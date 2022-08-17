@@ -1,0 +1,5 @@
+/build/
+/.dockerhome
+node_modules/
+__pycache__/
+.#*
