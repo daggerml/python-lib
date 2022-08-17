@@ -2,7 +2,6 @@ import os
 import json
 import weakref
 import tarfile
-import requests
 import subprocess
 from time import sleep
 from uuid import uuid4
@@ -11,6 +10,7 @@ from hashlib import md5
 from dataclasses import dataclass
 from collections.abc import Mapping
 from tempfile import NamedTemporaryFile
+from http.client import HTTPConnection, HTTPSConnection
 
 try:
     import boto3
@@ -59,13 +59,17 @@ def setup():
     def api(op, **kwargs):
         try:
             if 'DML_LOCAL_DB' in os.environ:
-                endpoint = 'http://localhost:8000/'
+                conn = HTTPConnection("localhost", 8000)
             else:
-                endpoint = f"https://api.{DML_ZONE}-{AWS_REGION}.daggerml.com/"
+                conn = HTTPSConnection(f"api.{DML_ZONE}-{AWS_REGION}.daggerml.com")
             if 'gid' not in kwargs:
                 kwargs['gid'] = DML_GID
-            json = dict(op=op, **kwargs)
-            resp = requests.post(endpoint, json=json).json()
+            headers = {'content-type': 'application/json', 'accept': 'application/json'}
+            conn.request('POST', '/', json.dumps(dict(op=op, **kwargs)), headers)
+            resp = conn.getresponse()
+            if resp.status != 200:
+                raise ApiError(f'{resp.status} {resp.reason}')
+            resp = json.loads(resp.read())
             if resp['status'] != 'ok':
                 err = resp['error']
                 if err['context']:
@@ -123,6 +127,17 @@ def setup():
         def keys(self):
             return PROXY_BY_DATUM[self].value['data'].keys()
 
+    def commit_node(node_id, token, result):
+        result = to_db(from_py_eager(result))
+        datum_id = PROXY_BY_DATUM[result].id
+        finalized = api(
+            'commit_node',
+            node_id=node_id,
+            token=token,
+            datum_id=datum_id
+        )['finalized']
+        return finalized, result
+
     class LocalFuncDatum(BaseDatum):
         def __call__(self, *args):
             args = [from_py_eager(x) for x in args]
@@ -142,14 +157,8 @@ def setup():
                 return from_db(result)
             STACK.append(node_id)
             try:
-                result = to_db(from_py_eager(PROXY_BY_DATUM[self].py(*args)))
-                datum_id = PROXY_BY_DATUM[result].id
-                finalized = api(
-                    'commit_node',
-                    node_id=node_id,
-                    token=token,
-                    datum_id=datum_id
-                )['finalized']
+                result = PROXY_BY_DATUM[self].py(*args)
+                finalized, result = commit_node(node_id, token, result)
                 assert finalized
                 return result
             except Exception as e:
@@ -454,14 +463,23 @@ def setup():
         return proc.stdout
 
     def tar(path):
+        import sys
         if boto3 is None:
             raise RuntimeError('boto3 is required for the `tar` function')
-        path = os.path.realpath(path)
+        path = os.path.expanduser(path)
+        if not os.path.isabs(path):
+            # if not abspath, then it's relative to the calling function
+            print('globals:', sys._getframe(1).f_globals)
+            base = os.path.dirname(os.path.realpath(sys._getframe(1).f_globals['__file__']))
+            path = os.path.normpath(os.path.join(base, path))
         if not os.path.isdir(path):
             raise ValueError('path %s is not a valid directory' % path)
+        if not path.endswith('/'):
+            path += '/'
+        print('uploading', path)
         hash_script = os.path.join(
             os.path.dirname(os.path.realpath(__file__)),
-            'local-dir-hash.sh'
+            'extras/local-dir-hash.sh'
         )
         dir_hash = shell(hash_script, '-p', path, stdout=True).decode().strip()
         s3_key = 'datum/s3-upload/%s/data.tar.gz' % dir_hash
@@ -476,10 +494,10 @@ def setup():
             {'uri': 's3://%s/%s' % (OUTPUT_BUCKET, s3_key)}
         )
 
-    return Resource, Func, func, run, load, to_py, tar
+    return Resource, Func, func, run, load, to_py, tar, from_db, commit_node
 
 
-Resource, Func, func, run, load, to_py, tar = setup()
+Resource, Func, func, run, load, to_py, tar, from_db, commit_node = setup()
 
 del setup
 
@@ -572,4 +590,8 @@ to_py.__doc__ = \
     """convert a Datum or LazyDatum to its corresponding python object
 
     Alternatively, you could run `datum.to_py()`
+    """
+
+commit_node.__doc__ = \
+    """commit a node. Only used in executors
     """
