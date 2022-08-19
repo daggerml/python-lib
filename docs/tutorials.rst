@@ -11,6 +11,7 @@ For more information on Jupyter itself, see `their web site <https://jupyter.org
    examples/daggerml-basics
    examples/generate-data-0
    examples/generate-data-1
+   examples/trees
 
 .. toctree::
    :caption: Advanced tutorials
