@@ -27,6 +27,14 @@ class DatumError(DmlError):
     pass
 
 
+class FailedNodeException(DmlError):
+    def __init__(self, message):
+        self.message = message
+
+    def __str__(self):
+        return 'FailedNodeException: ' + self.message
+
+
 def setup():
 
     ###########################################################################
@@ -148,7 +156,10 @@ def setup():
             result = claim['result']
             token = claim['refresh_token']
             node_id = claim['node_id']
-            if result:
+            error = claim['error']
+            if error is not None:
+                raise FailedNodeException(error)
+            if result is not None:
                 return from_db(result)
             STACK.append(node_id)
             try:
@@ -163,7 +174,7 @@ def setup():
                     token=token,
                     error={'message': str(e)}
                 )
-                raise e
+                raise FailedNodeException(str(e)) from e
             finally:
                 STACK.pop()
 
@@ -180,10 +191,10 @@ def setup():
                     args=[PROXY_BY_DATUM[x].id for x in args]
                 )
                 result_id = node_info['result']
+                if node_info['error'] is not None:
+                    raise FailedNodeException(json.dumps(node_info['error']))
                 if result_id is not None:
                     return from_db(result_id)
-                if node_info.get('error') is not None:
-                    raise RuntimeError('error: %s' % json.dumps(node_info['error']))
                 sleep(1)
 
     class LazyDatum:
@@ -443,9 +454,13 @@ def setup():
         #     dag_name='builtin',
         #     version=None
         # )))
-        result = (func(f)(*args)).force()
-        api('commit_dag', dag_id=DAG_ID[0], datum_id=PROXY_BY_DATUM[result].id)
-        return result
+        try:
+            result = (func(f)(*args)).force()
+            api('commit_dag', dag_id=DAG_ID[0], datum_id=PROXY_BY_DATUM[result].id)
+            return result
+        except Exception:
+            api('fail_dag', dag_id=DAG_ID[0])
+        return
 
     return Resource, Func, func, run, load, to_py, from_db, commit_node
 

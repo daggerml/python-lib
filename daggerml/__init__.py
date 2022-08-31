@@ -4,6 +4,7 @@ import tarfile
 import subprocess
 from hashlib import md5
 from tempfile import NamedTemporaryFile
+import daggerml.util as util
 from daggerml.util import Resource, Func, func, run, load, to_py
 import pkg_resources  # part of setuptools
 
@@ -14,7 +15,7 @@ OUTPUT_BUCKET = 'daggerml-zone-{}-store'.format(DML_ZONE)
 __version__ = pkg_resources.require('daggerml')[0].version
 del pkg_resources
 
-__all__ = ('Resource', 'Func', 'func', 'run', 'load', 'to_py', 'tar')
+__all__ = ('Resource', 'Func', 'func', 'run', 'load', 'to_py', 'tar', 'util')
 
 
 def tar(path):
