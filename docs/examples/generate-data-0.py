@@ -33,10 +33,19 @@ def funkify(image):
 @dml.func
 def main():
     dkr_build = dml.load('docker')['build']
-    tarball = dml.tar(os.path.abspath('./generate-data/'))
+    tarball = dml.tar(os.path.join(os.path.dirname(dml.__file__),
+                                   '../docs/examples/generate-data/'))
     image = dkr_build(tarball)
     f = funkify(image)
     return f(20, 200, 50, 12)
+
+
+# %% [markdown]
+"""
+Normally we'd be able to pass in relative paths into `dml.tar`, but
+because of the way we run our documentation, it's just easier to pass in
+absolute paths (the question of "relative to what" is binding).
+"""
 
 
 # %%

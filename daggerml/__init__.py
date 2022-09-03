@@ -1,25 +1,26 @@
 import os
 import boto3
 import tarfile
+import logging
 import subprocess
 from hashlib import md5
 from tempfile import NamedTemporaryFile
+from daggerml.__about__ import __version__  # noqa: F401
 import daggerml.util as util
 from daggerml.util import Resource, Func, func, run, load, to_py
-import pkg_resources  # part of setuptools
 
 
 DML_ZONE = os.environ['DML_ZONE']
 OUTPUT_BUCKET = 'daggerml-zone-{}-store'.format(DML_ZONE)
+logger = logging.getLogger(__name__)
 
-__version__ = pkg_resources.require('daggerml')[0].version
-del pkg_resources
 
 __all__ = ('Resource', 'Func', 'func', 'run', 'load', 'to_py', 'tar', 'util')
 
 
 def tar(path):
     import sys
+
     def shell(*args, stdout=False, stderr=False):
         devnull = subprocess.DEVNULL
         stdout = subprocess.PIPE if stdout else devnull
@@ -29,7 +30,8 @@ def tar(path):
             print(proc)
             raise RuntimeError(f"subprocess exit code: {proc.returncode}")
         if proc.stderr is not None:
-            print(proc.stderr.decode())
+            logger.info('shell process has stderr: %s',
+                        proc.stderr.decode())
         return proc.stdout
     if boto3 is None:
         raise RuntimeError('boto3 is required for the `tar` function')
@@ -43,7 +45,7 @@ def tar(path):
         raise ValueError('path %s is not a valid directory' % path)
     if not path.endswith('/'):
         path += '/'
-    print('uploading', path)
+    logger.info('uploading %s', path)
     hash_script = os.path.join(
         os.path.dirname(os.path.realpath(__file__)),
         'extras/local-dir-hash.sh'
@@ -73,7 +75,7 @@ def upload_file(path):
         path = os.path.normpath(os.path.join(base, path))
     if not os.path.isfile(path):
         raise ValueError('path %s is not a valid file' % path)
-    print('uploading', path)
+    logger.info('uploading %s', path)
     with open(path, 'rb') as f:
         txt = f.read()
         fhash = md5(txt).hexdigest()

@@ -33,7 +33,8 @@ def funkify(image):
 @dml.func
 def main():
     dkr_build = dml.load('docker')['build']
-    tarball = dml.tar(os.path.abspath('./generate-data/'))
+    tarball = dml.tar(os.path.join(os.path.dirname(dml.__file__),
+                                   '../docs/examples/generate-data/'))
     image = dkr_build(tarball)
     f = funkify(image)
     resp = f(20, 200, 50, 12)

@@ -1,13 +1,11 @@
-========================
-Dagger-ML Python Library
-========================
+# Dagger-ML Python Library
 
-Usage
-=====
+## Usage
+
 TODO
 
-Setup
-=====
+## Setup
+
 To set this up, you need to run:
 
 1. `. ./bash-env.sh <ZONE>`
@@ -17,8 +15,7 @@ Then you can either run individual examples from the **docs/examples/**
 directory, or run the docs (see below).
 
 
-Docs
-====
+## Docs
 
 To build the docs, run:
 `cd docs && make html && (cd _build/html && python3 -m http.server 8080)`
