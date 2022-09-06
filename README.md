@@ -1,18 +1,21 @@
 # Dagger-ML Python Library
 
+## Prerequisites
+
+*pipx*
+
+If [pipx](https://pypa.github.io/pipx/) is not installed, first do that.
+
+*hatch*
+Then install [hatch](https://hatch.pypa.io/latest/) via: `pipx install hatch`.
+
 ## Usage
 
-TODO
+You currently need `AWS_DEFAULT_REGION` and `DML_ZONE` environment variables
+set. Then you can run `python bootstrap-docker.py`, for instance.
 
-## Setup
-
-To set this up, you need to run:
-
-1. `. ./bash-env.sh <ZONE>`
-2. `python bootstrap-docker.py`
-
-Then you can either run individual examples from the **docs/examples/**
-directory, or run the docs (see below).
+`bootstrap-docker.py` sets up the docker-build func, so you can now run docker
+stuff in your dags (e.g. as we do in the docs/examples/ directory).
 
 ## Run Locally
 
@@ -30,10 +33,13 @@ python infra/lib/api/server.py
 DML_LOCAL_DB=1 python mydag.py
 ```
 
-
 ## Docs
 
-To build the docs, run:
-`cd docs && make html && (cd _build/html && python3 -m http.server 8080)`
+To build the docs, first make sure `bootstrap-docker.py` has been run, then
+run: `hatch run docs:build`
 
-Then, wait for everything to run, and then check it out in the browser.
+To serve the docs: `hatch run docs:serve`
+
+## Tests
+
+To run the tests: `hatch run test:cov`
