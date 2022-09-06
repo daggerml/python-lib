@@ -14,6 +14,22 @@ To set this up, you need to run:
 Then you can either run individual examples from the **docs/examples/**
 directory, or run the docs (see below).
 
+## Run Locally
+
+```bash
+# Start local postgres:
+sudo systemctl start postgresql
+
+# Connect to local postgres:
+psql -h localhost postgres postgres
+
+# Start local DML API server:
+python infra/lib/api/server.py
+
+# Run dag locally
+DML_LOCAL_DB=1 python mydag.py
+```
+
 
 ## Docs
 

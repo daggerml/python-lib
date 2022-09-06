@@ -24,23 +24,27 @@ import daggerml as dml
 
 
 # %%
-@dml.func
+dag = dml.init()
+
+
+# %%
+@dag.func
 def get_tree_func():
-    dkr_build = dml.load('docker')['build']
+    dkr_build = dag.load('docker')['build']
     tarball = dml.tar(os.path.abspath('./trees/'))
     image = dkr_build(tarball)
     return dml.Func('docker', image)
 
 
 # %%
-@dml.func
+@dag.func
 def get_data(seed):
-    data_gen = dml.load('docs/data-generator')['f']
+    data_gen = dag.load('docs/data-generator')['f']
     return data_gen(seed, 200, 50, 12)
 
 
 # %%
-@dml.func
+@dag.func
 def main():
     f = get_tree_func()
     data = get_data(20)
@@ -51,4 +55,6 @@ def main():
 
 
 # %%
-print('dag:', dml.run(main, name='docs/trees'))
+resp = dag.run(main, name='docs/trees')
+print('dag:', resp)
+print('python:', resp.to_py())

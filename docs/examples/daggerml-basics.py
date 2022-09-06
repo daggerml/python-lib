@@ -21,44 +21,44 @@ First, set up the environment:
 """
 
 # %%
-# import os
 from time import sleep
-from daggerml import func, to_py, run
-# os.environ['DML_LOCAL_DB'] = '1'
+import daggerml as dml
 
 
 # %%
-@func
+dag = dml.init()
+
+
+# %%
+@dag.func
 def doit(n):
-    print('running doit with', to_py(n))
+    print('running doit with', dag.to_py(n))
     datum = {'sdf': [1, 2, 3, n, ['four', 'five']]}
-    sleep(10)
+    sleep(10)  # simulating a function that takes 10 seconds to run
     return datum
 
 
 # %%
-@func
+@dag.func
 def doit2(x):
     return x['sdf']
 
 
 # %%
-@func
+@dag.func
 def aaron0(x):
     return x
 
 
 # %%
-@func
+@dag.func
 def main():
-    lst = [doit2(doit(3)), doit(3), doit(2), doit(2), doit(2)]
+    lst = [doit2(doit(3)), doit(3)] + ([doit(2)] * 10)
     x = aaron0(lst[0])
-    # This code below will not be run because it's not returned.
-    [doit(x) for x in range(5, 10)]
     return {'list': lst, 'x': x}
 
 
 # %%
 # %%timeit -n 1 -r 1
-result = to_py(run(main, name='docs/dml-basics'))
+result = dag.run(main, name='docs/dml-basics').to_py()
 print('dag result ==', result)

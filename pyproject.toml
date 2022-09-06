@@ -21,21 +21,49 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-  "boto3>=1.0"
+  "dataclasses; python_version < '3.7'"
 ]
 dynamic = ["version"]
+
+[project.optional-dependencies]
+aws = [
+  "boto3>=1.0"
+]
+
+[project.urls]
+Homepage = "https://daggerml.com"
+Documentation = "https://daggerml.com/docs"
+Issues = "https://github.com/daggerml/python-lib/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[tool.hatch.version]
+path = "daggerml/__about__.py"
+
 
 [tool.hatch.envs.default]
 python = "38"
 dependencies = []
 
-[tool.hatch.envs.default.scripts]
-vers = "python --version"
+[tool.hatch.envs.quick-test]
+python = "37"
+dependencies = [
+  "pytest",
+  "pytest-cov",
+]
+
+[tool.hatch.envs.quick-test.scripts]
+cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=daggerml --cov=tests"
+no-cov = "cov --no-cov"
+
 
 [tool.hatch.envs.test]
 dependencies = [
   "pytest",
-  "pytest-cov",
+  "pytest-cov"
 ]
 
 [tool.hatch.envs.test.scripts]
@@ -43,7 +71,7 @@ cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=dagger
 no-cov = "cov --no-cov"
 
 [[tool.hatch.envs.test.matrix]]
-python = ["36", "38", "39"]
+python = ["36", "37", "38", "39", "310"]
 
 [tool.hatch.envs.docs]
 python = "38"
@@ -56,13 +84,14 @@ dependencies = [
   "numpy>=1.23.2",
   "jupyter>=1.0.0",
   "pandas>=1.4.3",
+  "boto3>=1.0",
   "pyarrow>=9.0.0",
   "s3fs>=2022.7.1",
 ]
 
 [tool.hatch.envs.docs.scripts]
 build = '(cd docs && make html)'
-serve = '(cd docs/_build/html && python -m http.server)'
+serve = '(cd docs/_build/html && python -m http.server 8080)'
 
 
 [tool.coverage.run]
@@ -78,15 +107,3 @@ exclude_lines = [
   "if __name__ == .__main__.:",
   "if TYPE_CHECKING:",
 ]
-
-[tool.hatch.version]
-path = "daggerml/__about__.py"
-
-[project.urls]
-Homepage = "https://github.com/pypa/sampleproject"
-Documentation = "https://github.com/unknown/foop#readme"
-Issues = "https://github.com/pypa/sampleproject/issues"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"

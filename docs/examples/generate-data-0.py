@@ -24,15 +24,19 @@ import daggerml as dml
 
 
 # %%
-@dml.func
+dag = dml.init()
+
+
+# %%
+@dag.func
 def funkify(image):
     return dml.Func('docker', image)
 
 
 # %%
-@dml.func
+@dag.func
 def main():
-    dkr_build = dml.load('docker')['build']
+    dkr_build = dag.load('docker')['build']
     tarball = dml.tar(os.path.join(os.path.dirname(dml.__file__),
                                    '../docs/examples/generate-data/'))
     image = dkr_build(tarball)
@@ -49,7 +53,7 @@ absolute paths (the question of "relative to what" is binding).
 
 
 # %%
-resp = dml.to_py(dml.run(main, name='docs/random-data'))
+resp = dag.run(main, name='docs/random-data').to_py()
 print('dag ==', resp)
 
 
