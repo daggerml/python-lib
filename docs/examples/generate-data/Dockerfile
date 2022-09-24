@@ -6,7 +6,7 @@ RUN apt-get update && apt-get -y install curl python3.8 build-essential libssl-d
 # Force stdin, stdout and stderr to be totally unbuffered. Good for logging
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONIOENCODING=UTF-8 LANG=C.UTF-8 LC_ALL=C.UTF-8
 
-RUN python3 -m pip install pyarrow pandas s3fs boto3 fsspec
+RUN python3 -m pip install pyarrow pandas==1.2.1 s3fs boto3 fsspec
 
 ADD main.py /code/main.py
 WORKDIR /code
