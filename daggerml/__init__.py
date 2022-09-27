@@ -10,7 +10,8 @@ from typing import Callable, Any
 from dataclasses import dataclass
 from collections.abc import Mapping
 from daggerml.util import api, tar, upload_file  # noqa: F401
-from daggerml._types import Func, Resource
+from daggerml.util import get_datum, upsert_datum, commit_node, fail_node
+from daggerml._types import Resource
 from daggerml.__about__ import __version__  # noqa: F401
 from daggerml.exceptions import NodeError, DatumError
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def init():
-    """init function that returns stateful dag"""
+    """initialize a dag"""
 
     ###########################################################################
     # INDEXES
@@ -40,30 +41,6 @@ def init():
     STACK = []
 
     ###########################################################################
-    # HELPERS
-    ###########################################################################
-
-    def commit_node(node_id, token, result):
-        result = to_db(from_py(result))
-        datum_id = PROXY_BY_DATUM[result].id
-        finalized = api(
-            'commit_node',
-            node_id=node_id,
-            token=token,
-            datum_id=datum_id
-        )['finalized']
-        return finalized, result
-
-    def upsert_and_claim(func_id, args):
-        return api(
-            'upsert_node_and_claim',
-            func=func_id,
-            dag_id=DAG_ID[0],
-            args=args,
-            ttl=0
-        )
-
-    ###########################################################################
     # DATUM
     ###########################################################################
 
@@ -77,114 +54,133 @@ def init():
             return to_py(self)
 
     class ScalarDatum(BaseDatum):
-        pass
+        # TODO: add __add__, __mul__, etc.
+        type = 'scalar'
+
+    class ResourcerDatum(BaseDatum):
+        type = 'resource'
 
     class CollectionDatum(BaseDatum):
         def __len__(self):
-            return len(PROXY_BY_DATUM[self].value['data'])
+            return len(PROXY_BY_DATUM[self].value)
 
         def __getitem__(self, key):
-            return from_db(PROXY_BY_DATUM[self].value['data'][key])
+            return from_db(PROXY_BY_DATUM[self].value[key])
+
+    def call_local(self, proxy, *args):
+        if proxy.dag_id != DAG_ID[0]:
+            self = from_py(proxy.py)
+            proxy = PROXY_BY_DATUM[self]
+        if proxy.dag_id != DAG_ID[0]:
+            raise ValueError('%s != %s' % (proxy.dag_id, DAG_ID[0]))
+        to_db(self)
+        while True:
+            claim = api(
+                'upsert_node_and_claim',
+                func=proxy.id,
+                dag_id=DAG_ID[0],
+                args=[PROXY_BY_DATUM[x].id for x in args],
+                ttl=0
+            )
+            token = claim['refresh_token']
+            if claim['error'] is not None:
+                raise NodeError(claim['error'])
+            if claim['result'] is not None:
+                return from_db(claim['result'])
+            if token is not None:
+                break
+            sleep(1)
+        node_id = claim['node_id']
+        STACK.append(node_id)
+        try:
+            result = proxy.py(*args)
+            result = to_db(from_py(result))
+            datum_id = PROXY_BY_DATUM[result].id
+            finalized = commit_node(node_id, token, datum_id)['finalized']
+            assert finalized
+            return result
+        except Exception as e:
+            fail_node(node_id, token, str(e))
+            raise NodeError(str(e)) from e
+        finally:
+            STACK.pop()
+
+    def call_remote(self, proxy, *args):
+        # funcs are maps
+        to_db(self)
+        while True:
+            node_info = api(
+                'upsert_node',
+                func=proxy.id,
+                dag_id=DAG_ID[0],
+                args=[PROXY_BY_DATUM[x].id for x in args]
+            )
+            result_id = node_info['result']
+            if node_info['error'] is not None:
+                raise NodeError(json.dumps(node_info['error']))
+            if result_id is not None:
+                return from_db(result_id)
+            sleep(1)
 
     class ListDatum(CollectionDatum):
+        type = 'list'
+
         def __iter__(self):
-            for x in PROXY_BY_DATUM[self].value['data']:
+            for x in PROXY_BY_DATUM[self].value:
                 yield from_db(x)
 
+        def __call__(self, *args):
+            # funcs are maps
+            args = [from_py(x) for x in args]
+            [to_db(x) for x in args]
+            proxy = PROXY_BY_DATUM[self]
+            if hasattr(proxy, 'py'):
+                return call_local(self, proxy, *args)
+            return call_remote(self, proxy, *args)
+
     class MapDatum(CollectionDatum):
+        type = 'map'
+
         def __iter__(self):
-            for x in PROXY_BY_DATUM[self].value['data']:
+            for x in PROXY_BY_DATUM[self].value:
                 yield x
 
         def keys(self):
-            return PROXY_BY_DATUM[self].value['data'].keys()
+            return PROXY_BY_DATUM[self].value.keys()
 
-    class LocalFuncDatum(BaseDatum):
-        def __call__(self, *args):
-            args = [from_py(x) for x in args]
-            proxy = PROXY_BY_DATUM[self]
-            if proxy.dag_id != DAG_ID[0]:
-                self = from_py(proxy.py)
-                proxy = PROXY_BY_DATUM[self]
-            if proxy.dag_id != DAG_ID[0]:
-                raise ValueError('%s != %s' % (proxy.dag_id, DAG_ID[0]))
-            [to_db(x) for x in [self, *args]]
-            while True:
-                claim = upsert_and_claim(proxy.id,
-                                         [PROXY_BY_DATUM[x].id for x in args])
-                token = claim['refresh_token']
-                if claim['error'] is not None:
-                    raise NodeError(claim['error'])
-                if claim['result'] is not None:
-                    return from_db(claim['result'])
-                if token is not None:
-                    break
-                sleep(1)
-            node_id = claim['node_id']
-            STACK.append(node_id)
-            try:
-                result = proxy.py(*args)
-                finalized, result = commit_node(node_id, token, result)
-                assert finalized
-                return result
-            except Exception as e:
-                api(
-                    'fail_node',
-                    node_id=node_id,
-                    token=token,
-                    error={'message': str(e)}
-                )
-                raise NodeError(str(e)) from e
-            finally:
-                STACK.pop()
+        def values(self):
+            return [from_db(x) for x in PROXY_BY_DATUM[self].value.values()]
 
-    class FuncDatum(BaseDatum):
-        def __call__(self, *args):
-            args = [from_py(x) for x in args]
-            [to_db(x) for x in [self, *args]]
-            proxy = PROXY_BY_DATUM[self]
-            while True:
-                node_info = api(
-                    'upsert_node',
-                    func=proxy.id,
-                    dag_id=DAG_ID[0],
-                    args=[PROXY_BY_DATUM[x].id for x in args]
-                )
-                result_id = node_info['result']
-                if node_info['error'] is not None:
-                    raise NodeError(json.dumps(node_info['error']))
-                if result_id is not None:
-                    return from_db(result_id)
-                sleep(1)
+        def items(self):
+            return [(k, from_db(v)) for k, v in PROXY_BY_DATUM[self].value.items()]
 
     ###########################################################################
     # DATUM PROXY
     ###########################################################################
 
-    def proxyclass(datum_type, db_type, *py_types):
-        def ret(proxy_type):
-            def factory():
-                return proxy_type(datum_type, db_type)
-            PROXY_FACTORY_BY_DB_TYPE[db_type] = factory
+    def proxyclass(datum_cls, db_type, *py_types):
+        def ret(proxy_cls):
+            proxy_cls.type = db_type
+            proxy_cls.datum_type = datum_cls
+            PROXY_FACTORY_BY_DB_TYPE[db_type] = proxy_cls
             for py_type in py_types:
-                PROXY_FACTORY_BY_PY_TYPE[py_type] = factory
-            return proxy_type
+                PROXY_FACTORY_BY_PY_TYPE[py_type] = proxy_cls
+            return proxy_cls
         return ret
 
     class BaseProxy:
-        def __init__(self, datum_type, db_type):
-            self.datum_type = datum_type
-            self.db_type = db_type
+        def __init__(self):
             self.persisted = False
             self.id = self.value = self.members = None
 
         def from_py(self, py):
-            self.value = {'type': self.db_type, 'data': self.py2data(py)}
-            self.id = md5(json.dumps(self.value, sort_keys=True).encode()).hexdigest()
+            self.value = self.py2data(py)
+            js = json.dumps({'type': self.type, 'value': self.value}, sort_keys=True)
+            self.id = md5(js.encode()).hexdigest()
             return self
 
         def to_py(self):
-            return self.data2py(self.value['data'])
+            return self.data2py(self.value)
 
         def from_json(self, json):
             self.id = json['id']
@@ -193,7 +189,7 @@ def init():
             return self
 
         def to_json(self):
-            return {'id': self.id, 'value': self.value}
+            return {'id': self.id, 'value': self.value, 'type': self.type}
 
         def py2data(self, py):
             return py
@@ -204,25 +200,39 @@ def init():
         def persist_members(self):
             pass
 
-    @proxyclass(ScalarDatum, 'null', type(None))
-    class NullProxy(BaseProxy):
-        pass
+    @proxyclass(ScalarDatum, 'scalar', type(None), str, int, float)
+    class ScalarProxy(BaseProxy):
+        def py2data(self, py):
+            if py is None:
+                _type = None
+            else:
+                _type = type(py).__name__
+            return {'type': _type, 'value': str(py)}
 
-    @proxyclass(ScalarDatum, 'string', str)
-    class StringProxy(BaseProxy):
-        pass
+        def data2py(self, data):
+            if data['type'] is None:
+                return None
+            if data['type'] == 'int':
+                return int(data['value'])
+            if data['type'] == 'float':
+                return float(data['value'])
+            return data['value']
 
-    @proxyclass(ScalarDatum, 'int', int)
-    class IntProxy(BaseProxy):
-        pass
-
-    @proxyclass(ScalarDatum, 'float', float)
-    class FloatProxy(BaseProxy):
-        pass
-
-    @proxyclass(ListDatum, 'list', list, tuple, type(dict().keys()))
+    @proxyclass(ListDatum, 'list', list, tuple, type(dict().keys()),
+                type(lambda: 1))
     class ListProxy(BaseProxy):
         def py2data(self, py):
+            if callable(py):
+                self.py = py
+                name = py.__qualname__
+                if name == '<lambda>':
+                    name = name + uuid4().hex
+                if len(DAG_ID) > 0:
+                    name = f'{DAG_ID[0]}/{name}'
+                    self.dag_id = copy(DAG_ID[0])
+                else:
+                    self.dag_id = ''
+                py = ['local', name]
             self.members = [from_py(x) for x in py]
             return [PROXY_BY_DATUM[x].id for x in self.members]
 
@@ -246,44 +256,13 @@ def init():
         def data2py(self, data):
             if self.members is None:
                 self.members = {k: from_db(v) for (k, v) in data.items()}
+            if hasattr(self, 'py'):
+                return self.py
             return {k: to_py(v) for (k, v) in self.members.items()}
 
         def persist_members(self):
             if self.members is not None:
                 [to_db(self.members[k]) for k in self.members]
-
-    @proxyclass(LocalFuncDatum, 'local-func', type(lambda x: x))
-    class LocalFuncProxy(BaseProxy):
-        def py2data(self, py):
-            name = py.__qualname__
-            if name == '<lambda>':
-                name = name + uuid4().hex
-            self.py = py
-            if len(DAG_ID) > 0:
-                self.members = from_py(f'{DAG_ID[0]}/{name}')
-                self.dag_id = copy(DAG_ID[0])
-            else:
-                self.members = from_py(name)
-                self.dag_id = ''
-            return {'executor': 'local', 'func_datum': PROXY_BY_DATUM[self.members].id}
-
-        def data2py(self, data):
-            return self.py
-
-        def persist_members(self):
-            to_db(self.members)
-
-    @proxyclass(FuncDatum, 'func', Func)
-    class FuncProxy(BaseProxy):
-        def py2data(self, py):
-            self.members = from_py(py.data)
-            return {'executor': py.executor, 'func_datum': PROXY_BY_DATUM[self.members].id}
-
-        def data2py(self, data):
-            return Func(to_py(data['executor']), to_py(from_db(self.value['data']['func_datum'])))
-
-        def persist_members(self):
-            to_db(self.members)
 
     @proxyclass(ScalarDatum, 'resource', Resource)
     class ResourceProxy(BaseProxy):
@@ -298,12 +277,11 @@ def init():
     ###########################################################################
 
     def from_json(json):
-        if json is None:
+        if json is None:  # when does this happen?
             raise DatumError('not found')
-        id = json['id']
-        datum = DATUM_BY_ID.get(id)
+        datum = DATUM_BY_ID.get(json['id'])
         if datum is None:
-            proxy = PROXY_FACTORY_BY_DB_TYPE[json['value']['type']]().from_json(json)
+            proxy = PROXY_FACTORY_BY_DB_TYPE[json['type']]().from_json(json)
             datum = proxy.datum_type()
             DATUM_BY_ID[id] = datum
             PROXY_BY_DATUM[datum] = proxy
@@ -314,14 +292,14 @@ def init():
             return datum_or_id
         datum = DATUM_BY_ID.get(datum_or_id)
         if datum is None:
-            datum = from_json(api('get_datum', id=datum_or_id))
+            datum = from_json(get_datum(datum_or_id))
         return datum
 
     def to_db(datum):
         proxy = PROXY_BY_DATUM[datum]
         if not proxy.persisted:
             proxy.persist_members()
-            id = api('upsert_datum', value=proxy.value)['id']
+            id = upsert_datum(proxy.value, proxy.type)['id']
             assert id == proxy.id, 'proxy ID (%s) != DB ID (%s)' % (proxy.id, id)
             proxy.persisted = True
         return datum
@@ -347,9 +325,6 @@ def init():
             PROXY_BY_DATUM[datum] = proxy
         return datum
 
-    def func(f):
-        return from_py(f)
-
     def load(dag_name, version=None):
         datum = from_json(api(
             'get_dag_result',
@@ -373,7 +348,7 @@ def init():
             raise RuntimeError('cannot start a new dag while one is already running...')
         DAG_ID.append(api('create_dag', name=name)['id'])
         try:
-            result = func(f)(*args)
+            result = from_py(f)(*args)
             api('commit_dag', dag_id=DAG_ID[0], datum_id=PROXY_BY_DATUM[result].id)
             return result
         except Exception:
@@ -382,13 +357,9 @@ def init():
             raise
         finally:
             DAG_ID.pop()
-            # PROXY_FACTORY_BY_PY_TYPE.clear()
-            # PROXY_FACTORY_BY_DB_TYPE.clear()
-            # DATUM_BY_ID.clear()
-            # PROXY_BY_DATUM.clear()
         return
 
-    return Dag(func, run, load, to_py)
+    return Dag(from_py, run, load, to_py)
 
 
 @dataclass(frozen=True)
@@ -400,31 +371,32 @@ class Dag:
     Examples
     --------
     >>> dag = init()
-    >>> @dag.func
+    >>> @dag.from_py
     ... def inc(x):
     ...     return x.to_py() + 1
     >>> def main(n):
     ...     return [inc(x) for x in range(n.to_py())]
     >>> dag.run(main, 5, name='test').to_py()
     [1, 2, 3, 4, 5]
+    >>> dag.from_py(5)
     """
-    _func: Callable[[Callable], Callable]
+    _from_py: Callable[[Any], Any]
     _run: Callable[[Callable], Any]
     _load: Callable[[str], Any]
     _to_py: Callable[[Any], Any]
 
-    def func(self, f):
-        """decorator to turn a function into a daggerml func
+    def from_py(self, f):
+        """decorator to turn a python object into a daggerml one
 
         Parameters
         ----------
-        f : callable
+        x : callable, int, float, string, list, map, None
 
         Returns
         -------
         A lazy daggerml tracked function
         """
-        return self._func(f)
+        return self._from_py(f)
 
     def run(self, f, *args, name):
         """run a dag

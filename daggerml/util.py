@@ -24,16 +24,16 @@ logger = logging.getLogger(__name__)
 
 DML_ZONE = os.getenv('DML_ZONE', 'prod')
 DML_GID = os.getenv('DML_GID', 'test-A')
-AWS_REGION = os.getenv('DML_REGION', 'us-west-2')
+DML_REGION = os.getenv('DML_REGION', 'us-west-2')
 OUTPUT_BUCKET = 'daggerml-zone-{}-store'.format(DML_ZONE)
 
 
 def api(op, **kwargs):
     try:
         if 'DML_LOCAL_DB' in os.environ:
-            conn = HTTPConnection("localhost", 8000)
+            conn = HTTPConnection("localhost", 8081)
         else:
-            conn = HTTPSConnection(f"api.{DML_ZONE}-{AWS_REGION}.daggerml.com")
+            conn = HTTPSConnection(f"api.{DML_ZONE}-{DML_REGION}.daggerml.com")
         if 'gid' not in kwargs:
             kwargs['gid'] = DML_GID
         headers = {'content-type': 'application/json', 'accept': 'application/json'}
@@ -56,7 +56,33 @@ def api(op, **kwargs):
         raise ApiError(f'{e.__class__.__name__}: {str(e)}')
 
 
-def shell(*args, stdout=False, stderr=False):
+def commit_node(node_id, token, datum_id):
+    return api(
+        'commit_node',
+        node_id=node_id,
+        token=token,
+        datum_id=datum_id
+    )
+
+
+def fail_node(node_id, token, err_msg):
+    return api(
+        'fail_node',
+        node_id=node_id,
+        token=token,
+        error={'message': err_msg}
+    )
+
+
+def get_datum(datum_id, gid=DML_GID):
+    return api('get_datum', id=datum_id, gid=gid)
+
+
+def upsert_datum(value, type):
+    return api('upsert_datum', value=value, type=type)
+
+
+def _shell(*args, stdout=False, stderr=False):
     """run a shell command... Used internally"""
     devnull = subprocess.DEVNULL
     stdout = subprocess.PIPE if stdout else devnull
@@ -101,7 +127,7 @@ def tar(path):
         os.path.dirname(os.path.realpath(__file__)),
         'extras/local-dir-hash.sh'
     )
-    dir_hash = shell(hash_script, '-p', path, stdout=True).decode().strip()
+    dir_hash = _shell(hash_script, '-p', path, stdout=True).decode().strip()
     s3_key = 'datum/s3-upload/%s/data.tar.gz' % dir_hash
     with NamedTemporaryFile(dir='/tmp/', suffix='.tar.gz', prefix='dml-s3-upload') as f:
         with tarfile.open(f.name, 'w:gz') as tar:

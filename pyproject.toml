@@ -48,18 +48,6 @@ path = "daggerml/__about__.py"
 python = "38"
 dependencies = []
 
-[tool.hatch.envs.quick-test]
-python = "37"
-dependencies = [
-  "pytest",
-  "pytest-cov",
-]
-
-[tool.hatch.envs.quick-test.scripts]
-cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=daggerml --cov=tests"
-no-cov = "cov --no-cov"
-
-
 [tool.hatch.envs.test]
 dependencies = [
   "pytest",
@@ -72,6 +60,21 @@ no-cov = "cov --no-cov"
 
 [[tool.hatch.envs.test.matrix]]
 python = ["36", "37", "38", "39", "310"]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+omit = [
+  "daggerml/__about__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+
 
 [tool.hatch.envs.docs]
 python = "38"
@@ -92,18 +95,3 @@ dependencies = [
 [tool.hatch.envs.docs.scripts]
 build = '(cd docs && make html)'
 serve = '(cd docs/_build/html && python -m http.server 8080)'
-
-
-[tool.coverage.run]
-branch = true
-parallel = true
-omit = [
-  "daggerml/__about__.py",
-]
-
-[tool.coverage.report]
-exclude_lines = [
-  "no cov",
-  "if __name__ == .__main__.:",
-  "if TYPE_CHECKING:",
-]
