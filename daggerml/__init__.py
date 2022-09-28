@@ -40,6 +40,13 @@ def init():
     # BUILTINS = {}
     STACK = []
 
+    def get_datum_id(t, v):
+        js = json.dumps({'type': t, 'value': v},
+                        sort_keys=True)
+        return md5(js.encode()).hexdigest()
+
+    LOCAL_EXEC_ID = get_datum_id('scalar', {'type': 'string', 'value': 'local'})
+
     ###########################################################################
     # DATUM
     ###########################################################################
@@ -80,6 +87,8 @@ def init():
                 func=proxy.id,
                 dag_id=DAG_ID[0],
                 args=[PROXY_BY_DATUM[x].id for x in args],
+                executor_id=LOCAL_EXEC_ID,
+                executor_secret='local',
                 ttl=0
             )
             token = claim['refresh_token']
@@ -175,8 +184,7 @@ def init():
 
         def from_py(self, py):
             self.value = self.py2data(py)
-            js = json.dumps({'type': self.type, 'value': self.value}, sort_keys=True)
-            self.id = md5(js.encode()).hexdigest()
+            self.id = get_datum_id(self.type, self.value)
             return self
 
         def to_py(self):
@@ -205,6 +213,8 @@ def init():
         def py2data(self, py):
             if py is None:
                 _type = None
+            elif isinstance(py, str):
+                _type = 'string'
             else:
                 _type = type(py).__name__
             return {'type': _type, 'value': str(py)}
