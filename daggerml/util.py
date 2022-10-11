@@ -7,10 +7,12 @@ from hashlib import md5
 from tempfile import NamedTemporaryFile
 import subprocess
 from http.client import HTTPConnection, HTTPSConnection
+from urllib.parse import urlparse
 try:
     import boto3
 except ImportError:
     boto3 = None
+from daggerml._config import DML_API_ENDPOINT, DML_ZONE, AWS_LOCALSTACK_ENDPOINT
 from daggerml._types import Resource
 from daggerml.exceptions import ApiError
 
@@ -22,22 +24,19 @@ logger = logging.getLogger(__name__)
 # AWS
 ###########################################################################
 
-DML_ZONE = os.getenv('DML_ZONE', 'prod')
-DML_GID = os.getenv('DML_GID', 'test-A')
-DML_REGION = os.getenv('DML_REGION', 'us-west-2')
 OUTPUT_BUCKET = 'daggerml-zone-{}-store'.format(DML_ZONE)
 
 
 def api(op, **kwargs):
     try:
-        if 'DML_LOCAL_DB' in os.environ:
-            conn = HTTPConnection("localhost", 8081)
-        else:
-            conn = HTTPSConnection(f"api.{DML_ZONE}-{DML_REGION}.daggerml.com")
-        if 'gid' not in kwargs:
-            kwargs['gid'] = DML_GID
+        url = urlparse(DML_API_ENDPOINT)
+        scheme = url.scheme or 'http'
+        host = url.hostname or 'localhost'
+        port = url.port or 80
+        path = url.path or '/'
+        conn = (HTTPConnection if scheme == 'http' else HTTPSConnection)(host, port)
         headers = {'content-type': 'application/json', 'accept': 'application/json'}
-        conn.request('POST', '/', json.dumps(dict(op=op, **kwargs)), headers)
+        conn.request('POST', path, json.dumps(dict(op=op, **kwargs)), headers)
         resp = conn.getresponse()
         if resp.status != 200:
             raise ApiError(f'{resp.status} {resp.reason}')
@@ -74,8 +73,8 @@ def fail_node(node_id, token, err_msg):
     )
 
 
-def get_datum(datum_id, gid=DML_GID):
-    return api('get_datum', id=datum_id, gid=gid)
+def get_datum(datum_id):
+    return api('get_datum', id=datum_id)
 
 
 def upsert_datum(value, type):
@@ -132,7 +131,7 @@ def tar(path):
     with NamedTemporaryFile(dir='/tmp/', suffix='.tar.gz', prefix='dml-s3-upload') as f:
         with tarfile.open(f.name, 'w:gz') as tar:
             tar.add(path, arcname=os.path.sep)
-        boto3.client('s3').put_object(
+        boto3.client('s3', endpoint_url=AWS_LOCALSTACK_ENDPOINT).put_object(
             Body=f.read(), Bucket=OUTPUT_BUCKET, Key=s3_key
         )
     return Resource(
@@ -156,7 +155,7 @@ def upload_file(path):
         txt = f.read()
         fhash = md5(txt).hexdigest()
         s3_key = 'datum/s3-upload/%s/%s' % (fhash, os.path.basename(path))
-        boto3.client('s3').put_object(
+        boto3.client('s3', endpoint_url=AWS_LOCALSTACK_ENDPOINT).put_object(
             Body=txt, Bucket=OUTPUT_BUCKET, Key=s3_key
         )
     return Resource(

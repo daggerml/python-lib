@@ -1,7 +1,7 @@
-import os
 import json
 import pytest
 import unittest
+import daggerml
 import daggerml as dml
 from hashlib import md5
 from daggerml.exceptions import ApiError
@@ -17,7 +17,6 @@ def div(x, y):
 
 class TestAll(unittest.TestCase):
     def setUp(self):
-        os.environ['DML_LOCAL_DB'] = '1'
         self.dag = dml.init()
         self.inc = self.dag.from_py(inc)
         self.div = self.dag.from_py(div)
