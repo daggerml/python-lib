@@ -67,7 +67,7 @@ def daggerml():
     from time import sleep
     from collections.abc import Mapping
     from weakref import WeakKeyDictionary
-    from dataclasses import dataclass  # , field
+    from dataclasses import dataclass
     from typing import NewType
     from uuid import uuid4
 
@@ -76,25 +76,26 @@ def daggerml():
         id: str
         parent: str
 
-    def to_data(dag, py):
+    def to_data(py, dag=None):
         if isinstance(py, Node):
             return {'type': 'ref', 'value': {'node_id': py.id}}
             # py = py.to_py()
         if callable(py):
+            if dag is None:
+                raise RuntimeError(
+                    'cannot call `to_data` on a local function without a dag argument'
+                )
             fn_id = py.__qualname__
             if fn_id == '<lambda>':
                 fn_id += uuid4().hex
             fn_id = py.__module__ + ':' + fn_id
-            # we used to have the dag ID in the live above but that's not
-            # accessable so now we have uuid4. This can't be in `Dag.from_py`
-            # because it might be nested.
-            py = [Node(dag, dag._exec_node), fn_id]
+            py = [Node(dag, dag._exec_id), fn_id]
         if isinstance(py, list) or isinstance(py, tuple):
-            return {'type': 'list', 'value': [to_data(dag, x) for x in py]}
+            return {'type': 'list', 'value': [to_data(x, dag) for x in py]}
         elif isinstance(py, dict) or isinstance(py, Mapping):
             if not all([isinstance(x, str) for x in py]):
                 raise TypeError('map datum keys must be strings')
-            return {'type': 'map', 'value': {k: to_data(dag, v) for (k, v) in py.items()}}
+            return {'type': 'map', 'value': {k: to_data(v, dag) for (k, v) in py.items()}}
         elif isinstance(py, type(None)):
             return {'type': 'scalar', 'value': {'type': 'null'}}
         elif isinstance(py, str):
@@ -133,6 +134,17 @@ def daggerml():
         else:
             raise ValueError('unknown type: ' + t)
 
+    def claim_node(exec_id, ttl, node_id=None):
+        resp = _api('node', 'claim_node', exec_id=exec_id, ttl=ttl, node_id=node_id)
+        if resp is not None:
+            resp['expr'] = from_data(resp['expr'])
+        return resp
+
+    def commit_node(result, node_id, refresh_token, dag=None):
+        resp = _api('node', 'commit_node', node_id=node_id,
+                    token=refresh_token, data=to_data(result, dag=dag))
+        return resp
+
     CACHE = WeakKeyDictionary()
 
     @dataclass(frozen=True)
@@ -153,7 +165,7 @@ def daggerml():
                 CACHE[resp] = cached[key]
             return resp
 
-        def __call__(self, *args):
+        def __call__(self, *args, block=True):
             args = [self.dag.from_py(x) for x in args]
             if callable(CACHE.get(self)):
                 resp = _api('dag', 'put_node_and_claim', dag_id=self.dag.id, ttl=0,
@@ -164,8 +176,8 @@ def daggerml():
                     logger.debug('ignoring error: %s', json.dumps(resp['error']))
                 try:
                     result = CACHE[self](*args)
-                    resp2 = _api('node', 'commit_node', node_id=resp['node_id'],
-                                 token=resp['refresh_token'], data=to_data(self.dag, result))
+                    resp2 = commit_node(result, resp['node_id'],
+                                        resp['refresh_token'], dag=self.dag)
                     assert resp2['finalized'], 'failed to finalize node'
                 except Exception as e:
                     err = {'message': str(e)}
@@ -176,22 +188,55 @@ def daggerml():
                 n = Node(self.dag, resp['node_id'])
                 CACHE[n] = result
                 return n
+            expr = [self.id] + [x.id for x in args]
+            if not block:
+                return NodeWaiter(self.dag, expr)
             while True:
-                resp = _api('dag', 'put_node', dag_id=self.dag.id,
-                            expr=[self.id] + [x.id for x in args])
+                resp = _api('dag', 'put_node', dag_id=self.dag.id, expr=expr)
                 if resp['success']:
                     return Node(self.dag, resp['node_id'])
                 if resp['error'] is not None:
                     logger.debug('ignoring error: %s', json.dumps(resp['error']))
                     raise NodeError(resp['error'])
-                sleep(10)
+                sleep(2)
             return
 
         def to_py(self):
             return self.dag.to_py(self)
 
         def __repr__(self):
-            return f'Node({self.dag.id},{self.id})'
+            return f'Node({self.dag.name},{self.dag.version},{self.id})'
+
+    @dataclass
+    class NodeWaiter:
+        def __init__(self, dag, expr):
+            self.dag = dag
+            self.expr = expr
+            self._result = None
+            self.check()
+
+        def check(self):
+            self._resp = _api('dag', 'put_node', dag_id=self.dag.id, expr=self.expr)
+            return self.result
+
+        @property
+        def node_id(self):
+            return self._resp['node_id']
+
+        @property
+        def result(self):
+            if self._resp['success']:
+                return Node(self.dag, self.node_id)
+            if self._resp['error'] is not None:
+                logger.debug('ignoring error: %s', json.dumps(self._resp['error']))
+                raise NodeError(self._resp['error'])
+            return
+
+        def wait(self, dt=5):
+            while self.result is None:
+                sleep(dt)
+                self.check()
+            return self.result
 
     def load_result(dag_id, dag_name, version='latest'):
         tmp = _api('dag', 'get_dag_by_name_version', name=dag_name, version=version)
@@ -206,22 +251,24 @@ def daggerml():
         name: str
         version: int
         _get_fn: str
-        _exec_node: str
+        _exec_id: str
 
         @classmethod
         def new(cls, name):
             res = _api('dag', 'create_dag', name=name)
-            return cls(res['id'], name, res['version'], res['bs_node'], res['exec_node'])
+            return cls(res['id'], name, res['version'], res['get_fn'], res['executor_id'])
 
         @classmethod
         def from_id(cls, dag_id):
             res = _api('dag', 'describe', dag_id=dag_id)
+            if res is None:
+                raise DagError('No such dag')
             return cls(dag_id, res['name'], res['version'], None, None)
 
         def from_py(self, py):
             if isinstance(py, Node):
                 return py
-            res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(self, py))
+            res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(py, self))
             node = Node(self, res['node_id'])
             if node not in CACHE:
                 CACHE[node] = py
@@ -246,11 +293,15 @@ def daggerml():
             res = load_result(self.id, dag_name, version)
             return Node(self, res)
 
+        def get_resource(self):
+            res = _api('dag', 'put_resource', dag_id=self.id)
+            return Node(self, res['node_id']), res['secret']
+
         def __repr__(self):
             return f'Dag({self.name},{self.version})'
 
-    return Resource, Dag, Node
+    return Resource, Dag, Node, claim_node, commit_node
 
 
-Resource, Dag, Node = daggerml()
+Resource, Dag, Node, claim_node, commit_node = daggerml()
 del daggerml
