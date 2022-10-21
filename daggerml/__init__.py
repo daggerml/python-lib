@@ -19,12 +19,17 @@ class ApiError(DmlError):
     pass
 
 
-class NodeError(DmlError):
-    pass
-
-
 class DagError(DmlError):
     pass
+
+
+class NodeError(DmlError):
+    def __init__(self, node_id, msg):
+        super().__init__(msg)
+        self.node_id = node_id
+
+    def __repr__(self):
+        return f'NodeError({self.node_id}, {self.msg})'
 
 
 def _api(api_, op, **kwargs):
@@ -136,9 +141,7 @@ def daggerml():
 
     def claim_node(exec_id, ttl, node_id=None):
         resp = _api('node', 'claim_node', exec_id=exec_id, ttl=ttl, node_id=node_id)
-        if resp is not None:
-            resp['expr'] = from_data(resp['expr'])
-        return resp
+        return Dag.from_info(**resp)
 
     def commit_node(result, node_id, refresh_token, dag=None):
         resp = _api('node', 'commit_node', node_id=node_id,
@@ -168,7 +171,7 @@ def daggerml():
         def __call__(self, *args, block=True):
             args = [self.dag.from_py(x) for x in args]
             if callable(CACHE.get(self)):
-                resp = _api('dag', 'put_node_and_claim', dag_id=self.dag.id, ttl=0,
+                resp = _api('dag', 'put_fnapp_and_claim', dag_id=self.dag.id, ttl=0,
                             expr=[self.id] + [x.id for x in args])
                 if resp['success']:
                     return Node(self.dag, resp['node_id'])
@@ -176,30 +179,24 @@ def daggerml():
                     logger.debug('ignoring error: %s', json.dumps(resp['error']))
                 try:
                     result = CACHE[self](*args)
-                    resp2 = commit_node(result, resp['node_id'],
-                                        resp['refresh_token'], dag=self.dag)
+                    resp2 = _api('node', 'commit_node', node_id=resp['node_id'],
+                                 token=resp['refresh_token'], data=to_data(result, dag=self.dag))
                     assert resp2['finalized'], 'failed to finalize node'
                 except Exception as e:
                     err = {'message': str(e)}
                     _api('node', 'fail_node',
                          node_id=resp['node_id'], token=resp['refresh_token'],
                          error=err)
-                    raise NodeError(err)
+                    raise NodeError(resp['node_id'], err)
                 n = Node(self.dag, resp['node_id'])
                 CACHE[n] = result
                 return n
             expr = [self.id] + [x.id for x in args]
+            waiter = NodeWaiter(self.dag, expr)
             if not block:
-                return NodeWaiter(self.dag, expr)
-            while True:
-                resp = _api('dag', 'put_node', dag_id=self.dag.id, expr=expr)
-                if resp['success']:
-                    return Node(self.dag, resp['node_id'])
-                if resp['error'] is not None:
-                    logger.debug('ignoring error: %s', json.dumps(resp['error']))
-                    raise NodeError(resp['error'])
-                sleep(2)
-            return
+                return waiter
+            waiter.wait(2)
+            return waiter.result
 
         def to_py(self):
             return self.dag.to_py(self)
@@ -216,7 +213,7 @@ def daggerml():
             self.check()
 
         def check(self):
-            self._resp = _api('dag', 'put_node', dag_id=self.dag.id, expr=self.expr)
+            self._resp = _api('dag', 'put_fnapp', dag_id=self.dag.id, expr=self.expr)
             return self.result
 
         @property
@@ -229,7 +226,7 @@ def daggerml():
                 return Node(self.dag, self.node_id)
             if self._resp['error'] is not None:
                 logger.debug('ignoring error: %s', json.dumps(self._resp['error']))
-                raise NodeError(self._resp['error'])
+                raise NodeError(self.node_id, self._resp['error'])
             return
 
         def wait(self, dt=5):
@@ -241,7 +238,7 @@ def daggerml():
     def load_result(dag_id, dag_name, version='latest'):
         tmp = _api('dag', 'get_dag_by_name_version', name=dag_name, version=version)
         if tmp is None:
-            return None
+            raise DagError('No such dag/version: %s / %r' % (dag_name, version))
         res = _api('dag', 'put_load', dag_id=dag_id, node_id=tmp['result'])
         return res['node_id']
 
@@ -252,18 +249,17 @@ def daggerml():
         version: int
         _get_fn: str
         _exec_id: str
+        expr_id: str
 
         @classmethod
         def new(cls, name):
             res = _api('dag', 'create_dag', name=name)
-            return cls(res['id'], name, res['version'], res['get_fn'], res['executor_id'])
+            return cls(res['id'], name, res['version'], res['get_fn'],
+                       res['executor_id'], res['expr_id'])
 
         @classmethod
-        def from_id(cls, dag_id):
-            res = _api('dag', 'describe', dag_id=dag_id)
-            if res is None:
-                raise DagError('No such dag')
-            return cls(dag_id, res['name'], res['version'], None, None)
+        def from_info(cls, id, name, version, get_fn, executor_id, expr_id):
+            return cls(id, name, version, get_fn, executor_id, expr_id)
 
         def from_py(self, py):
             if isinstance(py, Node):
@@ -283,25 +279,33 @@ def daggerml():
             CACHE[node] = py
             return py
 
+        def fail(self, result=None):
+            kwargs = {}
+            if result is not None:
+                kwargs['result'] = self.from_py(result).id
+            if not _api('dag', 'fail_dag', dag_id=self.id, **kwargs)['success']:
+                raise DagError('Failed to fail dag')
+            return
+
         def commit(self, result):
             result = self.from_py(result)
             if not _api('dag', 'commit_dag', dag_id=self.id, result=result.id)['success']:
-                raise DagError('Cannot commit to a completed dag')
+                raise DagError('Failed to commit dag')
             return
 
         def load(self, dag_name, version='latest'):
             res = load_result(self.id, dag_name, version)
             return Node(self, res)
 
-        def get_resource(self):
-            res = _api('dag', 'put_resource', dag_id=self.id)
+        def create_resource(self):
+            res = _api('dag', 'create_resource', dag_id=self.id)
             return Node(self, res['node_id']), res['secret']
 
         def __repr__(self):
             return f'Dag({self.name},{self.version})'
 
-    return Resource, Dag, Node, claim_node, commit_node
+    return Resource, Dag, Node, claim_node  # , commit_node
 
 
-Resource, Dag, Node, claim_node, commit_node = daggerml()
+Resource, Dag, Node, claim_node = daggerml()
 del daggerml
