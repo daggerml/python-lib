@@ -32,7 +32,7 @@ class NodeError(DmlError):
         return f'NodeError({self.node_id}, {self.msg})'
 
 
-def _api(api_, op, **kwargs):
+def _api(api_, op, group=None, **kwargs):
     try:
         url = urlparse(DML_API_ENDPOINT)
         scheme = url.scheme or 'http'
@@ -41,6 +41,8 @@ def _api(api_, op, **kwargs):
         path = url.path or '/'
         conn = (HTTPConnection if scheme == 'http' else HTTPSConnection)(host, port)
         headers = {'content-type': 'application/json', 'accept': 'application/json'}
+        if isinstance(group, str):
+            headers['X-DaggerML-Group'] = group
         conn.request('POST', path, json.dumps(dict(api=api_, op=op, **kwargs)), headers)
         resp = conn.getresponse()
         if resp.status != 200:
@@ -93,7 +95,7 @@ def daggerml():
             if fn_id == '<lambda>':
                 fn_id += uuid4().hex
             fn_id = py.__module__ + ':' + fn_id
-            py = [Node(dag, dag._exec_id), fn_id]
+            py = [Node(dag, dag.executor_id), fn_id]
         if isinstance(py, list) or isinstance(py, tuple):
             return {'type': 'list', 'value': [to_data(x, dag) for x in py]}
         elif isinstance(py, dict) or isinstance(py, Mapping):
@@ -149,7 +151,7 @@ def daggerml():
             return len(self.dag.to_py(self))
 
         def __getitem__(self, key):
-            f = Node(self.dag, self.dag._get_fn)
+            f = Node(self.dag, self.dag.get_fn)
             resp = f(self, key)
             cached = CACHE.get(self)
             if cached is not None:
@@ -235,31 +237,30 @@ def daggerml():
     @dataclass(frozen=True)
     class Dag:
         id: str
-        name: str
-        version: int
-        _get_fn: str
-        _exec_id: str
-        expr_id: str
+        name: str = None
+        version: int = None
+        group: str = None
+        expr_id: str = None
+        get_fn: str = None
+        executor_id: str = None
 
         @classmethod
-        def new(cls, name):
-            res = _api('dag', 'create_dag', name=name)
-            return cls(res['id'], name, res['version'], res['get_fn'],
-                       res['executor_id'], res['expr_id'])
+        def new(cls, name, group='test0'):
+            res = _api('dag', 'create_dag', name=name, group=group)
+            return cls(res['id'], name, res['version'], group, res['expr_id'],
+                       res['get_fn'], res['executor_id'])
 
         @classmethod
-        def from_claim(cls, exec_id, ttl, node_id=None):
-            resp = _api('node', 'claim_node', exec_id=exec_id, ttl=ttl, node_id=node_id)
-            return cls.from_info(**resp)
-
-        @classmethod
-        def from_info(cls, id, name, version, get_fn, executor_id, expr_id):
-            return cls(id, name, version, get_fn, executor_id, expr_id)
+        def from_claim(cls, executor_id, ttl, node_id=None, group='test0'):
+            resp = _api('node', 'claim_node', executor_id=executor_id, ttl=ttl,
+                        node_id=node_id, group=group)
+            return cls(**resp, group=group)
 
         def from_py(self, py):
             if isinstance(py, Node):
                 return py
-            res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(py, self))
+            res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(py, self),
+                       group=self.group)
             node = Node(self, res['node_id'])
             if node not in CACHE:
                 CACHE[node] = py
@@ -270,7 +271,7 @@ def daggerml():
                 raise ValueError('node does not belong to dag')
             if node in CACHE:
                 return CACHE[node]
-            py = from_data(_api('node', 'get_node', node_id=node.id))
+            py = from_data(_api('node', 'get_node', node_id=node.id, group=self.group))
             CACHE[node] = py
             return py
 
@@ -278,13 +279,14 @@ def daggerml():
             kwargs = {}
             if result is not None:
                 kwargs['result'] = self.from_py(result).id
-            if not _api('dag', 'fail_dag', dag_id=self.id, **kwargs)['success']:
+            if not _api('dag', 'fail_dag', dag_id=self.id, group=self.group, **kwargs)['success']:
                 raise DagError('Failed to fail dag')
             return
 
         def commit(self, result):
             result = self.from_py(result)
-            if not _api('dag', 'commit_dag', dag_id=self.id, result=result.id)['success']:
+            if not _api('dag', 'commit_dag', dag_id=self.id, result=result.id,
+                        group=self.group)['success']:
                 raise DagError('Failed to commit dag')
             return
 
@@ -293,7 +295,7 @@ def daggerml():
             return Node(self, res)
 
         def create_resource(self):
-            res = _api('dag', 'create_resource', dag_id=self.id)
+            res = _api('dag', 'create_resource', dag_id=self.id, group=self.group)
             return Node(self, res['node_id']), res['secret']
 
         def __repr__(self):
