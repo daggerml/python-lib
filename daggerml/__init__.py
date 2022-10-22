@@ -84,7 +84,6 @@ def daggerml():
     def to_data(py, dag=None):
         if isinstance(py, Node):
             return {'type': 'ref', 'value': {'node_id': py.id}}
-            # py = py.to_py()
         if callable(py):
             if dag is None:
                 raise RuntimeError(
@@ -138,15 +137,6 @@ def daggerml():
             return Resource(v['id'], v['parent'])
         else:
             raise ValueError('unknown type: ' + t)
-
-    def claim_node(exec_id, ttl, node_id=None):
-        resp = _api('node', 'claim_node', exec_id=exec_id, ttl=ttl, node_id=node_id)
-        return Dag.from_info(**resp)
-
-    def commit_node(result, node_id, refresh_token, dag=None):
-        resp = _api('node', 'commit_node', node_id=node_id,
-                    token=refresh_token, data=to_data(result, dag=dag))
-        return resp
 
     CACHE = WeakKeyDictionary()
 
@@ -258,6 +248,11 @@ def daggerml():
                        res['executor_id'], res['expr_id'])
 
         @classmethod
+        def from_claim(cls, exec_id, ttl, node_id=None):
+            resp = _api('node', 'claim_node', exec_id=exec_id, ttl=ttl, node_id=node_id)
+            return cls.from_info(**resp)
+
+        @classmethod
         def from_info(cls, id, name, version, get_fn, executor_id, expr_id):
             return cls(id, name, version, get_fn, executor_id, expr_id)
 
@@ -304,8 +299,19 @@ def daggerml():
         def __repr__(self):
             return f'Dag({self.name},{self.version})'
 
-    return Resource, Dag, Node, claim_node  # , commit_node
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, exc_traceback):
+            if exc_type is not None:
+                err = None
+                if exc_type == NodeError:
+                    err = Node(self, exc_value.node_id)
+                self.fail(err)
+                return True  # FIXME remove this to not catch these errors
+
+    return Resource, Dag, Node
 
 
-Resource, Dag, Node, claim_node = daggerml()
+Resource, Dag, Node = daggerml()
 del daggerml
