@@ -163,11 +163,8 @@ def daggerml():
         def __call__(self, *args, block=True):
             args = [self.dag.from_py(x) for x in args]
             if callable(CACHE.get(self)):
-                executor = self.dag.executor
                 resp = _api('dag', 'put_fnapp_and_claim', dag_id=self.dag.id,
                             ttl=0, secret=self.dag.secret,
-                            executor_id=executor.id,
-                            executor_parent=executor.parent,
                             expr=[self.id] + [x.id for x in args])
                 if resp['success']:
                     return Node(self.dag, resp['node_id'])
@@ -178,16 +175,12 @@ def daggerml():
                     resp2 = _api('node', 'commit_node',
                                  node_id=resp['node_id'],
                                  secret=self.dag.secret,
-                                 executor_id=executor.id,
-                                 executor_parent=executor.parent,
                                  token=resp['refresh_token'],
                                  data=to_data(result, dag=self.dag))
                     assert resp2['finalized'], 'failed to finalize node'
                 except Exception as e:
                     err = {'message': str(e)}
                     _api('node', 'fail_node', secret=self.dag.secret,
-                         executor_id=executor.id,
-                         executor_parent=executor.parent,
                          node_id=resp['node_id'], token=resp['refresh_token'],
                          error=err)
                     raise NodeError(resp['node_id'], err)
@@ -217,8 +210,6 @@ def daggerml():
 
         def check(self):
             self._resp = _api('dag', 'put_fnapp', dag_id=self.dag.id,
-                              executor_id=self.dag.executor.id,
-                              executor_parent=self.dag.executor.parent,
                               expr=self.expr, secret=self.dag.secret)
             return self.result
 
@@ -279,9 +270,7 @@ def daggerml():
             if isinstance(py, Node):
                 return py
             res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(py, self),
-                       group=self.group, secret=self.secret,
-                       executor_id=self.executor.id,
-                       executor_parent=self.executor.parent)
+                       group=self.group, secret=self.secret)
             node = Node(self, res['node_id'])
             if node not in CACHE:
                 CACHE[node] = py
@@ -302,8 +291,6 @@ def daggerml():
             if result is not None:
                 kwargs['result'] = self.from_py(result).id
             if not _api('dag', 'fail_dag', dag_id=self.id, group=self.group,
-                        executor_id=self.executor.id,
-                        executor_parent=self.executor.parent,
                         secret=self.secret, **kwargs)['success']:
                 raise DagError('Failed to fail dag')
             return
@@ -311,8 +298,6 @@ def daggerml():
         def commit(self, result):
             result = self.from_py(result)
             if not _api('dag', 'commit_dag', dag_id=self.id, result=result.id,
-                        executor_id=self.executor.id,
-                        executor_parent=self.executor.parent,
                         group=self.group, secret=self.secret)['success']:
                 raise DagError('Failed to commit dag')
             return
@@ -322,15 +307,11 @@ def daggerml():
             if node_id is None:
                 raise DagError('No such dag/version: %s / %r' % (dag_name, version))
             res = _api('dag', 'put_load', dag_id=self.id,
-                       executor_id=self.executor.id,
-                       executor_parent=self.executor.parent,
                        node_id=node_id, secret=self.secret)
             return Node(self, res['node_id'])
 
         def create_resource(self):
             res = _api('dag', 'create_resource', dag_id=self.id,
-                       executor_id=self.executor.id,
-                       executor_parent=self.executor.parent,
                        group=self.group, secret=self.secret)
             return Node(self, res['node_id']), res['secret']
 
