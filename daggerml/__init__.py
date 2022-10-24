@@ -163,7 +163,11 @@ def daggerml():
         def __call__(self, *args, block=True):
             args = [self.dag.from_py(x) for x in args]
             if callable(CACHE.get(self)):
-                resp = _api('dag', 'put_fnapp_and_claim', dag_id=self.dag.id, ttl=0,
+                executor = self.dag.executor
+                resp = _api('dag', 'put_fnapp_and_claim', dag_id=self.dag.id,
+                            ttl=0, secret=self.dag.secret,
+                            executor_id=executor.id,
+                            executor_parent=executor.parent,
                             expr=[self.id] + [x.id for x in args])
                 if resp['success']:
                     return Node(self.dag, resp['node_id'])
@@ -171,12 +175,19 @@ def daggerml():
                     logger.debug('ignoring error: %s', json.dumps(resp['error']))
                 try:
                     result = CACHE[self](*args)
-                    resp2 = _api('node', 'commit_node', node_id=resp['node_id'],
-                                 token=resp['refresh_token'], data=to_data(result, dag=self.dag))
+                    resp2 = _api('node', 'commit_node',
+                                 node_id=resp['node_id'],
+                                 secret=self.dag.secret,
+                                 executor_id=executor.id,
+                                 executor_parent=executor.parent,
+                                 token=resp['refresh_token'],
+                                 data=to_data(result, dag=self.dag))
                     assert resp2['finalized'], 'failed to finalize node'
                 except Exception as e:
                     err = {'message': str(e)}
-                    _api('node', 'fail_node',
+                    _api('node', 'fail_node', secret=self.dag.secret,
+                         executor_id=executor.id,
+                         executor_parent=executor.parent,
                          node_id=resp['node_id'], token=resp['refresh_token'],
                          error=err)
                     raise NodeError(resp['node_id'], err)
@@ -205,7 +216,10 @@ def daggerml():
             self.check()
 
         def check(self):
-            self._resp = _api('dag', 'put_fnapp', dag_id=self.dag.id, expr=self.expr)
+            self._resp = _api('dag', 'put_fnapp', dag_id=self.dag.id,
+                              executor_id=self.dag.executor.id,
+                              executor_parent=self.dag.executor.parent,
+                              expr=self.expr, secret=self.dag.secret)
             return self.result
 
         @property
@@ -227,12 +241,11 @@ def daggerml():
                 self.check()
             return self.result
 
-    def load_result(dag_id, dag_name, version='latest'):
+    def get_dag_by_name_version(dag_name, version='latest'):
         tmp = _api('dag', 'get_dag_by_name_version', name=dag_name, version=version)
-        if tmp is None:
-            raise DagError('No such dag/version: %s / %r' % (dag_name, version))
-        res = _api('dag', 'put_load', dag_id=dag_id, node_id=tmp['result'])
-        return res['node_id']
+        if tmp is not None:
+            tmp = tmp['result']
+        return tmp
 
     @dataclass(frozen=True)
     class Dag:
@@ -243,24 +256,32 @@ def daggerml():
         expr_id: str = None
         get_fn: str = None
         executor_id: str = None
+        secret: str = None
+
+        def __post_init__(self):
+            if self.executor_id is not None:
+                object.__setattr__(self, 'executor', Node(self, self.executor_id).to_py())
+            pass
 
         @classmethod
         def new(cls, name, group='test0'):
-            res = _api('dag', 'create_dag', name=name, group=group)
-            return cls(res['id'], name, res['version'], group, res['expr_id'],
-                       res['get_fn'], res['executor_id'])
+            resp = _api('dag', 'create_dag', name=name, group=group)
+            return cls(**resp, group=group)
 
         @classmethod
-        def from_claim(cls, executor_id, ttl, node_id=None, group='test0'):
-            resp = _api('node', 'claim_node', executor_id=executor_id, ttl=ttl,
-                        node_id=node_id, group=group)
+        def from_claim(cls, executor, secret, ttl, node_id=None, group='test0'):
+            resp = _api('node', 'claim_node', executor_id=executor.id,
+                        executor_parent=executor.parent, ttl=ttl,
+                        node_id=node_id, group=group, secret=secret)
             return cls(**resp, group=group)
 
         def from_py(self, py):
             if isinstance(py, Node):
                 return py
             res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(py, self),
-                       group=self.group)
+                       group=self.group, secret=self.secret,
+                       executor_id=self.executor.id,
+                       executor_parent=self.executor.parent)
             node = Node(self, res['node_id'])
             if node not in CACHE:
                 CACHE[node] = py
@@ -271,7 +292,8 @@ def daggerml():
                 raise ValueError('node does not belong to dag')
             if node in CACHE:
                 return CACHE[node]
-            py = from_data(_api('node', 'get_node', node_id=node.id, group=self.group))
+            py = from_data(_api('node', 'get_node', node_id=node.id,
+                                group=self.group, secret=self.secret))
             CACHE[node] = py
             return py
 
@@ -279,23 +301,37 @@ def daggerml():
             kwargs = {}
             if result is not None:
                 kwargs['result'] = self.from_py(result).id
-            if not _api('dag', 'fail_dag', dag_id=self.id, group=self.group, **kwargs)['success']:
+            if not _api('dag', 'fail_dag', dag_id=self.id, group=self.group,
+                        executor_id=self.executor.id,
+                        executor_parent=self.executor.parent,
+                        secret=self.secret, **kwargs)['success']:
                 raise DagError('Failed to fail dag')
             return
 
         def commit(self, result):
             result = self.from_py(result)
             if not _api('dag', 'commit_dag', dag_id=self.id, result=result.id,
-                        group=self.group)['success']:
+                        executor_id=self.executor.id,
+                        executor_parent=self.executor.parent,
+                        group=self.group, secret=self.secret)['success']:
                 raise DagError('Failed to commit dag')
             return
 
         def load(self, dag_name, version='latest'):
-            res = load_result(self.id, dag_name, version)
-            return Node(self, res)
+            node_id = get_dag_by_name_version(dag_name, version)
+            if node_id is None:
+                raise DagError('No such dag/version: %s / %r' % (dag_name, version))
+            res = _api('dag', 'put_load', dag_id=self.id,
+                       executor_id=self.executor.id,
+                       executor_parent=self.executor.parent,
+                       node_id=node_id, secret=self.secret)
+            return Node(self, res['node_id'])
 
         def create_resource(self):
-            res = _api('dag', 'create_resource', dag_id=self.id, group=self.group)
+            res = _api('dag', 'create_resource', dag_id=self.id,
+                       executor_id=self.executor.id,
+                       executor_parent=self.executor.parent,
+                       group=self.group, secret=self.secret)
             return Node(self, res['node_id']), res['secret']
 
         def __repr__(self):
