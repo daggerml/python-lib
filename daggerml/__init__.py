@@ -335,7 +335,8 @@ def daggerml():
     def claim_execution(executor, secret, ttl, node_id=None, group='test0'):
         resp = _api('node', 'claim_node', executor=resource_to_data(executor),
                     ttl=ttl, node_id=node_id, group=group, secret=secret)
-        return Dag(**resp, group=group)
+        resp['group'] = group
+        return resp
 
     return Resource, Dag, Node, claim_execution
 
