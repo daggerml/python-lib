@@ -75,13 +75,23 @@ def daggerml():
     from collections.abc import Mapping
     from weakref import WeakKeyDictionary
     from dataclasses import dataclass
-    from typing import NewType
+    from typing import NewType, Optional
     from uuid import uuid4
 
     @dataclass(frozen=True)
     class Resource:
         id: str
-        parent: str
+        parent: Optional[NewType('Resource', None)]
+
+    def data_to_resource(data):
+        if data is None:
+            return None
+        return Resource(data['id'], data_to_resource(data['parent']))
+
+    def resource_to_data(rsrc):
+        if rsrc is None:
+            return None
+        return {'id': rsrc.id, 'parent': resource_to_data(rsrc.parent)}
 
     def to_data(py, dag=None):
         if isinstance(py, Node):
@@ -111,7 +121,7 @@ def daggerml():
         elif isinstance(py, float):
             return {'type': 'scalar', 'value': {'type': 'float', 'value': str(py)}}
         elif isinstance(py, Resource):
-            return {'type': 'resource', 'value': {'id': py.id, 'parent': py.parent}}
+            return {'type': 'resource', 'value': resource_to_data(py)}
         else:
             raise ValueError('unknown type: ' + type(py))
 
@@ -136,7 +146,7 @@ def daggerml():
             else:
                 raise ValueError('unknown scalar type: ' + t)
         elif t == 'resource':
-            return Resource(v['id'], v['parent'])
+            return data_to_resource(v)
         else:
             raise ValueError('unknown type: ' + t)
 
@@ -259,13 +269,6 @@ def daggerml():
             resp = _api('dag', 'create_dag', name=name, group=group)
             return cls(**resp, group=group)
 
-        @classmethod
-        def from_claim(cls, executor, secret, ttl, node_id=None, group='test0'):
-            resp = _api('node', 'claim_node', executor_id=executor.id,
-                        executor_parent=executor.parent, ttl=ttl,
-                        node_id=node_id, group=group, secret=secret)
-            return cls(**resp, group=group)
-
         def from_py(self, py):
             if isinstance(py, Node):
                 return py
@@ -329,8 +332,13 @@ def daggerml():
                 self.fail(err)
                 return True  # FIXME remove this to not catch these errors
 
-    return Resource, Dag, Node
+    def claim_execution(executor, secret, ttl, node_id=None, group='test0'):
+        resp = _api('node', 'claim_node', executor=resource_to_data(executor),
+                    ttl=ttl, node_id=node_id, group=group, secret=secret)
+        return Dag(**resp, group=group)
+
+    return Resource, Dag, Node, claim_execution
 
 
-Resource, Dag, Node = daggerml()
+Resource, Dag, Node, claim_execution = daggerml()
 del daggerml
