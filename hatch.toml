@@ -1,0 +1,23 @@
+[envs.default]
+python = "39"
+dependencies = []
+
+[envs.docs]
+python = "38"
+dependencies = [
+  "Sphinx>=5.1.1",
+  "sphinx-rtd-theme>=1.0.0",
+  "nbsphinx>=0.8.9",
+  "jupytext>=1.14.1",
+  "matplotlib>=3.5.3",
+  "numpy>=1.23.2",
+  "jupyter>=1.0.0",
+  "pandas>=1.4.3",
+  "boto3>=1.0",
+  "pyarrow>=9.0.0",
+  "s3fs>=2022.7.1",
+]
+
+[envs.docs.scripts]
+build = '(cd docs && make html)'
+serve = '(cd docs/_build/html && python -m http.server 8080)'
