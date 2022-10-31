@@ -1,9 +1,17 @@
 import json
 import logging
-from daggerml.__about__ import __version__  # noqa: F401
+import traceback as tb
 from daggerml._config import DML_API_ENDPOINT
 from http.client import HTTPConnection, HTTPSConnection
 from urllib.parse import urlparse
+from pkg_resources import get_distribution, DistributionNotFound
+
+try:
+    __version__ = get_distribution("daggerml").version
+except DistributionNotFound:
+    __version__ = 'local'
+
+del get_distribution, DistributionNotFound
 
 
 logger = logging.getLogger(__name__)
@@ -24,12 +32,7 @@ class DagError(DmlError):
 
 
 class NodeError(DmlError):
-    def __init__(self, node_id, msg):
-        super().__init__(msg)
-        self.node_id = node_id
-
-    def __repr__(self):
-        return f'NodeError({self.node_id}, {self.msg})'
+    pass
 
 
 def _api(api_, op, group=None, **kwargs):
@@ -70,6 +73,17 @@ def describe_dag(dag_id):
     return _api('dag', 'describe', dag_id=dag_id)
 
 
+def format_exception(err):
+    if isinstance(err, NodeError):
+        return {
+            'message': err.msg['message']
+        }
+    return {
+        'message': str(err),
+        'trace': tb.format_exception(type(err), value=err, tb=err.__traceback__)
+    }
+
+
 def daggerml():
     from time import sleep
     from collections.abc import Mapping
@@ -83,15 +97,16 @@ def daggerml():
         id: str
         parent: Optional[NewType('Resource', None)]
 
-    def data_to_resource(data):
-        if data is None:
-            return None
-        return Resource(data['id'], data_to_resource(data['parent']))
+        @classmethod
+        def from_json(cls, data):
+            if data['parent'] is None:
+                return cls(data['id'], None)
+            return cls(data['id'], cls.from_json(data['parent']))
 
-    def resource_to_data(rsrc):
-        if rsrc is None:
-            return None
-        return {'id': rsrc.id, 'parent': resource_to_data(rsrc.parent)}
+        def to_json(self):
+            if self.parent is None:
+                return {'id': self.id, 'parent': None}
+            return {'id': self.id, 'parent': self.parent.to_json()}
 
     def to_data(py, dag=None):
         if isinstance(py, Node):
@@ -121,7 +136,7 @@ def daggerml():
         elif isinstance(py, float):
             return {'type': 'scalar', 'value': {'type': 'float', 'value': str(py)}}
         elif isinstance(py, Resource):
-            return {'type': 'resource', 'value': resource_to_data(py)}
+            return {'type': 'resource', 'value': py.to_json()}
         else:
             raise ValueError('unknown type: ' + type(py))
 
@@ -146,7 +161,7 @@ def daggerml():
             else:
                 raise ValueError('unknown scalar type: ' + t)
         elif t == 'resource':
-            return data_to_resource(v)
+            return Resource.from_json(v)
         else:
             raise ValueError('unknown type: ' + t)
 
@@ -164,7 +179,7 @@ def daggerml():
             f = Node(self.dag, self.dag.get_fn)
             resp = f(self, key)
             cached = CACHE.get(self)
-            if cached is not None:
+            if cached is not None:  # populate value in cache from cache (local funcs)
                 if isinstance(key, Node):
                     key = key.to_py()
                 CACHE[resp] = cached[key]
@@ -189,11 +204,11 @@ def daggerml():
                                  data=to_data(result, dag=self.dag))
                     assert resp2['finalized'], 'failed to finalize node'
                 except Exception as e:
-                    err = {'message': str(e)}
+                    err = format_exception(e)
                     _api('node', 'fail_node', secret=self.dag.secret,
                          node_id=resp['node_id'], token=resp['refresh_token'],
                          error=err)
-                    raise NodeError(resp['node_id'], err)
+                    raise NodeError(err)
                 n = Node(self.dag, resp['node_id'])
                 CACHE[n] = result
                 return n
@@ -233,7 +248,7 @@ def daggerml():
                 return Node(self.dag, self.node_id)
             if self._resp['error'] is not None:
                 logger.debug('ignoring error: %s', json.dumps(self._resp['error']))
-                raise NodeError(self.node_id, self._resp['error'])
+                raise NodeError(self._resp['error'])
             return
 
         def wait(self, dt=5):
@@ -289,20 +304,15 @@ def daggerml():
             CACHE[node] = py
             return py
 
-        def fail(self, result=None):
-            kwargs = {}
-            if result is not None:
-                kwargs['result'] = self.from_py(result).id
-            if not _api('dag', 'fail_dag', dag_id=self.id, group=self.group,
-                        secret=self.secret, **kwargs)['success']:
-                raise DagError('Failed to fail dag')
+        def fail(self, failure_info={}):
+            _api('dag', 'fail_dag', dag_id=self.id, group=self.group,
+                 secret=self.secret, failure_info=failure_info)
             return
 
         def commit(self, result):
             result = self.from_py(result)
-            if not _api('dag', 'commit_dag', dag_id=self.id, result=result.id,
-                        group=self.group, secret=self.secret)['success']:
-                raise DagError('Failed to commit dag')
+            _api('dag', 'commit_dag', dag_id=self.id, result=result.id,
+                 group=self.group, secret=self.secret)
             return
 
         def load(self, dag_name, version='latest'):
@@ -324,16 +334,13 @@ def daggerml():
         def __enter__(self):
             return self
 
-        def __exit__(self, exc_type, exc_value, exc_traceback):
-            if exc_type is not None:
-                err = None
-                if exc_type == NodeError:
-                    err = Node(self, exc_value.node_id)
-                self.fail(err)
+        def __exit__(self, _, exc_val, __):
+            if exc_val is not None:
+                self.fail(format_exception(exc_val))
                 return True  # FIXME remove this to not catch these errors
 
     def claim_execution(executor, secret, ttl, node_id=None, group='test0'):
-        resp = _api('node', 'claim_node', executor=resource_to_data(executor),
+        resp = _api('node', 'claim_node', executor=executor.to_json(),
                     ttl=ttl, node_id=node_id, group=group, secret=secret)
         resp['group'] = group
         return resp
