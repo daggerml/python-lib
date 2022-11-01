@@ -1,7 +1,7 @@
 import json
 import logging
 import traceback as tb
-from daggerml._config import DML_API_ENDPOINT
+from daggerml._config import DML_API_ENDPOINT, DML_API_KEY
 from http.client import HTTPConnection, HTTPSConnection
 from urllib.parse import urlparse
 from pkg_resources import get_distribution, DistributionNotFound
@@ -35,18 +35,22 @@ class NodeError(DmlError):
     pass
 
 
-def _api(api_, op, group=None, **kwargs):
+def _api(api, op, group=None, **kwargs):
     try:
         url = urlparse(DML_API_ENDPOINT)
-        scheme = url.scheme or 'http'
-        host = url.hostname or 'localhost'
-        port = url.port or 80
-        path = url.path or '/'
+        scheme = url.scheme
+        host = url.hostname
+        port = url.port
+        path = url.path
+        assert all(x is not None for x in [scheme, host, port, path]), \
+            f'invalid endpoint URL: {DML_API_ENDPOINT}'
         conn = (HTTPConnection if scheme == 'http' else HTTPSConnection)(host, port)
         headers = {'content-type': 'application/json', 'accept': 'application/json'}
-        if isinstance(group, str):
-            headers['X-DaggerML-Group'] = group
-        conn.request('POST', path, json.dumps(dict(api=api_, op=op, **kwargs)), headers)
+        if DML_API_KEY is not None:
+            headers['x-daggerml-apikey'] = DML_API_KEY
+        if group is not None:
+            headers['x-daggerml-group'] = group
+        conn.request('POST', path, json.dumps(dict(api=api, op=op, **kwargs)), headers)
         resp = conn.getresponse()
         if resp.status != 200:
             raise ApiError(f'{resp.status} {resp.reason}')
@@ -54,7 +58,7 @@ def _api(api_, op, group=None, **kwargs):
         if resp['status'] != 'ok':
             err = resp['error']
             if err['context']:
-                logger.error('api error: %s', '\n'.join(err['context']))
+                logger.error('api error: %s', err['context'])
             raise ApiError(f'{err["code"]}: {err["message"]}')
         return resp['result']
     except KeyboardInterrupt:
