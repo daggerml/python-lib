@@ -41,17 +41,19 @@ class NodeError(DmlError):
 class Resource:
     id: str
     parent: Optional[NewType('Resource', None)]
+    tag: Optional[str] = None
 
     @classmethod
     def from_json(cls, data):
         if data['parent'] is None:
-            return cls(data['id'], None)
-        return cls(data['id'], cls.from_json(data['parent']))
+            return cls(data['id'], data['tag'], None)
+        return cls(data['id'], cls.from_json(data['parent']), data['tag'])
 
     def to_json(self):
-        if self.parent is None:
-            return {'id': self.id, 'parent': None}
-        return {'id': self.id, 'parent': self.parent.to_json()}
+        parent = None
+        if self.parent is not None:
+            parent = self.parent.to_json()
+        return {'id': self.id, 'tag': self.tag, 'parent': parent}
 
 
 def _api(api, op, group=None, **kwargs):
@@ -103,13 +105,6 @@ def get_dag_by_name_version(dag_name, version='latest'):
     return tmp['result']
 
 
-def claim_execution(executor, secret, ttl, node_id=None, group='test0'):
-    resp = _api('node', 'claim_node', executor=executor.to_json(),
-                ttl=ttl, node_id=node_id, group=group, secret=secret)
-    resp['group'] = group
-    return resp
-
-
 def format_exception(err):
     if isinstance(err, NodeError):
         return err.msg
@@ -124,6 +119,13 @@ def daggerml():
     from collections.abc import Mapping
     from weakref import WeakKeyDictionary
     from uuid import uuid4
+
+    tag2resource = {}
+
+    def register_tag(tag, cls):
+        assert tag not in tag2resource
+        tag2resource[tag] = cls
+        return
 
     def to_data(py, dag=None):
         if isinstance(py, Node):
@@ -178,7 +180,7 @@ def daggerml():
             else:
                 raise ValueError('unknown scalar type: ' + t)
         elif t == 'resource':
-            return Resource.from_json(v)
+            return tag2resource.get(v['tag'], Resource).from_json(v)
         else:
             raise ValueError('unknown type: ' + t)
 
@@ -346,9 +348,9 @@ def daggerml():
                        node_id=node_id, secret=self.secret)
             return Node(self, res['node_id'])
 
-        def create_resource(self):
+        def create_resource(self, tag=None):
             res = _api('dag', 'create_resource', dag_id=self.id,
-                       group=self.group, secret=self.secret)
+                       group=self.group, secret=self.secret, tag=tag)
             return Node(self, res['node_id']), res['secret']
 
         def __repr__(self):
@@ -362,8 +364,8 @@ def daggerml():
                 self.fail(format_exception(exc_val))
                 return True  # FIXME remove this to not catch these errors
 
-    return Dag, Node
+    return Dag, Node, register_tag
 
 
-Dag, Node = daggerml()
+Dag, Node, register_tag = daggerml()
 del daggerml
