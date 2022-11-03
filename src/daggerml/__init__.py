@@ -1,6 +1,8 @@
 import json
 import logging
 import traceback as tb
+from dataclasses import dataclass
+from typing import NewType, Optional
 from daggerml._config import DML_API_ENDPOINT, DML_API_KEY
 from http.client import HTTPConnection, HTTPSConnection
 from urllib.parse import urlparse
@@ -35,12 +37,29 @@ class NodeError(DmlError):
     pass
 
 
+@dataclass(frozen=True)
+class Resource:
+    id: str
+    parent: Optional[NewType('Resource', None)]
+
+    @classmethod
+    def from_json(cls, data):
+        if data['parent'] is None:
+            return cls(data['id'], None)
+        return cls(data['id'], cls.from_json(data['parent']))
+
+    def to_json(self):
+        if self.parent is None:
+            return {'id': self.id, 'parent': None}
+        return {'id': self.id, 'parent': self.parent.to_json()}
+
+
 def _api(api, op, group=None, **kwargs):
     try:
         url = urlparse(DML_API_ENDPOINT)
         scheme = url.scheme
         host = url.hostname
-        port = url.port
+        port = url.port or 443
         path = url.path
         assert all(x is not None for x in [scheme, host, port, path]), \
             f'invalid endpoint URL: {DML_API_ENDPOINT}'
@@ -77,11 +96,23 @@ def describe_dag(dag_id):
     return _api('dag', 'describe', dag_id=dag_id)
 
 
+def get_dag_by_name_version(dag_name, version='latest'):
+    tmp = _api('dag', 'get_dag_by_name_version', name=dag_name, version=version)
+    if tmp is None:
+        return None
+    return tmp['result']
+
+
+def claim_execution(executor, secret, ttl, node_id=None, group='test0'):
+    resp = _api('node', 'claim_node', executor=executor.to_json(),
+                ttl=ttl, node_id=node_id, group=group, secret=secret)
+    resp['group'] = group
+    return resp
+
+
 def format_exception(err):
     if isinstance(err, NodeError):
-        return {
-            'message': err.msg['message']
-        }
+        return err.msg
     return {
         'message': str(err),
         'trace': tb.format_exception(type(err), value=err, tb=err.__traceback__)
@@ -92,25 +123,7 @@ def daggerml():
     from time import sleep
     from collections.abc import Mapping
     from weakref import WeakKeyDictionary
-    from dataclasses import dataclass
-    from typing import NewType, Optional
     from uuid import uuid4
-
-    @dataclass(frozen=True)
-    class Resource:
-        id: str
-        parent: Optional[NewType('Resource', None)]
-
-        @classmethod
-        def from_json(cls, data):
-            if data['parent'] is None:
-                return cls(data['id'], None)
-            return cls(data['id'], cls.from_json(data['parent']))
-
-        def to_json(self):
-            if self.parent is None:
-                return {'id': self.id, 'parent': None}
-            return {'id': self.id, 'parent': self.parent.to_json()}
 
     def to_data(py, dag=None):
         if isinstance(py, Node):
@@ -261,12 +274,6 @@ def daggerml():
                 self.check()
             return self.result
 
-    def get_dag_by_name_version(dag_name, version='latest'):
-        tmp = _api('dag', 'get_dag_by_name_version', name=dag_name, version=version)
-        if tmp is not None:
-            tmp = tmp['result']
-        return tmp
-
     @dataclass(frozen=True)
     class Dag:
         id: str
@@ -278,15 +285,27 @@ def daggerml():
         executor_id: str = None
         secret: str = None
 
-        def __post_init__(self):
-            if self.executor_id is not None:
-                object.__setattr__(self, 'executor', Node(self, self.executor_id).to_py())
-            pass
+        @property
+        def expr(self):
+            return Node(self, self.expr_id)
+
+        @property
+        def executor(self):
+            return Node(self, self.executor_id).to_py()
 
         @classmethod
         def new(cls, name, group='test0'):
             resp = _api('dag', 'create_dag', name=name, group=group)
             return cls(**resp, group=group)
+
+        @classmethod
+        def from_claim(cls, executor, secret, ttl, group, node_id=None):
+            resp = _api('node', 'claim_node', executor=executor.to_json(),
+                        ttl=ttl, node_id=node_id, group=group, secret=secret)
+            if resp['id'] is None:
+                return
+            resp['group'] = group
+            return cls(**resp)
 
         def from_py(self, py):
             if isinstance(py, Node):
@@ -343,14 +362,8 @@ def daggerml():
                 self.fail(format_exception(exc_val))
                 return True  # FIXME remove this to not catch these errors
 
-    def claim_execution(executor, secret, ttl, node_id=None, group='test0'):
-        resp = _api('node', 'claim_node', executor=executor.to_json(),
-                    ttl=ttl, node_id=node_id, group=group, secret=secret)
-        resp['group'] = group
-        return resp
-
-    return Resource, Dag, Node, claim_execution
+    return Dag, Node
 
 
-Resource, Dag, Node, claim_execution = daggerml()
+Dag, Node = daggerml()
 del daggerml
