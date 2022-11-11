@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daggerml"
-version = "0.0.1"
+version = "0.0.3"
 authors = [
   { name="DaggerML", email="engineering@daggerml.com" }
 ]
@@ -26,11 +26,6 @@ classifiers = [
 ]
 dependencies = [
   "dataclasses; python_version < '3.7'"
-]
-
-[project.optional-dependencies]
-aws = [
-  "boto3>=1.0"
 ]
 
 [project.urls]

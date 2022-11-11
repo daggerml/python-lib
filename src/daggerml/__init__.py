@@ -44,15 +44,15 @@ class Resource:
     tag: Optional[str] = None
 
     @classmethod
-    def from_json(cls, data):
+    def from_dict(cls, data):
         if data['parent'] is None:
             return cls(data['id'], data['tag'], None)
-        return cls(data['id'], cls.from_json(data['parent']), data['tag'])
+        return cls(data['id'], cls.from_dict(data['parent']), data['tag'])
 
-    def to_json(self):
+    def to_dict(self):
         parent = None
         if self.parent is not None:
-            parent = self.parent.to_json()
+            parent = self.parent.to_dict()
         return {'id': self.id, 'tag': self.tag, 'parent': parent}
 
 
@@ -155,7 +155,7 @@ def daggerml():
         elif isinstance(py, float):
             return {'type': 'scalar', 'value': {'type': 'float', 'value': str(py)}}
         elif isinstance(py, Resource):
-            return {'type': 'resource', 'value': py.to_json()}
+            return {'type': 'resource', 'value': py.to_dict()}
         else:
             raise ValueError('unknown type: ' + type(py))
 
@@ -180,7 +180,7 @@ def daggerml():
             else:
                 raise ValueError('unknown scalar type: ' + t)
         elif t == 'resource':
-            return tag2resource.get(v['tag'], Resource).from_json(v)
+            return tag2resource.get(v['tag'], Resource).from_dict(v)
         else:
             raise ValueError('unknown type: ' + t)
 
@@ -287,14 +287,6 @@ def daggerml():
         executor_id: str = None
         secret: str = None
 
-        @property
-        def expr(self):
-            return Node(self, self.expr_id)
-
-        @property
-        def executor(self):
-            return Node(self, self.executor_id).to_py()
-
         @classmethod
         def new(cls, name, group='test0'):
             resp = _api('dag', 'create_dag', name=name, group=group)
@@ -302,12 +294,19 @@ def daggerml():
 
         @classmethod
         def from_claim(cls, executor, secret, ttl, group, node_id=None):
-            resp = _api('node', 'claim_node', executor=executor.to_json(),
+            resp = _api('node', 'claim_node', executor=executor.to_dict(),
                         ttl=ttl, node_id=node_id, group=group, secret=secret)
-            if resp['id'] is None:
+            if resp is None:
                 return
-            resp['group'] = group
-            return cls(**resp)
+            return cls(**resp, group=group)
+
+        @property
+        def expr(self):
+            return Node(self, self.expr_id)
+
+        @property
+        def executor(self):
+            return Node(self, self.executor_id).to_py()
 
         def from_py(self, py):
             if isinstance(py, Node):
@@ -338,6 +337,14 @@ def daggerml():
             result = self.from_py(result)
             _api('dag', 'commit_dag', dag_id=self.id, result=result.id,
                  group=self.group, secret=self.secret)
+            return
+
+        def refresh(self, ttl=300):
+            res = _api('dag', 'refresh_claim', dag_id=self.id,
+                       group=self.group, secret=self.secret, ttl=ttl,
+                       refresh_token=self.id)
+            if res is None:
+                raise DagError('Failed to refresh dag!')
             return
 
         def load(self, dag_name, version='latest'):
