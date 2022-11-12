@@ -288,9 +288,10 @@ def daggerml():
         secret: str = None
 
         @classmethod
-        def new(cls, name, group='test0'):
-            resp = _api('dag', 'create_dag', name=name, group=group)
-            return cls(**resp, group=group)
+        def new(cls, name, version=None, group='test0'):
+            resp = _api('dag', 'create_dag', name=name, version=version, group=group)
+            if resp is not None:
+                return cls(**resp, group=group)
 
         @classmethod
         def from_claim(cls, executor, secret, ttl, group, node_id=None):
