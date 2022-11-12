@@ -345,7 +345,7 @@ def daggerml():
                        refresh_token=self.id)
             if res is None:
                 raise DagError('Failed to refresh dag!')
-            return
+            return res
 
         def load(self, dag_name, version='latest'):
             node_id = get_dag_by_name_version(dag_name, version)
