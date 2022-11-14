@@ -295,7 +295,9 @@ def daggerml():
 
         @classmethod
         def from_claim(cls, executor, secret, ttl, group, node_id=None):
-            resp = _api('node', 'claim_node', executor=executor.to_dict(),
+            if isinstance(executor, Resource):
+                executor = executor.to_dict()
+            resp = _api('node', 'claim_node', executor=executor,
                         ttl=ttl, node_id=node_id, group=group, secret=secret)
             if resp is None:
                 return
