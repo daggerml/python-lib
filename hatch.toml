@@ -1,6 +1,9 @@
 [envs.default]
 python = "39"
-dependencies = []
+dependencies = [
+  "pytest",
+  "pytest-cov"
+]
 
 [envs.docs]
 python = "38"

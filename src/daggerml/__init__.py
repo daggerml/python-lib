@@ -1,5 +1,6 @@
 import json
 import logging
+import warnings
 import traceback as tb
 from dataclasses import dataclass
 from typing import NewType, Optional
@@ -17,6 +18,32 @@ del get_distribution, DistributionNotFound
 
 
 logger = logging.getLogger(__name__)
+
+
+def _json_dumps_default(obj):
+    if isinstance(obj, Resource):
+        return {'type': 'resource', 'value': obj.to_dict()}
+    raise TypeError('unknown type %r' % type(obj))
+
+
+def json_dumps(obj, *, skipkeys=False, ensure_ascii=True,
+               check_circular=True, allow_nan=True,
+               cls=None, indent=None, separators=(',', ':'),
+               default=None, sort_keys=True, **kw):
+    if default is not None:
+        def _default(x):
+            try:
+                y = _json_dumps_default(x)
+            except TypeError:
+                y = default(x)
+            return y
+    else:
+        def _default(x):
+            return _json_dumps_default(x)
+    return json.dumps(obj, skipkeys=skipkeys, ensure_ascii=ensure_ascii,
+                      check_circular=check_circular, allow_nan=allow_nan,
+                      cls=cls, indent=indent, separators=separators,
+                      default=_default, sort_keys=sort_keys, **kw)
 
 
 class DmlError(Exception):
@@ -123,7 +150,8 @@ def daggerml():
     tag2resource = {}
 
     def register_tag(tag, cls):
-        assert tag not in tag2resource
+        if tag in tag2resource:
+            warnings.warn('tag is already registered')
         tag2resource[tag] = cls
         return
 
@@ -332,6 +360,8 @@ def daggerml():
             return py
 
         def fail(self, failure_info={}):
+            if isinstance(failure_info, (dict, list, tuple, Resource)):
+                failure_info = json.loads(json_dumps(failure_info))
             _api('dag', 'fail_dag', dag_id=self.id, group=self.group,
                  secret=self.secret, failure_info=failure_info)
             return
