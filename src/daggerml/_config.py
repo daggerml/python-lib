@@ -1,7 +1,10 @@
 import configparser
+import logging
 import os
 import pathlib
 
+
+logger = logging.getLogger(__name__)
 USER_HOME_DIR = str(pathlib.Path.home())
 
 LOCALSTACK_HOST = os.getenv('LOCALSTACK_HOST')
@@ -54,15 +57,15 @@ def configure():
             config.read(config_file)
             if profile in config:
                 section = config[profile]
+                ks = keys[file_type]
                 for (k, v) in section.items():
-                    ks = keys[file_type]
                     if k in ks:
                         var = ks[k]
                         if globals()[var] is None:
                             globals()[var] = v
                     else:
-                        loc = config_file + ': in [' + str(section.name) + ']'
-                        raise RuntimeError('invalid key: ' + k + ': in ' + loc)
+                        logger.warning('invalid config key: %s in %s:[%s].',
+                                       k, config_file, str(section.name))
 
     for d in config_dirs:
         for f in config_files:

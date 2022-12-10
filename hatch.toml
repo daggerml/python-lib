@@ -2,7 +2,8 @@
 python = "39"
 dependencies = [
   "pytest",
-  "pytest-cov"
+  "pytest-cov",
+  "boto3"
 ]
 
 [envs.docs]
