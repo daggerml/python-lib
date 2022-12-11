@@ -63,9 +63,6 @@ def configure():
                         var = ks[k]
                         if globals()[var] is None:
                             globals()[var] = v
-                    else:
-                        logger.warning('invalid config key: %s in %s:[%s].',
-                                       k, config_file, str(section.name))
 
     for d in config_dirs:
         for f in config_files:
