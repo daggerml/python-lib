@@ -1,10 +1,11 @@
 import json
 import logging
+import sys
 import warnings
 import traceback as tb
 from dataclasses import dataclass
 from typing import NewType, Optional
-from daggerml._config import DML_API_ENDPOINT, DML_API_KEY
+from daggerml._config import DML_API_ENDPOINT, DML_API_KEY, DML_GROUP_ID
 from http.client import HTTPConnection, HTTPSConnection
 from urllib.parse import urlparse
 from pkg_resources import get_distribution, DistributionNotFound
@@ -316,7 +317,7 @@ def daggerml():
         secret: str = None
 
         @classmethod
-        def new(cls, name, version=None, group='test0'):
+        def new(cls, name, version=None, group=DML_GROUP_ID):
             resp = _api('dag', 'create_dag', name=name, version=version, group=group)
             if resp is not None:
                 return cls(**resp, group=group)
@@ -404,8 +405,12 @@ def daggerml():
                 self.fail(format_exception(exc_val))
                 return True  # FIXME remove this to not catch these errors
 
-    return Dag, Node, register_tag
+    def login(username, password):
+        resp = _api('auth', 'create_api_key', username=username, password=password)
+        return resp
+
+    return Dag, Node, register_tag, login
 
 
-Dag, Node, register_tag = daggerml()
+Dag, Node, register_tag, login = daggerml()
 del daggerml

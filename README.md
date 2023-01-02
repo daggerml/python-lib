@@ -9,6 +9,27 @@ If [pipx](https://pypa.github.io/pipx/) is not installed, first do that.
 *hatch*
 Then install [hatch](https://hatch.pypa.io/latest/) via: `pipx install hatch`.
 
+## Configuration
+
+```bash
+# help
+python -m daggerml --help
+
+# configure global API endpoint
+python -m daggerml configure \
+  --global \
+  --profile ${DML_PROFILE} \ # optional
+  --api-endpoint https://api.${DML_ZONE}-${AWS_REGION}.${DOMAIN}
+
+# configure API key
+python -m daggerml login \
+  --profile ${DML_PROFILE} \ # optional
+  --username ${USERNAME}
+
+# configure group ID for local project
+python -m daggerml configure --group-id ${DML_GROUP_ID}
+```
+
 ## Usage
 
 You currently need `AWS_DEFAULT_REGION` and `DML_ZONE` environment variables
