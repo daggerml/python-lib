@@ -237,8 +237,7 @@ def daggerml():
             args = [self.dag.from_py(x) for x in args]
             if callable(CACHE.get(self)):
                 resp = _api('dag', 'put_fnapp_and_claim', dag_id=self.dag.id,
-                            ttl=0, secret=self.dag.secret,
-                            expr=[self.id] + [x.id for x in args])
+                            ttl=0, expr=[self.id] + [x.id for x in args])
                 if resp['success']:
                     return Node(self.dag, resp['node_id'])
                 if resp['error'] is not None:
@@ -370,6 +369,11 @@ def daggerml():
         def commit(self, result):
             result = self.from_py(result)
             _api('dag', 'commit_dag', dag_id=self.id, result=result.id,
+                 group=self.group, secret=self.secret)
+            return
+
+        def delete(self):
+            _api('dag', 'delete_dag', dag_id=self.id,
                  group=self.group, secret=self.secret)
             return
 
