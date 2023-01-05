@@ -64,12 +64,12 @@ def configure():
 
     def from_file(config_dir, file_type, profile):
         config_file = os.path.join(config_dir, file_type)
+        ks = keys[file_type]
         if os.path.exists(config_file) and profile is not None:
             config = ConfigParser(interpolation=ExtendedInterpolation())
             config.read(config_file)
             if profile in config:
                 section = config[profile]
-                ks = keys[file_type]
                 for (k, v) in section.items():
                     if k in ks:
                         set_global(ks[k], v)
@@ -82,9 +82,10 @@ def configure():
     # FIXME: remove when references to DML_ZONE and DML_REGION are eliminated
     if globals().get('DML_API_ENDPOINT') is not None:
         url = urlparse(globals()['DML_API_ENDPOINT'])
-        m = re.search('^api\.([^-]+)-([^.]+)\.', url.netloc)
-        set_global('DML_ZONE', m.group(1))
-        set_global('DML_REGION', m.group(2))
+        m = re.search(r'^api\.([^-]+)-([^.]+)\.', url.netloc)
+        if m is not None and len(m.groups()) > 1:
+            set_global('DML_ZONE', m.group(1))
+            set_global('DML_REGION', m.group(2))
 
     def get_config_dir(_global):
         config_dir = USER_HOME_DIR if _global else os.getcwd()

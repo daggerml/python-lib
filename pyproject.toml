@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daggerml"
-version = "0.0.8"
+version = "0.0.9"
 authors = [
   { name="DaggerML", email="engineering@daggerml.com" }
 ]
@@ -30,9 +30,10 @@ dependencies = [
 
 [project.optional-dependencies]
 conf = ["boto3", "click"]
+all = ["boto3", "click"]
 
 [project.scripts]
-daggerml-configure = "daggerml.configure:cli"
+dml = "daggerml.cli:cli"
 
 [project.urls]
 Homepage = "https://daggerml.com"

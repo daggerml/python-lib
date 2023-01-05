@@ -1,6 +1,5 @@
 import json
 import logging
-import sys
 import warnings
 import traceback as tb
 from dataclasses import dataclass
@@ -235,9 +234,10 @@ def daggerml():
 
         def __call__(self, *args, block=True):
             args = [self.dag.from_py(x) for x in args]
+            expr = [self.id] + [x.id for x in args]
             if callable(CACHE.get(self)):
                 resp = _api('dag', 'put_fnapp_and_claim', dag_id=self.dag.id,
-                            ttl=0, expr=[self.id] + [x.id for x in args])
+                            ttl=0, expr=expr)
                 if resp['success']:
                     return Node(self.dag, resp['node_id'])
                 if resp['error'] is not None:
@@ -259,7 +259,7 @@ def daggerml():
                 n = Node(self.dag, resp['node_id'])
                 CACHE[n] = result
                 return n
-            expr = [self.id] + [x.id for x in args]
+            print('running remote:', expr)
             waiter = NodeWaiter(self.dag, expr)
             if not block:
                 return waiter
@@ -281,8 +281,10 @@ def daggerml():
             self.check()
 
         def check(self):
+            print('checking remote:', self.dag.id)
             self._resp = _api('dag', 'put_fnapp', dag_id=self.dag.id,
                               expr=self.expr, secret=self.dag.secret)
+            print('done checking remote:', self.result)
             return self.result
 
         @property
