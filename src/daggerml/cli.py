@@ -1,17 +1,17 @@
 import click
-import sys
 import daggerml as dml
 import daggerml._config as config
-import logging
 from daggerml._config import DML_PROFILE, DML_GROUP_ID, DML_API_ENDPOINT
+import json
+import logging
+import sys
 
 
 logger = logging.getLogger(__name__)
 
 
 @click.group(context_settings={'show_default': True,
-                               'help_option_names': ['-h', '--help'],
-                               'auto_envvar_prefix': 'DML'})
+                               'help_option_names': ['-h', '--help']})
 def cli():
     pass
 
@@ -47,13 +47,14 @@ def dag():
 @click.option('-n', '--name',
               help='optional name to filter on')
 def dag_list(name):
-    click.echo(dml.list_dags(name))
+    for x in dml.list_dags(name):
+        click.echo(json.dumps(x))
 
 
-@dag.command('describe', help='list dags')
-@click.argument('dag_id', help='dag ID')
+@dag.command('describe', help='describe dags')
+@click.argument('dag_id')
 def dag_describe(dag_id):
-    click.echo(dml.describe_dag(dag_id))
+    click.echo(json.dumps(dml.describe_dag(dag_id)))
 
 
 if __name__ == '__main__':
