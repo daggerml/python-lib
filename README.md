@@ -30,6 +30,21 @@ python -m daggerml login \
 python -m daggerml configure --group-id ${DML_GROUP_ID}
 ```
 
+```bash
+# bash command completion
+pip install argcomplete
+
+# enable completion for dml in this shell
+eval "$(register-python-argcomplete dml)"
+
+# enable completion for dml via bashrc
+cat <<'EOT' >> ~/.bashrc
+eval "$(register-python-argcomplete dml)"
+EOT
+
+# or see: https://kislyuk.github.io/argcomplete/#activating-global-completion
+```
+
 ## Usage
 
 You currently need `AWS_DEFAULT_REGION` and `DML_ZONE` environment variables
