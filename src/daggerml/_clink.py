@@ -42,9 +42,10 @@ class Cli:
 
 class Command:
     def __init__(self, subparsers, func, *args, **kwargs):
-        self.command = func.__name__.replace('_', '-')
+        self.command = func.__name__
+        self.name = self.command.replace('_', '-')
         self.func = func
-        self.parser = subparsers.add_parser(self.command, *args, **kwargs)
+        self.parser = subparsers.add_parser(self.name, *args, **kwargs)
         self.parser.set_defaults(func=self)
 
     def arg(self, *args, **kwargs):
