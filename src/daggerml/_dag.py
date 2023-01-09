@@ -74,8 +74,11 @@ def _api(api, op, group=_conf.DML_GROUP_ID, **kwargs):
             headers['x-daggerml-apikey'] = _conf.DML_API_KEY
         if group is not None:
             headers['x-daggerml-group'] = group
-        conn.request('POST', path, json.dumps(dict(api=api, op=op, **kwargs)), headers)
-        resp = conn.getresponse()
+        while True:
+            conn.request('POST', path, json.dumps(dict(api=api, op=op, **kwargs)), headers)
+            resp = conn.getresponse()
+            if resp.status != 504:
+                break
         if resp.status != 200:
             raise ApiError(f'{resp.status} {resp.reason}')
         resp = json.loads(resp.read())
