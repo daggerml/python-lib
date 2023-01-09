@@ -1,5 +1,4 @@
 from daggerml._cli import cli
-import sys
 
 
 if __name__ == '__main__':
