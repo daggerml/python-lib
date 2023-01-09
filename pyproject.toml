@@ -33,7 +33,7 @@ conf = ["boto3", "click"]
 all = ["boto3", "click"]
 
 [project.scripts]
-dml = "daggerml.cli:cli"
+dml = "daggerml._cli:cli"
 
 [project.urls]
 Homepage = "https://daggerml.com"

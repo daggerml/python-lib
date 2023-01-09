@@ -101,6 +101,11 @@ def configure():
             config.read(path)
         return config
 
+    def set_config(config, profile, k, v):
+        if profile not in config:
+            config[profile] = {}
+        config[profile][k] = v
+
     def write_config(config, name, _global):
         Path(get_config_dir(_global)).mkdir(mode=0o700, parents=True, exist_ok=True)
         config_file = get_config_file(name, _global)
@@ -111,14 +116,14 @@ def configure():
     def update_config(profile, group_id, api_endpoint, _global=False):
         config = read_config('config', _global)
         if group_id is not None:
-            config.set(profile, 'group_id', group_id)
+            set_config(config, profile, 'group_id', group_id)
         if api_endpoint is not None:
-            config.set(profile, 'api_endpoint', api_endpoint)
+            set_config(config, profile, 'api_endpoint', api_endpoint)
         write_config(config, 'config', _global)
 
     def update_credentials(profile, api_key):
         config = read_config('credentials', True)
-        config.set(profile, 'api_key', api_key)
+        set_config(config, profile, 'api_key', api_key)
         write_config(config, 'credentials', True)
 
     return update_config, update_credentials

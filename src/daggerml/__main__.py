@@ -1,8 +1,8 @@
-from daggerml.cli import cli
+from daggerml._cli import cli
 import sys
 
 
 if __name__ == '__main__':
-    cli(sys.argv[1:])
+    cli()
 else:
     raise RuntimeError('Do not import %s directly' % __name__)

@@ -59,7 +59,7 @@ class NodeError(DmlError):
     pass
 
 
-def _api(api, op, group=None, **kwargs):
+def _api(api, op, group=_conf.DML_GROUP_ID, **kwargs):
     try:
         url = urlparse(_conf.DML_API_ENDPOINT)
         scheme = url.scheme
