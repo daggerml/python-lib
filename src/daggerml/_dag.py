@@ -4,7 +4,7 @@ import warnings
 import traceback as tb
 from dataclasses import dataclass
 from typing import NewType, Optional
-from daggerml._config import DML_API_ENDPOINT, DML_API_KEY, DML_GROUP_ID
+import daggerml._config as _conf
 from http.client import HTTPConnection, HTTPSConnection
 from urllib.parse import urlparse
 
@@ -59,39 +59,19 @@ class NodeError(DmlError):
     pass
 
 
-@dataclass(frozen=True)
-class Resource:
-    """daggerml's datatype extension class"""
-    id: str
-    parent: Optional[NewType('Resource', None)]
-    tag: Optional[str] = None
-
-    @classmethod
-    def from_dict(cls, data):
-        if data['parent'] is None:
-            return cls(data['id'], data['tag'], None)
-        return cls(data['id'], cls.from_dict(data['parent']), data['tag'])
-
-    def to_dict(self):
-        parent = None
-        if self.parent is not None:
-            parent = self.parent.to_dict()
-        return {'id': self.id, 'tag': self.tag, 'parent': parent}
-
-
 def _api(api, op, group=None, **kwargs):
     try:
-        url = urlparse(DML_API_ENDPOINT)
+        url = urlparse(_conf.DML_API_ENDPOINT)
         scheme = url.scheme
         host = url.hostname
         port = url.port or 443
         path = url.path
         assert all(x is not None for x in [scheme, host, port, path]), \
-            f'invalid endpoint URL: {DML_API_ENDPOINT}'
+            f'invalid endpoint URL: {_conf.DML_API_ENDPOINT}'
         conn = (HTTPConnection if scheme == 'http' else HTTPSConnection)(host, port)
         headers = {'content-type': 'application/json', 'accept': 'application/json'}
-        if DML_API_KEY is not None:
-            headers['x-daggerml-apikey'] = DML_API_KEY
+        if _conf.DML_API_KEY is not None:
+            headers['x-daggerml-apikey'] = _conf.DML_API_KEY
         if group is not None:
             headers['x-daggerml-group'] = group
         conn.request('POST', path, json.dumps(dict(api=api, op=op, **kwargs)), headers)
@@ -169,6 +149,28 @@ def daggerml():
 
     tag2resource = {}
 
+    @dataclass(frozen=True)
+    class Resource:
+        """daggerml's datatype extension class"""
+        id: str
+        parent: Optional[NewType('Resource', None)]
+        tag: Optional[str] = None
+
+        @staticmethod
+        def from_dict(data):
+            cls = tag2resource.get(data['tag'], Resource)
+            if data['parent'] is None:
+                parent = None
+            else:
+                parent = Resource.from_dict(data['parent'])
+            return cls(data['id'], parent, data['tag'])
+
+        def to_dict(self):
+            parent = self.parent
+            if parent is not None:
+                parent = parent.to_dict()
+            return {'id': self.id, 'tag': self.tag, 'parent': parent}
+
     def register_tag(tag, cls):
         """register a tag with daggerml
 
@@ -181,6 +183,8 @@ def daggerml():
         cls : Resource subclass
             the class representation of the resource
         """
+        assert issubclass(cls, Resource), 'class must be a subclass of resource!'
+        assert isinstance(tag, str), 'tags must be strings, not %r!' % tag
         if tag in tag2resource:
             warnings.warn('tag is already registered')
         tag2resource[tag] = cls
@@ -243,7 +247,7 @@ def daggerml():
             else:
                 raise ValueError('unknown scalar type: ' + t)
         elif t == 'resource':
-            return tag2resource.get(v['tag'], Resource).from_dict(v)
+            return Resource.from_dict(v)
         else:
             raise ValueError('unknown type: ' + t)
 
@@ -354,7 +358,7 @@ def daggerml():
         secret: str = None
 
         @classmethod
-        def new(cls, name, version=None, group=DML_GROUP_ID):
+        def new(cls, name, version=None, group=_conf.DML_GROUP_ID):
             """create a new dag"""
             resp = _api('dag', 'create_dag', name=name, version=version, group=group)
             if resp is not None:
@@ -474,8 +478,8 @@ def daggerml():
                 logger.exception('failing dag')
                 return True  # FIXME remove this to not catch these errors
 
-    return Dag, Node, register_tag
+    return Dag, Node, Resource, register_tag
 
 
-Dag, Node, register_tag = daggerml()
+Dag, Node, Resource, register_tag = daggerml()
 del daggerml
