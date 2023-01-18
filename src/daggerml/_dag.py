@@ -2,7 +2,7 @@ import json
 import logging
 import warnings
 import traceback as tb
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NewType, Optional
 import daggerml._config as _conf
 from http.client import HTTPConnection, HTTPSConnection
@@ -274,12 +274,12 @@ def daggerml():
                 CACHE[resp] = cached[key]
             return resp
 
-        def __call__(self, *args, block=True):
+        def __call__(self, *args, block=True, meta={}):
             args = [self.dag.from_py(x) for x in args]
             expr = [self.id] + [x.id for x in args]
             if callable(CACHE.get(self)):
                 resp = _api('dag', 'put_fnapp_and_claim', dag_id=self.dag.id,
-                            ttl=0, expr=expr)
+                            ttl=0, expr=expr, meta=meta)
                 if resp['success']:
                     return Node(self.dag, resp['node_id'])
                 if resp['error'] is not None:
@@ -301,7 +301,7 @@ def daggerml():
                 n = Node(self.dag, resp['node_id'])
                 CACHE[n] = result
                 return n
-            waiter = NodeWaiter(self.dag, expr)
+            waiter = NodeWaiter(self.dag, expr, meta)
             if not block:
                 return waiter
             waiter.wait(2)
@@ -319,15 +319,22 @@ def daggerml():
 
     @dataclass
     class NodeWaiter:
-        def __init__(self, dag, expr):
+        def __init__(self, dag, expr, meta):
             self.dag = dag
             self.expr = expr
+            self.meta = meta
             self._result = None
             self.check()
 
         def check(self):
-            self._resp = _api('dag', 'put_fnapp', dag_id=self.dag.id,
-                              expr=self.expr, secret=self.dag.secret)
+            self._resp = _api(
+                'dag',
+                'put_fnapp',
+                dag_id=self.dag.id,
+                expr=self.expr,
+                meta=self.meta,
+                secret=self.dag.secret
+            )
             return self.result
 
         @property
@@ -359,6 +366,7 @@ def daggerml():
         get_fn: str = None
         executor_id: str = None
         secret: str = None
+        meta_json: str = None
 
         @classmethod
         def new(cls, name, version=None, group=_conf.DML_GROUP_ID):
@@ -390,12 +398,18 @@ def daggerml():
                         ttl=ttl, node_id=node_id, group=group, secret=secret)
             if resp is None:
                 return
+            resp['meta_json'] = json.dumps(resp.pop('meta'))
             return cls(**resp, group=group)
 
         @property
         def expr(self):
             """remote execution's expression"""
             return Node(self, self.expr_id)
+
+        @property
+        def meta(self):
+            """remote execution's function application metadata"""
+            return json.loads(self.meta_json)
 
         @property
         def executor(self):
