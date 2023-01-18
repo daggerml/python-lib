@@ -77,11 +77,12 @@ def _api(api, op, group=_conf.DML_GROUP_ID, **kwargs):
         while True:
             conn.request('POST', path, json.dumps(dict(api=api, op=op, **kwargs)), headers)
             resp = conn.getresponse()
+            data = resp.read()
             if resp.status != 504:
                 break
         if resp.status != 200:
             raise ApiError(f'{resp.status} {resp.reason}')
-        resp = json.loads(resp.read())
+        resp = json.loads(data)
         if resp['status'] != 'ok':
             err = resp['error']
             if err['context']:
