@@ -68,14 +68,13 @@ def _api(api, op, group=_conf.DML_GROUP_ID, **kwargs):
         path = url.path
         assert all(x is not None for x in [scheme, host, port, path]), \
             f'invalid endpoint URL: {_conf.DML_API_ENDPOINT}'
-        Conn = (HTTPConnection if scheme == 'http' else HTTPSConnection)
+        conn = (HTTPConnection if scheme == 'http' else HTTPSConnection)(host, port)
         headers = {'content-type': 'application/json', 'accept': 'application/json'}
         if _conf.DML_API_KEY is not None:
             headers['x-daggerml-apikey'] = _conf.DML_API_KEY
         if group is not None:
             headers['x-daggerml-group'] = group
         while True:
-            conn = Conn(host, port)
             conn.request('POST', path, json.dumps(dict(api=api, op=op, **kwargs)), headers)
             resp = conn.getresponse()
             if resp.status != 504:
