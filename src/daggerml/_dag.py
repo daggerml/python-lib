@@ -1,11 +1,12 @@
+from copy import copy, deepcopy
+import daggerml._config as _conf
+from dataclasses import dataclass
+from http.client import HTTPConnection, HTTPSConnection
 import json
 import logging
 import warnings
 import traceback as tb
-from dataclasses import dataclass
 from typing import NewType, Optional
-import daggerml._config as _conf
-from http.client import HTTPConnection, HTTPSConnection
 from urllib.parse import urlparse
 
 
@@ -149,7 +150,6 @@ def daggerml():
     from time import sleep
     from collections.abc import Mapping
     from weakref import WeakKeyDictionary
-    from uuid import uuid4
 
     tag2resource = {}
 
@@ -194,25 +194,15 @@ def daggerml():
         tag2resource[tag] = cls
         return
 
-    def to_data(py, dag=None):
+    def to_data(py):
         if isinstance(py, Node):
             return {'type': 'ref', 'value': {'node_id': py.id}}
-        if callable(py):
-            if dag is None:
-                raise RuntimeError(
-                    'cannot call `to_data` on a local function without a dag argument'
-                )
-            fn_id = py.__qualname__
-            if fn_id == '<lambda>':
-                fn_id += uuid4().hex
-            fn_id = py.__module__ + ':' + fn_id
-            py = [Node(dag, dag.executor_id), fn_id]
-        if isinstance(py, list) or isinstance(py, tuple):
-            return {'type': 'list', 'value': [to_data(x, dag) for x in py]}
-        elif isinstance(py, dict) or isinstance(py, Mapping):
+        elif isinstance(py, (list, tuple)):
+            return {'type': 'list', 'value': [to_data(x) for x in py]}
+        elif isinstance(py, (dict, Mapping)):
             if not all([isinstance(x, str) for x in py]):
                 raise TypeError('map datum keys must be strings')
-            return {'type': 'map', 'value': {k: to_data(v, dag) for (k, v) in py.items()}}
+            return {'type': 'map', 'value': {k: to_data(v) for (k, v) in py.items()}}
         elif isinstance(py, type(None)):
             return {'type': 'scalar', 'value': {'type': 'null'}}
         elif isinstance(py, str):
@@ -263,48 +253,71 @@ def daggerml():
         id: str
 
         def __len__(self):
-            return len(self.dag.to_py(self))
+            _meta = self.meta['$dml']
+            if 'length' in _meta:
+                return _meta['length']
+            keys = _meta.get('keys')
+            if keys is not None:
+                return len(keys)
+            raise ValueError('cannot iterate of this node type')
 
-        def __getitem__(self, key):
-            f = Node(self.dag, self.dag.get_fn)
-            resp = f(self, key)
-            cached = CACHE.get(self)
-            if cached is not None:  # populate value in cache from cache (local funcs)
-                if isinstance(key, Node):
-                    key = key.to_py()
-                CACHE[resp] = cached[key]
+        def __iter__(self):
+            _meta = self.meta['$dml']
+            if _meta['type'] == 'list':
+                for i in range(_meta['length']):
+                    yield self[i]
+            elif _meta['type'] == 'map':
+                for key in _meta['keys']:
+                    yield key
+            else:
+                raise ValueError('cannot iterate of this node type')
+
+        def __add__(self, other):
+            if len(other) == 0:
+                return self
+            f = self.dag.from_py([self.dag.db_executor, 'concat', self, other])
+            resp = f()
             return resp
 
-        def __call__(self, *args, block=True, meta={}):
-            args = [self.dag.from_py(x) for x in args]
-            expr = [self.id] + [x.id for x in args]
-            if callable(CACHE.get(self)):
-                resp = _api('dag', 'put_fnapp_and_claim', dag_id=self.dag.id,
-                            ttl=0, expr=expr, meta=meta)
-                if resp['success']:
-                    return Node(self.dag, resp['node_id'])
-                if resp['error'] is not None:
-                    logger.debug('ignoring error: %s', json.dumps(resp['error']))
-                try:
-                    result = CACHE[self](*args)
-                    resp2 = _api('node', 'commit_node',
-                                 node_id=resp['node_id'],
-                                 secret=self.dag.secret,
-                                 token=resp['refresh_token'],
-                                 data=to_data(result, dag=self.dag))
-                    assert resp2['finalized'], 'failed to finalize node'
-                except Exception as e:
-                    err = format_exception(e)
-                    _api('node', 'fail_node', secret=self.dag.secret,
-                         node_id=resp['node_id'], token=resp['refresh_token'],
-                         error=err)
-                    raise NodeError(err)
-                n = Node(self.dag, resp['node_id'])
-                CACHE[n] = result
-                return n
-            waiter = NodeWaiter(self.dag, expr, meta)
-            if not block:
-                return waiter
+        def __getitem__(self, key):
+            f = self.dag.from_py([self.dag.db_executor, 'get', self, key])
+            resp = f()
+            if self in CACHE:
+                if isinstance(key, Node):
+                    key = key.to_py()
+                CACHE[resp] = CACHE[self][key]
+            return resp
+
+        def call_async(self, *args, **meta):
+            """call a remote function asynchronously
+
+            Parameters
+            ----------
+            *args : dml types
+            **meta : json serializable
+
+            Returns
+            -------
+            NodeWaiter
+            """
+            expr = self + args
+            waiter = NodeWaiter(self.dag, expr.id, meta)
+            return waiter
+
+        def __call__(self, *args, **meta):
+            """call a remote function
+
+            Parameters
+            ----------
+            *args : dml types
+            **meta : json serializable
+
+            Returns
+            -------
+            Node
+            """
+            expr = self + args
+            waiter = NodeWaiter(self.dag, expr.id, meta)
             waiter.wait(2)
             return waiter.result
 
@@ -354,7 +367,6 @@ def daggerml():
             if self._resp['success']:
                 return Node(self.dag, self.node_id)
             if self._resp['error'] is not None:
-                logger.debug('ignoring error: %s', json.dumps(self._resp['error']))
                 raise NodeError(self._resp['error'])
             return
 
@@ -371,7 +383,8 @@ def daggerml():
         version: int = None
         group: str = None
         expr_id: str = None
-        get_fn: str = None
+        db_exec: str = None
+        # get_fn: str = None
         executor_id: str = None
         secret: str = None
 
@@ -417,27 +430,37 @@ def daggerml():
             """this dag's executor resource"""
             return Node(self, self.executor_id).to_py()
 
+        @property
+        def db_executor(self):
+            return Node(self, self.db_exec).to_py()
+
         def from_py(self, py):
             """convert a python datastructure to a literal node"""
-            if isinstance(py, Node):
-                return py
-            res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(py, self),
+            res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(py),
                        group=self.group, secret=self.secret)
             node = Node(self, res['node_id'])
             if node not in CACHE:
-                CACHE[node] = py
+                CACHE[node] = deepcopy(py)
             return node
 
         def to_py(self, node):
-            """convert a node to a python datastructure"""
-            if node.dag != self:
-                raise ValueError('node does not belong to dag')
-            if node in CACHE:
-                return CACHE[node]
-            py = from_data(_api('node', 'get_node', node_id=node.id,
-                                group=self.group, secret=self.secret))
-            CACHE[node] = py
-            return py
+            """convert a [collection of] nodes to a python datastructure"""
+            if isinstance(node, Node):
+                if node.dag != self:
+                    raise ValueError('node does not belong to dag')
+                if node in CACHE:
+                    py = self.to_py(CACHE[node])
+                else:
+                    py = from_data(_api('node', 'get_node', node_id=node.id,
+                                        group=self.group, secret=self.secret))
+                    CACHE[node] = deepcopy(py)
+            elif isinstance(node, (tuple, list)):
+                py = tuple([self.to_py(x) for x in node])
+            elif isinstance(node, Mapping):
+                py = {k: self.to_py(v) for k, v in node.items()}
+            elif isinstance(node, (bool, str, int, float, type(None), Resource)):
+                py = node
+            return copy(py)
 
         def fail(self, failure_info={}):
             """fail a dag"""
