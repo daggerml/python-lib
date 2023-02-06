@@ -12,20 +12,11 @@ def cli(*args, **kwargs):
 
 
 @clink.arg('--global', action='store_true', dest='_global', help='update global configuration')
-@clink.arg('--group-id', help='group ID')
 @clink.arg('--api-endpoint', help='API endpoint')
 @cli.command(help='configure DaggerML API')
-def configure(profile, group_id, api_endpoint, _global):
-    if group_id or api_endpoint:
-        config.update_config(profile, group_id, api_endpoint, _global)
-
-
-@clink.arg('--username', required=True, help='user name')
-@cli.command(help='create DaggerML API key')
-def login(profile, username):
-    password = getpass()
-    resp = dml.login(username, password)
-    config.update_credentials(profile, resp['api_key'])
+def configure(profile, api_endpoint, _global):
+    if api_endpoint:
+        config.update_config(profile, api_endpoint, _global)
 
 
 @clink.arg('--dag-name', help='name of DAG to list')
@@ -37,4 +28,5 @@ def list_dags(dag_name, **kwargs):
 @clink.arg('--dag-id', required=True, help='ID of DAG to describe')
 @cli.command(help='describe DAGs')
 def describe_dags(dag_id, **kwargs):
+    print('asdfasdfasdfasd')
     return dml.describe_dag(dag_id)

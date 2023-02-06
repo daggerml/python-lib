@@ -16,12 +16,11 @@ LOCALSTACK_HOST = os.getenv('LOCALSTACK_HOST')
 EDGE_PORT = os.getenv('EDGE_PORT', '4566')
 AWS_LOCALSTACK_ENDPOINT = None
 
-DML_ZONE = os.getenv('DML_ZONE')
-DML_REGION = os.getenv('DML_REGION')
-DML_GROUP_ID = os.getenv('DML_GROUP_ID')
-DML_API_ENDPOINT = os.getenv('DML_API_ENDPOINT')
-DML_API_KEY = os.getenv('DML_API_KEY')
 DML_PROFILE = os.getenv('DML_PROFILE')
+DML_API_ENDPOINT = os.getenv('DML_API_ENDPOINT')
+DML_API_HOST = None
+DML_ZONE = None
+DML_REGION = None
 
 
 def deep_merge(d, v):
@@ -35,11 +34,7 @@ def deep_merge(d, v):
 def configure():
     keys = {
         'config': {
-            'group_id': 'DML_GROUP_ID',
             'api_endpoint': 'DML_API_ENDPOINT',
-        },
-        'credentials': {
-            'api_key': 'DML_API_KEY',
         },
     }
 
@@ -49,7 +44,6 @@ def configure():
     ]
 
     config_files = [
-        'credentials',
         'config',
     ]
 
@@ -79,13 +73,13 @@ def configure():
             for p in profiles:
                 from_file(os.path.join(d, '.dml'), f, p)
 
-    # FIXME: remove when references to DML_ZONE and DML_REGION are eliminated
     if globals().get('DML_API_ENDPOINT') is not None:
         url = urlparse(globals()['DML_API_ENDPOINT'])
         m = re.search(r'^api\.([^-]+)-([^.]+)\.', url.netloc)
-        if m is not None and len(m.groups()) > 1:
+        if m is not None and len(m.groups()) == 2:
             set_global('DML_ZONE', m.group(1))
             set_global('DML_REGION', m.group(2))
+            set_global('DML_API_HOST', url.netloc)
 
     def get_config_dir(_global):
         config_dir = USER_HOME_DIR if _global else os.getcwd()
@@ -113,10 +107,8 @@ def configure():
         with open(config_file, 'w') as f:
             config.write(f)
 
-    def update_config(profile, group_id, api_endpoint, _global=False):
+    def update_config(profile, api_endpoint, _global=False):
         config = read_config('config', _global)
-        if group_id is not None:
-            set_config(config, profile, 'group_id', group_id)
         if api_endpoint is not None:
             set_config(config, profile, 'api_endpoint', api_endpoint)
         write_config(config, 'config', _global)

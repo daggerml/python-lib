@@ -1,16 +1,19 @@
-from copy import copy, deepcopy
-import daggerml._config as _conf
-from dataclasses import dataclass
-from http.client import HTTPConnection, HTTPSConnection
+import boto3
 import json
 import logging
-import warnings
+import requests
 import traceback as tb
+import warnings
+from aws_requests_auth.boto_utils import BotoAWSRequestsAuth
+from copy import copy, deepcopy
+from daggerml._config import DML_API_ENDPOINT, DML_API_HOST, DML_REGION
+from dataclasses import dataclass
 from typing import NewType, Optional
-from urllib.parse import urlparse
 
 
 logger = logging.getLogger(__name__)
+conn_pool = requests.Session()
+boto3_session = boto3.session.Session()
 
 
 def _json_dumps_default(obj):
@@ -60,54 +63,32 @@ class NodeError(DmlError):
     pass
 
 
-def _api(api, op, group=_conf.DML_GROUP_ID, **kwargs):
+def _api(api, op, **kwargs):
     try:
-        url = urlparse(_conf.DML_API_ENDPOINT)
-        scheme = url.scheme
-        host = url.hostname
-        port = url.port or 443
-        path = url.path
-        assert all(x is not None for x in [scheme, host, port, path]), \
-            f'invalid endpoint URL: {_conf.DML_API_ENDPOINT}'
-        conn = (HTTPConnection if scheme == 'http' else HTTPSConnection)(host, port)
-        headers = {'content-type': 'application/json', 'accept': 'application/json'}
-        if _conf.DML_API_KEY is not None:
-            headers['x-daggerml-apikey'] = _conf.DML_API_KEY
-        if group is not None:
-            headers['x-daggerml-group'] = group
+        payload = dict(api=api, op=op, **kwargs)
         while True:
-            conn.request('POST', path, json.dumps(dict(api=api, op=op, **kwargs)), headers)
-            resp = conn.getresponse()
-            data = resp.read()
-            if resp.status != 504:
+            assert boto3_session.get_credentials() is not None, 'AWS credentials not found'
+            auth = BotoAWSRequestsAuth(aws_host=DML_API_HOST,
+                                       aws_region=DML_REGION,
+                                       aws_service='execute-api')
+            resp = conn_pool.post(DML_API_ENDPOINT, auth=auth, json=payload)
+            data = resp.json()
+            if resp.status_code != 504:
                 break
-        if resp.status != 200:
-            raise ApiError(f'{resp.status} {resp.reason}')
-        resp = json.loads(data)
-        if resp['status'] != 'ok':
-            err = resp['error']
+        if resp.status_code != 200:
+            raise ApiError(f'{resp.status_code} {resp.reason}')
+        if data['status'] != 'ok':
+            err = data['error']
             if err['context']:
                 logger.error('api error: %s', err['context'])
             raise ApiError(f'{err["code"]}: {err["message"]}')
-        return resp['result']
+        return data['result']
     except KeyboardInterrupt:
         raise
     except ApiError:
         raise
     except Exception as e:
         raise ApiError(f'{e.__class__.__name__}: {str(e)}')
-
-
-def login(username, password):
-    """login to daggerml
-
-    Parameters
-    ----------
-    username : str
-    password : str
-    """
-    resp = _api('auth', 'create_api_key', username=username, password=password)
-    return resp
 
 
 def list_dags(name=None):
@@ -348,14 +329,11 @@ def daggerml():
             self.check()
 
         def check(self):
-            self._resp = _api(
-                'dag',
-                'put_fnapp',
-                dag_id=self.dag.id,
-                expr=self.expr,
-                meta=self.meta,
-                secret=self.dag.secret
-            )
+            self._resp = _api('dag', 'put_fnapp',
+                              dag_id=self.dag.id,
+                              expr=self.expr,
+                              meta=self.meta,
+                              secret=self.dag.secret)
             return self.result
 
         @property
@@ -381,7 +359,6 @@ def daggerml():
         id: str
         name: str = None
         version: int = None
-        group: str = None
         expr_id: str = None
         db_exec: str = None
         # get_fn: str = None
@@ -389,14 +366,14 @@ def daggerml():
         secret: str = None
 
         @classmethod
-        def new(cls, name, version=None, group=_conf.DML_GROUP_ID):
+        def new(cls, name, version=None):
             """create a new dag"""
-            resp = _api('dag', 'create_dag', name=name, version=version, group=group)
+            resp = _api('dag', 'create_dag', name=name, version=version)
             if resp is not None:
-                return cls(**resp, group=group)
+                return cls(**resp)
 
         @classmethod
-        def from_claim(cls, executor, secret, ttl, group, node_id=None):
+        def from_claim(cls, executor, secret, ttl, node_id=None):
             """claim a remote execution
 
             Parameters
@@ -407,18 +384,19 @@ def daggerml():
                 the executor's secret
             ttl : int
                 how long for the claim to be active for (before needing to refresh)
-            group : str
-                the group ID
             node_id : str, optional
                 the specific node_id to claim
             """
             if isinstance(executor, Resource):
                 executor = executor.to_dict()
-            resp = _api('node', 'claim_node', executor=executor,
-                        ttl=ttl, node_id=node_id, group=group, secret=secret)
+            resp = _api('node', 'claim_node',
+                        executor=executor,
+                        ttl=ttl,
+                        node_id=node_id,
+                        secret=secret)
             if resp is None:
                 return
-            return cls(**resp, group=group)
+            return cls(**resp)
 
         @property
         def expr(self):
@@ -436,8 +414,10 @@ def daggerml():
 
         def from_py(self, py):
             """convert a python datastructure to a literal node"""
-            res = _api('dag', 'put_literal', dag_id=self.id, data=to_data(py),
-                       group=self.group, secret=self.secret)
+            res = _api('dag', 'put_literal',
+                       dag_id=self.id,
+                       data=to_data(py),
+                       secret=self.secret)
             node = Node(self, res['node_id'])
             if node not in CACHE:
                 CACHE[node] = deepcopy(py)
@@ -451,8 +431,9 @@ def daggerml():
                 if node in CACHE:
                     py = self.to_py(CACHE[node])
                 else:
-                    py = from_data(_api('node', 'get_node', node_id=node.id,
-                                        group=self.group, secret=self.secret))
+                    py = from_data(_api('node', 'get_node',
+                                        node_id=node.id,
+                                        secret=self.secret))
                     CACHE[node] = deepcopy(py)
             elif isinstance(node, (tuple, list)):
                 py = tuple([self.to_py(x) for x in node])
@@ -466,27 +447,30 @@ def daggerml():
             """fail a dag"""
             if isinstance(failure_info, (dict, list, tuple, Resource)):
                 failure_info = json.loads(json_dumps(failure_info))
-            _api('dag', 'fail_dag', dag_id=self.id, group=self.group,
-                 secret=self.secret, failure_info=failure_info)
+            _api('dag', 'fail_dag',
+                 dag_id=self.id,
+                 secret=self.secret,
+                 failure_info=failure_info)
             return
 
         def commit(self, result):
             """commit a dag result"""
             result = self.from_py(result)
-            _api('dag', 'commit_dag', dag_id=self.id, result=result.id,
-                 group=self.group, secret=self.secret)
+            _api('dag', 'commit_dag',
+                 dag_id=self.id,
+                 result=result.id,
+                 secret=self.secret)
             return
 
         def delete(self):
             """delete a dag (must be failed / committed first)"""
-            _api('dag', 'delete_dag', dag_id=self.id,
-                 group=self.group, secret=self.secret)
+            _api('dag', 'delete_dag', dag_id=self.id, secret=self.secret)
             return
 
         def refresh(self, ttl=300):
             """refresh a dag claim (ttl is same as in `from_claim`)"""
             res = _api('dag', 'refresh_claim', dag_id=self.id,
-                       group=self.group, secret=self.secret, ttl=ttl,
+                       secret=self.secret, ttl=ttl,
                        refresh_token=self.id)
             if res is None:
                 raise DagError('Failed to refresh dag!')
@@ -504,7 +488,7 @@ def daggerml():
         def create_resource(self, tag=None):
             """get a resource object"""
             res = _api('dag', 'create_resource', dag_id=self.id,
-                       group=self.group, secret=self.secret, tag=tag)
+                       secret=self.secret, tag=tag)
             return Node(self, res['node_id']), res['secret']
 
         def __repr__(self):

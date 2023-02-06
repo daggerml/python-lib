@@ -25,7 +25,8 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-  "dataclasses; python_version < '3.7'"
+  "dataclasses; python_version < '3.7'",
+  "aws-requests-auth"
 ]
 
 [project.optional-dependencies]
