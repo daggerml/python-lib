@@ -330,6 +330,9 @@ def daggerml():
             self._result = None
             self.check()
 
+        def __hash__(self):  # required for this to be a key in a map
+            return hash(self.id)
+
         def check(self):
             self._resp = _api('dag', 'put_fnapp',
                               dag_id=self.dag.id,
@@ -339,13 +342,13 @@ def daggerml():
             return self.result
 
         @property
-        def node_id(self):
+        def id(self):
             return self._resp['node_id']
 
         @property
         def result(self):
             if self._resp['success']:
-                return Node(self.dag, self.node_id)
+                return Node(self.dag, self.id)
             if self._resp['error'] is not None:
                 raise NodeError(self._resp['error'])
             return
