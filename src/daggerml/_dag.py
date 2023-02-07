@@ -67,6 +67,8 @@ def _api(api, op, **kwargs):
     try:
         payload = dict(api=api, op=op, **kwargs)
         while True:
+            assert DML_API_ENDPOINT is not None, 'API endpoint not configured'
+            assert DML_API_HOST is not None and DML_REGION is not None, 'invalid API endpoint'
             assert boto3_session.get_credentials() is not None, 'AWS credentials not found'
             auth = BotoAWSRequestsAuth(aws_host=DML_API_HOST,
                                        aws_region=DML_REGION,
@@ -80,7 +82,7 @@ def _api(api, op, **kwargs):
         if data['status'] != 'ok':
             err = data['error']
             if err['context']:
-                logger.error('api error: %s', err['context'])
+                logger.error('api error: %s', err['message'] + '\n' + err['context'])
             raise ApiError(f'{err["code"]}: {err["message"]}')
         return data['result']
     except KeyboardInterrupt:
