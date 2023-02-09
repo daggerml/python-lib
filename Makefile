@@ -1,3 +1,3 @@
 .PHONY: pypi
 pypi:
-	python -m build && twine upload dist/*
+	python3 -m build && twine upload dist/*
