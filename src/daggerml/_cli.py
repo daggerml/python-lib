@@ -1,7 +1,6 @@
 import daggerml as dml
 import daggerml._config as config
 import daggerml._clink as clink
-from getpass import getpass
 
 
 @clink.arg('--profile', default='DEFAULT', help='configuration profile')

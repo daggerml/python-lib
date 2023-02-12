@@ -1,7 +1,7 @@
 import sys
 import json
 from os.path import basename
-from argparse import ArgumentParser
+from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 try:
     from argcomplete import autocomplete
@@ -11,9 +11,9 @@ except ModuleNotFoundError:
 
 
 class Cli:
-    def __init__(self, func, *args, **kwargs):
+    def __init__(self, func, *args, formatter_class=ArgumentDefaultsHelpFormatter, **kwargs):
         kwargs['prog'] = basename(sys.argv[0])
-        self.parser = ArgumentParser(*args, **kwargs)
+        self.parser = ArgumentParser(*args, formatter_class=formatter_class, **kwargs)
         self.parser.set_defaults(func=func)
         self.subparsers = self.parser.add_subparsers(title='commands')
 
@@ -22,6 +22,9 @@ class Cli:
         return self
 
     def command(self, *args, **kwargs):
+        if 'formatter_class' not in kwargs:
+            kwargs['formatter_class'] = self.parser.formatter_class
+
         def wrapped(f):
             return Command(self.subparsers, f, *args, **kwargs)
         return wrapped
@@ -29,8 +32,7 @@ class Cli:
     def __call__(self, *args, **kwargs):
         autocomplete(self.parser)
         args = vars(self.parser.parse_args(*args, **kwargs))
-        func = args['func']
-        args.pop('func', None)
+        func = args.pop('func')
         try:
             result = func(**args)
             if result is not None:
