@@ -158,7 +158,7 @@ def daggerml():
                 parent = parent.to_dict()
             return {'id': self.id, 'tag': self.tag, 'parent': parent}
 
-    def register_tag(tag, cls):
+    def register_tag(tag, cls=None):
         """register a tag with daggerml
 
         Once registered, any resources loaded with this tag will be of type: cls
@@ -170,12 +170,14 @@ def daggerml():
         cls : Resource subclass
             the class representation of the resource
         """
-        assert issubclass(cls, Resource), 'class must be a subclass of resource!'
-        assert isinstance(tag, str), 'tags must be strings, not %r!' % tag
-        if tag in tag2resource:
-            warnings.warn('tag is already registered')
-        tag2resource[tag] = cls
-        return
+        def wrapped(cls):
+            assert issubclass(cls, Resource), 'class must be a subclass of resource!'
+            assert isinstance(tag, str), 'tags must be strings, not %r!' % tag
+            if tag in tag2resource:
+                warnings.warn('tag is already registered')
+            tag2resource[tag] = cls
+            return cls
+        return wrapped if cls is None else wrapped(cls)
 
     def to_data(py):
         if isinstance(py, Node):
