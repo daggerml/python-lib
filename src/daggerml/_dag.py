@@ -238,21 +238,19 @@ def daggerml():
         id: str
 
         def __len__(self):
-            _meta = self.meta['$dml']
-            if 'length' in _meta:
-                return _meta['length']
-            keys = _meta.get('keys')
+            if '$length' in self.meta:
+                return self.meta['$length']
+            keys = self.meta.get('$keys')
             if keys is not None:
                 return len(keys)
             raise ValueError('cannot iterate of this node type')
 
         def __iter__(self):
-            _meta = self.meta['$dml']
-            if _meta['type'] == 'list':
-                for i in range(_meta['length']):
+            if self.meta['$type'] == 'list':
+                for i in range(self.meta['$length']):
                     yield self[i]
-            elif _meta['type'] == 'map':
-                for key in _meta['keys']:
+            elif self.meta['$type'] == 'map':
+                for key in self.meta['$keys']:
                     yield key
             else:
                 raise ValueError('cannot iterate of this node type')
