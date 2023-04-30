@@ -13,6 +13,8 @@ from typing import NewType, Optional
 
 logger = logging.getLogger(__name__)
 conn_pool = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+conn_pool.mount('https://', adapter)
 boto3_session = boto3.session.Session()
 
 
@@ -353,7 +355,7 @@ def daggerml():
                 raise NodeError(self._resp['error'])
             return
 
-        def wait(self, dt=5):
+        def wait(self, dt=0.1):
             while self.result is None:
                 sleep(dt)
                 self.check()
@@ -489,12 +491,6 @@ def daggerml():
             res = _api('dag', 'put_load', dag_id=self.id,
                        node_id=node_id, secret=self.secret)
             return Node(self, res['node_id'])
-
-        def create_resource(self, tag=None):
-            """get a resource object"""
-            res = _api('dag', 'create_resource', dag_id=self.id,
-                       secret=self.secret, tag=tag)
-            return Node(self, res['node_id']), res['secret']
 
         def __repr__(self):
             return f'Dag({self.name},{self.version})'
