@@ -147,11 +147,12 @@ def daggerml():
 
         @staticmethod
         def from_dict(data):
-            cls = tag2resource.get(data['tag'], Resource)
             if data['parent'] is None:
                 parent = None
+                cls = Resource
             else:
                 parent = Resource.from_dict(data['parent'])
+                cls = tag2resource.get(parent.tag, Resource)
             return cls(data['id'], parent, data['tag'])
 
         def to_dict(self):
@@ -173,10 +174,10 @@ def daggerml():
             the class representation of the resource
         """
         def wrapped(cls):
-            assert issubclass(cls, Resource), 'class must be a subclass of resource!'
-            assert isinstance(tag, str), 'tags must be strings, not %r!' % tag
+            assert issubclass(cls, Resource), 'invalid class: expected Resource'
+            assert isinstance(tag, str), 'invalid tag: expected string'
             if tag in tag2resource:
-                warnings.warn('tag is already registered')
+                warnings.warn('tag already registered: ' + tag)
             tag2resource[tag] = cls
             return cls
         return wrapped if cls is None else wrapped(cls)
