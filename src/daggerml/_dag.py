@@ -331,6 +331,7 @@ def daggerml():
             self.expr = expr
             self.meta = meta
             self._result = None
+            self._resp = {}
             self.check()
 
         def __hash__(self):  # required for this to be a key in a map
@@ -341,6 +342,7 @@ def daggerml():
                               dag_id=self.dag.id,
                               expr=self.expr,
                               meta=self.meta,
+                              token=self._resp.get('token'),
                               secret=self.dag.secret)
             return self.result
 
