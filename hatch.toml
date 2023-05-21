@@ -1,5 +1,5 @@
 [envs.default]
-python = "39"
+python = "310"
 dependencies = [
   "pytest",
   "pytest-cov",
@@ -7,7 +7,7 @@ dependencies = [
 ]
 
 [envs.docs]
-python = "38"
+python = "310"
 dependencies = [
   "Sphinx>=5.1.1",
   "sphinx-rtd-theme>=1.0.0",
@@ -25,3 +25,13 @@ dependencies = [
 [envs.docs.scripts]
 build = '(cd docs && make html)'
 serve = '(cd docs/_build/html && python -m http.server 8080)'
+
+
+[build.targets.sdist]
+exclude = [
+  "/.github",
+  "/docs",
+]
+
+[build.targets.wheel]
+packages = ["src/daggerml"]
