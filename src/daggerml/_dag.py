@@ -14,6 +14,7 @@ from typing import NewType, Optional
 logger = logging.getLogger(__name__)
 conn_pool = requests.Session()
 adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+conn_pool.mount('http://', adapter)
 conn_pool.mount('https://', adapter)
 boto3_session = boto3.session.Session()
 
@@ -71,7 +72,7 @@ def _api(api, op, **kwargs):
         while True:
             assert DML_API_ENDPOINT is not None, 'API endpoint not configured'
             assert boto3_session.get_credentials() is not None, 'AWS credentials not found'
-            resp = conn_pool.post(DML_API_ENDPOINT + 'user', auth=AWSSigV4('execute-api'), json=payload)
+            resp = conn_pool.post(DML_API_ENDPOINT + '/user', auth=AWSSigV4('execute-api'), json=payload)
             data = resp.json()
             if resp.status_code != 504:
                 break
