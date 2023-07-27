@@ -1,5 +1,4 @@
 [envs.default]
-python = "310"
 dependencies = [
   "pytest",
   "pytest-cov",
@@ -7,7 +6,6 @@ dependencies = [
 ]
 
 [envs.docs]
-python = "310"
 dependencies = [
   "Sphinx>=5.1.1",
   "sphinx-rtd-theme>=1.0.0",

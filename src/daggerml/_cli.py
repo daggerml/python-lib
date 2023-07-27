@@ -27,5 +27,4 @@ def list_dags(dag_name, **kwargs):
 @clink.arg('--dag-id', required=True, help='ID of DAG to describe')
 @cli.command(help='describe DAGs')
 def describe_dags(dag_id, **kwargs):
-    print('asdfasdfasdfasd')
     return dml.describe_dag(dag_id)

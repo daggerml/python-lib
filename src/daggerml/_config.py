@@ -12,15 +12,8 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 USER_HOME_DIR = str(pathlib.Path.home())
 
-LOCALSTACK_HOST = os.getenv('LOCALSTACK_HOST')
-EDGE_PORT = os.getenv('EDGE_PORT', '4566')
-AWS_LOCALSTACK_ENDPOINT = None
-
 DML_PROFILE = os.getenv('DML_PROFILE')
 DML_API_ENDPOINT = os.getenv('DML_API_ENDPOINT')
-DML_API_HOST = None
-DML_ZONE = None
-DML_REGION = None
 
 
 def deep_merge(d, v):
@@ -73,14 +66,6 @@ def configure():
             for p in profiles:
                 from_file(os.path.join(d, '.dml'), f, p)
 
-    if globals().get('DML_API_ENDPOINT') is not None:
-        url = urlparse(globals()['DML_API_ENDPOINT'])
-        m = re.search(r'^api\.([^-]+)-([^.]+)\.', url.netloc)
-        if m is not None and len(m.groups()) == 2:
-            set_global('DML_ZONE', m.group(1))
-            set_global('DML_REGION', m.group(2))
-            set_global('DML_API_HOST', url.netloc)
-
     def get_config_dir(_global):
         config_dir = USER_HOME_DIR if _global else os.getcwd()
         return os.path.join(config_dir, '.dml')
@@ -113,15 +98,7 @@ def configure():
             set_config(config, profile, 'api_endpoint', api_endpoint)
         write_config(config, 'config', _global)
 
-    def update_credentials(profile, api_key):
-        config = read_config('credentials', True)
-        set_config(config, profile, 'api_key', api_key)
-        write_config(config, 'credentials', True)
-
-    return update_config, update_credentials
+    return update_config
 
 
-update_config, update_credentials = configure()
-
-if LOCALSTACK_HOST is not None:
-    AWS_LOCALSTACK_ENDPOINT = 'http://{}:{}'.format(LOCALSTACK_HOST, EDGE_PORT)
+update_config = configure()

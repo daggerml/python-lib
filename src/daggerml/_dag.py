@@ -4,9 +4,9 @@ import logging
 import requests
 import traceback as tb
 import warnings
-from aws_requests_auth.boto_utils import BotoAWSRequestsAuth
+from requests_auth_aws_sigv4 import AWSSigV4
 from copy import copy, deepcopy
-from daggerml._config import DML_API_ENDPOINT, DML_API_HOST, DML_REGION
+from daggerml._config import DML_API_ENDPOINT
 from dataclasses import dataclass
 from typing import NewType, Optional
 
@@ -70,12 +70,8 @@ def _api(api, op, **kwargs):
         payload = dict(api=api, op=op, **kwargs)
         while True:
             assert DML_API_ENDPOINT is not None, 'API endpoint not configured'
-            assert DML_API_HOST is not None and DML_REGION is not None, 'invalid API endpoint'
             assert boto3_session.get_credentials() is not None, 'AWS credentials not found'
-            auth = BotoAWSRequestsAuth(aws_host=DML_API_HOST,
-                                       aws_region=DML_REGION,
-                                       aws_service='execute-api')
-            resp = conn_pool.post(DML_API_ENDPOINT, auth=auth, json=payload)
+            resp = conn_pool.post(DML_API_ENDPOINT + 'user', auth=AWSSigV4('execute-api'), json=payload)
             data = resp.json()
             if resp.status_code != 504:
                 break
@@ -84,7 +80,7 @@ def _api(api, op, **kwargs):
         if data['status'] != 'ok':
             err = data['error']
             if err['context']:
-                logger.error('api error: %s', err['message'] + '\n' + err['context'])
+                logger.error('api error: %s', err['message'] + '\n' + '\n'.join(err['context']))
             raise ApiError(f'{err["code"]}: {err["message"]}')
         return data['result']
     except KeyboardInterrupt:
