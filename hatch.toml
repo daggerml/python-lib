@@ -5,6 +5,9 @@ dependencies = [
   "boto3"
 ]
 
+[envs.default.scripts]
+test = 'pytest -vsx'
+
 [envs.docs]
 dependencies = [
   "Sphinx>=5.1.1",

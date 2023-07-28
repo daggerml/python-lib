@@ -44,21 +44,15 @@ is located.
 
 ```python
 import daggerml as dml
-
 d0 = dml.Dag.new('my-dag')
 d0.commit(42)
-
-d1 = dml.Dag.new('another-dag')
-fourty_two = d1.load('my-dag')
-d1.commit(fourty_two.to_py() + 1)
 ```
 
 ## Tests
 
-Run test suite with `pytest`:
-
 ```bash
-pytest -vsx
+# run tests
+hatch run test
 ```
 
 ## Docs
