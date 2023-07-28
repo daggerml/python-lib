@@ -2,50 +2,40 @@
 
 ## Prerequisites
 
-*pipx*
+* [pipx](https://pypa.github.io/pipx/installation/)
+* [hatch](https://hatch.pypa.io/latest/install/#pipx) (via `pipx`)
 
-If [pipx](https://pypa.github.io/pipx/) is not installed, first do that.
+## Configure
 
-*hatch*
-
-Then install [hatch](https://hatch.pypa.io/latest/) via:
+Get the DaggerML API endpoint from the `api-endpoint` output of your DaggerML
+infrastructure Terraform CDK stack. Then start a hatch shell with a Python
+virtual environment:
 
 ```bash
-pipx install hatch
+# start a hatch shell
+hatch shell
 ```
 
-## Configuration
+Within this shell you can use the `dml` executable to configure the DaggerML
+SDK for this project:
 
-```bash
-# help
-dml --help
-
+```
 # configure API endpoint (in the ./.dml directory)
 dml configure --api-endpoint ${DML_API_ENDPOINT}
 ```
+
+You can enable command completion for `dml` if you want:
 
 ```bash
 # bash command completion
 pip install argcomplete
 
-# enable completion for dml in this shell
+# enable completion for dml in this shell, or add to your .bashrc file, or
+# see: https://kislyuk.github.io/argcomplete/#activating-global-completion
 eval "$(python "$(which register-python-argcomplete)" dml)"
-
-# enable completion for dml via bashrc
-cat <<'EOT' >> ~/.bashrc
-eval "$(python "$(which register-python-argcomplete)" dml)"
-EOT
-
-# or see: https://kislyuk.github.io/argcomplete/#activating-global-completion
 ```
 
-You can also use `python -m daggerml` instead of the `dml` executable if you
-prefer:
-
-```bash
-# help
-python -m daggerml --help
-```
+You can also use `python -m daggerml` instead of `dml` if you prefer that.
 
 ## Usage
 
@@ -65,15 +55,18 @@ d1.commit(fourty_two.to_py() + 1)
 
 ## Tests
 
-Run test suite with `pytest`.
+Run test suite with `pytest`:
+
+```bash
+pytest -vsx
+```
 
 ## Docs
 
-To build the docs, first make sure `bootstrap-docker.py` has been run, then
-run: `hatch run docs:build`
+```bash
+# build the docs
+hatch run docs:build
 
-To serve the docs: `hatch run docs:serve`
-
-## Tests
-
-To run the tests: `hatch run test:cov`
+# start a server to view the docs
+hatch run docs:serve
+```
