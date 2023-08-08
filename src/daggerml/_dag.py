@@ -17,6 +17,7 @@ adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
 conn_pool.mount('http://', adapter)
 conn_pool.mount('https://', adapter)
 boto3_session = boto3.session.Session()
+api_region = None
 
 
 def _json_dumps_default(obj):
@@ -67,12 +68,20 @@ class NodeError(DmlError):
 
 
 def _api(api, op, **kwargs):
+    global api_region
     try:
         payload = dict(api=api, op=op, **kwargs)
         while True:
             assert DML_API_ENDPOINT is not None, 'API endpoint not configured'
             assert boto3_session.get_credentials() is not None, 'AWS credentials not found'
-            resp = conn_pool.post(DML_API_ENDPOINT + '/user', auth=AWSSigV4('execute-api'), json=payload)
+            url = DML_API_ENDPOINT + '/user'
+            if api_region is None:
+                resp = conn_pool.get(url)
+                if resp.status_code != 200:
+                    break
+                api_region = resp.json()['region']
+            auth = AWSSigV4('execute-api', region=api_region)
+            resp = conn_pool.post(url, auth=auth, json=payload)
             data = resp.json()
             if resp.status_code != 504:
                 break
