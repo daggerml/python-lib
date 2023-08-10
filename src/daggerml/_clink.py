@@ -1,11 +1,11 @@
-import sys
 import json
+import sys
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from os.path import basename
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 try:
     from argcomplete import autocomplete
-except ModuleNotFoundError:
+except ImportError:
     def autocomplete(parser):
         pass
 

@@ -1,16 +1,12 @@
 import logging
 import os
-import pathlib
-import re
 import sys
 from collections.abc import MutableMapping as Map
 from configparser import ConfigParser, ExtendedInterpolation
 from pathlib import Path
-from urllib.parse import urlparse
-
 
 logger = logging.getLogger(__name__)
-USER_HOME_DIR = str(pathlib.Path.home())
+USER_HOME_DIR = str(Path.home())
 
 DML_PROFILE = os.getenv('DML_PROFILE')
 DML_API_ENDPOINT = os.getenv('DML_API_ENDPOINT')

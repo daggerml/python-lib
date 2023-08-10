@@ -1,16 +1,17 @@
-import boto3
 import json
 import logging
-import requests
-from time import sleep
 import traceback as tb
 import warnings
-from requests_auth_aws_sigv4 import AWSSigV4
 from copy import copy, deepcopy
-from daggerml._config import DML_API_ENDPOINT
 from dataclasses import dataclass
+from time import sleep
 from typing import NewType, Optional
 
+import boto3
+import requests
+from requests_auth_aws_sigv4 import AWSSigV4
+
+from daggerml._config import DML_API_ENDPOINT
 
 logger = logging.getLogger(__name__)
 conn_pool = requests.Session()
@@ -99,7 +100,7 @@ def _api(api, op, **kwargs):
     except ApiError:
         raise
     except Exception as e:
-        raise ApiError(f'{e.__class__.__name__}: {str(e)}')
+        raise ApiError(f'{e.__class__.__name__}: {str(e)}') from e
 
 
 def list_dags(name=None):
@@ -127,6 +128,19 @@ def get_dag_by_name_version(dag_name, version='latest'):
     if tmp is None:
         return None
     return tmp['result']
+
+
+def get_deleted_resources(dag_id, secret, exclusive_start_id=-1):
+    return _api('dag', 'get_deleted_resources', dag_id=dag_id, secret=secret,
+                exclusive_start_id=exclusive_start_id)
+
+
+def get_node(node_id, secret):
+    return _api('node', 'get_node', node_id=node_id, secret=secret)
+
+
+def get_node_metadata(node_id, secret):
+    return _api('node', 'get_node_metadata', node_id=node_id, secret=secret)
 
 
 def format_exception(err):
@@ -183,7 +197,7 @@ def daggerml():
             assert issubclass(cls, Resource), 'invalid class: expected Resource'
             assert isinstance(tag, str), 'invalid tag: expected string'
             if tag in tag2resource:
-                warnings.warn('tag already registered: ' + tag)
+                warnings.warn('tag already registered: ' + tag, stacklevel=2)
             tag2resource[tag] = cls
             return cls
         return wrapped if cls is None else wrapped(cls)
@@ -325,9 +339,7 @@ def daggerml():
 
         @property
         def meta(self):
-            resp = _api('node', 'get_node_metadata',
-                        node_id=self.id,
-                        secret=self.dag.secret)
+            resp = get_node_metadata(self.id, self.dag.secret)
             return resp
 
     @dataclass
@@ -447,9 +459,7 @@ def daggerml():
                 if node in CACHE:
                     py = self.to_py(CACHE[node])
                 else:
-                    py = from_data(_api('node', 'get_node',
-                                        node_id=node.id,
-                                        secret=self.secret))
+                    py = from_data(get_node(node.id, self.secret))
                     CACHE[node] = deepcopy(py)
             elif isinstance(node, (tuple, list)):
                 py = tuple([self.to_py(x) for x in node])
@@ -459,7 +469,7 @@ def daggerml():
                 py = node
             return copy(py)
 
-        def fail(self, failure_info={}):
+        def fail(self, failure_info={}):  # noqa: B006
             """fail a dag"""
             if isinstance(failure_info, (dict, list, tuple, Resource)):
                 failure_info = json.loads(json_dumps(failure_info))
@@ -480,7 +490,7 @@ def daggerml():
 
         def delete(self):
             """delete a dag (must be failed / committed first)"""
-            _api('dag', 'delete_dag', dag_id=self.id, secret=self.secret)
+            delete_dag(dag_id=self.id)
             return
 
         def refresh(self, ttl=300):
@@ -526,8 +536,8 @@ def fullname(o):
 
 
 def dag_fn(fn):
-    def wrapped(dag, *args):
-        node = dag.from_py([dag.executor, fullname(fn)]).call_async(*args)
+    def wrapped(dag, *args, **kwargs):
+        node = dag.from_py([dag.executor, fullname(fn)]).call_async(*args, **kwargs)
         while True:
             sleep(0.1)
             fn_dag = Dag.from_claim(dag.executor, dag.secret, ttl=-1, node_id=node.id)

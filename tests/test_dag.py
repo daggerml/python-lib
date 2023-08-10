@@ -1,14 +1,13 @@
-# from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
-import pytest
-from time import sleep
 from datetime import datetime
-from util import DmlTestBase
+from time import sleep
 from uuid import uuid4
+
+import pytest
+from util import DmlTestBase
+
 import daggerml as dml
-from daggerml import (
-    Dag, Node, NodeError, DagError, list_dags, describe_dag, Resource, ApiError, dag_fn
-)
+from daggerml import ApiError, Dag, DagError, Node, NodeError, Resource, dag_fn, describe_dag, list_dags
 from daggerml._dag import _api
 
 

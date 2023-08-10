@@ -1,5 +1,6 @@
-import daggerml as dml
 import unittest
+
+import daggerml as dml
 
 
 class DmlTestBase(unittest.TestCase):
