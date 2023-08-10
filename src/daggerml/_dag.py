@@ -2,6 +2,7 @@ import boto3
 import json
 import logging
 import requests
+from time import sleep
 import traceback as tb
 import warnings
 from requests_auth_aws_sigv4 import AWSSigV4
@@ -138,7 +139,6 @@ def format_exception(err):
 
 
 def daggerml():
-    from time import sleep
     from collections.abc import Mapping
     from weakref import WeakKeyDictionary
 
@@ -518,3 +518,22 @@ def daggerml():
 
 Dag, Node, Resource, register_tag = daggerml()
 del daggerml
+
+
+def fullname(o):
+    klass = o.__class__
+    return klass.__module__ + '.' + klass.__qualname__
+
+
+def dag_fn(fn):
+    def wrapped(dag, *args):
+        node = dag.from_py([dag.executor, fullname(fn)]).call_async(*args)
+        while True:
+            sleep(0.1)
+            fn_dag = Dag.from_claim(dag.executor, dag.secret, ttl=-1, node_id=node.id)
+            if isinstance(fn_dag, Dag):
+                break
+        with fn_dag:
+            fn_dag.commit(fn(fn_dag))
+        return node.wait()
+    return wrapped

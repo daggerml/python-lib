@@ -7,7 +7,7 @@ from util import DmlTestBase
 from uuid import uuid4
 import daggerml as dml
 from daggerml import (
-    Dag, Node, NodeError, DagError, list_dags, describe_dag, Resource, ApiError
+    Dag, Node, NodeError, DagError, list_dags, describe_dag, Resource, ApiError, dag_fn
 )
 from daggerml._dag import _api
 
@@ -569,3 +569,15 @@ class TestQuery(DmlTestBase):
         resp = describe_dag(dag_id)
         assert isinstance(resp, dict)
         assert resp['name'] == self.id()
+
+class TestLocalExecutor(DmlTestBase):
+
+    def test_basic_local_func(self):
+        @dag_fn
+        def add(dag):
+            _, _, *args = dag.expr
+            return sum([x.to_py() for x in args])
+        dag = Dag.new(self.id())
+        args = [1, 2, 3, 4, 5]
+        resp = add(dag, *args)
+        assert resp.to_py() == sum(args)
