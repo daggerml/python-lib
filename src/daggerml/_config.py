@@ -10,6 +10,8 @@ USER_HOME_DIR = str(Path.home())
 
 DML_PROFILE = os.getenv('DML_PROFILE')
 DML_API_ENDPOINT = os.getenv('DML_API_ENDPOINT')
+DML_S3_BUCKET = os.getenv('DML_S3_BUCKET')
+DML_S3_PREFIX = os.getenv('DML_S3_PREFIX', '')
 
 
 def deep_merge(d, v):
@@ -24,6 +26,8 @@ def configure():
     keys = {
         'config': {
             'api_endpoint': 'DML_API_ENDPOINT',
+            's3_bucket': 'DML_S3_BUCKET',
+            's3_prefix': 'DML_S3_PREFIX',
         },
     }
 

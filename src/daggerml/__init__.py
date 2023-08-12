@@ -1,7 +1,7 @@
 from daggerml._dag import (
     DmlError, DagError, ApiError, NodeError, Resource,
     list_dags, describe_dag, delete_dag, get_dag_by_name_version,
-    Dag, Node, register_tag, dag_fn
+    Dag, Node, register_tag, dag_fn, s3_upload, S3Resource
 )
 
 from importlib.metadata import version, PackageNotFoundError

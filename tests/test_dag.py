@@ -3,11 +3,24 @@ from datetime import datetime
 from time import sleep
 from uuid import uuid4
 
+import boto3
 import pytest
 from util import DmlTestBase
 
 import daggerml as dml
-from daggerml import ApiError, Dag, DagError, Node, NodeError, Resource, dag_fn, describe_dag, list_dags
+from daggerml import (
+    ApiError,
+    Dag,
+    DagError,
+    Node,
+    NodeError,
+    Resource,
+    S3Resource,
+    dag_fn,
+    describe_dag,
+    list_dags,
+    s3_upload,
+)
 from daggerml._dag import _api
 
 
@@ -230,7 +243,7 @@ class TestDagBasic(DmlTestBase):
 
     def test_dag_literal_node_resource(self):
         d0 = Dag.new(self.id())
-        n0 = d0.from_py(Resource('asdf', d0.executor))
+        n0 = d0.from_py(Resource('asdf', d0.executor, tag='blah'))
 
         # Every dag has an executor whose tag is the dag's name:
         assert d0.executor.tag == self.id()
@@ -238,18 +251,13 @@ class TestDagBasic(DmlTestBase):
         assert isinstance(n0.to_py(), Resource)
         assert n0.to_py().parent == d0.executor
 
-        # A new literal resource cannot have a tag and can only be created
+        # A new literal resource must have a tag and can only be created
         # with the dag's executor as its parent. Any other parent (or no
         # parent) should raise:
 
         # Executor is good but new resource can't have a tag:
-        with pytest.raises(ApiError, match='invalid resource'):
-            d0.from_py(Resource('qwer', d0.executor, 'my.unfortunate.tag'))
-
-        # Only a dag executor resource can have no parent, but an executor
-        # resource always has a tag which is the same as the dag's name:
-        with pytest.raises(ApiError, match='invalid resource'):
-            d0.from_py(Resource('qwer', None))
+        with pytest.raises(ApiError, match='new resources must have a tag'):
+            d0.from_py(Resource('qwer', d0.executor, None))
 
         # Trying to create a new executor resource should raise:
         with pytest.raises(ApiError, match='resource that was not already in the dag'):
@@ -258,7 +266,7 @@ class TestDagBasic(DmlTestBase):
         # Trying to smuggle a resource into a dag should raise:
         with pytest.raises(ApiError, match='resource that was not already in the dag'):
             d1 = Dag.new(self.id() + '.other')
-            d0.from_py(Resource('poiu', d1.executor))
+            d0.from_py(Resource('poiu', d1.executor, tag='test'))
 
     def test_dag_load(self):
         d0 = Dag.new(self.id())
@@ -571,7 +579,7 @@ class TestQuery(DmlTestBase):
 
 class TestLocalExecutor(DmlTestBase):
 
-    def test_basic_local_func(self):
+    def test_local_func_basic(self):
         @dag_fn
         def add(dag):
             _, _, *args = dag.expr
@@ -580,3 +588,47 @@ class TestLocalExecutor(DmlTestBase):
         args = [1, 2, 3, 4, 5]
         resp = add(dag, *args)
         assert resp.to_py() == sum(args)
+
+    def test_not_squashing(self):
+        "make sure different functions aren't overwriting each others caches"
+        @dag_fn
+        def sub(dag):
+            _, _, c, d = dag.expr
+            return c.to_py() - d.to_py()
+
+        @dag_fn
+        def add(dag):
+            _, _, *args = dag.expr
+            return sum([x.to_py() for x in args])
+        dag = Dag.new(self.id())
+        add_resp = add(dag, 3, 1)
+        sub_resp = sub(dag, 3, 1)
+        assert add_resp.to_py() == 3 + 1
+        assert sub_resp.to_py() == 3 - 1
+
+class TestS3Executor(DmlTestBase):
+
+    def test_upload_basic(self):
+        dag = Dag.new(self.id())
+        obj = b'this is a test'
+        with pytest.raises(ValueError, match='s3_upload requires'):
+            s3_upload(dag, obj, bucket=None, prefix='test')
+        resource_node = s3_upload(dag, obj, bucket='daggerml-base', prefix='test')
+        try:
+            assert isinstance(resource_node, Node)
+            resource = resource_node.to_py()
+            assert isinstance(resource, S3Resource)
+            assert resource.tag == 'com.daggerml.executor.s3'
+            assert resource.uri.startswith('s3://daggerml-base/test/')
+            assert resource.bucket == 'daggerml-base'
+            assert resource.key.startswith('test/')
+            resp = boto3.client('s3').get_object(
+                Bucket=resource.bucket,
+                Key=resource.key
+            )
+            assert resp['Body'].read() == obj
+        finally:
+            resp = boto3.client('s3').delete_object(
+                Bucket=resource.bucket,
+                Key=resource.key
+            )

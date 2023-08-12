@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import traceback as tb
@@ -5,13 +6,14 @@ import warnings
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from time import sleep
-from typing import NewType, Optional
+from typing import ClassVar, NewType, Optional
+from urllib.parse import urlparse
 
 import boto3
 import requests
 from requests_auth_aws_sigv4 import AWSSigV4
 
-from daggerml._config import DML_API_ENDPOINT
+from daggerml._config import DML_API_ENDPOINT, DML_S3_BUCKET, DML_S3_PREFIX
 
 logger = logging.getLogger(__name__)
 conn_pool = requests.Session()
@@ -167,12 +169,10 @@ def daggerml():
 
         @staticmethod
         def from_dict(data):
-            if data['parent'] is None:
-                parent = None
-                cls = Resource
-            else:
-                parent = Resource.from_dict(data['parent'])
-                cls = tag2resource.get(parent.tag, Resource)
+            parent = data['parent']
+            if parent is not None:
+                parent = Resource.from_dict(parent)
+            cls = tag2resource.get(data['tag'], Resource)
             return cls(data['id'], parent, data['tag'])
 
         def to_dict(self):
@@ -181,7 +181,7 @@ def daggerml():
                 parent = parent.to_dict()
             return {'id': self.id, 'tag': self.tag, 'parent': parent}
 
-    def register_tag(tag, cls=None):
+    def register_tag(cls):
         """register a tag with daggerml
 
         Once registered, any resources loaded with this tag will be of type: cls
@@ -193,14 +193,12 @@ def daggerml():
         cls : Resource subclass
             the class representation of the resource
         """
-        def wrapped(cls):
-            assert issubclass(cls, Resource), 'invalid class: expected Resource'
-            assert isinstance(tag, str), 'invalid tag: expected string'
-            if tag in tag2resource:
-                warnings.warn('tag already registered: ' + tag, stacklevel=2)
-            tag2resource[tag] = cls
-            return cls
-        return wrapped if cls is None else wrapped(cls)
+        assert issubclass(cls, Resource), 'invalid class: expected Resource'
+        assert isinstance(cls.tag, str), 'invalid tag: expected string'
+        if cls.tag in tag2resource:
+            warnings.warn('tag already registered: ' + cls.tag, stacklevel=2)
+        tag2resource[cls.tag] = cls
+        return cls
 
     def to_data(py):
         if isinstance(py, Node):
@@ -398,7 +396,8 @@ def daggerml():
             """create a new dag"""
             resp = _api('dag', 'create_dag', name=name, version=version)
             if resp is not None:
-                return cls(**resp)
+                dag = cls(**resp)
+                return dag
 
         @classmethod
         def from_claim(cls, executor, secret, ttl, node_id=None):
@@ -530,12 +529,15 @@ Dag, Node, Resource, register_tag = daggerml()
 del daggerml
 
 
-def fullname(o):
-    klass = o.__class__
-    return klass.__module__ + '.' + klass.__qualname__
+def fullname(obj):
+    return '.'.join([obj.__module__, obj.__qualname__])
 
 
 def dag_fn(fn):
+    """wraps a function into a dag node with executor being the dag's executor
+
+    This is only reproducible if it's in the cloud. But that's okay.
+    """
     def wrapped(dag, *args, **kwargs):
         node = dag.from_py([dag.executor, fullname(fn)]).call_async(*args, **kwargs)
         while True:
@@ -547,3 +549,91 @@ def dag_fn(fn):
             fn_dag.commit(fn(fn_dag))
         return node.wait()
     return wrapped
+
+
+def hash_file(file_path, block_size):
+    _hash = hashlib.md5()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(block_size):
+            _hash.update(chunk)
+    _hash = _hash.hexdigest()
+    _id = json_dumps({'path': file_path, 'hash': _hash})
+    return _id
+
+
+def hash_bytes(bytes_object):
+    _hash = hashlib.md5()
+    _hash.update(bytes_object)
+    _hash = _hash.hexdigest()
+    return _hash
+
+
+@register_tag
+@dataclass(frozen=True)
+class LocalResource(Resource):
+    """local files"""
+    tag: ClassVar[str] = 'com.daggerml.executor.local'
+
+    @property
+    def js(self):
+        return json.loads(self.id)
+
+    @property
+    def file_path(self):
+        return self.js['path']
+
+    @property
+    def hash(self):
+        return self.js['hash']
+
+    @classmethod
+    def from_file(cls, dag, file_path, block_size=2**20):
+        """computes the hash of the file and incorporates that into the ID"""
+        _id = json_dumps({'path': file_path, 'hash': hash_file(file_path, block_size)})
+        return cls(id=_id, parent=dag.executor)
+
+
+@register_tag
+@dataclass(frozen=True)
+class S3Resource(Resource):
+    """data on s3"""
+    tag: ClassVar[str] = 'com.daggerml.executor.s3'
+
+    @property
+    def uri(self):
+        return self.id
+
+    @property
+    def bucket(self):
+        return urlparse(self.uri).netloc
+
+    @property
+    def key(self):
+        return urlparse(self.uri).path[1:]
+
+    @classmethod
+    def from_uri(cls, dag, uri):
+        return cls(id=uri,
+                   parent=dag.executor)
+
+
+def s3_upload(dag, bytes_object, bucket=DML_S3_BUCKET, prefix=DML_S3_PREFIX, client=None, **meta):
+    """upload data to s3.
+
+    Appears as Dag.from_py(S3Resource) in the dag."""
+    if bucket is None:
+        raise ValueError('`s3_upload requires `DML_S3_{BUCKET|PREFIX}` to be set')
+    prefix = prefix.rstrip('/')
+    _hash = hash_bytes(bytes_object)
+    key = f'{prefix}/bytes/{_hash[:10]}'
+    resource = S3Resource.from_uri(dag, f's3://{bucket}/{key}')
+    if client is None:
+        client = boto3.client('s3')
+    response = client.put_object(
+        Body=bytes_object,
+        Bucket=bucket,
+        Key=key,
+        Metadata=meta,
+    )
+    print(response)
+    return dag.from_py(resource)
