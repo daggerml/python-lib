@@ -9,7 +9,7 @@ ignore = []
 unfixable = ["B"]
 
 [per-file-ignores]
-"__init__.py" = ["F401", "E401", "E402", "I001"]
+"__init__.py" = ["F401", "E402"]
 
 [isort]
 known-first-party = ["daggerml"]

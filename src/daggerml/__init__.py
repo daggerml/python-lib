@@ -1,10 +1,23 @@
-from daggerml._dag import (
-    DmlError, DagError, ApiError, NodeError, Resource,
-    list_dags, describe_dag, delete_dag, get_dag_by_name_version,
-    Dag, Node, register_tag, dag_fn, s3_upload, S3Resource
-)
+from importlib.metadata import PackageNotFoundError, version
 
-from importlib.metadata import version, PackageNotFoundError
+from daggerml._dag import (
+    ApiError,
+    Dag,
+    DagError,
+    DmlError,
+    LocalResource,
+    Node,
+    NodeError,
+    Resource,
+    S3Resource,
+    dag_fn,
+    delete_dag,
+    describe_dag,
+    get_dag_by_name_version,
+    list_dags,
+    register_tag,
+    s3_upload,
+)
 
 try:
     __version__ = version("daggerml")

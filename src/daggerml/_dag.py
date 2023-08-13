@@ -3,10 +3,13 @@ import json
 import logging
 import traceback as tb
 import warnings
+from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import dataclass
+from io import BytesIO, IOBase
+from pathlib import Path
 from time import sleep
-from typing import ClassVar, NewType, Optional
+from typing import ClassVar, IO, NewType, Optional, Union
 from urllib.parse import urlparse
 
 import boto3
@@ -551,21 +554,26 @@ def dag_fn(fn):
     return wrapped
 
 
-def hash_file(file_path, block_size):
-    _hash = hashlib.md5()
-    with open(file_path, "rb") as f:
-        while chunk := f.read(block_size):
-            _hash.update(chunk)
-    _hash = _hash.hexdigest()
-    _id = json_dumps({'path': file_path, 'hash': _hash})
-    return _id
-
-
-def hash_bytes(bytes_object):
-    _hash = hashlib.md5()
-    _hash.update(bytes_object)
-    _hash = _hash.hexdigest()
-    return _hash
+def hash_object(file_obj: Union[IO, bytes, str, Path], chunk_size: int = 8 * 1024 * 1024) -> str:
+    """compute hash consistent with aws s3 etag of file"""
+    # unconfirmed from https://stackoverflow.com/a/43819225
+    if not isinstance(file_obj, IOBase):
+        if isinstance(file_obj, bytes):
+            return hash_object(BytesIO(file_obj), chunk_size)
+        with open(file_obj, 'rb') as fo:
+            return hash_object(fo, chunk_size)
+    md5s = []
+    while data := file_obj.read(chunk_size):
+        if data is None:
+            break
+        md5s.append(hashlib.md5(data))
+    if len(md5s) < 1:
+        return '"{}"'.format(hashlib.md5().hexdigest())
+    if len(md5s) == 1:
+        return '"{}"'.format(md5s[0].hexdigest())
+    digests = b''.join(m.digest() for m in md5s)
+    digests_md5 = hashlib.md5(digests)
+    return '"{}-{}"'.format(digests_md5.hexdigest(), len(md5s))
 
 
 @register_tag
@@ -587,9 +595,9 @@ class LocalResource(Resource):
         return self.js['hash']
 
     @classmethod
-    def from_file(cls, dag, file_path, block_size=2**20):
+    def from_file(cls, dag, file_path):
         """computes the hash of the file and incorporates that into the ID"""
-        _id = json_dumps({'path': file_path, 'hash': hash_file(file_path, block_size)})
+        _id = json_dumps({'path': str(file_path), 'hash': hash_object(file_path)})
         return cls(id=_id, parent=dag.executor)
 
 
@@ -617,23 +625,30 @@ class S3Resource(Resource):
                    parent=dag.executor)
 
 
-def s3_upload(dag, bytes_object, bucket=DML_S3_BUCKET, prefix=DML_S3_PREFIX, client=None, **meta):
+def s3_put_bytes_or_file(bytes_or_file: Union[IO, bytes, str, Path], client, bucket, key):
+    if isinstance(bytes_or_file, (str, Path)):
+        with open(bytes_or_file, 'rb') as f:
+            return s3_put_bytes_or_file(f, client, bucket, key)
+    # FIXME check for the file first?
+    return client.put_object(
+        Body=bytes_or_file,
+        Bucket=bucket,
+        Key=key,
+    )
+
+
+def s3_upload(dag, bytes_object, bucket=DML_S3_BUCKET, prefix=DML_S3_PREFIX, client=None):
     """upload data to s3.
 
     Appears as Dag.from_py(S3Resource) in the dag."""
     if bucket is None:
         raise ValueError('`s3_upload requires `DML_S3_{BUCKET|PREFIX}` to be set')
     prefix = prefix.rstrip('/')
-    _hash = hash_bytes(bytes_object)
-    key = f'{prefix}/bytes/{_hash[:10]}'
-    resource = S3Resource.from_uri(dag, f's3://{bucket}/{key}')
     if client is None:
         client = boto3.client('s3')
-    response = client.put_object(
-        Body=bytes_object,
-        Bucket=bucket,
-        Key=key,
-        Metadata=meta,
-    )
-    print(response)
+    if isinstance(bytes_object, LocalResource):
+        bytes_object = str(Path(bytes_object.file_path).absolute())
+    key = f'{prefix}/bytes/{hash_object(bytes_object)}'
+    resource = S3Resource.from_uri(dag, f's3://{bucket}/{key}')
+    s3_put_bytes_or_file(bytes_object, client, bucket, key)
     return dag.from_py(resource)

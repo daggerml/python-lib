@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime
+from tempfile import NamedTemporaryFile
 from time import sleep
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from daggerml import (
     ApiError,
     Dag,
     DagError,
+    LocalResource,
     Node,
     NodeError,
     Resource,
@@ -606,13 +608,69 @@ class TestLocalExecutor(DmlTestBase):
         assert add_resp.to_py() == 3 + 1
         assert sub_resp.to_py() == 3 - 1
 
-class TestS3Executor(DmlTestBase):
+class TestLocalResource(DmlTestBase):
+
+    def test_hash_basic(self):
+        dag = Dag.new(self.id())
+        txt = 'this is a test'
+        with NamedTemporaryFile() as f0:
+            f0.write(txt.encode())
+            f0.seek(0)
+            f0r = LocalResource.from_file(dag, f0.name)
+            assert f0r.parent == dag.executor
+            assert f0r.file_path == f0.name
+            with NamedTemporaryFile() as f1:
+                f1.write(txt.encode())
+                f1.seek(0)
+                f1r = LocalResource.from_file(dag, f1.name)
+                assert f1r.file_path == f1.name
+                assert f0r.id != f1r.id
+                assert f0r.hash == f1r.hash
+            with NamedTemporaryFile() as f1:
+                f1.write((txt + ' other').encode())
+                f1.seek(0)
+                f1r = LocalResource.from_file(dag, f1.name)
+                assert f1r.file_path == f1.name
+                assert f0r.id != f1r.id
+                assert f0r.hash != f1r.hash
+
+    def test_hash_empty_files(self):
+        dag = Dag.new(self.id())
+        txt = 'this is a test'
+        with NamedTemporaryFile() as f0:
+            f0.seek(25 * 1024 * 1024)  # >3x chunk size
+            f0.write(txt.encode())
+            f0.seek(0)
+            f0r = LocalResource.from_file(dag, f0.name)
+            assert f0r.parent == dag.executor
+            assert f0r.file_path == f0.name
+            with NamedTemporaryFile() as f1:
+                f1.seek(25 * 1024 * 1024)
+                f1.write(txt.encode())
+                f1.seek(0)
+                f1r = LocalResource.from_file(dag, f1.name)
+                assert f1r.file_path == f1.name
+                assert f0r.id != f1r.id
+                assert f0r.hash == f1r.hash
+            with NamedTemporaryFile() as f1:
+                f1.seek(25 * 1024 * 1024 + 1)
+                f1.write(txt.encode())
+                f1.seek(0)
+                f1r = LocalResource.from_file(dag, f1.name)
+                assert f1r.file_path == f1.name
+                assert f0r.id != f1r.id
+                assert f0r.hash != f1r.hash
+
+class TestS3Resource(DmlTestBase):
+
+    def test_no_bucket(self):
+        dag = Dag.new(self.id())
+        with pytest.raises(ValueError, match='s3_upload requires'):
+            s3_upload(dag, b'this is a test', bucket=None, prefix='test')
 
     def test_upload_basic(self):
         dag = Dag.new(self.id())
         obj = b'this is a test'
-        with pytest.raises(ValueError, match='s3_upload requires'):
-            s3_upload(dag, obj, bucket=None, prefix='test')
         resource_node = s3_upload(dag, obj, bucket='daggerml-base', prefix='test')
         try:
             assert isinstance(resource_node, Node)
@@ -627,6 +685,35 @@ class TestS3Executor(DmlTestBase):
                 Key=resource.key
             )
             assert resp['Body'].read() == obj
+        finally:
+            resp = boto3.client('s3').delete_object(
+                Bucket=resource.bucket,
+                Key=resource.key
+            )
+
+    def test_upload_file_chunks(self):
+        dag = Dag.new(self.id())
+        txt = b'this is a test'
+        num_bytes = 25 * 1024 * 1024  # >3x chunk size
+        with NamedTemporaryFile() as f0:
+            f0.seek(num_bytes)
+            f0.write(txt)
+            f0.seek(0)
+            f0r = LocalResource.from_file(dag, f0.name)
+            resource_node = s3_upload(dag, f0r, bucket='daggerml-base', prefix='test')
+        try:
+            assert isinstance(resource_node, Node)
+            resource = resource_node.to_py()
+            assert isinstance(resource, S3Resource)
+            assert resource.tag == 'com.daggerml.executor.s3'
+            assert resource.uri.startswith('s3://daggerml-base/test/')
+            assert resource.bucket == 'daggerml-base'
+            assert resource.key.startswith('test/')
+            resp = boto3.client('s3').get_object(
+                Bucket=resource.bucket,
+                Key=resource.key
+            )
+            assert resp['Body'].read().endswith(txt)
         finally:
             resp = boto3.client('s3').delete_object(
                 Bucket=resource.bucket,
