@@ -1,15 +1,16 @@
 import hashlib
 import json
 import logging
+import os
 import traceback as tb
 import warnings
-from contextlib import contextmanager
 from copy import copy, deepcopy
 from dataclasses import dataclass
-from io import BytesIO, IOBase
+from functools import singledispatch
+from io import BytesIO
 from pathlib import Path
 from time import sleep
-from typing import ClassVar, IO, NewType, Optional, Union
+from typing import IO, ClassVar, NewType, Optional, Union
 from urllib.parse import urlparse
 
 import boto3
@@ -146,6 +147,11 @@ def get_node(node_id, secret):
 
 def get_node_metadata(node_id, secret):
     return _api('node', 'get_node_metadata', node_id=node_id, secret=secret)
+
+
+def describe_node(node_id):
+    """describe a dag with its ID"""
+    return _api('node', 'describe', node_id=node_id)
 
 
 def format_exception(err):
@@ -554,14 +560,10 @@ def dag_fn(fn):
     return wrapped
 
 
-def hash_object(file_obj: Union[IO, bytes, str, Path], chunk_size: int = 8 * 1024 * 1024) -> str:
+@singledispatch
+def hash_object(file_obj: IO, chunk_size: int = 8 * 1024 * 1024) -> str:
     """compute hash consistent with aws s3 etag of file"""
     # unconfirmed from https://stackoverflow.com/a/43819225
-    if not isinstance(file_obj, IOBase):
-        if isinstance(file_obj, bytes):
-            return hash_object(BytesIO(file_obj), chunk_size)
-        with open(file_obj, 'rb') as fo:
-            return hash_object(fo, chunk_size)
     md5s = []
     while data := file_obj.read(chunk_size):
         if data is None:
@@ -574,6 +576,20 @@ def hash_object(file_obj: Union[IO, bytes, str, Path], chunk_size: int = 8 * 102
     digests = b''.join(m.digest() for m in md5s)
     digests_md5 = hashlib.md5(digests)
     return '"{}-{}"'.format(digests_md5.hexdigest(), len(md5s))
+
+
+@hash_object.register
+def _(file_obj: bytes, chunk_size: int = 8 * 1024 * 1024) -> str:
+    """compute hash consistent with aws s3 etag of file"""
+    return hash_object(BytesIO(file_obj), chunk_size)
+
+
+@hash_object.register(str)
+@hash_object.register(os.PathLike)
+def _(file_obj: Union[str, os.PathLike], chunk_size: int = 8 * 1024 * 1024) -> str:
+    """compute hash consistent with aws s3 etag of file"""
+    with open(file_obj, 'rb') as fo:
+        return hash_object(fo, chunk_size)
 
 
 @register_tag
@@ -625,16 +641,21 @@ class S3Resource(Resource):
                    parent=dag.executor)
 
 
-def s3_put_bytes_or_file(bytes_or_file: Union[IO, bytes, str, Path], client, bucket, key):
-    if isinstance(bytes_or_file, (str, Path)):
-        with open(bytes_or_file, 'rb') as f:
-            return s3_put_bytes_or_file(f, client, bucket, key)
+@singledispatch
+def s3_put_bytes_or_file(bytes_or_file: Union[IO, bytes], client, bucket, key):
     # FIXME check for the file first?
     return client.put_object(
         Body=bytes_or_file,
         Bucket=bucket,
         Key=key,
     )
+
+
+@s3_put_bytes_or_file.register(str)
+@s3_put_bytes_or_file.register(os.PathLike)
+def _(bytes_or_file: Union[str, os.PathLike], client, bucket, key):
+    with open(bytes_or_file, 'rb') as f:
+        return s3_put_bytes_or_file(f, client, bucket, key)
 
 
 def s3_upload(dag, bytes_object, bucket=DML_S3_BUCKET, prefix=DML_S3_PREFIX, client=None):

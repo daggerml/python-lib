@@ -20,6 +20,7 @@ from daggerml import (
     S3Resource,
     dag_fn,
     describe_dag,
+    hash_object,
     list_dags,
     s3_upload,
 )
@@ -633,6 +634,24 @@ class TestLocalResource(DmlTestBase):
                 assert f1r.file_path == f1.name
                 assert f0r.id != f1r.id
                 assert f0r.hash != f1r.hash
+
+    def test_hash_consistency(self):
+        """ensure all versions of hashing work"""
+        txt = b'this is a test'
+        h0 = hash_object(txt)
+        with NamedTemporaryFile() as f:
+            f.write(txt)
+            f.seek(0)
+            assert h0 == hash_object(f)
+            assert h0 == hash_object(f.name)
+        with NamedTemporaryFile() as f:
+            f.write(txt + b'. other')
+            f.seek(0)
+            h1 = hash_object(f)
+            h2 = hash_object(f.name)
+            assert h1 != h0
+            assert h2 != h0
+            assert h1 == h2
 
     def test_hash_empty_files(self):
         dag = Dag.new(self.id())

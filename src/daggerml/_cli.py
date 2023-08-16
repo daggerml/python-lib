@@ -48,3 +48,10 @@ def get_node(node_id, secret, **kw):
 @cli.command(help='describe DAGs')
 def get_node_metadata(node_id, secret, **kw):
     return dml.get_node_metadata(node_id=node_id, secret=secret)
+
+
+@clink.arg('--node-id', help='ID of the Node to describe')
+@cli.command(help='list DAGs')
+def describe_node(node_id, **kwargs):
+    """this is a test"""
+    return dml.describe_node(node_id)
