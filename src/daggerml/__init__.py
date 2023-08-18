@@ -15,6 +15,7 @@ from daggerml._dag import (
     describe_dag,
     describe_node,
     get_dag_by_name_version,
+    get_dag_topology,
     hash_object,
     list_dags,
     register_tag,

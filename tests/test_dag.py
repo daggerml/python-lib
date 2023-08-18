@@ -20,6 +20,7 @@ from daggerml import (
     S3Resource,
     dag_fn,
     describe_dag,
+    get_dag_topology,
     hash_object,
     list_dags,
     s3_upload,
@@ -579,6 +580,14 @@ class TestQuery(DmlTestBase):
         resp = describe_dag(dag_id)
         assert isinstance(resp, dict)
         assert resp['name'] == self.id()
+
+    def test_query_topology(self):
+        dag = Dag.new(self.id())
+        data = [{'a': 23}, 42]
+        dag.commit(data)
+        resp = get_dag_topology(dag.id)
+        assert isinstance(resp, list)
+        assert len(resp) == 4
 
 class TestLocalExecutor(DmlTestBase):
 

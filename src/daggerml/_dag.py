@@ -149,6 +149,10 @@ def get_node_metadata(node_id, secret):
     return _api('node', 'get_node_metadata', node_id=node_id, secret=secret)
 
 
+def get_dag_topology(dag_id):
+    return _api('dag', 'get_topology', dag_id=dag_id)
+
+
 def describe_node(node_id):
     """describe a dag with its ID"""
     return _api('node', 'describe', node_id=node_id)
@@ -209,30 +213,6 @@ def daggerml():
         tag2resource[cls.tag] = cls
         return cls
 
-    def to_data(py):
-        if isinstance(py, Node):
-            return {'type': 'ref', 'value': {'node_id': py.id}}
-        elif isinstance(py, (list, tuple)):
-            return {'type': 'list', 'value': [to_data(x) for x in py]}
-        elif isinstance(py, (dict, Mapping)):
-            if not all([isinstance(x, str) for x in py]):
-                raise TypeError('map datum keys must be strings')
-            return {'type': 'map', 'value': {k: to_data(v) for (k, v) in py.items()}}
-        elif isinstance(py, type(None)):
-            return {'type': 'scalar', 'value': {'type': 'null'}}
-        elif isinstance(py, str):
-            return {'type': 'scalar', 'value': {'type': 'string', 'value': str(py)}}
-        elif isinstance(py, bool):
-            return {'type': 'scalar', 'value': {'type': 'boolean', 'value': bool(py)}}
-        elif isinstance(py, int):
-            return {'type': 'scalar', 'value': {'type': 'int', 'value': str(py)}}
-        elif isinstance(py, float):
-            return {'type': 'scalar', 'value': {'type': 'float', 'value': str(py)}}
-        elif isinstance(py, Resource):
-            return {'type': 'resource', 'value': py.to_dict()}
-        else:
-            raise ValueError('unknown type: ' + type(py))
-
     def from_data(res):
         t = res['type']
         v = res['value']
@@ -260,7 +240,56 @@ def daggerml():
         else:
             raise ValueError('unknown type: ' + t)
 
+    def to_data(py):
+        if isinstance(py, Node):
+            return {'type': 'ref', 'value': {'node_id': py.id}}
+        elif isinstance(py, (list, tuple)):
+            return {'type': 'list', 'value': [to_data(x) for x in py]}
+        elif isinstance(py, (dict, Mapping)):
+            if not all([isinstance(x, str) for x in py]):
+                raise TypeError('map datum keys must be strings')
+            return {'type': 'map', 'value': {k: to_data(v) for (k, v) in py.items()}}
+        elif isinstance(py, type(None)):
+            return {'type': 'scalar', 'value': {'type': 'null'}}
+        elif isinstance(py, str):
+            return {'type': 'scalar', 'value': {'type': 'string', 'value': str(py)}}
+        elif isinstance(py, bool):
+            return {'type': 'scalar', 'value': {'type': 'boolean', 'value': bool(py)}}
+        elif isinstance(py, int):
+            return {'type': 'scalar', 'value': {'type': 'int', 'value': str(py)}}
+        elif isinstance(py, float):
+            return {'type': 'scalar', 'value': {'type': 'float', 'value': str(py)}}
+        elif isinstance(py, Resource):
+            return {'type': 'resource', 'value': py.to_dict()}
+        else:
+            raise ValueError('unknown type: ' + type(py))
+
     CACHE = WeakKeyDictionary()
+
+    def _run_dag_builtin(dag, builtin_op, **kw):
+        # TODO: add try catch and maybe return a node error here?
+        res = _api('dag', 'builtin', builtin_op=builtin_op, dag_id=dag.id, secret=dag.secret, **kw)
+        if res['error'] is not None:
+            raise NodeError(res['error']['message'])
+        return Node(dag, res['node_id'])
+
+    def _from_py(dag, py, **meta):
+        """convert a python datastructure to a literal node"""
+        if isinstance(py, (list, tuple)):
+            items = [_from_py(dag, i).id for i in py]
+            node = _run_dag_builtin(dag, 'construct_list', args=items, meta=meta)
+        elif isinstance(py, (dict, Mapping)):
+            items = {k: _from_py(dag, v).id for k, v in py.items()}
+            node = _run_dag_builtin(dag, 'construct_map', args=items, meta=meta)
+        else:
+            res = _api('dag', 'put_literal',
+                       dag_id=dag.id,
+                       data=to_data(py),
+                       secret=dag.secret)
+            node = Node(dag, res['node_id'])
+        if node not in CACHE:
+            CACHE[node] = deepcopy(py)
+        return node
 
     @dataclass(frozen=True)
     class Node:
@@ -288,18 +317,15 @@ def daggerml():
         def __add__(self, other):
             if len(other) == 0:
                 return self
-            f = self.dag.from_py([self.dag.db_executor, 'concat', self, other])
-            resp = f()
-            return resp
+            return _run_dag_builtin(self.dag, 'concat', args=[self.id, self.dag.from_py(other).id], meta={})
 
         def __getitem__(self, key):
-            f = self.dag.from_py([self.dag.db_executor, 'get', self, key])
-            resp = f()
+            res = _run_dag_builtin(self.dag, 'get', args=[self.id, self.dag.from_py(key).id], meta={})
             if self in CACHE:
                 if isinstance(key, Node):
                     key = key.to_py()
-                CACHE[resp] = CACHE[self][key]
-            return resp
+                CACHE[res] = CACHE[self][key]
+            return res
 
         def call_async(self, *args, **meta):
             """call a remote function asynchronously
@@ -448,16 +474,9 @@ def daggerml():
         def db_executor(self):
             return Node(self, self.db_exec).to_py()
 
-        def from_py(self, py):
+        def from_py(self, py, **meta):
             """convert a python datastructure to a literal node"""
-            res = _api('dag', 'put_literal',
-                       dag_id=self.id,
-                       data=to_data(py),
-                       secret=self.secret)
-            node = Node(self, res['node_id'])
-            if node not in CACHE:
-                CACHE[node] = deepcopy(py)
-            return node
+            return _from_py(self, py, **meta)
 
         def to_py(self, node):
             """convert a [collection of] nodes to a python datastructure"""
