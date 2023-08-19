@@ -23,7 +23,9 @@ if DML_TEST_LOCAL:
     os.environ['AWS_SECRET_ACCESS_KEY'] = 'bogus'
     os.environ['AWS_REGION'] = 'bogus'
     os.environ.pop('AWS_PROFILE', None)
-    logger.info(f'Local test mode: DML_API_ENDPOINT={DML_API_ENDPOINT}, DML_S3_ENDPOINT={DML_S3_ENDPOINT}')
+    logger.warning('Local test mode:')
+    logger.warning(f'DML_API_ENDPOINT={DML_API_ENDPOINT}')
+    logger.warning(f'DML_S3_ENDPOINT={DML_S3_ENDPOINT}')
 
 
 def deep_merge(d, v):
