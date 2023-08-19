@@ -6,7 +6,7 @@ dependencies = [
 ]
 
 [envs.default.scripts]
-test = 'pytest -vsx --log-cli-level=INFO --log-disable=botocore.credentials --log-disable=daggerml._dag'
+test = 'pytest -vsx --log-cli-level=INFO --log-disable=botocore.credentials'
 
 [envs.docs]
 dependencies = [
