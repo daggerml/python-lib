@@ -51,8 +51,11 @@ d0.commit(42)
 ## Tests
 
 ```bash
-# run tests
+# run tests against AWS infrastructure
 hatch run test
+
+# run tests locally (need local docker API server running)
+DML_TEST_LOCAL=true hatch run test
 ```
 
 ## Docs

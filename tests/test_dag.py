@@ -26,6 +26,7 @@ from daggerml import (
     s3_upload,
 )
 from daggerml._dag import _api
+from daggerml._config import DML_S3_ENDPOINT, DML_TEST_LOCAL
 
 
 def get_dag(dag):
@@ -360,6 +361,7 @@ class TestDagBasic(DmlTestBase):
         with pytest.raises(ApiError, match='bad secret or invalid executor'):
             d1.commit(n1)
 
+
 class TestFuncApplication(DmlTestBase):
 
     def setUp(self):
@@ -558,6 +560,7 @@ class TestFuncApplication(DmlTestBase):
         assert y2.wait().to_py() == '42 is magic'
         assert y3.wait().to_py() == '43 is magic'
 
+
 class TestQuery(DmlTestBase):
 
     def test_query_list_without_name(self):
@@ -589,6 +592,7 @@ class TestQuery(DmlTestBase):
         assert isinstance(resp, list)
         assert len(resp) == 4
 
+
 class TestLocalExecutor(DmlTestBase):
 
     def test_local_func_basic(self):
@@ -617,6 +621,7 @@ class TestLocalExecutor(DmlTestBase):
         sub_resp = sub(dag, 3, 1)
         assert add_resp.to_py() == 3 + 1
         assert sub_resp.to_py() == 3 - 1
+
 
 class TestLocalResource(DmlTestBase):
 
@@ -689,32 +694,40 @@ class TestLocalResource(DmlTestBase):
                 assert f0r.id != f1r.id
                 assert f0r.hash != f1r.hash
 
+
 class TestS3Resource(DmlTestBase):
+
+    def setUp(self):
+        self.client = boto3.client('s3', endpoint_url=DML_S3_ENDPOINT)
+        self.bucket = 'daggerml-base'
+        self.prefix = 'test'
+        if DML_TEST_LOCAL:
+            self.client.create_bucket(Bucket=self.bucket)
 
     def test_no_bucket(self):
         dag = Dag.new(self.id())
         with pytest.raises(ValueError, match='s3_upload requires'):
-            s3_upload(dag, b'this is a test', bucket=None, prefix='test')
+            s3_upload(dag, b'this is a test', bucket=None, prefix=self.prefix, client=self.client)
 
     def test_upload_basic(self):
         dag = Dag.new(self.id())
         obj = b'this is a test'
-        resource_node = s3_upload(dag, obj, bucket='daggerml-base', prefix='test')
+        resource_node = s3_upload(dag, obj, bucket=self.bucket, prefix=self.prefix, client=self.client)
         try:
             assert isinstance(resource_node, Node)
             resource = resource_node.to_py()
             assert isinstance(resource, S3Resource)
             assert resource.tag == 'com.daggerml.executor.s3'
             assert resource.uri.startswith('s3://daggerml-base/test/')
-            assert resource.bucket == 'daggerml-base'
+            assert resource.bucket == self.bucket
             assert resource.key.startswith('test/')
-            resp = boto3.client('s3').get_object(
+            resp = self.client.get_object(
                 Bucket=resource.bucket,
                 Key=resource.key
             )
             assert resp['Body'].read() == obj
         finally:
-            resp = boto3.client('s3').delete_object(
+            resp = self.client.delete_object(
                 Bucket=resource.bucket,
                 Key=resource.key
             )
@@ -728,22 +741,22 @@ class TestS3Resource(DmlTestBase):
             f0.write(txt)
             f0.seek(0)
             f0r = LocalResource.from_file(dag, f0.name)
-            resource_node = s3_upload(dag, f0r, bucket='daggerml-base', prefix='test')
+            resource_node = s3_upload(dag, f0r, bucket=self.bucket, prefix=self.prefix, client=self.client)
         try:
             assert isinstance(resource_node, Node)
             resource = resource_node.to_py()
             assert isinstance(resource, S3Resource)
             assert resource.tag == 'com.daggerml.executor.s3'
             assert resource.uri.startswith('s3://daggerml-base/test/')
-            assert resource.bucket == 'daggerml-base'
+            assert resource.bucket == self.bucket
             assert resource.key.startswith('test/')
-            resp = boto3.client('s3').get_object(
+            resp = self.client.get_object(
                 Bucket=resource.bucket,
                 Key=resource.key
             )
             assert resp['Body'].read().endswith(txt)
         finally:
-            resp = boto3.client('s3').delete_object(
+            resp = self.client.delete_object(
                 Bucket=resource.bucket,
                 Key=resource.key
             )

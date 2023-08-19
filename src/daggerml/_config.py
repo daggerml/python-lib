@@ -8,10 +8,18 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 USER_HOME_DIR = str(Path.home())
 
+DML_TEST_LOCAL = os.getenv('DML_TEST_LOCAL')
 DML_PROFILE = os.getenv('DML_PROFILE')
 DML_API_ENDPOINT = os.getenv('DML_API_ENDPOINT')
 DML_S3_BUCKET = os.getenv('DML_S3_BUCKET')
 DML_S3_PREFIX = os.getenv('DML_S3_PREFIX', '')
+DML_S3_ENDPOINT = None
+
+if DML_TEST_LOCAL:
+    DML_PROFILE = None
+    DML_API_ENDPOINT = 'http://localhost:8080'
+    DML_S3_ENDPOINT = 'http://localhost:4566'
+    logger.info(f'Local test mode: DML_API_ENDPOINT={DML_API_ENDPOINT}, DML_S3_ENDPOINT={DML_S3_ENDPOINT}')
 
 
 def deep_merge(d, v):
