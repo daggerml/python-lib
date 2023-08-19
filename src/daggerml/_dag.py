@@ -421,8 +421,6 @@ def daggerml():
         name: str = None
         version: int = None
         expr_id: str = None
-        db_exec: str = None
-        # get_fn: str = None
         executor_id: str = None
         secret: str = None
 
@@ -469,10 +467,6 @@ def daggerml():
         def executor(self):
             """this dag's executor resource"""
             return Node(self, self.executor_id).to_py()
-
-        @property
-        def db_executor(self):
-            return Node(self, self.db_exec).to_py()
 
         def from_py(self, py, **meta):
             """convert a python datastructure to a literal node"""
@@ -566,8 +560,11 @@ def dag_fn(fn):
 
     This is only reproducible if it's in the cloud. But that's okay.
     """
-    def wrapped(dag, *args, **kwargs):
-        node = dag.from_py([dag.executor, fullname(fn)]).call_async(*args, **kwargs)
+    fn_name = fullname(fn)
+    def wrapped(dag, *args, **meta):
+        if 'name' not in meta:
+            meta['name'] = f'{fn_name}(args)'
+        node = dag.from_py([dag.executor, fn_name], name=f'dag_fn:{fn_name}').call_async(*args, **meta)
         while True:
             sleep(0.1)
             fn_dag = Dag.from_claim(dag.executor, dag.secret, ttl=-1, node_id=node.id)

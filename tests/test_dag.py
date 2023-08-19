@@ -25,8 +25,8 @@ from daggerml import (
     list_dags,
     s3_upload,
 )
-from daggerml._dag import _api
 from daggerml._config import DML_S3_ENDPOINT, DML_TEST_LOCAL
+from daggerml._dag import _api
 
 
 def get_dag(dag):
@@ -563,11 +563,16 @@ class TestFuncApplication(DmlTestBase):
 
 class TestQuery(DmlTestBase):
 
+    def test_query_list_no_dags(self):
+        resp = list_dags()
+        assert isinstance(resp, list)
+        assert len(resp) == 0
+
     def test_query_list_without_name(self):
         Dag.new(self.id()).commit(23)
         resp = list_dags()
         assert isinstance(resp, list)
-        assert len(resp) > 1
+        assert len(resp) == 1
 
     def test_query_list_with_name(self):
         Dag.new(self.id()).commit(23)
@@ -589,8 +594,13 @@ class TestQuery(DmlTestBase):
         data = [{'a': 23}, 42]
         dag.commit(data)
         resp = get_dag_topology(dag.id)
-        assert isinstance(resp, list)
-        assert len(resp) == 4
+        assert isinstance(resp, dict)
+        assert len(resp) == 2
+        nodes, edges = resp['nodes'], resp['edges']
+        assert isinstance(nodes, list)
+        assert len(nodes) == 5  # 23, {'a': 23}, 42, [], and dag executor
+        assert isinstance(edges, list)
+        assert len(edges) == 3  # 23 -> {'a': 23}; {a: 23} -> []; 42 -> []
 
 
 class TestLocalExecutor(DmlTestBase):
