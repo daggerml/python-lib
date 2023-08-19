@@ -19,6 +19,10 @@ if DML_TEST_LOCAL:
     DML_PROFILE = None
     DML_API_ENDPOINT = 'http://localhost:8080'
     DML_S3_ENDPOINT = 'http://localhost:4566'
+    os.environ['AWS_ACCESS_KEY_ID'] = 'bogus'
+    os.environ['AWS_SECRET_ACCESS_KEY'] = 'bogus'
+    os.environ['AWS_REGION'] = 'bogus'
+    os.environ.pop('AWS_PROFILE', None)
     logger.info(f'Local test mode: DML_API_ENDPOINT={DML_API_ENDPOINT}, DML_S3_ENDPOINT={DML_S3_ENDPOINT}')
 
 
