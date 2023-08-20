@@ -10,7 +10,7 @@ from functools import singledispatch
 from io import BytesIO
 from pathlib import Path
 from time import sleep
-from typing import IO, ClassVar, NewType, Optional, Union
+from typing import IO, NewType, Optional, Union
 from urllib.parse import urlparse
 
 import boto3
@@ -194,7 +194,7 @@ def daggerml():
                 parent = parent.to_dict()
             return {'id': self.id, 'tag': self.tag, 'parent': parent}
 
-    def register_tag(cls):
+    def register_tag(tag, cls=None):
         """register a tag with daggerml
 
         Once registered, any resources loaded with this tag will be of type: cls
@@ -206,11 +206,13 @@ def daggerml():
         cls : Resource subclass
             the class representation of the resource
         """
-        assert issubclass(cls, Resource), 'invalid class: expected Resource'
-        assert isinstance(cls.tag, str), 'invalid tag: expected string'
-        if cls.tag in tag2resource:
-            warnings.warn('tag already registered: ' + cls.tag, stacklevel=2)
-        tag2resource[cls.tag] = cls
+        if cls is None:
+            return lambda x: register_tag(tag=tag, cls=x)
+        assert issubclass(cls, Resource), 'invalid class: expected Resource subclass'
+        assert isinstance(tag, str), 'invalid tag: expected string'
+        if tag in tag2resource:
+            warnings.warn('tag already registered: ' + tag, stacklevel=2)
+        tag2resource[tag] = cls
         return cls
 
     def from_data(res):
@@ -560,16 +562,13 @@ def dag_fn(fn):
 
     This is only reproducible if it's in the cloud. But that's okay.
     """
-    fn_name = fullname(fn)
     def wrapped(dag, *args, **meta):
-        if 'name' not in meta:
-            meta['name'] = f'{fn_name}(args)'
-        node = dag.from_py([dag.executor, fn_name], name=f'dag_fn:{fn_name}').call_async(*args, **meta)
+        node = dag.from_py([dag.executor, fullname(fn)]).call_async(*args, **meta)
         while True:
-            sleep(0.1)
             fn_dag = Dag.from_claim(dag.executor, dag.secret, ttl=-1, node_id=node.id)
             if isinstance(fn_dag, Dag):
                 break
+            sleep(0.1)
         with fn_dag:
             fn_dag.commit(fn(fn_dag))
         return node.wait()
@@ -586,12 +585,12 @@ def hash_object(file_obj: IO, chunk_size: int = 8 * 1024 * 1024) -> str:
             break
         md5s.append(hashlib.md5(data))
     if len(md5s) < 1:
-        return '"{}"'.format(hashlib.md5().hexdigest())
+        return hashlib.md5().hexdigest()
     if len(md5s) == 1:
-        return '"{}"'.format(md5s[0].hexdigest())
+        return md5s[0].hexdigest()
     digests = b''.join(m.digest() for m in md5s)
     digests_md5 = hashlib.md5(digests)
-    return '"{}-{}"'.format(digests_md5.hexdigest(), len(md5s))
+    return '{}-{}'.format(digests_md5.hexdigest(), len(md5s))  # wrap this in double quotes for s3 etag
 
 
 @hash_object.register
@@ -608,12 +607,10 @@ def _(file_obj: Union[str, os.PathLike], chunk_size: int = 8 * 1024 * 1024) -> s
         return hash_object(fo, chunk_size)
 
 
-@register_tag
+@register_tag('com.daggerml.executor.local')
 @dataclass(frozen=True)
 class LocalResource(Resource):
     """local files"""
-    tag: ClassVar[str] = 'com.daggerml.executor.local'
-
     @property
     def js(self):
         return json.loads(self.id)
@@ -627,18 +624,16 @@ class LocalResource(Resource):
         return self.js['hash']
 
     @classmethod
-    def from_file(cls, dag, file_path):
+    def from_file(cls, parent, file_path):
         """computes the hash of the file and incorporates that into the ID"""
         _id = json_dumps({'path': str(file_path), 'hash': hash_object(file_path)})
-        return cls(id=_id, parent=dag.executor)
+        return cls(id=_id, parent=parent, tag='com.daggerml.executor.local')
 
 
-@register_tag
+@register_tag('com.daggerml.executor.s3')
 @dataclass(frozen=True)
 class S3Resource(Resource):
     """data on s3"""
-    tag: ClassVar[str] = 'com.daggerml.executor.s3'
-
     @property
     def uri(self):
         return self.id
@@ -652,9 +647,8 @@ class S3Resource(Resource):
         return urlparse(self.uri).path[1:]
 
     @classmethod
-    def from_uri(cls, dag, uri):
-        return cls(id=uri,
-                   parent=dag.executor)
+    def from_uri(cls, parent, uri):
+        return cls(id=uri, parent=parent, tag='com.daggerml.executor.s3')
 
 
 @singledispatch
@@ -674,18 +668,55 @@ def _(bytes_or_file: Union[str, os.PathLike], client, bucket, key):
         return s3_put_bytes_or_file(f, client, bucket, key)
 
 
-def s3_upload(dag, bytes_object, bucket=DML_S3_BUCKET, prefix=DML_S3_PREFIX, client=None):
-    """upload data to s3.
+def local_executor(dag, exec_name, exec_version):
+    file_path = f'.dml/{exec_name}_{exec_version}.json'
+    exec_dag = Dag.new(exec_name, exec_version)
+    if exec_dag is not None:
+        exec_dag.commit(exec_dag.executor)
+        with open(file_path, 'w') as fo:
+            json.dump(vars(exec_dag), fo)
+        secret = exec_dag.secret
+    else:
+        with open(file_path, 'r') as fo:
+            secret = json.load(fo)['secret']
+    exec_node = dag.load(exec_name, version=exec_version)
+    return exec_node.to_py(), secret
 
-    Appears as Dag.from_py(S3Resource) in the dag."""
-    if bucket is None:
-        raise ValueError('`s3_upload requires `DML_S3_{BUCKET|PREFIX}` to be set')
-    prefix = prefix.rstrip('/')
-    if client is None:
-        client = boto3.client('s3')
+
+def delete_local_executor(exec_name, exec_version):
+    file_path = f'.dml/{exec_name}_{exec_version}.json'
+    with open(file_path, 'r') as fo:
+        js = json.load(fo)
+    delete_dag(js['id'])
+    os.remove(file_path)
+    return
+
+
+local_executor.delete = delete_local_executor
+
+
+def _s3_upload(dag, bytes_object, bucket, prefix, client):
+    """upload data to s3"""
     if isinstance(bytes_object, LocalResource):
         bytes_object = str(Path(bytes_object.file_path).absolute())
     key = f'{prefix}/bytes/{hash_object(bytes_object)}'
-    resource = S3Resource.from_uri(dag, f's3://{bucket}/{key}')
+    resource = S3Resource.from_uri(dag.executor, f's3://{bucket}/{key}')
     s3_put_bytes_or_file(bytes_object, client, bucket, key)
     return dag.from_py(resource)
+
+
+def s3_upload(dag, bytes_object, exec_name=None, bucket=DML_S3_BUCKET, prefix=DML_S3_PREFIX, client=None):
+    """upload data to s3"""
+    if bucket is None:
+        raise ValueError('`s3_upload requires `DML_S3_{BUCKET,PREFIX}` to be set')
+    prefix = prefix.rstrip('/')
+    if client is None:
+        client = boto3.client('s3')
+    if exec_name is None:
+        return _s3_upload(dag, bytes_object, bucket, prefix, client)
+    s3_exec, s3_secret = local_executor(dag, exec_name, 0)
+    put_fn = dag.from_py([s3_exec]).call_async()
+    with Dag.from_claim(s3_exec, s3_secret, 1, node_id=put_fn.id) as s3_dag:
+        s3_dag.commit(_s3_upload(s3_dag, bytes_object, bucket, prefix, client))
+    resp = put_fn.wait()
+    return resp

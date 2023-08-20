@@ -26,7 +26,7 @@ from daggerml import (
     s3_upload,
 )
 from daggerml._config import DML_S3_ENDPOINT, DML_TEST_LOCAL
-from daggerml._dag import _api
+from daggerml._dag import _api, local_executor
 
 
 def get_dag(dag):
@@ -641,20 +641,20 @@ class TestLocalResource(DmlTestBase):
         with NamedTemporaryFile() as f0:
             f0.write(txt.encode())
             f0.seek(0)
-            f0r = LocalResource.from_file(dag, f0.name)
+            f0r = LocalResource.from_file(dag.executor, f0.name)
             assert f0r.parent == dag.executor
             assert f0r.file_path == f0.name
             with NamedTemporaryFile() as f1:
                 f1.write(txt.encode())
                 f1.seek(0)
-                f1r = LocalResource.from_file(dag, f1.name)
+                f1r = LocalResource.from_file(dag.executor, f1.name)
                 assert f1r.file_path == f1.name
                 assert f0r.id != f1r.id
                 assert f0r.hash == f1r.hash
             with NamedTemporaryFile() as f1:
                 f1.write((txt + ' other').encode())
                 f1.seek(0)
-                f1r = LocalResource.from_file(dag, f1.name)
+                f1r = LocalResource.from_file(dag.executor, f1.name)
                 assert f1r.file_path == f1.name
                 assert f0r.id != f1r.id
                 assert f0r.hash != f1r.hash
@@ -684,14 +684,14 @@ class TestLocalResource(DmlTestBase):
             f0.seek(25 * 1024 * 1024)  # >3x chunk size
             f0.write(txt.encode())
             f0.seek(0)
-            f0r = LocalResource.from_file(dag, f0.name)
+            f0r = LocalResource.from_file(dag.executor, f0.name)
             assert f0r.parent == dag.executor
             assert f0r.file_path == f0.name
             with NamedTemporaryFile() as f1:
                 f1.seek(25 * 1024 * 1024)
                 f1.write(txt.encode())
                 f1.seek(0)
-                f1r = LocalResource.from_file(dag, f1.name)
+                f1r = LocalResource.from_file(dag.executor, f1.name)
                 assert f1r.file_path == f1.name
                 assert f0r.id != f1r.id
                 assert f0r.hash == f1r.hash
@@ -699,7 +699,7 @@ class TestLocalResource(DmlTestBase):
                 f1.seek(25 * 1024 * 1024 + 1)
                 f1.write(txt.encode())
                 f1.seek(0)
-                f1r = LocalResource.from_file(dag, f1.name)
+                f1r = LocalResource.from_file(dag.executor, f1.name)
                 assert f1r.file_path == f1.name
                 assert f0r.id != f1r.id
                 assert f0r.hash != f1r.hash
@@ -742,6 +742,33 @@ class TestS3Resource(DmlTestBase):
                 Key=resource.key
             )
 
+    def test_upload_with_executor(self):
+        dag = Dag.new(self.id())
+        obj = b'this is a test'
+        resource_node = s3_upload(dag, obj, exec_name='test.s3', bucket=self.bucket,
+                                  prefix=self.prefix, client=self.client)
+        try:
+            assert isinstance(resource_node, Node)
+            resource = resource_node.to_py()
+            assert isinstance(resource, S3Resource)
+            assert resource.tag == 'com.daggerml.executor.s3'
+            assert resource.uri.startswith('s3://daggerml-base/test/')
+            assert resource.bucket == self.bucket
+            assert resource.key.startswith('test/')
+            assert resource.parent != dag.executor
+            resp = self.client.get_object(
+                Bucket=resource.bucket,
+                Key=resource.key
+            )
+            assert resp['Body'].read() == obj
+            dag.delete()  # so that we can delete the dag below (dependencies)
+            local_executor.delete('test.s3', 0)  # so that the later tests are all good
+        finally:
+            resp = self.client.delete_object(
+                Bucket=resource.bucket,
+                Key=resource.key
+            )
+
     def test_upload_file_chunks(self):
         dag = Dag.new(self.id())
         txt = b'this is a test'
@@ -750,7 +777,7 @@ class TestS3Resource(DmlTestBase):
             f0.seek(num_bytes)
             f0.write(txt)
             f0.seek(0)
-            f0r = LocalResource.from_file(dag, f0.name)
+            f0r = LocalResource.from_file(dag.executor, f0.name)
             resource_node = s3_upload(dag, f0r, bucket=self.bucket, prefix=self.prefix, client=self.client)
         try:
             assert isinstance(resource_node, Node)
@@ -770,3 +797,42 @@ class TestS3Resource(DmlTestBase):
                 Bucket=resource.bucket,
                 Key=resource.key
             )
+
+    def test_s3_etag_small_file(self):
+        dag = Dag.new(self.id())
+        txt = b'this is a test'
+        # num_bytes = 25 * 1024 * 1024  # >3x chunk size
+        with NamedTemporaryFile() as f0:
+            # f0.seek(num_bytes)
+            f0.write(txt)
+            f0.seek(0)
+            resource_node = s3_upload(dag, f0.name, bucket=self.bucket, prefix=self.prefix, client=self.client)
+        rsrc = resource_node.to_py()
+        etag = rsrc.key.split('/')[-1]
+        assert self.client.head_object(Bucket=rsrc.bucket, Key=rsrc.key)['ETag'] == f'"{etag}"'
+        self.client.delete_object(
+            Bucket=rsrc.bucket,
+            Key=rsrc.key
+        )
+
+    # FIXME ETags aren't correct for larger files...
+    #   for 1, up to 80MB, tags seem to follow ^[a-zA-Z0-9]+$, not ^[a-zA-Z0-9]+-[0-9]+
+    #     maybe the chunksize is higher than 80MB? Seems unlikely.
+    #     maybe we need to use one of the other upload endpoints. (upload_fileobj, or whatever
+    #   e.g. bcf0d70da6a4453d7afee926c2d34036-65
+    #   https://stackoverflow.com/a/43819225
+    # def test_s3_etag_larger(self):
+    #     import string
+    #     dag = Dag.new(self.id())
+    #     with NamedTemporaryFile('w') as f:
+    #         for _ in range(3 * 1024 * 1024):
+    #             f.write(string.ascii_lowercase + '\n')  # each is about 75 bytes
+    #         f.seek(0)
+    #         resource_node = s3_upload(dag, f.name, bucket=self.bucket, prefix=self.prefix, client=self.client)
+    #     rsrc = resource_node.to_py()
+    #     etag = rsrc.key.split('/')[-1]
+    #     assert self.client.head_object(Bucket=rsrc.bucket, Key=rsrc.key)['ETag'] == f'"{etag}"'
+    #     self.client.delete_object(
+    #         Bucket=rsrc.bucket,
+    #         Key=rsrc.key
+    #     )
