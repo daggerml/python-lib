@@ -607,24 +607,21 @@ class TestLocalExecutor(DmlTestBase):
 
     def test_local_func_basic(self):
         @dag_fn
-        def add(dag):
-            _, _, *args = dag.expr
+        def add(*args):
             return sum([x.to_py() for x in args])
         dag = Dag.new(self.id())
         args = [1, 2, 3, 4, 5]
-        resp = add(dag, *args)
+        resp = add(dag, *args, name='foo')
         assert resp.to_py() == sum(args)
+        assert resp.meta['name'] == 'foo'
 
     def test_not_squashing(self):
         "make sure different functions aren't overwriting each others caches"
         @dag_fn
-        def sub(dag):
-            _, _, c, d = dag.expr
+        def sub(c, d):
             return c.to_py() - d.to_py()
-
         @dag_fn
-        def add(dag):
-            _, _, *args = dag.expr
+        def add(*args):
             return sum([x.to_py() for x in args])
         dag = Dag.new(self.id())
         add_resp = add(dag, 3, 1)

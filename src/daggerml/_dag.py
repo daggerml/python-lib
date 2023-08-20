@@ -570,7 +570,8 @@ def dag_fn(fn):
                 break
             sleep(0.1)
         with fn_dag:
-            fn_dag.commit(fn(fn_dag))
+            _, _, *args = fn_dag.expr
+            fn_dag.commit(fn(*args))
         return node.wait()
     return wrapped
 
