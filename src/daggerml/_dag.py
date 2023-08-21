@@ -177,7 +177,7 @@ def daggerml():
     class Resource:
         """daggerml's datatype extension class"""
         id: str
-        parent: Optional[NewType('Resource', None)]
+        parent: Optional["Resource"]
         tag: Optional[str] = None
 
         @staticmethod
@@ -295,7 +295,7 @@ def daggerml():
 
     @dataclass(frozen=True)
     class Node:
-        dag: NewType("Dag", None)
+        dag: "Dag"
         id: str
 
         def __len__(self):
