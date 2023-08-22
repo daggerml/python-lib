@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime
+from enum import Enum
 from tempfile import NamedTemporaryFile
 from time import sleep
 from uuid import uuid4
@@ -13,7 +14,6 @@ from daggerml import (
     ApiError,
     Dag,
     DagError,
-    LocalResource,
     Node,
     NodeError,
     Resource,
@@ -21,12 +21,11 @@ from daggerml import (
     dag_fn,
     describe_dag,
     get_dag_topology,
-    hash_object,
     list_dags,
     s3_upload,
 )
 from daggerml._config import DML_S3_ENDPOINT, DML_TEST_LOCAL
-from daggerml._dag import _api, local_executor
+from daggerml._dag import _api, fullname, local_executor
 
 
 def get_dag(dag):
@@ -151,6 +150,24 @@ class TestDagBasic(DmlTestBase):
         # The to_py() method of Dag and Node both return the python value:
         assert n0.to_py() == d0.to_py(n0) == 42
 
+    def test_dag_from_py_serialized(self):
+        class MyClass(Enum):
+            a = 'foo'
+            b = 'bar'
+
+        d0 = Dag.new(self.id())
+        with pytest.raises(ValueError):
+            n0 = d0.from_py(MyClass.a)
+
+        @Dag.serialize.register
+        def _(self, x: MyClass):
+            return str(x)
+
+        n0 = d0.from_py(MyClass.a)
+
+        # The to_py() return the original because of the caching
+        assert n0.to_py() == 'MyClass.a'
+
     def test_dag_various_literal_node_values(self):
         d0 = Dag.new(self.id())
 
@@ -212,6 +229,19 @@ class TestDagBasic(DmlTestBase):
         # Access index which is out of range, should raise:
         with pytest.raises(NodeError, match='no such key'):
             n0[len(n0)]
+
+    def test_dag_literal_long_node_list(self):
+        d0 = Dag.new(self.id())
+
+        # Create a python list:
+        c0 = list(range(74))
+
+        # Create a node in d0 with list value:
+        n0 = d0.from_py(c0)
+        assert n0[len(n0) - 1].to_py() == c0[-1]
+        assert n0[0].to_py() == c0[0]
+        with pytest.raises(ApiError, match='ProgramLimitExceeded: index row size .+ "datum_value_key"'):
+            d0.from_py(list(range(75)))  # long nodes fail for now
 
     def test_dag_literal_node_list_concatenate(self):
         d0 = Dag.new(self.id())
@@ -629,77 +659,28 @@ class TestLocalExecutor(DmlTestBase):
         assert add_resp.to_py() == 3 + 1
         assert sub_resp.to_py() == 3 - 1
 
+    def test_local_func_localex(self):
+        le = local_executor('foobar', 0)
 
-class TestLocalResource(DmlTestBase):
+        @dag_fn(executor_name=le.name, executor_version=le.version)
+        def add(*args):
+            return sum([x.to_py() for x in args])
+        args = [1, 2, 3, 4, 5]
 
-    def test_hash_basic(self):
-        dag = Dag.new(self.id())
-        txt = 'this is a test'
-        with NamedTemporaryFile() as f0:
-            f0.write(txt.encode())
-            f0.seek(0)
-            f0r = LocalResource.from_file(dag.executor, f0.name)
-            assert f0r.parent == dag.executor
-            assert f0r.file_path == f0.name
-            with NamedTemporaryFile() as f1:
-                f1.write(txt.encode())
-                f1.seek(0)
-                f1r = LocalResource.from_file(dag.executor, f1.name)
-                assert f1r.file_path == f1.name
-                assert f0r.id != f1r.id
-                assert f0r.hash == f1r.hash
-            with NamedTemporaryFile() as f1:
-                f1.write((txt + ' other').encode())
-                f1.seek(0)
-                f1r = LocalResource.from_file(dag.executor, f1.name)
-                assert f1r.file_path == f1.name
-                assert f0r.id != f1r.id
-                assert f0r.hash != f1r.hash
+        dag0 = Dag.new(self.id())
+        add(dag0, *args, name='foo')
 
-    def test_hash_consistency(self):
-        """ensure all versions of hashing work"""
-        txt = b'this is a test'
-        h0 = hash_object(txt)
-        with NamedTemporaryFile() as f:
-            f.write(txt)
-            f.seek(0)
-            assert h0 == hash_object(f)
-            assert h0 == hash_object(f.name)
-        with NamedTemporaryFile() as f:
-            f.write(txt + b'. other')
-            f.seek(0)
-            h1 = hash_object(f)
-            h2 = hash_object(f.name)
-            assert h1 != h0
-            assert h2 != h0
-            assert h1 == h2
+        dag1 = Dag.new(self.id())  # not the same executor
+        executor, secret = le.get(dag1)
+        node = dag1.from_py([executor, fullname(add.__wrapped__)]).call_async(*args)
+        assert node.check() is not None  # cached from previous run
+        node = node.result
+        assert node.dag is dag1
 
-    def test_hash_empty_files(self):
-        dag = Dag.new(self.id())
-        txt = 'this is a test'
-        with NamedTemporaryFile() as f0:
-            f0.seek(25 * 1024 * 1024)  # >3x chunk size
-            f0.write(txt.encode())
-            f0.seek(0)
-            f0r = LocalResource.from_file(dag.executor, f0.name)
-            assert f0r.parent == dag.executor
-            assert f0r.file_path == f0.name
-            with NamedTemporaryFile() as f1:
-                f1.seek(25 * 1024 * 1024)
-                f1.write(txt.encode())
-                f1.seek(0)
-                f1r = LocalResource.from_file(dag.executor, f1.name)
-                assert f1r.file_path == f1.name
-                assert f0r.id != f1r.id
-                assert f0r.hash == f1r.hash
-            with NamedTemporaryFile() as f1:
-                f1.seek(25 * 1024 * 1024 + 1)
-                f1.write(txt.encode())
-                f1.seek(0)
-                f1r = LocalResource.from_file(dag.executor, f1.name)
-                assert f1r.file_path == f1.name
-                assert f0r.id != f1r.id
-                assert f0r.hash != f1r.hash
+        # we have to delete these dags so that teardown will work properly
+        dag0.delete()
+        dag1.delete()
+        le.delete()
 
 
 class TestS3Resource(DmlTestBase):
@@ -759,7 +740,7 @@ class TestS3Resource(DmlTestBase):
             )
             assert resp['Body'].read() == obj
             dag.delete()  # so that we can delete the dag below (dependencies)
-            local_executor.delete('test.s3', 0)  # so that the later tests are all good
+            local_executor('test.s3', 0).delete()  # so that the later tests are all good
         finally:
             resp = self.client.delete_object(
                 Bucket=resource.bucket,
@@ -774,8 +755,7 @@ class TestS3Resource(DmlTestBase):
             f0.seek(num_bytes)
             f0.write(txt)
             f0.seek(0)
-            f0r = LocalResource.from_file(dag.executor, f0.name)
-            resource_node = s3_upload(dag, f0r, bucket=self.bucket, prefix=self.prefix, client=self.client)
+            resource_node = s3_upload(dag, f0.name, bucket=self.bucket, prefix=self.prefix, client=self.client)
         try:
             assert isinstance(resource_node, Node)
             resource = resource_node.to_py()
@@ -833,3 +813,29 @@ class TestS3Resource(DmlTestBase):
     #         Bucket=rsrc.bucket,
     #         Key=rsrc.key
     #     )
+
+
+# class TestRemoteFunc(DmlTestBase):
+#
+#     def setUp(self):
+#         self.client = boto3.client('s3', endpoint_url=DML_S3_ENDPOINT)
+#         self.bucket = 'daggerml-base'
+#         self.prefix = 'test'
+#         if DML_TEST_LOCAL:
+#             self.client.create_bucket(Bucket=self.bucket)
+#
+#     def test_basic(self):
+#         from daggerml._dag import dkr, fullname
+#
+#         @dkr(requirements=('pandas'))
+#         def foo(x):
+#             return x
+#
+#         assert foo.call_remote.__name__ == 'asdf'
+#         # dag = Dag.new(self.id())
+#         # assert foo(dag, 4) is None
+#         assert foo.fn.__name__ == 'asdf'
+#         assert fullname(foo.fn) == 'asdf'
+#
+#         with pytest.raises(ValueError, match='s3_upload requires'):
+#             s3_upload(dag, b'this is a test', bucket=None, prefix=self.prefix, client=self.client)

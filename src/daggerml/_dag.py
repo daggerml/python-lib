@@ -4,14 +4,15 @@ import logging
 import os
 import traceback as tb
 import warnings
+from collections.abc import Mapping
 from copy import copy, deepcopy
 from dataclasses import dataclass
-from functools import singledispatch
+from functools import partial, singledispatch, singledispatchmethod, wraps
 from io import BytesIO
-from pathlib import Path
 from time import sleep
-from typing import IO, NewType, Optional, Union
+from typing import IO, Optional, Union
 from urllib.parse import urlparse
+from weakref import WeakKeyDictionary
 
 import boto3
 import requests
@@ -168,8 +169,6 @@ def format_exception(err):
 
 
 def daggerml():
-    from collections.abc import Mapping
-    from weakref import WeakKeyDictionary
 
     tag2resource = {}
 
@@ -274,24 +273,6 @@ def daggerml():
         if res['error'] is not None:
             raise NodeError(res['error']['message'])
         return Node(dag, res['node_id'])
-
-    def _from_py(dag, py, **meta):
-        """convert a python datastructure to a literal node"""
-        if isinstance(py, (list, tuple)):
-            items = [_from_py(dag, i).id for i in py]
-            node = _run_dag_builtin(dag, 'construct_list', args=items, meta=meta)
-        elif isinstance(py, (dict, Mapping)):
-            items = {k: _from_py(dag, v).id for k, v in py.items()}
-            node = _run_dag_builtin(dag, 'construct_map', args=items, meta=meta)
-        else:
-            res = _api('dag', 'put_literal',
-                       dag_id=dag.id,
-                       data=to_data(py),
-                       secret=dag.secret)
-            node = Node(dag, res['node_id'])
-        if node not in CACHE:
-            CACHE[node] = deepcopy(py)
-        return node
 
     @dataclass(frozen=True)
     class Node:
@@ -470,9 +451,29 @@ def daggerml():
             """this dag's executor resource"""
             return Node(self, self.executor_id).to_py()
 
+        @singledispatchmethod
+        def serialize(self, x):
+            raise ValueError('cannot serialize python objects of type: %r' % type(x))
+
         def from_py(self, py, **meta):
             """convert a python datastructure to a literal node"""
-            return _from_py(self, py, **meta)
+            if isinstance(py, (list, tuple)):
+                items = [self.from_py(item).id for item in py]
+                node = _run_dag_builtin(self, 'construct_list', args=items, meta=meta)
+            elif isinstance(py, (dict, Mapping)):
+                items = {k: self.from_py(v).id for k, v in py.items()}
+                node = _run_dag_builtin(self, 'construct_map', args=items, meta=meta)
+            elif isinstance(py, (type(None), bool, str, int, float, Resource, Node)):
+                res = _api('dag', 'put_literal',
+                           dag_id=self.id,
+                           data=to_data(py),
+                           secret=self.secret)
+                node = Node(self, res['node_id'])
+            else:
+                return self.from_py(self.serialize(py), **meta)
+            if node not in CACHE:
+                CACHE[node] = deepcopy(py)
+            return node
 
         def to_py(self, node):
             """convert a [collection of] nodes to a python datastructure"""
@@ -553,19 +554,56 @@ Dag, Node, Resource, register_tag = daggerml()
 del daggerml
 
 
+class local_executor:
+    def __init__(self, name, version):
+        self.name = name
+        self.version = version
+
+    @property
+    def file_path(self):
+        return f'.dml/{self.name}_{self.version}.json'
+
+    def get(self, dag):
+        exec_dag = Dag.new(self.name, self.version)
+        if exec_dag is not None:
+            exec_dag.commit(exec_dag.executor)
+            with open(self.file_path, 'w') as fo:
+                json.dump(vars(exec_dag), fo)
+            secret = exec_dag.secret
+        else:
+            with open(self.file_path, 'r') as fo:
+                secret = json.load(fo)['secret']
+        exec_node = dag.load(self.name, version=self.version)
+        return exec_node.to_py(), secret
+
+    def delete(self):
+        with open(self.file_path, 'r') as fo:
+            js = json.load(fo)
+        delete_dag(js['id'])
+        os.remove(self.file_path)
+        return
+
+
 def fullname(obj):
     return '.'.join([obj.__module__, obj.__qualname__])
 
 
-def dag_fn(fn):
+def dag_fn(fn=None, executor_name=None, executor_version=None):
     """wraps a function into a dag node with executor being the dag's executor
 
     This is only reproducible if it's in the cloud. But that's okay.
     """
+    if fn is None:
+        return partial(dag_fn, executor_name=executor_name, executor_version=executor_version)
+    @wraps(fn)
     def wrapped(dag, *args, **meta):
-        node = dag.from_py([dag.executor, fullname(fn)]).call_async(*args, **meta)
+        if executor_name is None:
+            executor, secret = dag.executor, dag.secret
+        else:
+            executor, secret = local_executor(executor_name, executor_version).get(dag)
+        node = dag.from_py([executor, fullname(fn)]).call_async(*args, **meta)
         while True:
-            fn_dag = Dag.from_claim(dag.executor, dag.secret, ttl=-1, node_id=node.id)
+            fn_dag = Dag.from_claim(executor, secret, ttl=-1, node_id=node.id)
             if isinstance(fn_dag, Dag):
                 break
             sleep(0.1)
@@ -577,7 +615,7 @@ def dag_fn(fn):
 
 
 @singledispatch
-def hash_object(file_obj: IO, chunk_size: int = 8 * 1024 * 1024) -> str:
+def compute_hash(file_obj: IO, chunk_size: int = 8 * 1024 * 1024) -> str:
     """compute hash consistent with aws s3 etag of file"""
     # unconfirmed from https://stackoverflow.com/a/43819225
     md5s = []
@@ -594,41 +632,18 @@ def hash_object(file_obj: IO, chunk_size: int = 8 * 1024 * 1024) -> str:
     return '{}-{}'.format(digests_md5.hexdigest(), len(md5s))  # wrap this in double quotes for s3 etag
 
 
-@hash_object.register
+@compute_hash.register
 def _(file_obj: bytes, chunk_size: int = 8 * 1024 * 1024) -> str:
     """compute hash consistent with aws s3 etag of file"""
-    return hash_object(BytesIO(file_obj), chunk_size)
+    return compute_hash(BytesIO(file_obj), chunk_size)
 
 
-@hash_object.register(str)
-@hash_object.register(os.PathLike)
+@compute_hash.register(str)
+@compute_hash.register(os.PathLike)
 def _(file_obj: Union[str, os.PathLike], chunk_size: int = 8 * 1024 * 1024) -> str:
     """compute hash consistent with aws s3 etag of file"""
     with open(file_obj, 'rb') as fo:
-        return hash_object(fo, chunk_size)
-
-
-@register_tag('com.daggerml.executor.local')
-@dataclass(frozen=True)
-class LocalResource(Resource):
-    """local files"""
-    @property
-    def js(self):
-        return json.loads(self.id)
-
-    @property
-    def file_path(self):
-        return self.js['path']
-
-    @property
-    def hash(self):
-        return self.js['hash']
-
-    @classmethod
-    def from_file(cls, parent, file_path):
-        """computes the hash of the file and incorporates that into the ID"""
-        _id = json_dumps({'path': str(file_path), 'hash': hash_object(file_path)})
-        return cls(id=_id, parent=parent, tag='com.daggerml.executor.local')
+        return compute_hash(fo, chunk_size)
 
 
 @register_tag('com.daggerml.executor.s3')
@@ -653,7 +668,7 @@ class S3Resource(Resource):
 
 
 @singledispatch
-def s3_put_bytes_or_file(bytes_or_file: Union[IO, bytes], client, bucket, key):
+def s3_put_object(bytes_or_file: Union[IO, bytes], client, bucket, key):
     # FIXME check for the file first?
     return client.put_object(
         Body=bytes_or_file,
@@ -662,47 +677,18 @@ def s3_put_bytes_or_file(bytes_or_file: Union[IO, bytes], client, bucket, key):
     )
 
 
-@s3_put_bytes_or_file.register(str)
-@s3_put_bytes_or_file.register(os.PathLike)
+@s3_put_object.register(str)
+@s3_put_object.register(os.PathLike)
 def _(bytes_or_file: Union[str, os.PathLike], client, bucket, key):
     with open(bytes_or_file, 'rb') as f:
-        return s3_put_bytes_or_file(f, client, bucket, key)
-
-
-def local_executor(dag, exec_name, exec_version):
-    file_path = f'.dml/{exec_name}_{exec_version}.json'
-    exec_dag = Dag.new(exec_name, exec_version)
-    if exec_dag is not None:
-        exec_dag.commit(exec_dag.executor)
-        with open(file_path, 'w') as fo:
-            json.dump(vars(exec_dag), fo)
-        secret = exec_dag.secret
-    else:
-        with open(file_path, 'r') as fo:
-            secret = json.load(fo)['secret']
-    exec_node = dag.load(exec_name, version=exec_version)
-    return exec_node.to_py(), secret
-
-
-def delete_local_executor(exec_name, exec_version):
-    file_path = f'.dml/{exec_name}_{exec_version}.json'
-    with open(file_path, 'r') as fo:
-        js = json.load(fo)
-    delete_dag(js['id'])
-    os.remove(file_path)
-    return
-
-
-local_executor.delete = delete_local_executor
+        return s3_put_object(f, client, bucket, key)
 
 
 def _s3_upload(dag, bytes_object, bucket, prefix, client):
     """upload data to s3"""
-    if isinstance(bytes_object, LocalResource):
-        bytes_object = str(Path(bytes_object.file_path).absolute())
-    key = f'{prefix}/bytes/{hash_object(bytes_object)}'
+    key = f'{prefix}/bytes/{compute_hash(bytes_object)}'
     resource = S3Resource.from_uri(dag.executor, f's3://{bucket}/{key}')
-    s3_put_bytes_or_file(bytes_object, client, bucket, key)
+    s3_put_object(bytes_object, client, bucket, key)
     return dag.from_py(resource)
 
 
@@ -715,7 +701,7 @@ def s3_upload(dag, bytes_object, exec_name=None, bucket=DML_S3_BUCKET, prefix=DM
         client = boto3.client('s3')
     if exec_name is None:
         return _s3_upload(dag, bytes_object, bucket, prefix, client)
-    s3_exec, s3_secret = local_executor(dag, exec_name, 0)
+    s3_exec, s3_secret = local_executor(exec_name, 0).get(dag)
     put_fn = dag.from_py([s3_exec]).call_async()
     with Dag.from_claim(s3_exec, s3_secret, 1, node_id=put_fn.id) as s3_dag:
         s3_dag.commit(_s3_upload(s3_dag, bytes_object, bucket, prefix, client))
