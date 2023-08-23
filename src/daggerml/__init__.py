@@ -8,9 +8,6 @@ from daggerml._dag import (
     Node,
     NodeError,
     Resource,
-    S3Resource,
-    compute_hash,
-    dag_fn,
     delete_dag,
     describe_dag,
     describe_node,
@@ -18,8 +15,10 @@ from daggerml._dag import (
     get_dag_topology,
     list_dags,
     register_tag,
-    s3_upload,
 )
+from daggerml.contrib.process import local_fn
+from daggerml.contrib.s3 import S3Resource, compute_hash
+from daggerml.contrib.util import local_executor
 
 try:
     __version__ = version("daggerml")

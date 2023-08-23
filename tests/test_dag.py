@@ -1,7 +1,6 @@
 from dataclasses import replace
 from datetime import datetime
 from enum import Enum
-from tempfile import NamedTemporaryFile
 from time import sleep
 from uuid import uuid4
 
@@ -17,15 +16,17 @@ from daggerml import (
     Node,
     NodeError,
     Resource,
-    S3Resource,
-    dag_fn,
     describe_dag,
     get_dag_topology,
     list_dags,
-    s3_upload,
+    local_executor,
+    local_fn,
 )
 from daggerml._config import DML_S3_ENDPOINT, DML_TEST_LOCAL
-from daggerml._dag import _api, fullname, local_executor
+from daggerml._dag import _api
+from daggerml.contrib.process import process_fn
+from daggerml.contrib.s3 import S3Resource, s3_upload
+from daggerml.contrib.util import fullname
 
 
 def get_dag(dag):
@@ -636,8 +637,8 @@ class TestQuery(DmlTestBase):
 class TestLocalExecutor(DmlTestBase):
 
     def test_local_func_basic(self):
-        @dag_fn
-        def add(*args):
+        @local_fn
+        def add(dag, *args):
             return sum([x.to_py() for x in args])
         dag = Dag.new(self.id())
         args = [1, 2, 3, 4, 5]
@@ -647,11 +648,11 @@ class TestLocalExecutor(DmlTestBase):
 
     def test_not_squashing(self):
         "make sure different functions aren't overwriting each others caches"
-        @dag_fn
-        def sub(c, d):
+        @local_fn
+        def sub(dag, c, d):
             return c.to_py() - d.to_py()
-        @dag_fn
-        def add(*args):
+        @local_fn
+        def add(dag, *args):
             return sum([x.to_py() for x in args])
         dag = Dag.new(self.id())
         add_resp = add(dag, 3, 1)
@@ -662,8 +663,8 @@ class TestLocalExecutor(DmlTestBase):
     def test_local_func_localex(self):
         le = local_executor('foobar', 0)
 
-        @dag_fn(executor_name=le.name, executor_version=le.version)
-        def add(*args):
+        @local_fn(executor_name=le.name, executor_version=le.version)
+        def add(dag, *args):
             return sum([x.to_py() for x in args])
         args = [1, 2, 3, 4, 5]
 
@@ -720,70 +721,11 @@ class TestS3Resource(DmlTestBase):
                 Key=resource.key
             )
 
-    def test_upload_with_executor(self):
-        dag = Dag.new(self.id())
-        obj = b'this is a test'
-        resource_node = s3_upload(dag, obj, exec_name='test.s3', bucket=self.bucket,
-                                  prefix=self.prefix, client=self.client)
-        try:
-            assert isinstance(resource_node, Node)
-            resource = resource_node.to_py()
-            assert isinstance(resource, S3Resource)
-            assert resource.tag == 'com.daggerml.executor.s3'
-            assert resource.uri.startswith('s3://daggerml-base/test/')
-            assert resource.bucket == self.bucket
-            assert resource.key.startswith('test/')
-            assert resource.parent != dag.executor
-            resp = self.client.get_object(
-                Bucket=resource.bucket,
-                Key=resource.key
-            )
-            assert resp['Body'].read() == obj
-            dag.delete()  # so that we can delete the dag below (dependencies)
-            local_executor('test.s3', 0).delete()  # so that the later tests are all good
-        finally:
-            resp = self.client.delete_object(
-                Bucket=resource.bucket,
-                Key=resource.key
-            )
-
-    def test_upload_file_chunks(self):
-        dag = Dag.new(self.id())
-        txt = b'this is a test'
-        num_bytes = 25 * 1024 * 1024  # >3x chunk size
-        with NamedTemporaryFile() as f0:
-            f0.seek(num_bytes)
-            f0.write(txt)
-            f0.seek(0)
-            resource_node = s3_upload(dag, f0.name, bucket=self.bucket, prefix=self.prefix, client=self.client)
-        try:
-            assert isinstance(resource_node, Node)
-            resource = resource_node.to_py()
-            assert isinstance(resource, S3Resource)
-            assert resource.tag == 'com.daggerml.executor.s3'
-            assert resource.uri.startswith('s3://daggerml-base/test/')
-            assert resource.bucket == self.bucket
-            assert resource.key.startswith('test/')
-            resp = self.client.get_object(
-                Bucket=resource.bucket,
-                Key=resource.key
-            )
-            assert resp['Body'].read().endswith(txt)
-        finally:
-            resp = self.client.delete_object(
-                Bucket=resource.bucket,
-                Key=resource.key
-            )
-
     def test_s3_etag_small_file(self):
         dag = Dag.new(self.id())
         txt = b'this is a test'
         # num_bytes = 25 * 1024 * 1024  # >3x chunk size
-        with NamedTemporaryFile() as f0:
-            # f0.seek(num_bytes)
-            f0.write(txt)
-            f0.seek(0)
-            resource_node = s3_upload(dag, f0.name, bucket=self.bucket, prefix=self.prefix, client=self.client)
+        resource_node = s3_upload(dag, txt, bucket=self.bucket, prefix=self.prefix, client=self.client)
         rsrc = resource_node.to_py()
         etag = rsrc.key.split('/')[-1]
         assert self.client.head_object(Bucket=rsrc.bucket, Key=rsrc.key)['ETag'] == f'"{etag}"'
@@ -792,50 +734,12 @@ class TestS3Resource(DmlTestBase):
             Key=rsrc.key
         )
 
-    # FIXME ETags aren't correct for larger files...
-    #   for 1, up to 80MB, tags seem to follow ^[a-zA-Z0-9]+$, not ^[a-zA-Z0-9]+-[0-9]+
-    #     maybe the chunksize is higher than 80MB? Seems unlikely.
-    #     maybe we need to use one of the other upload endpoints. (upload_fileobj, or whatever
-    #   e.g. bcf0d70da6a4453d7afee926c2d34036-65
-    #   https://stackoverflow.com/a/43819225
-    # def test_s3_etag_larger(self):
-    #     import string
-    #     dag = Dag.new(self.id())
-    #     with NamedTemporaryFile('w') as f:
-    #         for _ in range(3 * 1024 * 1024):
-    #             f.write(string.ascii_lowercase + '\n')  # each is about 75 bytes
-    #         f.seek(0)
-    #         resource_node = s3_upload(dag, f.name, bucket=self.bucket, prefix=self.prefix, client=self.client)
-    #     rsrc = resource_node.to_py()
-    #     etag = rsrc.key.split('/')[-1]
-    #     assert self.client.head_object(Bucket=rsrc.bucket, Key=rsrc.key)['ETag'] == f'"{etag}"'
-    #     self.client.delete_object(
-    #         Bucket=rsrc.bucket,
-    #         Key=rsrc.key
-    #     )
+    def test_foobar(self):
+        @process_fn
+        def asdf(a, b, c):
+            return a + b + c
 
-
-# class TestRemoteFunc(DmlTestBase):
-#
-#     def setUp(self):
-#         self.client = boto3.client('s3', endpoint_url=DML_S3_ENDPOINT)
-#         self.bucket = 'daggerml-base'
-#         self.prefix = 'test'
-#         if DML_TEST_LOCAL:
-#             self.client.create_bucket(Bucket=self.bucket)
-#
-#     def test_basic(self):
-#         from daggerml._dag import dkr, fullname
-#
-#         @dkr(requirements=('pandas'))
-#         def foo(x):
-#             return x
-#
-#         assert foo.call_remote.__name__ == 'asdf'
-#         # dag = Dag.new(self.id())
-#         # assert foo(dag, 4) is None
-#         assert foo.fn.__name__ == 'asdf'
-#         assert fullname(foo.fn) == 'asdf'
-#
-#         with pytest.raises(ValueError, match='s3_upload requires'):
-#             s3_upload(dag, b'this is a test', bucket=None, prefix=self.prefix, client=self.client)
+        print('=' * 10)
+        print(asdf(1, 2, 3))
+        print('=' * 10)
+        assert asdf(1, 2, 3) is None
