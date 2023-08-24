@@ -8,6 +8,14 @@ dependencies = [
 [envs.default.scripts]
 test = 'pytest -vsx --log-cli-level=INFO --log-disable=botocore.credentials'
 
+[envs.test-env]
+dependencies = [
+  "pytest",
+  "pytest-cov",
+  "boto3",
+  "pandas==2.0.1",
+]
+
 [envs.docs]
 dependencies = [
   "Sphinx>=5.1.1",

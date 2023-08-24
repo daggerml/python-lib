@@ -1,72 +1,87 @@
 #!/usr/bin/env python
+import hashlib
+import importlib.util
 import inspect
+import json
+import os
+import subprocess
+import sys
 from functools import partial, wraps
 from pathlib import Path
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tempfile import TemporaryDirectory
 from textwrap import dedent
-from time import sleep
-from uuid import uuid4
 
-from daggerml._dag import Dag
-from daggerml.contrib.s3 import s3_upload
-from daggerml.contrib.util import fullname, local_executor
+from daggerml._config import DML_API_ENDPOINT, DML_TEST_LOCAL
+from daggerml._dag import Dag, json_dumps
+from daggerml.contrib.util import cached_executor, fullname
 
 
-def local_fn(fn=None, executor_name=None, executor_version=None, env=None, env_type=None):
+def local_fn(fn=None, executor_name=None, executor_version=None):
     """wraps a function into a node"""
     if fn is None:
-        return partial(local_fn, executor_name=executor_name, executor_version=executor_version,
-                       env=env, env_type=env_type)
+        return partial(local_fn, executor_name=executor_name, executor_version=executor_version)
     @wraps(fn)
     def wrapped(dag, *args, **meta):
-        if executor_name is None:
-            executor, secret = dag.executor, dag.secret
-        else:
-            executor, secret = local_executor(executor_name, executor_version).get(dag)
-        node = dag.from_py([executor, fullname(fn)]).call_async(*args, **meta)
-        while True:
-            fn_dag = Dag.from_claim(executor, secret, ttl=-1, node_id=node.id)
-            if isinstance(fn_dag, Dag):
-                break
-            sleep(0.1)
-        with fn_dag:
+        executor, secret = cached_executor(executor_name, executor_version).get(dag)
+        _hash = hashlib.md5(dedent(inspect.getsource(fn)).encode()).hexdigest()
+        print('hash ==', _hash, *args)
+        node = dag.from_py([executor, _hash])
+        node = node.call_async(*args, **meta, dml_name=fullname(fn))
+        if node.result:
+            return node.result
+        with Dag.from_claim(executor, secret, ttl=-1, node_id=node.id) as fn_dag:
             _, _, *args = fn_dag.expr
-            fn_dag.commit(fn(dag, *args))
+            fn_dag.commit(fn(fn_dag, *args))
         return node.wait()
     return wrapped
 
 
-def process_fn(fn=None, env=None, env_type=None):
-    """wraps a function into a node -- you probably want to wrap this in `local_fn`
-
-    Doesn't work yet
+def hatch(fn=None, env=None, executor_name=None, executor_version=None):
+    """executes a function in a different venv -- you probably want to wrap this in `local_fn`
     """
     if fn is None:
-        return partial(local_fn, env=env, env_type=env_type)
+        return partial(hatch, env=env, executor_name=executor_name, executor_version=executor_version)
     @wraps(fn)
     def wrapped(dag, *args, **meta):
-        import requests_auth_aws_sigv4 as req
-
-        import daggerml as dml
-        src = s3_upload(dag, dedent(inspect.getsource(fn)).encode())
-        # from tempfile import NamedTemporaryFile, TemporaryDirectory
-        node = dag.from_py([dag.executor, src, fullname(fn)]).call_async(*args, **meta)
-        if node.check() is not None:
+        if os.getenv('DML_EXECUTING'):
+            return fn(dag, *args)
+        executor, secret = cached_executor(executor_name, executor_version).get(dag)
+        src = hashlib.md5(dedent(inspect.getsource(fn)).encode()).hexdigest()
+        pip = subprocess.run(f'hatch -e {env} run python -m pip freeze',
+                             shell=True, check=True, capture_output=True)
+        pip = hashlib.md5(pip.stdout.strip()).hexdigest()
+        node = dag.from_py([dag.executor, f'{pip}:{src}']) \
+            .call_async(*args, **meta, dml_name=fullname(fn), dml_file=fn.__globals__['__file__'])
+        if node.result:
             return node.result
-        with TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-            (tmpdir / 'daggerml').symlink_to(Path(dml.__file__).parent)
-            (tmpdir / 'requests_auth_aws_sigv4').symlink_to(Path(req.__file__).parent)
-            with open(tmpdir / str(uuid4()), 'wb') as fo:
-                fo.write('from daggerml.contrib.process import process_fn')
-                fo.write(src)
-        while True:
-            fn_dag = Dag.from_claim(dag.executor, dag.secret, ttl=-1, node_id=node.id)
-            if isinstance(fn_dag, Dag):
-                break
-            sleep(0.1)
-        with fn_dag:
-            _, _, *args = fn_dag.expr
-            fn_dag.commit(fn(dag, *args))
+        with Dag.from_claim(executor, secret, ttl=-1, node_id=node.id) as fn_dag:
+            with open('foo.env', 'w') as f:
+                f.write(dedent(f"""
+                    export DML_DAG={repr(json_dumps(vars(fn_dag)))}
+                    export DML_ID={dag.name}
+                    export DML_EXECUTING='1'""").strip())
+            subprocess.run(f'hatch -e {env} run python {__file__}', shell=True,
+                           check=True, capture_output=True,
+                           env=dict(DML_DAG=repr(json_dumps(vars(fn_dag))),
+                                    DML_EXECUTING='1', **os.environ))
         return node.wait()
     return wrapped
+
+
+def import_file(module_name, file_path):
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+if __name__ == '__main__':
+    with Dag(**json.loads(os.getenv('DML_DAG'))) as dag:
+        _, _, *args = dag.expr
+        meta = dag.expr.meta
+        script = import_file('daggerml.contrib.script', meta['dml_file'])
+        # FIXME hack
+        *_, fnname = meta['dml_name'].split('.')
+        fn = getattr(script, fnname)
+        dag.commit(fn(dag, *args))

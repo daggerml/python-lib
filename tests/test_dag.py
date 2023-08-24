@@ -1,12 +1,13 @@
 from dataclasses import replace
 from datetime import datetime
 from enum import Enum
-from time import sleep
+from time import sleep, time
 from uuid import uuid4
 
 import boto3
 import pytest
 from util import DmlTestBase
+from contrib_helpers import hatch_check
 
 import daggerml as dml
 from daggerml import (
@@ -16,17 +17,15 @@ from daggerml import (
     Node,
     NodeError,
     Resource,
+    cached_executor,
     describe_dag,
     get_dag_topology,
     list_dags,
-    local_executor,
-    local_fn,
 )
 from daggerml._config import DML_S3_ENDPOINT, DML_TEST_LOCAL
 from daggerml._dag import _api
-from daggerml.contrib.process import process_fn
+from daggerml.contrib.process import local_fn
 from daggerml.contrib.s3 import S3Resource, s3_upload
-from daggerml.contrib.util import fullname
 
 
 def get_dag(dag):
@@ -655,33 +654,44 @@ class TestLocalExecutor(DmlTestBase):
         def add(dag, *args):
             return sum([x.to_py() for x in args])
         dag = Dag.new(self.id())
-        add_resp = add(dag, 3, 1)
-        sub_resp = sub(dag, 3, 1)
-        assert add_resp.to_py() == 3 + 1
-        assert sub_resp.to_py() == 3 - 1
+        assert add(dag, 3, 1).to_py() == 3 + 1
+        assert sub(dag, 3, 1).to_py() == 3 - 1
 
     def test_local_func_localex(self):
-        le = local_executor('foobar', 0)
+        le = cached_executor('foobar', 0)
 
+        mutable = []
         @local_fn(executor_name=le.name, executor_version=le.version)
-        def add(dag, *args):
-            return sum([x.to_py() for x in args])
-        args = [1, 2, 3, 4, 5]
+        def fn(dag, *args):  # noqa: B006
+            mutable.append(None)
+            return args  # len(mutable) - 1
 
         dag0 = Dag.new(self.id())
-        add(dag0, *args, name='foo')
+        fn(dag0, 0).to_py()
+        assert len(mutable) == 1
+        fn(dag0, 0).to_py()
+        assert len(mutable) == 1
+        for i in range(5):
+            fn(dag0, time()).to_py()
+            assert len(mutable) == i + 2
+        fn(dag0, 0).to_py()
+        assert len(mutable) == 6
+        fn(dag0, 0).to_py()
+        assert len(mutable) == 6
 
         dag1 = Dag.new(self.id())  # not the same executor
-        executor, secret = le.get(dag1)
-        node = dag1.from_py([executor, fullname(add.__wrapped__)]).call_async(*args)
-        assert node.check() is not None  # cached from previous run
-        node = node.result
-        assert node.dag is dag1
+        fn(dag1, 0).to_py()
+        assert len(mutable) == 6
 
         # we have to delete these dags so that teardown will work properly
         dag0.delete()
         dag1.delete()
         le.delete()
+
+    def test_hatch(self):
+        dag = Dag.new(self.id())
+        res = hatch_check(dag)
+        assert res.to_py() == 'asdf'
 
 
 class TestS3Resource(DmlTestBase):
@@ -733,13 +743,3 @@ class TestS3Resource(DmlTestBase):
             Bucket=rsrc.bucket,
             Key=rsrc.key
         )
-
-    def test_foobar(self):
-        @process_fn
-        def asdf(a, b, c):
-            return a + b + c
-
-        print('=' * 10)
-        print(asdf(1, 2, 3))
-        print('=' * 10)
-        assert asdf(1, 2, 3) is None

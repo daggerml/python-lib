@@ -7,7 +7,7 @@ from io import BytesIO
 from daggerml import Dag, delete_dag
 
 
-class local_executor:
+class cached_executor:
     def __init__(self, name, version):
         self.name = name
         self.version = version
@@ -17,6 +17,8 @@ class local_executor:
         return f'.dml/{self.name}_{self.version}.json'
 
     def get(self, dag):
+        if self.name is None:
+            return dag.executor, dag.secret
         exec_dag = Dag.new(self.name, self.version)
         if exec_dag is not None:
             exec_dag.commit(exec_dag.executor)

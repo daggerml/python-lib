@@ -16,9 +16,8 @@ from daggerml._dag import (
     list_dags,
     register_tag,
 )
-from daggerml.contrib.process import local_fn
-from daggerml.contrib.s3 import S3Resource, compute_hash
-from daggerml.contrib.util import local_executor
+from daggerml.contrib.s3 import S3Resource
+from daggerml.contrib.util import cached_executor
 
 try:
     __version__ = version("daggerml")
