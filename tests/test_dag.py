@@ -6,8 +6,6 @@ from uuid import uuid4
 
 import boto3
 import pytest
-from util import DmlTestBase
-from contrib_helpers import hatch_check
 
 import daggerml as dml
 from daggerml import (
@@ -26,6 +24,8 @@ from daggerml._config import DML_S3_ENDPOINT, DML_TEST_LOCAL
 from daggerml._dag import _api
 from daggerml.contrib.process import local_fn
 from daggerml.contrib.s3 import S3Resource, s3_upload
+from tests.contrib_helpers import hatch_check
+from tests.util import DmlTestBase
 
 
 def get_dag(dag):
@@ -691,7 +691,7 @@ class TestLocalExecutor(DmlTestBase):
     def test_hatch(self):
         dag = Dag.new(self.id())
         res = hatch_check(dag)
-        assert res.to_py() == 'asdf'
+        assert res.to_py() == '2.0.1'
 
 
 class TestS3Resource(DmlTestBase):

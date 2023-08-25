@@ -6,4 +6,4 @@ from daggerml.contrib.process import hatch
 def hatch_check(dag):
     "hatch functions need to be globally accessible for now"
     import pandas as pd
-    return 1  # pd.__version__
+    return pd.__version__

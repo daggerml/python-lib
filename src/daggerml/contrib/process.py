@@ -6,12 +6,10 @@ import json
 import os
 import subprocess
 import sys
+from base64 import b64decode, b64encode
 from functools import partial, wraps
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from textwrap import dedent
 
-from daggerml._config import DML_API_ENDPOINT, DML_TEST_LOCAL
 from daggerml._dag import Dag, json_dumps
 from daggerml.contrib.util import cached_executor, fullname
 
@@ -55,15 +53,18 @@ def hatch(fn=None, env=None, executor_name=None, executor_version=None):
         if node.result:
             return node.result
         with Dag.from_claim(executor, secret, ttl=-1, node_id=node.id) as fn_dag:
-            with open('foo.env', 'w') as f:
-                f.write(dedent(f"""
-                    export DML_DAG={repr(json_dumps(vars(fn_dag)))}
-                    export DML_ID={dag.name}
-                    export DML_EXECUTING='1'""").strip())
-            subprocess.run(f'hatch -e {env} run python {__file__}', shell=True,
-                           check=True, capture_output=True,
-                           env=dict(DML_DAG=repr(json_dumps(vars(fn_dag))),
-                                    DML_EXECUTING='1', **os.environ))
+            resp = subprocess.run(f'hatch -e {env} run python {__file__}',
+                                  shell=True, capture_output=True,
+                                  env=dict(DML_DAG=b64encode(json_dumps(vars(fn_dag)).encode()).decode(),
+                                           DML_EXECUTING='1',
+                                           **os.environ))
+            if resp.returncode != 0:
+                fn_dag.fail({
+                    'message': 'subproccess failed',
+                    'returncode': resp.returncode,
+                    'stdout': resp.stdout.decode(),
+                    'stderr': resp.stderr.decode(),
+                })
         return node.wait()
     return wrapped
 
@@ -77,11 +78,12 @@ def import_file(module_name, file_path):
 
 
 if __name__ == '__main__':
-    with Dag(**json.loads(os.getenv('DML_DAG'))) as dag:
+    dag = b64decode(os.getenv('DML_DAG').encode()).decode()
+    with Dag(**json.loads(dag)) as dag:
         _, _, *args = dag.expr
         meta = dag.expr.meta
         script = import_file('daggerml.contrib.script', meta['dml_file'])
-        # FIXME hack
+        # FIXME hack because imports aren't done correctly
         *_, fnname = meta['dml_name'].split('.')
         fn = getattr(script, fnname)
         dag.commit(fn(dag, *args))
