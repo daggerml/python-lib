@@ -6,7 +6,7 @@ import pytest
 import daggerml as dml
 from daggerml import cached_executor
 from daggerml._config import DML_S3_ENDPOINT, DML_TEST_LOCAL
-from daggerml.contrib.process import hatch, local_fn
+from daggerml.contrib.local import hatch, local_fn
 from daggerml.contrib.s3 import S3Resource, s3_upload
 from tests.util import DmlTestBase
 
