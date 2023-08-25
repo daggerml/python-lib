@@ -41,8 +41,6 @@ def hatch(fn=None, env=None, executor_name=None, executor_version=None):
         return partial(hatch, env=env, executor_name=executor_name, executor_version=executor_version)
     @wraps(fn)
     def wrapped(dag, *args, **meta):
-        if os.getenv('DML_EXECUTING'):
-            return fn(dag, *args)
         executor, secret = cached_executor(executor_name, executor_version).get(dag)
         src = hashlib.md5(dedent(inspect.getsource(fn)).encode()).hexdigest()
         pip = subprocess.run(f'hatch -e {env} run python -m pip freeze',
@@ -53,10 +51,44 @@ def hatch(fn=None, env=None, executor_name=None, executor_version=None):
         if node.result:
             return node.result
         with Dag.from_claim(executor, secret, ttl=-1, node_id=node.id) as fn_dag:
-            resp = subprocess.run(f'hatch -e {env} run python {__file__}',
+            cmd = f"hatch -e {env} run python -c 'from {__name__} import exec_local_func as f; f()'"
+            resp = subprocess.run(cmd,
                                   shell=True, capture_output=True, cwd=os.getcwd(),
                                   env=dict(DML_DAG=b64encode(json_dumps(vars(fn_dag)).encode()).decode(),
-                                           DML_EXECUTING='1',
+                                           PYTHONPATH=os.getcwd(),  # FIXME why is this necessary?
+                                           **os.environ))
+            if resp.returncode != 0:
+                fn_dag.fail({
+                    'message': 'subproccess failed',
+                    'returncode': resp.returncode,
+                    'stdout': resp.stdout.decode(),
+                    'stderr': resp.stderr.decode(),
+                })
+        return node.wait()
+    return wrapped
+
+
+def conda(fn=None, env=None, executor_name=None, executor_version=None):
+    """executes a function in a different venv -- you probably want to wrap this in `local_fn`
+    """
+    if fn is None:
+        return partial(hatch, env=env, executor_name=executor_name, executor_version=executor_version)
+    @wraps(fn)
+    def wrapped(dag, *args, **meta):
+        executor, secret = cached_executor(executor_name, executor_version).get(dag)
+        src = hashlib.md5(dedent(inspect.getsource(fn)).encode()).hexdigest()
+        pip = subprocess.run(f'conda run -n {env} python -m pip freeze',
+                             shell=True, check=True, capture_output=True)
+        pip = hashlib.md5(pip.stdout.strip()).hexdigest()
+        node = dag.from_py([dag.executor, f'{pip}:{src}']) \
+            .call_async(*args, **meta, dml_name=fullname(fn), dml_file=fn.__globals__['__file__'])
+        if node.result:
+            return node.result
+        with Dag.from_claim(executor, secret, ttl=-1, node_id=node.id) as fn_dag:
+            cmd = f"conda run -n {env} python -c 'from {__name__} import exec_local_func as f; f()'"
+            resp = subprocess.run(cmd,
+                                  shell=True, capture_output=True, cwd=os.getcwd(),
+                                  env=dict(DML_DAG=b64encode(json_dumps(vars(fn_dag)).encode()).decode(),
                                            PYTHONPATH=os.getcwd(),  # FIXME why is this necessary?
                                            **os.environ))
             if resp.returncode != 0:
@@ -78,7 +110,7 @@ def import_file(module_name, file_path):
     return module
 
 
-if __name__ == '__main__':
+def exec_local_func():
     dag = b64decode(os.getenv('DML_DAG').encode()).decode()
     with Dag(**json.loads(dag)) as dag:
         _, _, *args = dag.expr
@@ -87,4 +119,4 @@ if __name__ == '__main__':
         # FIXME hack because imports aren't done correctly
         *_, fnname = meta['dml_name'].split('.')
         fn = getattr(script, fnname)
-        dag.commit(fn(dag, *args))
+        dag.commit(fn.__wrapped__(dag, *args))
