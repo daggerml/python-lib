@@ -54,9 +54,10 @@ def hatch(fn=None, env=None, executor_name=None, executor_version=None):
             return node.result
         with Dag.from_claim(executor, secret, ttl=-1, node_id=node.id) as fn_dag:
             resp = subprocess.run(f'hatch -e {env} run python {__file__}',
-                                  shell=True, capture_output=True,
+                                  shell=True, capture_output=True, cwd=os.getcwd(),
                                   env=dict(DML_DAG=b64encode(json_dumps(vars(fn_dag)).encode()).decode(),
                                            DML_EXECUTING='1',
+                                           PYTHONPATH=os.getcwd(),  # FIXME why is this necessary?
                                            **os.environ))
             if resp.returncode != 0:
                 fn_dag.fail({
