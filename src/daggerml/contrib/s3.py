@@ -2,7 +2,6 @@
 import hashlib
 import logging
 import os
-import subprocess
 import sys
 import tarfile
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ import boto3
 from daggerml._config import DML_S3_BUCKET, DML_S3_PREFIX
 from daggerml._dag import Resource, register_tag
 
+# import subprocess
 logger = logging.getLogger(__name__)
 
 
@@ -69,9 +69,8 @@ def upload(dag, bytes_object, bucket=DML_S3_BUCKET, prefix=DML_S3_PREFIX, client
     prefix = prefix.rstrip('/')
     if client is None:
         client = boto3.client('s3')
-    key = f'{prefix}/bytes/{compute_hash(bytes_object)}'
-    resource = S3Resource.from_uri(dag.executor, f's3://{bucket}/{key}')
-    client.put_object(Body=bytes_object, Bucket=bucket, Key=key)
+    resource = S3Resource.from_uri(dag.executor, f's3://{bucket}/{prefix}/{compute_hash(bytes_object)}')
+    client.put_object(Body=bytes_object, Bucket=resource.bucket, Key=resource.key)
     return dag.from_py(resource)
 
 
@@ -82,19 +81,24 @@ def tar(dag, path, bucket, prefix, client=None):
     if not path.is_absolute():
         # if not abspath, then it's relative to the calling function
         calling_file = sys._getframe(1).f_globals['__file__']
-        path = Path(calling_file).parent / path
-        path = path.absolute()
+        path = (Path(calling_file).parent / path).absolute()
         logger.info('set path relative to %r -- %r', calling_file, path)
     if not path.is_dir():
         raise ValueError('path %s is not a valid directory' % path)
-    assert len(str(path).strip()) > 0
-    hash_script = Path(__file__).parent / 'extras/local-dir-hash.sh'
-    dir_hash = subprocess.run(f'{hash_script} {path}', capture_output=True, shell=True)\
-        .stdout.decode().strip()
-    resource = S3Resource.from_uri(dag.executor, f's3://{bucket}/{prefix}/s3-upload/{dir_hash}.tar.gz')
-    logger.info('compressing and uploading %r to %r', path, resource.uri)
     with NamedTemporaryFile(dir='/tmp/', suffix='.tar.gz', prefix='dml-s3-upload') as f:
         with tarfile.open(f.name, 'w:gz') as tar:
             tar.add(path, arcname=os.path.sep)
+        with tarfile.open(f.name, 'r:gz') as tar:
+            dir_hash = hashlib.sha256()
+            for tarinfo in tar:
+                if tarinfo.isreg():
+                    dir_hash.update(tarinfo.name.encode())
+                    dir_hash.update(bytes(tarinfo.mode) + bytes(tarinfo.uid) + bytes(tarinfo.gid))
+                    with tar.extractfile(tarinfo) as flo:
+                        while data := flo.read(2**20):
+                            dir_hash.update(data)
+        dir_hash = dir_hash.hexdigest()
+        resource = S3Resource.from_uri(dag.executor, f's3://{bucket}/{prefix}/{dir_hash}.tar.gz')
+        logger.info('compressing and uploading %r to %r', path, resource.uri)
         client.put_object(Body=f.read(), Bucket=resource.bucket, Key=resource.key)
     return dag.from_py(resource)

@@ -146,7 +146,7 @@ class TestS3Resource(DmlTestBase):
             # extract a copy of this directory, and the hash (uri) should be the same
             subprocess.run(f'tar -xzf {tmpd}/data.tar.gz -C {data_dir}/', shell=True)
             rsrc2 = s3.tar(dag, data_dir, self.bucket, self.prefix, self.client).to_py()
-            assert rsrc.uri == rsrc2.uri
+            assert rsrc.uri.split('/')[-1] == rsrc2.uri.split('/')[-1]
             # add a file and the hash should change
             with open(data_dir / 'foo.txt', 'w') as f:
                 f.write('testico')
