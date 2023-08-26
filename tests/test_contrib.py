@@ -135,17 +135,19 @@ class TestS3Resource(DmlTestBase):
 
     def test_upload_directory(self):
         dag = dml.Dag.new(self.id())
-        rsrc_node = s3.tar(dag, '.', self.bucket, self.prefix, self.client)
-        rsrc = rsrc_node.to_py()
+        # upload the test directory
+        rsrc = s3.tar(dag, '.', self.bucket, self.prefix, self.client).to_py()
         with TemporaryDirectory(prefix='dml-') as tmpd:
             tmpd = Path(tmpd)
-            print('tmp directory:', tmpd)
             data_dir = tmpd / 'data'
             data_dir.mkdir()
+            # download tarbell
             self.client.download_file(rsrc.bucket, rsrc.key, tmpd / 'data.tar.gz')
+            # extract a copy of this directory, and the hash (uri) should be the same
             subprocess.run(f'tar -xzf {tmpd}/data.tar.gz -C {data_dir}/', shell=True)
-            rsrc3 = s3.tar(dag, data_dir, self.bucket, self.prefix, self.client)
-            assert rsrc.uri == rsrc3.to_py().uri
+            rsrc2 = s3.tar(dag, data_dir, self.bucket, self.prefix, self.client).to_py()
+            assert rsrc.uri == rsrc2.uri
+            # add a file and the hash should change
             with open(data_dir / 'foo.txt', 'w') as f:
                 f.write('testico')
             rsrc4 = s3.tar(dag, data_dir, self.bucket, self.prefix, self.client)

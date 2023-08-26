@@ -87,16 +87,14 @@ def tar(dag, path, bucket, prefix, client=None):
         logger.info('set path relative to %r -- %r', calling_file, path)
     if not path.is_dir():
         raise ValueError('path %s is not a valid directory' % path)
+    assert len(str(path).strip()) > 0
     hash_script = Path(__file__).parent / 'extras/local-dir-hash.sh'
-    dir_hash = subprocess.run([str(hash_script), str(path)], capture_output=True, shell=True)\
+    dir_hash = subprocess.run(f'{hash_script} {path}', capture_output=True, shell=True)\
         .stdout.decode().strip()
-    key = f'{prefix}/s3-upload/{dir_hash}.tar.gz'
-    uri = f's3://{bucket}/{key}'
-    logger.info('compressing and uploading %r to %r', path, uri)
+    resource = S3Resource.from_uri(dag.executor, f's3://{bucket}/{prefix}/s3-upload/{dir_hash}.tar.gz')
+    logger.info('compressing and uploading %r to %r', path, resource.uri)
     with NamedTemporaryFile(dir='/tmp/', suffix='.tar.gz', prefix='dml-s3-upload') as f:
         with tarfile.open(f.name, 'w:gz') as tar:
             tar.add(path, arcname=os.path.sep)
-        client.put_object(
-            Body=f.read(), Bucket=bucket, Key=key
-        )
-    return dag.from_py(S3Resource.from_uri(dag.executor, uri))
+        client.put_object(Body=f.read(), Bucket=resource.bucket, Key=resource.key)
+    return dag.from_py(resource)
