@@ -190,6 +190,9 @@ class TestDagBasic(DmlTestBase):
         # Create a node in d0 with scalar value:
         n0 = d0.from_py(2)
 
+        # convert it to a map node so that __get__ is implemented
+        n0 = dml.MapNode(n0.dag, n0.id)
+
         # Access the 0th item of a scalar valued node, which should raise:
         with pytest.raises(NodeError, match='no such key'):
             n0[0]
@@ -223,6 +226,9 @@ class TestDagBasic(DmlTestBase):
         # Access index which is out of range, should raise:
         with pytest.raises(NodeError, match='no such key'):
             n0[len(n0)]
+
+        # test unpacking
+        assert len(d0.from_py([*n0])) == len(n0)
 
     def test_dag_literal_long_node_list(self):
         d0 = Dag.new(self.id())
@@ -269,6 +275,13 @@ class TestDagBasic(DmlTestBase):
             n0[1]
         with pytest.raises(NodeError, match='no such key'):
             n0['d']
+        assert sorted(n0.keys()) == sorted(m0.keys())
+        assert sorted(n0.items(), key=lambda x: x[0]) == [(x, n0[x]) for x in sorted(m0.keys())]
+        # test unpacking
+        m1 = dict(**n0)
+        assert isinstance(m1['a'], Node)
+        n1 = d0.from_py(m1)
+        assert n0.keys() == n1.keys()
 
     def test_dag_literal_node_resource(self):
         d0 = Dag.new(self.id())

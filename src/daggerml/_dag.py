@@ -266,30 +266,49 @@ def _run_dag_builtin(dag, builtin_op, **kw):
     res = _api('dag', 'builtin', builtin_op=builtin_op, dag_id=dag.id, secret=dag.secret, **kw)
     if res['error'] is not None:
         raise NodeError(res['error']['message'])
-    return Node(dag, res['node_id'])
+    return Node.from_id(dag, res['node_id'])
 
 @dataclass(frozen=True)
 class Node:
     dag: "Dag"
     id: str
 
+    @classmethod
+    def from_id(cls, dag, node_id):
+        node = Node(dag, node_id)
+        meta = node.meta
+        if meta['$type'] == 'list':
+            return ListNode(dag, node_id)
+        if meta['$type'] == 'map':
+            return MapNode(dag, node_id)
+        return node
+
+    def to_py(self):
+        """convert a node to python datastructures
+
+        recursively pulls data from daggerml if its not already in the cache.
+        """
+        return self.dag.to_py(self)
+
+    def __repr__(self):
+        return f'Node({self.dag.name},{self.dag.version},{self.id})'
+
+    @property
+    def meta(self):
+        resp = get_node_metadata(self.id, self.dag.secret)
+        return resp
+
+@dataclass(frozen=True)
+class ListNode(Node):
+    dag: "Dag"
+    id: str
+
     def __len__(self):
-        if '$length' in self.meta:
-            return self.meta['$length']
-        keys = self.meta.get('$keys')
-        if keys is not None:
-            return len(keys)
-        raise ValueError('cannot iterate of this node type')
+        return self.meta['$length']
 
     def __iter__(self):
-        if self.meta['$type'] == 'list':
-            for i in range(self.meta['$length']):
-                yield self[i]
-        elif self.meta['$type'] == 'map':
-            for key in self.meta['$keys']:
-                yield key
-        else:
-            raise ValueError('cannot iterate of this node type')
+        for i in range(self.meta['$length']):
+            yield self[i]
 
     def __add__(self, other):
         if len(other) == 0:
@@ -337,20 +356,46 @@ class Node:
         waiter.wait(2)
         return waiter.result
 
-    def to_py(self):
-        """convert a node to python datastructures
+    def __repr__(self):
+        return f'ListNode({self.dag.name},{self.dag.version},{self.id})'
 
-        recursively pulls data from daggerml if its not already in the cache.
-        """
-        return self.dag.to_py(self)
+@dataclass(frozen=True)
+class MapNode(Node):
+    dag: "Dag"
+    id: str
+
+    def __len__(self):
+        keys = self.meta.get('$keys')
+        if keys is not None:
+            return len(keys)
+        raise ValueError('cannot iterate of this node type')
+
+    def __iter__(self):
+        for key in self.meta['$keys']:
+            yield key
+
+    def keys(self):
+        return copy(self.meta['$keys'])
+
+    def items(self):
+        for k in self.keys():
+            yield k, self[k]
+
+    def __add__(self, other):
+        if len(other) == 0:
+            return self
+        return _run_dag_builtin(self.dag, 'concat', args=[self.id, self.dag.from_py(other).id], meta={})
+
+    def __getitem__(self, key):
+        res = _run_dag_builtin(self.dag, 'get', args=[self.id, self.dag.from_py(key).id], meta={})
+        if self in CACHE:
+            if isinstance(key, Node):
+                key = key.to_py()
+            CACHE[res] = CACHE[self][key]
+        return res
 
     def __repr__(self):
-        return f'Node({self.dag.name},{self.dag.version},{self.id})'
-
-    @property
-    def meta(self):
-        resp = get_node_metadata(self.id, self.dag.secret)
-        return resp
+        return f'MapNode({self.dag.name},{self.dag.version},{self.id})'
 
 @dataclass
 class NodeWaiter:
@@ -381,7 +426,7 @@ class NodeWaiter:
     @property
     def result(self):
         if self._resp['success']:
-            return Node(self.dag, self.id)
+            return Node.from_id(self.dag, self.id)
         if self._resp['error'] is not None:
             raise NodeError(self._resp['error'])
         return
@@ -410,7 +455,7 @@ class Dag:
             return dag
 
     @classmethod
-    def from_claim(cls, executor, secret, ttl, node_id=None):
+    def from_claim(cls, executor, secret, ttl, node_id=None, retry_count=9):
         """claim a remote execution
 
         Parameters
@@ -426,24 +471,32 @@ class Dag:
         """
         if isinstance(executor, Resource):
             executor = executor.to_dict()
-        resp = _api('node', 'claim_node',
-                    executor=executor,
-                    ttl=ttl,
-                    node_id=node_id,
-                    secret=secret)
-        if resp is None:
-            return
-        return cls(**resp)
+        def claim():
+            return _api('node', 'claim_node',
+                        executor=executor,
+                        ttl=ttl,
+                        node_id=node_id,
+                        secret=secret)
+        for i in range(retry_count + 1):
+            resp = _api('node', 'claim_node',
+                        executor=executor,
+                        ttl=ttl,
+                        node_id=node_id,
+                        secret=secret)
+            if resp is not None:
+                return cls(**resp)
+            if i < retry_count:
+                sleep(1)
 
     @property
     def expr(self):
         """remote execution's expression"""
-        return Node(self, self.expr_id)
+        return Node.from_id(self, self.expr_id)
 
     @property
     def executor(self):
         """this dag's executor resource"""
-        return Node(self, self.executor_id).to_py()
+        return Node.from_id(self, self.executor_id).to_py()
 
     @singledispatchmethod
     def serialize(self, x):
@@ -462,7 +515,7 @@ class Dag:
                        dag_id=self.id,
                        data=to_data(py),
                        secret=self.secret)
-            node = Node(self, res['node_id'])
+            node = Node.from_id(self, res['node_id'])
         else:
             return self.from_py(self.serialize(py), **meta)
         if node not in CACHE:
@@ -527,7 +580,7 @@ class Dag:
             raise DagError('No such dag/version: %s / %r' % (dag_name, version))
         res = _api('dag', 'put_load', dag_id=self.id,
                    node_id=node_id, secret=self.secret)
-        return Node(self, res['node_id'])
+        return Node.from_id(self, res['node_id'])
 
     def __repr__(self):
         return f'Dag({self.name},{self.version})'

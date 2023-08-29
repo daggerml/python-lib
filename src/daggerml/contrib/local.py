@@ -22,7 +22,6 @@ def local_fn(fn=None, executor_name=None, executor_version=None):
     def wrapped(dag, *args, **meta):
         executor, secret = cached_executor(executor_name, executor_version).get(dag)
         _hash = hashlib.md5(dedent(inspect.getsource(fn)).encode()).hexdigest()
-        print('hash ==', _hash, *args)
         node = dag.from_py([executor, _hash])
         node = node.call_async(*args, **meta, dml_name=fullname(fn))
         if node.result:
@@ -72,7 +71,7 @@ def conda(fn=None, env=None, executor_name=None, executor_version=None):
     """executes a function in a different venv -- you probably want to wrap this in `local_fn`
     """
     if fn is None:
-        return partial(hatch, env=env, executor_name=executor_name, executor_version=executor_version)
+        return partial(conda, env=env, executor_name=executor_name, executor_version=executor_version)
     @wraps(fn)
     def wrapped(dag, *args, **meta):
         executor, secret = cached_executor(executor_name, executor_version).get(dag)

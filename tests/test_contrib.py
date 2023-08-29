@@ -87,7 +87,7 @@ class TestLocalExecutor(DmlTestBase):
 class TestS3Resource(DmlTestBase):
 
     def setUp(self):
-        self.client = boto3.client('s3', endpoint_url=DML_S3_ENDPOINT)
+        self.client = boto3.client('s3', endpoint_url=DML_S3_ENDPOINT, region_name='us-east-1')
         self.bucket = 'daggerml-base'
         self.prefix = 'test'
         if DML_TEST_LOCAL:

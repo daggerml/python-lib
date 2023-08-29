@@ -5,6 +5,8 @@ from daggerml._dag import (
     Dag,
     DagError,
     DmlError,
+    ListNode,
+    MapNode,
     Node,
     NodeError,
     Resource,
