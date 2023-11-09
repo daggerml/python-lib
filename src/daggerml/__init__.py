@@ -1,6 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
-from daggerml.dag import Dag, Datum, Error, Fn, Literal, Load, Node, Ref, Resource, Scalar
+from daggerml.core import Dag, Datum, Error, Fn, Literal, Load, Node, Ref, Repo, Resource, Scalar, create_dag
 from daggerml.util import ApiError
 
 try:
@@ -9,3 +9,9 @@ except PackageNotFoundError:
     __version__ = 'local'
 
 del version, PackageNotFoundError
+
+
+__all__ = (
+    'Dag', 'Datum', 'Error', 'Fn', 'Literal', 'Load', 'Node', 'Ref',
+    'Repo', 'Resource', 'Scalar', 'ApiError', 'create_dag'
+)
