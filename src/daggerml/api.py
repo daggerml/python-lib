@@ -40,19 +40,19 @@ class Dag:
         ref = self.repo.put_load(dag_name)
         return Node(ref, self)
 
-    def commit(self, result) -> Node|None:
-        result = self.repo.commit(result.ref)
-        if result is None:
-            return
-        assert isinstance(result, core.Ref)
-        return Node(result, self)
-
     def apply(self, resource: Node, *args: Node) -> "Dag":
         assert isinstance(resource.value, core.Resource)
         repo = self.repo.begin([resource.ref] + [x.ref for x in args])
         assert isinstance(repo, core.Repo)
         dag = Dag(repo=repo)
         return dag
+
+    def commit(self, result) -> Node|None:
+        result = self.repo.commit(result.ref)
+        if result is None:
+            return
+        assert isinstance(result, core.Ref)
+        return Node(result, self)
 
     @property
     def expr(self):
