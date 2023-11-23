@@ -42,13 +42,15 @@ class Repo:
         #     self.nodes.add(resp)
         return resp
 
-    def begin(self, expr):
-        return self._invoke('begin', expr=expr)
+    def begin(self, expr) -> "Repo":
+        repo = self._invoke('begin', expr=expr)
+        assert isinstance(repo, Repo)
+        return repo
 
-    def put_literal(self, data):
+    def put_literal(self, data) -> Ref:
         return self._invoke('put_literal', data)
 
-    def put_load(self, dag_name):
+    def put_load(self, dag_name) -> Ref:
         return self._invoke('put_load', dag_name)
 
     def commit(self, result):
@@ -67,8 +69,10 @@ class Repo:
             self.commit(ex)
 
 
-def create_dag(name, message=None):
-    return invoke_api(None, 'begin', name=name, message=message)
+def create_dag(name: str, message: str|None = None) -> Repo:
+    repo = invoke_api(None, 'begin', name=name, message=message)
+    assert isinstance(repo, Repo)  # make my fucking linter happy
+    return repo
 
 
 @dml_type

@@ -49,9 +49,9 @@ def to_data(obj):
     raise ValueError(f'no data encoding for type: {n}')
 
 
-def dml_type(cls=None, slots=True, **kwargs):
+def dml_type(cls=None, **kwargs):
     def decorator(cls):
-        cls = dataclass(slots=slots, **kwargs)(cls)
+        cls = dataclass(**kwargs)(cls)
         DATA_TYPE[cls.__name__] = cls
         return cls
     return decorator(cls) if cls else decorator
@@ -61,7 +61,7 @@ def dml_type(cls=None, slots=True, **kwargs):
 class Error(Exception):
     message: str
     context: dict = field(default_factory=dict)
-    code: str = None
+    code: str|None = None
 
     def __post_init__(self):
         self.code = type(self).__name__ if self.code is None else self.code

@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 
 import daggerml.util
-from daggerml import core
+from daggerml import api, core
 
 
 @contextmanager
@@ -62,12 +62,35 @@ class TestDag(unittest.TestCase):
         self.olddir = os.getcwd()
         os.chdir(self.d0)
         daggerml.util.CLI_FLAGS[:] = ['--project-dir', self.d1, '--config-dir', self.d0]
+        daggerml.util._api('repo', 'create', 'test')
+        daggerml.util._api('project', 'init', 'test')
 
     def tearDown(self):
         os.chdir(self.olddir)
         self.tmpd0.__exit__(None, None, None)
         self.tmpd1.__exit__(None, None, None)
 
-    def test_base(self):
+    def test_create(self):
         print(f'{self.d0 = } -- {self.d1 = }')
-        assert 1 == 1
+        dag = api.Dag('test-dag0', 'this is the test dag')
+        assert isinstance(dag, api.Dag)
+        l0 = dag.put({'asdf': 12})
+        assert isinstance(l0, api.Node)
+        assert list(l0.value.keys()) == ['asdf']
+        rsrc = core.Resource({'a': 1, 'b': 2})
+        r0 = dag.put(rsrc)
+        f0 = dag.apply(r0, l0, l0)
+        assert isinstance(f0, api.Dag)
+        assert hasattr(f0, 'repo')
+        assert isinstance(f0.repo, core.Repo)
+        assert f0.expr[0].value == rsrc
+        l1 = f0.put({'qwer': 23})
+        assert isinstance(l1, api.Node)
+        n1 = f0.commit(l1)
+        assert isinstance(n1, api.Node)
+        assert list(n1.value.keys()) == ['qwer']
+        assert dag.commit(n1) is None
+        dag = api.Dag('test-dag1', 'this is the second test dag')
+        n0 = dag.load('test-dag0')
+        assert isinstance(n0, api.Node)
+        assert list(n0.value.keys()) == ['qwer']
