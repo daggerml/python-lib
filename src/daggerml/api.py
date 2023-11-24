@@ -95,7 +95,6 @@ class Dag:
             True means force this execution (replace the cache if it exists. E.g. retry errors
             False means no caching (don't use the cache and don't cache the results)
         """
-        # rnode = self.put(resource)
         with self.start_fn(resource, *args) as fndag:
             if (cache is None) and (fndag.repo.cached_dag is not None):
                 result = fndag.commit(None)
