@@ -79,7 +79,7 @@ class TestDag(unittest.TestCase):
         assert list(l0.value.keys()) == ['asdf']
         rsrc = core.Resource({'a': 1, 'b': 2})
         r0 = dag.put(rsrc)
-        f0 = dag.apply(r0, l0, l0)
+        f0 = dag.start_fn(r0, l0, l0)
         assert isinstance(f0, api.Dag)
         assert hasattr(f0, 'repo')
         assert isinstance(f0.repo, core.Repo)
@@ -94,3 +94,55 @@ class TestDag(unittest.TestCase):
         n0 = dag.load('test-dag0')
         assert isinstance(n0, api.Node)
         assert list(n0.value.keys()) == ['qwer']
+
+    def test_cache_basic(self):
+        dag = api.Dag('test-dag0', 'this is the test dag')
+        stash = [23]
+        def f(fndag):
+            return fndag.put(stash[0])
+        rsrc = core.Resource({'a': 1, 'b': 2})
+        args = dag.put(rsrc), dag.put(12), dag.put(13)
+        f0 = dag.start_fn(*args)
+        assert f0.repo.parent_dag is not None
+        assert f0.repo.cached_dag is None
+        n0 = f0.commit(f(f0), cache=None)
+        assert n0.value == 23
+        f1 = dag.start_fn(*args)
+        assert f1.repo.cached_dag is not None
+        n1 = f1.commit(None)
+        assert n1.value == 23
+
+    def test_cache_apply(self):
+        dag = api.Dag('test-dag0', 'this is the test dag')
+        stash = [23]
+        def f(fndag):
+            return fndag.put(stash[0])
+        rsrc = core.Resource({'a': 1, 'b': 2})
+        args = dag.put(rsrc), dag.put(12), dag.put(13)
+        assert dag.apply(f, *args).value == 23
+        # check using cached value
+        stash[0] = 40
+        assert dag.apply(f, *args).value == 23
+        # test ignoring cache
+        assert dag.apply(f, *args, cache=False).value == 40
+        # test ignoring cache doesn't fuck with cache
+        assert dag.apply(f, *args).value == 23
+        # test replace cache
+        assert dag.apply(f, *args, cache=True).value == 40
+        # test using replaced cache
+        assert dag.apply(f, *args).value == 40
+
+    def test_cache_datums(self):
+        dag = api.Dag('test-dag0', 'this is the test dag')
+        stash = [23]
+        def f(fndag):
+            return fndag.put(stash[0])
+        rsrc = core.Resource({'a': 1, 'b': 2})
+        assert dag.apply(f, dag.put(rsrc), dag.put(12), dag.put(13)).value == 23
+        # check using cached value
+        stash[0] = 40
+        assert dag.apply(f, dag.put(rsrc), dag.put(12), dag.put(13)).value == 23
+        dag.commit(dag.put(12))
+        # caching persists across dags
+        dag0 = api.Dag('test-dag1', 'this is another test dag')
+        assert dag0.apply(f, dag0.put(rsrc), dag0.put(12), dag0.put(13)).value == 23

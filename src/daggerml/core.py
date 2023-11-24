@@ -53,8 +53,8 @@ class Repo:
     def put_load(self, dag_name) -> Ref:
         return self._invoke('put_load', dag_name)
 
-    def commit(self, result):
-        return self._invoke('commit', result)
+    def commit(self, result, cache=None) -> Ref|None:
+        return self._invoke('commit', result, cache)
 
     def deref(self, ref):
         raise Exception('get_ref')

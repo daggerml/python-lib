@@ -1,5 +1,6 @@
 import logging
 from dataclasses import dataclass
+from typing import Callable, List
 
 from daggerml import core
 
@@ -14,9 +15,6 @@ class Node:
     @property
     def value(self):
         return self.ref().value().value
-
-    def __call__(self, *args: "Node") -> "Dag":
-        return self.dag.apply(self, *args)
 
 
 @dataclass
@@ -40,24 +38,55 @@ class Dag:
         ref = self.repo.put_load(dag_name)
         return Node(ref, self)
 
-    def apply(self, resource: Node, *args: Node) -> "Dag":
+    def start_fn(self, resource: Node, *args: Node) -> "Dag":
         assert isinstance(resource.value, core.Resource)
-        repo = self.repo.begin([resource.ref] + [x.ref for x in args])
+        repo = self.repo.begin([x.ref for x in [resource, *args]])
         assert isinstance(repo, core.Repo)
         dag = Dag(repo=repo)
         return dag
 
-    def commit(self, result) -> Node|None:
-        result = self.repo.commit(result.ref)
-        if result is None:
+    def commit(self, result: Node|None, cache=None) -> Node|None:
+        if cache is False and result is None:
+            raise ValueError('cannot commit None result')
+        result_ref = None if result is None else result.ref
+        if self.repo.parent_dag is not None:
+            if cache is True:
+                cache = self.repo.cached_dag
+            elif cache is None and self.repo.cached_dag is None:
+                cache = True
+        res = self.repo.commit(result_ref, cache=cache)
+        if res is None:
             return
-        assert isinstance(result, core.Ref)
-        return Node(result, self)
+        assert isinstance(res, core.Ref)
+        return Node(res, self)
+
+    def apply(self, f: Callable[["Dag"], Node],
+              resource: Node,
+              *args: Node,
+              cache: bool|None = None) -> Node:
+        """
+        Parameters
+        ----------
+        f : Callable
+        cache : bool|None
+            None means use cache if available (including errors) and populate cache if needed
+            True means force this execution (replace the cache if it exists. E.g. retry errors
+            False means no caching (don't use the cache and don't cache the results)
+        """
+        # rnode = self.put(resource)
+        with self.start_fn(resource, *args) as fndag:
+            if (cache is None) and (fndag.repo.cached_dag is not None):
+                result = fndag.commit(None)
+            else:
+                result = f(fndag)
+                result = fndag.commit(result, cache=cache)
+        assert result is not None
+        return result
 
     @property
-    def expr(self):
+    def expr(self) -> List[Node]:
         dag = self.repo.dag()
-        if not hasattr(dag, 'expr'):
+        if not isinstance(dag, core.FnDag):
             raise ValueError('cannot access `expr` for a non function dag')
         return [Node(x, self) for x in dag.expr]
 
