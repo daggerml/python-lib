@@ -14,10 +14,22 @@ class Node:
 
     @property
     def value(self) -> core.Scalar|List[core.Ref]|Set[core.Ref]|Dict[str, core.Ref]:
-        return self.ref().value().value
+        res = self.ref()
+        assert isinstance(res, core.Node)
+        return res.value().value
+
+    @property
+    def error(self) -> core.Error|None:
+        res = self.ref()
+        assert isinstance(res, core.Node)
+        return res.error
 
     def unroll(self) -> core.Scalar|List[Any]|Set[Any]|Dict[str, Any]:
-        return self.ref().value().unroll()
+        res = self.ref()
+        assert isinstance(res, core.Node)
+        if res.value is None:
+            raise res.error
+        return res.value().unroll()
 
 
 @dataclass
@@ -48,10 +60,17 @@ class Dag:
         dag = Dag(repo=repo)
         return dag
 
-    def commit(self, result: Node|None, cache=None) -> Node|None:
+    def commit(self, result: core.Error|Node|None, cache=None) -> Node|None:
         if cache is False and result is None:
             raise ValueError('cannot commit None result')
-        result_ref = None if result is None else result.ref
+        if result is None:
+            result_ref = None
+        elif isinstance(result, core.Error):
+            result_ref = result
+        elif isinstance(result, Node):
+            result_ref = result.ref
+        else:
+            raise ValueError('cannot commit type: %r' % type(result))
         if self.repo.parent_dag is not None:
             if cache is True:
                 cache = self.repo.cached_dag

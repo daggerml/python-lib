@@ -132,11 +132,17 @@ class Load:
 
     @property
     def value(self):
-        return self.dag().result().value
+        dag = self.dag()
+        assert isinstance(dag, Dag)
+        if dag.result is None:
+            if dag.error is None:
+                raise RuntimeError('cannot get dag value for unfinished dag')
+            raise dag.error
+        return dag.result().value
 
     @property
-    def error(self):
-        return self.dag().result().error
+    def error(self) -> Error:
+        return self.dag().error
 
 
 @dml_type
@@ -153,5 +159,5 @@ class Node:
         return self.data.value
 
     @property
-    def error(self):
+    def error(self) -> Error:
         return self.data.error

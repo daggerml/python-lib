@@ -3,6 +3,8 @@ import unittest
 from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 
+import pytest
+
 import daggerml.util
 from daggerml import api, core
 
@@ -164,3 +166,25 @@ class TestApi(unittest.TestCase):
         # caching persists across dags
         dag0 = api.Dag('test-dag1', 'this is another test dag')
         assert dag0.apply(f, dag0.put(rsrc), dag0.put(12), dag0.put(13)).value == 23
+
+    def test_errors(self):
+        dag = api.Dag('test-dag0', 'this is the test dag')
+        dag.commit(core.Error('asdf', code='qwer'))
+        dag = api.Dag('test-dag1', 'this is the test dag')
+        n0 = dag.load('test-dag0')
+        assert isinstance(n0, api.Node)
+        assert isinstance(n0.error, core.Error)
+        with pytest.raises(core.Error):
+            print(n0.value)
+
+    def test_contextmanager(self):
+        try:
+            with api.Dag('test-dag0', 'this is the test dag') as dag:
+                dag.put(1 / 0)
+        except ZeroDivisionError:
+            pass
+        with api.Dag('test-dag1', 'this is the test dag') as dag:
+            n0 = dag.load('test-dag0')
+            assert isinstance(n0, api.Node)
+            assert isinstance(n0.error, core.Error)
+            dag.commit(dag.put(n0.error.code))
