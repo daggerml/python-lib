@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass
-from typing import Callable, List
+from typing import Any, Callable, Dict, List, Set
 
 from daggerml import core
 
@@ -13,8 +13,11 @@ class Node:
     dag: "Dag"
 
     @property
-    def value(self):
+    def value(self) -> core.Scalar|List[core.Ref]|Set[core.Ref]|Dict[str, core.Ref]:
         return self.ref().value().value
+
+    def unroll(self) -> core.Scalar|List[Any]|Set[Any]|Dict[str, Any]:
+        return self.ref().value().unroll()
 
 
 @dataclass

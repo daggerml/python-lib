@@ -52,7 +52,7 @@ class TestCore(unittest.TestCase):
                 assert r1.commit(n2) is None
 
 
-class TestDag(unittest.TestCase):
+class TestApi(unittest.TestCase):
 
     def setUp(self):
         self.tmpd0 = TemporaryDirectory(prefix='dml-test-wd-')
@@ -70,8 +70,7 @@ class TestDag(unittest.TestCase):
         self.tmpd0.__exit__(None, None, None)
         self.tmpd1.__exit__(None, None, None)
 
-    def test_create(self):
-        print(f'{self.d0 = } -- {self.d1 = }')
+    def test_basic(self):
         dag = api.Dag('test-dag0', 'this is the test dag')
         assert isinstance(dag, api.Dag)
         l0 = dag.put({'asdf': 12})
@@ -94,6 +93,25 @@ class TestDag(unittest.TestCase):
         n0 = dag.load('test-dag0')
         assert isinstance(n0, api.Node)
         assert list(n0.value.keys()) == ['qwer']
+
+    def test_literal(self):
+        dag = api.Dag('test-dag0', 'this is the test dag')
+        data = {
+            'asdf': {12},
+            'qwer': [{'a': 32, 'b': 5}],
+            'c': True,
+            'd': None,
+            'e': 12.43,
+            'f': 'qwer',
+            'g': core.Resource({'a': 1, 'b': 2})
+        }
+        l0 = dag.put(data)
+        assert isinstance(l0, api.Node)
+        assert l0.unroll() == data
+        dag.commit(l0)
+        dag = api.Dag('test-dag1', 'this is the test dag')
+        n0 = dag.load('test-dag0')
+        assert n0.unroll() == data
 
     def test_cache_basic(self):
         dag = api.Dag('test-dag0', 'this is the test dag')

@@ -104,6 +104,18 @@ Scalar = str | int | float | bool | type(None) | Resource
 class Datum:
     value: list | dict | set | Scalar
 
+    def unroll(self):
+        val = self.value
+        if isinstance(val, Scalar):
+            return val
+        if isinstance(val, list|tuple):
+            return [x().unroll() for x in val]
+        if isinstance(val, dict):
+            return {k: v().unroll() for k, v in val.items()}
+        if isinstance(val, set):
+            return {v().unroll() for v in val}
+        raise ValueError('unrecognized type: %r' % type(val))
+
 
 @dml_type
 class Literal:
