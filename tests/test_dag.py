@@ -167,6 +167,21 @@ class TestApi(unittest.TestCase):
         dag0 = api.Dag('test-dag1', 'this is another test dag')
         assert dag0.apply(f, dag0.put(rsrc), dag0.put(12), dag0.put(13)).value == 23
 
+    def test_cache_errors(self):
+        dag = api.Dag('test-dag0', 'this is the test dag')
+        stash = [True]
+        def f(fndag):
+            if stash[0]:
+                raise ValueError('aaahhhh')
+            return fndag.put(stash[0])
+        rsrc = core.Resource({'a': 1, 'b': 2})
+        with pytest.raises(ValueError):
+            dag.apply(f, dag.put(rsrc), dag.put(12), dag.put(13))
+        # check using cached value
+        stash[0] = False
+        assert isinstance(dag.apply(f, dag.put(rsrc), dag.put(12), dag.put(13)).error, core.Error)
+        assert dag.apply(f, dag.put(rsrc), dag.put(12), dag.put(13), cache=False).value is False
+
     def test_errors(self):
         dag = api.Dag('test-dag0', 'this is the test dag')
         dag.commit(core.Error('asdf', code='qwer'))
