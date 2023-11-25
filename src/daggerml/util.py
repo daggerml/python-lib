@@ -49,15 +49,15 @@ def to_data(obj):
     raise ValueError(f'no data encoding for type: {n}')
 
 
-def dml_type(cls=None, **kwargs):
+def dml_type(cls=None):
     def decorator(cls):
-        cls = dataclass(**kwargs)(cls)
         DATA_TYPE[cls.__name__] = cls
         return cls
     return decorator(cls) if cls else decorator
 
 
 @dml_type
+@dataclass
 class Error(Exception):
     message: str
     context: dict = field(default_factory=dict)

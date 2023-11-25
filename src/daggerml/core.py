@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 
 from daggerml.util import Error, dml_type, invoke_api
 
@@ -6,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 @dml_type
+@dataclass
 class Ref:
     to: str | None
 
@@ -26,6 +28,7 @@ class Ref:
 
 
 @dml_type
+@dataclass
 class Repo:
     path: str
     user: str
@@ -76,6 +79,7 @@ def create_dag(name: str, message: str|None = None) -> Repo:
 
 
 @dml_type
+@dataclass
 class Dag:
     nodes: set[Ref]  # -> node
     result: Ref | None  # -> node
@@ -83,16 +87,19 @@ class Dag:
 
 
 @dml_type
+@dataclass
 class FnDag(Dag):
     expr: list[Ref]  # -> node
 
 
 @dml_type
+@dataclass
 class CachedFnDag(Dag):
     expr: list[Ref]  # -> node
 
 
 @dml_type
+@dataclass
 class Resource:
     data: dict
 
@@ -101,6 +108,7 @@ Scalar = str | int | float | bool | type(None) | Resource
 
 
 @dml_type
+@dataclass
 class Datum:
     value: list | dict | set | Scalar
 
@@ -118,6 +126,7 @@ class Datum:
 
 
 @dml_type
+@dataclass
 class Literal:
     value: Ref  # -> datum
 
@@ -127,6 +136,7 @@ class Literal:
 
 
 @dml_type
+@dataclass
 class Load:
     dag: Ref
 
@@ -146,11 +156,13 @@ class Load:
 
 
 @dml_type
+@dataclass
 class Fn(Load):
     expr: list[Ref]  # -> node
 
 
 @dml_type
+@dataclass
 class Node:
     data: Literal | Load | Fn
 
