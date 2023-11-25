@@ -62,15 +62,6 @@ class Repo:
     def deref(self, ref):
         raise Exception('get_ref')
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, err_type, exc_val, err_tb):
-        if exc_val is not None:
-            ex = Error.from_ex(exc_val)
-            logger.exception('failing dag with error code: %r', ex.code)
-            self.commit(ex)
-
 
 def create_dag(name: str, message: str|None = None) -> Repo:
     repo = invoke_api(None, 'begin', name=name, message=message)

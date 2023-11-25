@@ -5,8 +5,9 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
+import daggerml as dml
 import daggerml.util
-from daggerml import api, core
+from daggerml import core
 
 
 @contextmanager
@@ -73,31 +74,31 @@ class TestApi(unittest.TestCase):
         self.tmpd1.__exit__(None, None, None)
 
     def test_basic(self):
-        dag = api.Dag('test-dag0', 'this is the test dag')
-        assert isinstance(dag, api.Dag)
+        dag = dml.Dag('test-dag0', 'this is the test dag')
+        assert isinstance(dag, dml.Dag)
         l0 = dag.put({'asdf': 12})
-        assert isinstance(l0, api.Node)
+        assert isinstance(l0, dml.Node)
         assert list(l0.value.keys()) == ['asdf']
         rsrc = core.Resource({'a': 1, 'b': 2})
         r0 = dag.put(rsrc)
         f0 = dag.start_fn(r0, l0, l0)
-        assert isinstance(f0, api.Dag)
+        assert isinstance(f0, dml.Dag)
         assert hasattr(f0, 'repo')
         assert isinstance(f0.repo, core.Repo)
         assert f0.expr[0].value == rsrc
         l1 = f0.put({'qwer': 23})
-        assert isinstance(l1, api.Node)
+        assert isinstance(l1, dml.Node)
         n1 = f0.commit(l1)
-        assert isinstance(n1, api.Node)
+        assert isinstance(n1, dml.Node)
         assert list(n1.value.keys()) == ['qwer']
         assert dag.commit(n1) is None
-        dag = api.Dag('test-dag1', 'this is the second test dag')
+        dag = dml.Dag('test-dag1', 'this is the second test dag')
         n0 = dag.load('test-dag0')
-        assert isinstance(n0, api.Node)
+        assert isinstance(n0, dml.Node)
         assert list(n0.value.keys()) == ['qwer']
 
     def test_literal(self):
-        dag = api.Dag('test-dag0', 'this is the test dag')
+        dag = dml.Dag('test-dag0', 'this is the test dag')
         data = {
             'asdf': {12},
             'qwer': [{'a': 32, 'b': 5}],
@@ -108,15 +109,15 @@ class TestApi(unittest.TestCase):
             'g': core.Resource({'a': 1, 'b': 2})
         }
         l0 = dag.put(data)
-        assert isinstance(l0, api.Node)
+        assert isinstance(l0, dml.Node)
         assert l0.unroll() == data
         dag.commit(l0)
-        dag = api.Dag('test-dag1', 'this is the test dag')
+        dag = dml.Dag('test-dag1', 'this is the test dag')
         n0 = dag.load('test-dag0')
         assert n0.unroll() == data
 
     def test_cache_basic(self):
-        dag = api.Dag('test-dag0', 'this is the test dag')
+        dag = dml.Dag('test-dag0', 'this is the test dag')
         stash = [23]
         def f(fndag):
             return fndag.put(stash[0])
@@ -133,7 +134,7 @@ class TestApi(unittest.TestCase):
         assert n1.value == 23
 
     def test_cache_apply(self):
-        dag = api.Dag('test-dag0', 'this is the test dag')
+        dag = dml.Dag('test-dag0', 'this is the test dag')
         stash = [23]
         def f(fndag):
             return fndag.put(stash[0])
@@ -153,7 +154,7 @@ class TestApi(unittest.TestCase):
         assert dag.apply(f, *args).value == 40
 
     def test_cache_datums(self):
-        dag = api.Dag('test-dag0', 'this is the test dag')
+        dag = dml.Dag('test-dag0', 'this is the test dag')
         stash = [23]
         def f(fndag):
             return fndag.put(stash[0])
@@ -164,11 +165,11 @@ class TestApi(unittest.TestCase):
         assert dag.apply(f, dag.put(rsrc), dag.put(12), dag.put(13)).value == 23
         dag.commit(dag.put(12))
         # caching persists across dags
-        dag0 = api.Dag('test-dag1', 'this is another test dag')
+        dag0 = dml.Dag('test-dag1', 'this is another test dag')
         assert dag0.apply(f, dag0.put(rsrc), dag0.put(12), dag0.put(13)).value == 23
 
     def test_cache_errors(self):
-        dag = api.Dag('test-dag0', 'this is the test dag')
+        dag = dml.Dag('test-dag0', 'this is the test dag')
         stash = [True]
         def f(fndag):
             if stash[0]:
@@ -183,23 +184,23 @@ class TestApi(unittest.TestCase):
         assert dag.apply(f, dag.put(rsrc), dag.put(12), dag.put(13), cache=False).value is False
 
     def test_errors(self):
-        dag = api.Dag('test-dag0', 'this is the test dag')
+        dag = dml.Dag('test-dag0', 'this is the test dag')
         dag.commit(core.Error('asdf', code='qwer'))
-        dag = api.Dag('test-dag1', 'this is the test dag')
+        dag = dml.Dag('test-dag1', 'this is the test dag')
         n0 = dag.load('test-dag0')
-        assert isinstance(n0, api.Node)
+        assert isinstance(n0, dml.Node)
         assert isinstance(n0.error, core.Error)
         with pytest.raises(core.Error):
             print(n0.value)
 
     def test_contextmanager(self):
         try:
-            with api.Dag('test-dag0', 'this is the test dag') as dag:
+            with dml.Dag('test-dag0', 'this is the test dag') as dag:
                 dag.put(1 / 0)
         except ZeroDivisionError:
             pass
-        with api.Dag('test-dag1', 'this is the test dag') as dag:
+        with dml.Dag('test-dag1', 'this is the test dag') as dag:
             n0 = dag.load('test-dag0')
-            assert isinstance(n0, api.Node)
+            assert isinstance(n0, dml.Node)
             assert isinstance(n0.error, core.Error)
             dag.commit(dag.put(n0.error.code))

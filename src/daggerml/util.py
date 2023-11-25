@@ -82,8 +82,6 @@ def _api(*args):
     try:
         logger.debug('cmd args: %r', ['dml', *CLI_FLAGS, *args])
         resp = subprocess.run(['dml', *CLI_FLAGS, *args], capture_output=True)
-        if resp.returncode != 0:
-            raise ApiError(resp.stderr.decode())
         logger.debug('response: %r', resp.stdout)
         return resp.stdout
     except KeyboardInterrupt:
