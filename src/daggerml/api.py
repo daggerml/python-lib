@@ -72,14 +72,17 @@ class Dag:
         else:
             raise ValueError('cannot commit type: %r' % type(result))
         if self.repo.parent_dag is not None:
+            # function
             if cache is True:
                 cache = self.repo.cached_dag
             elif cache is None and self.repo.cached_dag is None:
                 cache = True
         res = self.repo.commit(result_ref, cache=cache)
         if res is None:
+            # no parent dag
             return
         assert isinstance(res, core.Ref)
+        # return Node(res, self.repo.parent_dag())
         return Node(res, self)
 
     def apply(self, f: Callable[["Dag"], Node],

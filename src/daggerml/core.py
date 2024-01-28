@@ -92,6 +92,9 @@ class CachedFnDag(Dag):
 @dml_type
 @dataclass
 class Resource:
+    """
+    Represents an externally managed Datum eg. s3, kubernetes cluster
+    """
     data: dict
 
 

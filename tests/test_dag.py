@@ -88,8 +88,10 @@ class TestApi(unittest.TestCase):
         assert f0.expr[0].value == rsrc
         l1 = f0.put({'qwer': 23})
         assert isinstance(l1, dml.Node)
+        assert l1.dag == f0
         n1 = f0.commit(l1)
         assert isinstance(n1, dml.Node)
+        # assert n1.dag == dag
         assert list(n1.value.keys()) == ['qwer']
         assert dag.commit(n1) is None
         dag = dml.Dag('test-dag1', 'this is the second test dag')
@@ -194,11 +196,10 @@ class TestApi(unittest.TestCase):
             print(n0.value)
 
     def test_contextmanager(self):
-        try:
+        with pytest.raises(ZeroDivisionError):
             with dml.Dag('test-dag0', 'this is the test dag') as dag:
                 dag.put(1 / 0)
-        except ZeroDivisionError:
-            pass
+
         with dml.Dag('test-dag1', 'this is the test dag') as dag:
             n0 = dag.load('test-dag0')
             assert isinstance(n0, dml.Node)
