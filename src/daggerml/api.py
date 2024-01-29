@@ -37,6 +37,7 @@ class Dag:
     name: str|None = None
     message: str|None = None
     repo: core.Repo|None = None
+    parent_dag: "Dag" = None
 
     def __post_init__(self):
         if self.repo is None:
@@ -57,7 +58,7 @@ class Dag:
         assert isinstance(resource.value, core.Resource)
         repo = self.repo.begin([x.ref for x in [resource, *args]])
         assert isinstance(repo, core.Repo)
-        dag = Dag(repo=repo)
+        dag = Dag(repo=repo, parent_dag=self)
         return dag
 
     def commit(self, result: core.Error|Node|None, cache=None) -> Node|None:
@@ -83,7 +84,7 @@ class Dag:
             return
         assert isinstance(res, core.Ref)
         # return Node(res, self.repo.parent_dag())
-        return Node(res, self)
+        return Node(res, self.parent_dag)
 
     def apply(self, f: Callable[["Dag"], Node],
               resource: Node,

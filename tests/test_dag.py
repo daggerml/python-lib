@@ -83,6 +83,7 @@ class TestApi(unittest.TestCase):
         r0 = dag.put(rsrc)
         f0 = dag.start_fn(r0, l0, l0)
         assert isinstance(f0, dml.Dag)
+        assert f0.parent_dag == dag
         assert hasattr(f0, 'repo')
         assert isinstance(f0.repo, core.Repo)
         assert f0.expr[0].value == rsrc
@@ -91,7 +92,7 @@ class TestApi(unittest.TestCase):
         assert l1.dag == f0
         n1 = f0.commit(l1)
         assert isinstance(n1, dml.Node)
-        # assert n1.dag == dag
+        assert n1.dag == dag
         assert list(n1.value.keys()) == ['qwer']
         assert dag.commit(n1) is None
         dag = dml.Dag('test-dag1', 'this is the second test dag')
