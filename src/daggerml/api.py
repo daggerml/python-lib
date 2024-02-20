@@ -1,8 +1,10 @@
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Set
 
 from daggerml import core
+from daggerml.util import from_data, to_data
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +45,26 @@ class Dag:
         if self.repo is None:
             assert self.name is not None
             self.repo = core.create_dag(self.name, message=self.message)
-        elif (self.name and self.message) is not None:
-            raise ValueError('name and message must be none when repo is specified')
+
+    def dump_state(self) -> Any:
+        def inner_fn(dag):
+            if dag is None:
+                return
+            return dict(name=self.name,
+                        message=self.message,
+                        repo=self.repo,
+                        parent_dag=inner_fn(dag.parent_dag))
+        return to_data(inner_fn(self))
+
+    @classmethod
+    def from_state(cls, state: Any) -> "Dag":
+        state = from_data(state)
+        def inner_fn(_state):
+            if _state is None:
+                return
+            _state['parent_dag'] = inner_fn(_state.get('parent_dag'))
+            return cls(**_state)
+        return inner_fn(state)
 
     def put(self, data) -> Node:
         ref = self.repo.put_literal(data)
@@ -123,3 +143,7 @@ class Dag:
             ex = core.Error.from_ex(exc_val)
             logger.exception('failing dag with error code: %r', ex.code)
             self.commit(ex)
+
+def load_state_file(file_path: str) -> Dag:
+    with open(file_path, 'r') as f:
+        return Dag.from_state(json.load(f))

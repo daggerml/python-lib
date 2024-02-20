@@ -90,7 +90,7 @@ class CachedFnDag(Dag):
 
 
 @dml_type
-@dataclass
+@dataclass(frozen=True)
 class Resource:
     """
     Represents an externally managed Datum eg. s3, kubernetes cluster
