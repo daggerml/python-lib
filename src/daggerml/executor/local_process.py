@@ -9,7 +9,7 @@ from textwrap import dedent
 import daggerml as dml
 
 
-async def async_run_local_proc(dag, fn, *args, python_interpreter, preamble=(), cache: bool = True):
+async def aio_run_local_proc(dag, fn, *args, python_interpreter, preamble=(), cache: bool = True):
     src = inspect.getsource(fn)
     resource = dml.Resource({'hostname': socket.gethostname(),
                              'function': {'source': src, 'name': fn.__qualname__},
@@ -64,7 +64,7 @@ async def async_run_local_proc(dag, fn, *args, python_interpreter, preamble=(), 
 
 
 def run_local_proc(dag, fn, *args, python_interpreter, preamble=(), cache: bool = True):
-    return asyncio.run(async_run_local_proc(dag, fn, *args,
-                                            python_interpreter=python_interpreter,
-                                            preamble=preamble,
-                                            cache=cache))
+    return asyncio.run(aio_run_local_proc(dag, fn, *args,
+                                          python_interpreter=python_interpreter,
+                                          preamble=preamble,
+                                          cache=cache))

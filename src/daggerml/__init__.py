@@ -1,7 +1,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 import daggerml.util as _util
-from daggerml.api import Dag, Node
+from daggerml.api import Dag, Node, dump_obj, load_obj
 from daggerml.api import load_state_file as load
 from daggerml.core import Datum, Error, Ref, Resource, Scalar
 from daggerml.util import ApiError
