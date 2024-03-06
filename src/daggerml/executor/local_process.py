@@ -26,9 +26,7 @@ async def aio_run_local_proc(dag, fn, *args, python_interpreter, preamble=(), ca
             for line in preamble:
                 f.write(line + '\n')
             f.write('\nimport daggerml as dml\n')
-            f.write(dedent(f"""
-            dml.set_flags({dml._util.CLI_FLAGS.flag_dict})
-            dag = dml.Dag.from_state({fn_dag.dump_state()})
+            f.write(dedent("""
             """))
             f.write('\n')
             f.write(dedent(src))
@@ -36,30 +34,33 @@ async def aio_run_local_proc(dag, fn, *args, python_interpreter, preamble=(), ca
             f.write(dedent(f"""
             if __name__ == '__main__':
                 try:
-                    with dag:
-                        result = {fn.__name__}(*dag.expr[1:])
-                        if not isinstance(result, dml.Node):
-                            result = dag.put(result)
-                        result = dag.commit(result, cache={cache})
+                    expr = {[dml._util.to_data(x.unroll()) for x in fn_dag.expr]!r}
+                    expr = [dml._util.from_data(x) for x in expr]
+                    result = {fn.__name__}(*expr[1:])
+                    # result = expr
                 except KeyboardInterrupt:
                     raise
                 except Exception as e:
-                    pass
+                    result = dml.Error.from_ex(e)
                 import json
                 with open('{tmpb.name}', 'w') as f:
-                    json.dump(dict(ref=result.ref.to, dag=result.dag.dump_state()), f)
+                    json.dump(dml._util.to_data(result), f)
             """))
+            f.seek(0)
         proc = await asyncio.create_subprocess_shell(
             f'{python_interpreter!r} {tmpa.name!r}',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await proc.communicate()
-        # subprocess.run([python_interpreter, tmpa.name], check=True)
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            print(stderr)
         with open(tmpb.name, 'r') as f:
             tmp = json.load(f)
-        dag = dml.Dag.from_state(tmp['dag'])
-        node = dml.Node(ref=dml.Ref(tmp['ref']), dag=dag)
+        resp = dml._util.from_data(tmp)
+        if isinstance(resp, dml.Error):
+            raise resp
+        node = fn_dag.commit(fn_dag.put(resp))
         return node
 
 
