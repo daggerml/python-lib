@@ -7,9 +7,7 @@ from typing import Dict, List, Union
 
 logger = logging.getLogger(__name__)
 
-DATA_TYPE = {}
 # usefull for tests
-
 @dataclass
 class CliFlags:
     # this could be just generally done better -- but it gets the job done for
@@ -36,13 +34,7 @@ class CliFlags:
 
 CLI_FLAGS = CliFlags({})
 
-
-def from_json(text):
-    return from_data(json.loads(text))
-
-
-def to_json(obj):
-    return json.dumps(to_data(obj), separators=(',', ':'))
+DATA_TYPE = {}
 
 
 def from_data(data):
@@ -57,10 +49,12 @@ def from_data(data):
         return {k: from_data(v) for (k, v) in args}
     if n in DATA_TYPE:
         return DATA_TYPE[n](*[from_data(x) for x in args])
-    raise ValueError(f'no data encoding for type: {n}')
+    return OpaqueDbObj(data)
 
 
 def to_data(obj):
+    if isinstance(obj, OpaqueDbObj):
+        return obj.data
     if isinstance(obj, tuple):
         obj = list(obj)
     n = obj.__class__.__name__
@@ -75,11 +69,32 @@ def to_data(obj):
     raise ValueError(f'no data encoding for type: {n}')
 
 
+def from_json(text):
+    return from_data(json.loads(text))
+
+
+def to_json(obj):
+    return json.dumps(to_data(obj), separators=(',', ':'))
+
+
 def dml_type(cls=None):
     def decorator(cls):
         DATA_TYPE[cls.__name__] = cls
         return cls
     return decorator(cls) if cls else decorator
+
+
+@dml_type
+@dataclass(init=False, frozen=True, slots=True)
+class OpaqueDbObj:
+    _data: str = field(init=False)
+
+    def __post_init__(self, data):
+        object.__setattr__(self, '_data', json.dumps(data))
+
+    @property
+    def data(self):
+        return json.loads(self._data)
 
 
 @dml_type

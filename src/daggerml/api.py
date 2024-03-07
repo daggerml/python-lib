@@ -4,47 +4,71 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Set
 
 from daggerml import core
-from daggerml.util import from_data, to_data
+from daggerml.core import Error, FnDag, Ref, Repo, Resource, Scalar, create_dag
+from daggerml.util import OpaqueDbObj, from_data, invoke_api, to_data
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class Node:
-    ref: core.Ref
+    ref: Ref
     dag: "Dag"
 
     @property
-    def value(self) -> core.Scalar|List[core.Ref]|Set[core.Ref]|Dict[str, core.Ref]:
+    def value(self) -> Scalar|List[Ref]|Set[Ref]|Dict[str, Ref]:
         res = self.ref()
         assert isinstance(res, core.Node)
         return res.value().value
 
     @property
-    def error(self) -> core.Error|None:
+    def error(self) -> Error|None:
         res = self.ref()
-        assert isinstance(res, core.Node)
+        assert isinstance(res, core.Node), f'aahh type: {type(res)}'
         return res.error
 
-    def unroll(self) -> core.Scalar|List[Any]|Set[Any]|Dict[str, Any]:
+    def unroll(self) -> Scalar|List[Any]|Set[Any]|Dict[str, Any]:
         res = self.ref()
-        assert isinstance(res, core.Node)
+        if res is None:
+            raise RuntimeError('are you in the wrong db?')
+        assert isinstance(res, core.Node), f'aahh type: {type(res)}'
         if res.value is None:
             raise res.error
         return res.value().unroll()
+
+
+def begin(repo: OpaqueDbObj, expr: dict|None = None) -> "Dag":
+    new_repo = invoke_api(repo, 'begin', expr=expr)
+    assert isinstance(new_repo, Repo)
+    return new_repo
+
+def put_literal(repo: OpaqueDbObj, data) -> Ref:
+    return invoke_api(repo, 'put_literal', data)
+
+def put_load(repo: OpaqueDbObj, dag_name) -> Ref:
+    return invoke_api(repo, 'put_load', dag_name)
+
+def commit(repo: OpaqueDbObj, result, cache=None) -> Ref|None:
+    return invoke_api(repo, 'commit', result, cache)
+
+def dump_obj(repo: OpaqueDbObj, obj: Any):
+    return invoke_api(repo, 'dump', obj)
+
+def load_obj(repo: OpaqueDbObj, obj: Any):
+    return invoke_api(repo, 'load', obj)
 
 
 @dataclass
 class Dag:
     name: str|None = None
     message: str|None = None
-    repo: core.Repo|None = None
+    repo: Repo|None = None
     parent_dag: "Dag" = None
 
     def __post_init__(self):
         if self.repo is None:
             assert self.name is not None
-            self.repo = core.create_dag(self.name, message=self.message)
+            self.repo = create_dag(self.name, message=self.message)
 
     def dump_state(self) -> Any:
         def inner_fn(dag):
@@ -67,42 +91,43 @@ class Dag:
         return inner_fn(state)
 
     def put(self, data) -> Node:
-        ref = self.repo.put_literal(data)
+        # ref = self.repo.put_literal(data)
+        ref = put_literal(self.repo, data)
         return Node(ref, self)
 
     def load(self, dag_name) -> Node:
-        ref = self.repo.put_load(dag_name)
+        # ref = self.repo.put_load(dag_name)
+        ref = put_load(self.repo, dag_name)
         return Node(ref, self)
 
     def start_fn(self, resource: Node, *args: Node) -> "Dag":
-        assert isinstance(resource.value, core.Resource)
-        repo = self.repo.begin([x.ref for x in [resource, *args]])
-        assert isinstance(repo, core.Repo)
+        assert isinstance(resource.value, Resource)
+        # repo = self.repo.begin([x.ref for x in [resource, *args]])
+        repo = begin(self.repo, [x.ref for x in [resource, *args]])
         dag = Dag(repo=repo, parent_dag=self)
         return dag
 
-    def commit(self, result: core.Error|Node|None, cache=None) -> Node|None:
+    def commit(self, result: Error|Node|None, cache=None) -> Node|None:
         if cache is False and result is None:
             raise ValueError('cannot commit None result')
         if result is None:
             result_ref = None
-        elif isinstance(result, core.Error):
+        elif isinstance(result, Error):
             result_ref = result
         elif isinstance(result, Node):
             result_ref = result.ref
         else:
             raise ValueError('cannot commit type: %r' % type(result))
-        if self.repo.parent_dag is not None:
-            # function
-            if cache is True:
-                cache = self.repo.cached_dag
-            elif cache is None and self.repo.cached_dag is None:
-                cache = True
-        res = self.repo.commit(result_ref, cache=cache)
+        # function
+        if cache is True:
+            cache = self.repo.cached_dag
+        elif cache is None and self.repo.cached_dag is None:
+            cache = True
+        res = commit(self.repo, result_ref, cache=cache)
         if res is None:
             # no parent dag
             return
-        assert isinstance(res, core.Ref)
+        assert isinstance(res, Ref)
         # return Node(res, self.repo.parent_dag())
         return Node(res, self.parent_dag)
 
@@ -131,7 +156,7 @@ class Dag:
     @property
     def expr(self) -> List[Node]:
         dag = self.repo.dag()
-        if not isinstance(dag, core.FnDag):
+        if not isinstance(dag, FnDag):
             raise ValueError('cannot access `expr` for a non function dag')
         return [Node(x, self) for x in dag.expr]
 
@@ -140,7 +165,7 @@ class Dag:
 
     def __exit__(self, err_type, exc_val, err_tb):
         if exc_val is not None:
-            ex = core.Error.from_ex(exc_val)
+            ex = Error.from_ex(exc_val)
             logger.exception('failing dag with error code: %r', ex.code)
             self.commit(ex)
 

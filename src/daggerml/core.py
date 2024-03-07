@@ -37,7 +37,6 @@ class Repo:
     dag: Ref | None
     parent_dag: Ref | None
     cached_dag: Ref | None
-    create: bool
 
     def _invoke(self, op, *args, **kwargs):
         resp = invoke_api(self, op, *args, **kwargs)
