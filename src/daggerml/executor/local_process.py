@@ -46,7 +46,6 @@ async def aio_run_local_proc(dag, fn, *args, python_interpreter, preamble=(), ca
                 with open('{tmpb.name}', 'w') as f:
                     json.dump(dml._util.to_data(result), f)
             """))
-            f.seek(0)
         proc = await asyncio.create_subprocess_shell(
             f'{python_interpreter!r} {tmpa.name!r}',
             stdout=asyncio.subprocess.PIPE,
