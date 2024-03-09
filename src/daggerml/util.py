@@ -2,7 +2,7 @@ import json
 import logging
 import subprocess
 import traceback as tb
-from dataclasses import dataclass, field, fields
+from dataclasses import InitVar, dataclass, field, fields
 from typing import Dict, List, Union
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,22 @@ class OpaqueDbObj:
     @property
     def data(self):
         return json.loads(self._data)
+
+
+@dml_type
+@dataclass(frozen=True)
+class Resource:
+    _data: InitVar[str|None] = None
+
+    def __post_init__(self, data):
+        object.__setattr__(self, '_data', to_json(data))
+
+    @property
+    def data(self):
+        return from_json(self._data)
+
+    def __repr__(self):
+        return f'Resource({self.data!r})'
 
 
 @dml_type

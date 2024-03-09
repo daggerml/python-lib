@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 
-from daggerml.util import Error, dml_type, invoke_api
+from daggerml.util import Error, Resource, dml_type, invoke_api
 
 logger = logging.getLogger(__name__)
 
@@ -86,15 +86,6 @@ class FnDag(Dag):
 @dataclass
 class CachedFnDag(Dag):
     expr: list[Ref]  # -> node
-
-
-@dml_type
-@dataclass(frozen=True)
-class Resource:
-    """
-    Represents an externally managed Datum eg. s3, kubernetes cluster
-    """
-    data: dict
 
 
 Scalar = str | int | float | bool | type(None) | Resource

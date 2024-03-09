@@ -125,6 +125,7 @@ class TestApi(unittest.TestCase):
             'map': {'a': 2, 'b': 'asdf'},
             'set': {12, 13, 'a', 3.4},
             'resource': Resource({'a': 1, 'b': 2}),
+            'compound': {'a': 23, 'b': {5, Resource({'a': 8, 'b': 2})}}
         }
         l0 = dag.put(data)
         assert isinstance(l0, dml.Node)
@@ -133,8 +134,6 @@ class TestApi(unittest.TestCase):
         dag = dml.Dag('test-dag1', 'this is the test dag')
         n0 = dag.load('test-dag0')
         assert n0.unroll() == data
-        with self.assertRaisesRegex(TypeError, "unhashable type: 'dict'"):
-            data = {Resource({'a': 8, 'b': 2})}
 
     def test_cache_basic(self):
         dag = dml.Dag('test-dag0', 'this is the test dag')
