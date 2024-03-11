@@ -136,23 +136,8 @@ class RemoteSsh(ExecutionEnvironment):
                 self.call(f'rm -rf {tmpd}')
 
 @dataclass
-class Formatter:
-    tpl: str
-    func: InitVar[Callable[..., str]|None] = None
-    _func: Callable[..., str] = field(init=False)
-
-    def __post_init__(self, func):
-        self._func = func or self.tpl.format
-
-    def __call__(self, txt: str) -> str:
-        return self._func(txt)
-
-    def __str__(self):
-        return self.tpl
-
-@dataclass
 class BaseExecutor:
-    cmd_tpl: Formatter
+    cmd_tpl: str
     exec_env: ExecutionEnvironment
 
     def prepare(self, fn_dag, resp_file, **kw):
@@ -161,7 +146,7 @@ class BaseExecutor:
     def run(self, dag, args, cache: bool = True, **kw):
         resource = dml.Resource({
             'executor': type(self).__name__,
-            'command-template': str(self.cmd_tpl),
+            'command-template': self.cmd_tpl,
         })
         args = [x if isinstance(x, dml.Node) else dag.put(x) for x in args]
         fn_dag = dag.start_fn(dag.put(resource), *args)
@@ -169,7 +154,7 @@ class BaseExecutor:
             resp_file = f'{tmpd}/result'
             for k, v in self.prepare(fn_dag, resp_file, **kw):
                 self.exec_env.put_obj(v, f'{tmpd}/{k}')
-            self.exec_env.call(self.cmd_tpl(tmpd))
+            self.exec_env.call(self.cmd_tpl.format(tmpd))
             result = self.exec_env.cat(resp_file)
         result = dml.from_json(result)
         if isinstance(result, dml.Error):
@@ -180,10 +165,10 @@ class BaseExecutor:
 @dataclass
 class PyExecutor(BaseExecutor):
     python: str
-    cmd_tpl: Formatter = field(init=False)
+    cmd_tpl: str = field(init=False)
 
     def __post_init__(self):
-        self.cmd_tpl = Formatter(f'{self.python!r} {{}}/script.py')
+        self.cmd_tpl = f'{self.python!r} {{}}/script.py'
 
     @staticmethod
     def make_script(expr, result_file):
@@ -233,13 +218,13 @@ class PyExecutor(BaseExecutor):
 class CondaPyExecutor(PyExecutor):
 
     def __post_init__(self):
-        self.cmd_tpl = Formatter(f'conda run -n {self.python} python "{{}}/script.py"')
+        self.cmd_tpl = f'conda run -n {self.python} python "{{}}/script.py"'
 
 @dataclass
 class HatchPyExecutor(PyExecutor):
 
     def __post_init__(self):
-        self.cmd_tpl = Formatter(f'hatch -e {self.python!r} run python "{{}}/script.py"')
+        self.cmd_tpl = f'hatch -e {self.python!r} run python "{{}}/script.py"'
 
 @dataclass
 class InProcEnv(ExecutionEnvironment):
@@ -275,7 +260,7 @@ class InProcEnv(ExecutionEnvironment):
 
 @dataclass
 class InProcExecutor(BaseExecutor):
-    cmd_tpl: Formatter = field(default=Formatter('{}'))
+    cmd_tpl: str = field(default='{}')
     exec_env: ExecutionEnvironment = field(default_factory=InProcEnv)
 
     def prepare(self, fn_dag, result_file, fn):
