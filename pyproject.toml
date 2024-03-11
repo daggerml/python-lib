@@ -33,6 +33,10 @@ dependencies = [
   "importlib_metadata; python_version < '3.8'",
 ]
 
+[project.optional-dependencies]
+aws = ["boto3"]
+all = ["daggerml[aws]"]
+
 [project.urls]
 Homepage = "https://daggerml.com"
 Documentation = "https://daggerml.com/docs"
@@ -46,6 +50,11 @@ python="3.10"
 dependencies = [
   "pytest",
   "pytest-cov",
+]
+
+[tool.hatch.envs.test-env]
+dependencies = [
+  "pandas==2.0.1",
 ]
 
 [tool.hatch.envs.test]

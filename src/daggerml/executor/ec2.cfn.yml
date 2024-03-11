@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Mappings:
+  RegionMap:
+    us-west-2:
+      AMI: "ami-08f7912c15ca96832"
+
+Resources:
+  # HostedZone:
+  #   Type: AWS::Route53::HostedZone
+  #   Properties:
+  #     HostedZoneTags:
+  #       - HostedZoneTag
+  #     Name: String
+  #     QueryLoggingConfig:
+  #       QueryLoggingConfig
+  #     VPCs:
+  #       - VPC
+  Sg:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Enable HTTP access via port 80
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 187
+          ToPort: 187
+          CidrIp: 0.0.0.0/0
+  EC2Instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+      InstanceType: t2.micro
+      KeyName: misc2-amn-k0
+      SecurityGroups:
+        - !Ref Sg
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+
+          apt-get update -y && apt-get install -y curl wget gpg coreutils
+          wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          apt-get update -y && apt-get install -y nomad
+
+          cat <<'EOT' >> /etc/ssh/sshd_config
+          # user-data config
+          Port 187
+          AcceptEnv AWS_*
+          EOT
+
+          systemctl restart sshd
+
+          cat <<'EOT' > /home/ubuntu/.ssh/config
+          User ubuntu
+          UserKnownHostsFile /dev/null
+          StrictHostKeyChecking no
+          LogLevel QUIET
+          ForwardAgent yes
+          SendEnv AWS_*
+          ConnectTimeout 6
+          ServerAliveInterval 5
+          EOT
+
+          sudo -i -u ubuntu bash <<'EOT'
+          cd /home/ubuntu/
+          curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh" \
+            && bash Miniforge3-$(uname)-$(uname -m).sh -b -p /home/ubuntu/.miniforge \
+            && rm Miniforge3-$(uname)-$(uname -m).sh \
+            && .miniforge/condabin/conda init --all
+          EOT
+
+  # Ec2Dns:
+  #   Type: "AWS::Route53::RecordSet"
+  #   Properties:
+  #     HostedZoneId: !Ref HostedZoneId
+  #     Name: !Sub "${AWS::StackName}.${HostedZoneName}"
+  #     Type: CNAME
+  #     TTL: 300
+  #     ResourceRecords: [!GetAtt EC2Instance.PublicDnsName]
+
+Outputs:
+  InstanceId:
+    Description: Ec2 instance ID
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub "${AWS::StackName}-Ec2-ID"
+  InstanceIP:
+    Description: Ec2 instance IP
+    Value: !GetAtt EC2Instance.PublicIp
+    Export:
+      Name: !Sub "${AWS::StackName}-Ec2-IP"
+  InstanceDNS:
+    Description: Ec2 instance DNS
+    Value: !GetAtt EC2Instance.PublicDnsName
+    Export:
+      Name: !Sub "${AWS::StackName}-Ec2-DNS"
