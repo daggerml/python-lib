@@ -4,7 +4,7 @@ import daggerml.util as _util
 from daggerml.api import Dag, Node, dump_obj, load_obj
 from daggerml.api import load_state_file as load
 from daggerml.core import Datum, Error, Ref, Resource, Scalar
-from daggerml.util import ApiError
+from daggerml.util import ApiError, from_data, from_json, to_data, to_json
 
 try:
     __version__ = version("daggerml")

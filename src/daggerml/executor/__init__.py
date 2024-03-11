@@ -14,6 +14,8 @@ import paramiko
 
 import daggerml as dml
 
+dml_root = os.path.dirname(dml.__file__)
+
 
 @dataclass
 class ExecutionEnvironment:
@@ -51,7 +53,8 @@ class Local(ExecutionEnvironment):
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            msg = 'proc command failed unexpectedly'
+            stderr = stderr.decode()
+            msg = f'proc command failed unexpectedly\n\n{stderr}'
             context = {'stderr': stderr}
             code = 'infra'
             raise dml.Error(msg, context=context, code=code)
@@ -168,7 +171,7 @@ class BaseExecutor:
                 self.exec_env.put_obj(v, f'{tmpd}/{k}')
             self.exec_env.call(self.cmd_tpl(tmpd))
             result = self.exec_env.cat(resp_file)
-        result = dml._util.from_json(result)
+        result = dml.from_json(result)
         if isinstance(result, dml.Error):
             raise result
         node = fn_dag.commit(fn_dag.put(result))
@@ -183,28 +186,43 @@ class PyExecutor(BaseExecutor):
         self.cmd_tpl = Formatter(f'{self.python!r} {{}}/script.py')
 
     @staticmethod
-    def make_script(expr, result_file, preamble=()):
+    def make_script(expr, result_file):
         fnname, src = expr[1].unroll()
-        out = [*preamble, '', 'import daggerml as dml', '', dedent(src), '']
-        out.append(dedent(f"""
-        if __name__ == '__main__':
+        tpl = dedent(
+            """
             try:
-                expr = {[dml._util.to_data(x.unroll()) for x in expr[2:]]!r}
-                expr = [dml._util.from_data(x) for x in expr]
-                result = {fnname}(*expr)
-            except KeyboardInterrupt:
-                raise
-            except Exception as e:
-                result = dml.Error.from_ex(e)
-            import json
-            with open({result_file!r}, 'w') as f:
-                json.dump(dml._util.to_data(result), f)
-        """))
-        return '\n'.join(out)
+                import daggerml as dml
+            except ImportError:
+                import dml_copy as dml
 
-    def prepare(self, fn_dag, result_file, preamble=()):
-        script = self.make_script(fn_dag.expr, result_file, preamble)
+            {src}
+
+            if __name__ == '__main__':
+                try:
+                    expr = {args!r}
+                    expr = [dml.from_data(x) for x in expr]
+                    result = {fnname}(*expr)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    result = dml.Error.from_ex(e)
+                import json
+                with open({result_file!r}, 'w') as f:
+                    json.dump(dml.to_data(result), f)
+            """
+        )
+        return tpl.format(
+            src=dedent(src),
+            args=[dml.to_data(x.unroll()) for x in expr[2:]],
+            fnname=fnname,
+            result_file=result_file,
+        )
+
+    def prepare(self, fn_dag, result_file):
+        script = self.make_script(fn_dag.expr, result_file)
         yield 'script.py', script.encode()
+        with open(f'{dml_root}/util.py', 'rb') as f:
+            yield 'dml_copy.py', f.read()
 
     def call(self, dag, fn, *args: dml.Node, cache: bool = True):
         src = inspect.getsource(fn)
@@ -215,7 +233,7 @@ class PyExecutor(BaseExecutor):
 class CondaPyExecutor(PyExecutor):
 
     def __post_init__(self):
-        self.cmd_tpl = Formatter(f'conda run -n {self.python!r} python "{{}}/script.py"')
+        self.cmd_tpl = Formatter(f'conda run -n {self.python} python "{{}}/script.py"')
 
 @dataclass
 class HatchPyExecutor(PyExecutor):
@@ -245,7 +263,7 @@ class InProcEnv(ExecutionEnvironment):
         except Exception as e:
             resp = dml.Error.from_ex(e)
         result_key = self.store[store_id]['result']
-        self.put_obj(dml._util.to_json(resp).encode(), result_key)
+        self.put_obj(dml.to_json(resp).encode(), result_key)
         return resp
 
     @contextmanager

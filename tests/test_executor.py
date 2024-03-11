@@ -40,8 +40,8 @@ class TestExecutorLocal(unittest.TestCase):
     def test_remote_exec(self):
         remote = ec2.RemoteSsh(**REMOTE_INFO)
         with remote.ssh() as ssh:
-            stdin, stdout, stderr = ssh.exec_command('pwd')
-            assert stdout.read() == bf'/home/{REMOTE_INFO["user"]}\n'
+            stdin, stdout, stderr = ssh.exec_command('echo foopy')
+            assert stdout.read() == b'foopy\n'
             assert stderr.read() == b''
 
     @unittest.skipIf(REMOTE_INFO is None, 'no remote (set REMOTE_{IP,PORT,KEY})')
@@ -76,6 +76,16 @@ class TestExecutorLocal(unittest.TestCase):
             import pandas as pd
             series = pd.Series({k: v**2 for k, v in x.items()})
             return series.to_dict()
+        resp = pyex.call(dag, f, l0)
+        assert resp.unroll() == {k: v**2 for k, v in data.items()}
+
+    def test_local_conda(self):
+        pyex = ec2.CondaPyExecutor(ec2.Local(), 'base')
+        dag = dml.Dag('test-dag0', 'this is the test dag')
+        data = {'asdf': 12}
+        l0 = dag.put(data)
+        def f(x):
+            return {k: v**2 for k, v in x.items()}
         resp = pyex.call(dag, f, l0)
         assert resp.unroll() == {k: v**2 for k, v in data.items()}
 
