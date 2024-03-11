@@ -240,7 +240,10 @@ class InProcEnv(ExecutionEnvironment):
         fn = self.store[store_id]['fn']
         args = self.store[store_id]['args']
         args = [x.unroll() for x in args]
-        resp = fn(*args)
+        try:
+            resp = fn(*args)
+        except Exception as e:
+            resp = dml.Error.from_ex(e)
         result_key = self.store[store_id]['result']
         self.put_obj(dml._util.to_json(resp).encode(), result_key)
         return resp
