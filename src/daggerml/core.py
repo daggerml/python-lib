@@ -19,9 +19,9 @@ def dml_type(cls=None):
 
 
 @dml_type
-@dataclass  # (frozen=True)
+@dataclass(frozen=True, slots=True)
 class Resource:
-    data: Dict[str,str]
+    data: str
 
 Scalar = str | int | float | bool | type(None) | Resource
 
@@ -164,9 +164,9 @@ class Dag:
             return Node(ref)
         return Dag(token, self.api_flags.copy())
 
-    def call(self, f, *args, cache: bool = True, resource: Resource|None = None) -> "Dag|Node":
-        resource = resource or Resource({'exec': 'local'})
-        fndag = self.start_fn(self.put(resource), *args, cache=cache)
+    def call(self, f, *args, cache: bool = True, retry: bool = False) -> Node:
+        resource = Resource(json.dumps({'exec': 'local'}, separators=(',', ':')))
+        fndag = self.start_fn(self.put(resource), *args, cache=cache, retry=retry)
         if isinstance(fndag, Node):
             return fndag
         with fndag:
@@ -177,7 +177,7 @@ class Dag:
             return node
 
     @property
-    def expr(self):
+    def expr(self) -> List[Any]:
         return self.invoke('get_expr')
 
     def put(self, data) -> Node:
