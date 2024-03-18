@@ -1,48 +1,10 @@
-import os
-import unittest
-from contextlib import contextmanager
-from tempfile import TemporaryDirectory
 from typing import Any, Dict
 
 import daggerml as dml
-
-# import daggerml.util
-# from daggerml.core import Error, Resource
+from tests.util import DmlTestBase
 
 
-@contextmanager
-def cd(newdir):
-    olddir = os.getcwd()
-    newdir = os.path.expanduser(newdir)
-    try:
-        os.chdir(newdir)
-        yield newdir
-    finally:
-        os.chdir(olddir)
-
-@contextmanager
-def use_repo():
-    with (
-        TemporaryDirectory(prefix='dml-test-wd-') as d0,
-        TemporaryDirectory(prefix='dml-test-wd-') as d1
-    ):
-        flags = {'config-dir': d0, 'project-dir': d1}
-        dml._api(*dml.Dag._to_flags(flags), 'repo', 'create', 'test')
-        dml._api(*dml.Dag._to_flags(flags), 'project', 'init', 'test')
-        yield flags
-
-
-class TestApi(unittest.TestCase):
-
-    def setUp(self):
-        self.pylib = use_repo()
-        self.flags = self.pylib.__enter__()
-
-    def tearDown(self):
-        self.pylib.__exit__(None, None, None)
-
-    def new(self, name, message):
-        return dml.new(name, message, flags=self.flags)
+class TestApi(DmlTestBase):
 
     def test_basic(self):
         dag = self.new('test-dag0', 'this is the test dag')
@@ -110,41 +72,12 @@ class TestApi(unittest.TestCase):
         n1 = dag.call(f, *args, cache=True)
         assert dag.get_value(n1) == 0
 
-    # def test_cache_errors(self):
-    #     dag = self.new('test-dag0', 'this is the test dag')
-    #     rsrc = dml.Resource({'a': 1, 'b': 2})
-    #     args = dag.put(rsrc), dag.put(12), dag.put(13)
-    #     stash = [True]
-    #     def f(*args):
-    #         if stash[0]:
-    #             raise ValueError('aaahhhh')
-    #         return stash[0]
-    #     with pytest.raises(ValueError):
-    #         dag.call(f, *args, cache=True)
-    #     # check using cached value
-    #     stash[0] = False
-    #     resp = dag.call(f, *args, cache=True)
-    #     assert dag.get_value(resp) is None
-    #     assert isinstance(dag.call(f, *args), Error)
-    #     assert dag.call(f, *args, cache=False).value is False
-    #
-    # def test_errors(self):
-    #     dag = dml.Dag('test-dag0', 'this is the test dag')
-    #     dag.commit(Error('asdf', code='qwer'))
-    #     dag = dml.Dag('test-dag1', 'this is the test dag')
-    #     n0 = dag.load('test-dag0')
-    #     assert isinstance(n0, dml.Node)
-    #     assert isinstance(n0.error, Error)
-    #     with pytest.raises(Error):
-    #         print(n0.value)
-    #
-    # def test_contextmanager(self):
-    #     with pytest.raises(ZeroDivisionError):
-    #         with dml.Dag('test-dag0', 'this is the test dag') as dag:
-    #             dag.put(1 / 0)
-    #
-    #     with dml.Dag('test-dag1', 'this is the test dag') as dag:
-    #         n0 = dag.load('test-dag0')
-    #         assert isinstance(n0, dml.Node)
-    #         assert isinstance(n0.error, Error)
-    #         dag.commit(dag.put(n0.error.code))
+    def test_contextmanager(self):
+        with self.assertRaises(ZeroDivisionError):
+            with self.new('dag0', 'this is the test dag') as dag:
+                dag.put(1 / 0)
+        dag = self.new('dag1', 'this is the test dag')
+        n0 = dag.load('dag0')
+        assert isinstance(n0, dml.Node)
+        with self.assertRaises(dml.Error):
+            dag.get_value(n0)

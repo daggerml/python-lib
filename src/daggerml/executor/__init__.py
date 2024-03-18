@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 import asyncio
 import inspect
+import json
 import os
 import shutil
 from contextlib import contextmanager
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 from textwrap import dedent
-from typing import Callable, Dict
+from typing import Dict
 from uuid import uuid4
 
 import paramiko
@@ -143,23 +144,29 @@ class BaseExecutor:
     def prepare(self, fn_dag, resp_file, **kw):
         raise NotImplementedError('BaseExecutor should be subclassed')
 
-    def run(self, dag, args, cache: bool = True, **kw):
-        resource = dml.Resource({
+    @property
+    def meta(self):
+        return {
             'executor': type(self).__name__,
             'command-template': self.cmd_tpl,
-        })
+        }
+
+    def run(self, dag, args, cache: bool = True, retry: bool = False, **kw) -> dml.Node:
+        resource = dml.Resource(json.dumps(self.meta, separators=(',', ':'), sort_keys=True))
         args = [x if isinstance(x, dml.Node) else dag.put(x) for x in args]
-        fn_dag = dag.start_fn(dag.put(resource), *args)
+        fndag = dag.start_fn(dag.put(resource), *args, cache=cache, retry=retry)
+        if isinstance(fndag, dml.Node):
+            return fndag
         with self.exec_env.tmpdir() as tmpd:
             resp_file = f'{tmpd}/result'
-            for k, v in self.prepare(fn_dag, resp_file, **kw):
+            for k, v in self.prepare(fndag, resp_file, **kw):
                 self.exec_env.put_obj(v, f'{tmpd}/{k}')
             self.exec_env.call(self.cmd_tpl.format(tmpd))
             result = self.exec_env.cat(resp_file)
         result = dml.from_json(result)
         if isinstance(result, dml.Error):
             raise result
-        node = fn_dag.commit(fn_dag.put(result))
+        node = fndag.commit(fndag.put(result))
         return node
 
 @dataclass
@@ -168,24 +175,25 @@ class PyExecutor(BaseExecutor):
     cmd_tpl: str = field(init=False)
 
     def __post_init__(self):
-        self.cmd_tpl = f'{self.python!r} {{}}/script.py'
+        self.cmd_tpl = f'{self.python!r} "{{0}}/script.py" "{{0}}/args.json"'
 
     @staticmethod
-    def make_script(expr, result_file):
-        fnname, src = expr[1].unroll()
+    def make_script(fnname, src, result_file):
         tpl = dedent(
             """
+            import sys
             try:
                 import daggerml as dml
             except ImportError:
                 import dml_copy as dml
 
+            with open(sys.argv[1], 'r') as f:
+                expr = dml.from_json(f.read())
+
             {src}
 
             if __name__ == '__main__':
                 try:
-                    expr = {args!r}
-                    expr = [dml.from_data(x) for x in expr]
                     result = {fnname}(*expr)
                 except KeyboardInterrupt:
                     raise
@@ -198,15 +206,15 @@ class PyExecutor(BaseExecutor):
         )
         return tpl.format(
             src=dedent(src),
-            args=[dml.to_data(x.unroll()) for x in expr[2:]],
             fnname=fnname,
             result_file=result_file,
         )
 
-    def prepare(self, fn_dag, result_file):
-        script = self.make_script(fn_dag.expr, result_file)
+    def prepare(self, fn_dag: dml.Dag, result_file: str):
+        yield 'args.json', dml.to_json(fn_dag.expr[2:]).encode()
+        script = self.make_script(*fn_dag.expr[1], result_file)
         yield 'script.py', script.encode()
-        with open(f'{dml_root}/util.py', 'rb') as f:
+        with open(f'{dml_root}/core.py', 'rb') as f:
             yield 'dml_copy.py', f.read()
 
     def call(self, dag, fn, *args: dml.Node, cache: bool = True):
@@ -218,13 +226,13 @@ class PyExecutor(BaseExecutor):
 class CondaPyExecutor(PyExecutor):
 
     def __post_init__(self):
-        self.cmd_tpl = f'conda run -n {self.python} python "{{}}/script.py"'
+        self.cmd_tpl = f'conda run -n {self.python} python "{{0}}/script.py" "{{0}}/args.json"'
 
 @dataclass
 class HatchPyExecutor(PyExecutor):
 
     def __post_init__(self):
-        self.cmd_tpl = f'hatch -e {self.python!r} run python "{{}}/script.py"'
+        self.cmd_tpl = f'hatch -e {self.python!r} run python "{{0}}/script.py" "{{0}}/args.json"'
 
 @dataclass
 class InProcEnv(ExecutionEnvironment):
@@ -242,7 +250,7 @@ class InProcEnv(ExecutionEnvironment):
     def call(self, store_id):
         fn = self.store[store_id]['fn']
         args = self.store[store_id]['args']
-        args = [x.unroll() for x in args]
+        # args = [x.unroll() for x in args]
         try:
             resp = fn(*args)
         except Exception as e:
