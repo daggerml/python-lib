@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 import json
 import logging
+import os
 import subprocess
 import traceback as tb
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
+from threading import Event
+from time import time
 from typing import Any, Dict, List
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+uuid = uuid4().hex
 
 DATA_TYPE = {}
 
@@ -99,23 +106,12 @@ class ApiError(Error):
 def _api(*args):
     try:
         cmd = ['dml', *args]
-        logger.debug('cmd args: %r', cmd)
         resp = subprocess.run(cmd, capture_output=True)
-        logger.debug('response: %r', resp.stdout)
         return resp.stdout.decode()
     except KeyboardInterrupt:
         raise
     except Exception as e:
         raise Error.from_ex(e) from e
-
-
-def invoke_api(token, op, *args, **kwargs):
-    payload = to_json([op, args, kwargs])
-    resp = _api('dag', 'invoke', token, payload)
-    data = from_json(resp)
-    if isinstance(data, Error):
-        raise data
-    return data
 
 @dataclass(frozen=True)
 class Node:
@@ -154,31 +150,38 @@ class Dag:
             raise data
         return data
 
-    def start_fn(self, *expr, cache: bool = True, retry: bool = False) -> "Dag|Node":
+    def start_fn(self, *expr, cache: bool = True, retry: bool = False) -> "FnDag|Node":
         expr = [x if isinstance(x, Node) else self.put(x) for x in expr]
         expr = [x.ref for x in expr]
-        token = self._invoke('start_fn', expr=expr, cache=cache, retry=retry)
-        ref = from_json(token)
+        ref = self.invoke('start_fn', expr=expr, cache=cache, retry=retry)
         assert isinstance(ref, Ref)
         if ref.type == 'node':
             return Node(ref)
-        return Dag(token, self.api_flags.copy())
+        assert ref.type == 'index'
+        token = to_json(ref)
+        return FnDag(token, api_flags=self.api_flags.copy())
 
-    def call(self, f, *args, cache: bool = True, retry: bool = False) -> Node:
-        resource = Resource(json.dumps({'exec': 'local'}, separators=(',', ':')))
+    def call(self, f, *args, cache: bool = True, retry: bool = False, update_freq: int|float = 5) -> Node:
+        resource = Resource(json.dumps({'exec': 'local', 'uuid': uuid, 'func_name': f.__qualname__}, separators=(',', ':')))
         fndag = self.start_fn(self.put(resource), *args, cache=cache, retry=retry)
         if isinstance(fndag, Node):
+            logger.debug('returning cached call')
             return fndag
-        with fndag:
-            result = f(*fndag.expr[1:])
-            result = fndag.put(result)
-            node = fndag.commit(result, cache=cache)
-            assert isinstance(node, Node)
-            return node
-
-    @property
-    def expr(self) -> List[Any]:
-        return self.invoke('get_expr')
+        logger.debug('running call')
+        lock_info = {'pid': os.getpid(), 'uid': uuid4().hex}
+        try:
+            lock = fndag.relock(lock_info, update_freq)
+        except Error as e:
+            raise RuntimeError(f'error: {e = } -- wtf')
+        if lock is None:
+            raise RuntimeError('lock was none?!')
+        with fndag._update_loop(lock, lock_info, freq=update_freq):
+            with fndag:
+                result = f(*fndag.expr[1:])
+                result = fndag.put(result)
+                node = fndag.commit(result, cache=cache)
+        assert isinstance(node, Node)
+        return node
 
     def put(self, data) -> Node:
         resp = self.invoke('put_literal', data)
@@ -190,14 +193,12 @@ class Dag:
         assert isinstance(resp, Ref)
         return Node(resp)
 
-    def commit(self, result, cache: bool = True) -> Node|None:
+    def commit(self, result, cache: bool = True) -> None:
         if isinstance(result, Node):
             result = result.ref
         resp = self.invoke('commit', result, cache=cache)
-        if resp is None:
-            return
-        assert isinstance(resp, Ref)
-        return Node(resp)
+        assert resp is None
+        return resp
 
     def get_value(self, node: Node) -> Any:
         val = self.invoke('get_node_value', node.ref)
@@ -211,3 +212,69 @@ class Dag:
             ex = Error.from_ex(exc_val)
             logger.exception('failing dag with error code: %r', ex.code)
             self.commit(ex)
+
+@dataclass(frozen=True)
+class FnDag(Dag):
+    expr: List[Node] = field(init=False)
+
+    def __post_init__(self):
+        resp = self.invoke('get_expr')
+        object.__setattr__(self, 'expr', resp)
+
+    @property
+    def meta(self) -> str:
+        return self.invoke('get_fn_meta')
+
+    def update_meta(self, old: str, new: str) -> bool:
+        return self.invoke('update_fn_meta', old, new)
+
+    def lockable(self, meta: str|None = None, old: str|None = None) -> bool:
+        if meta is None:
+            meta = self.meta
+        if old is not None and meta != old:
+            return False
+        if meta == '':
+            return True
+        meta_js = from_json(meta)
+        assert isinstance(meta_js, dict)
+        return time() >= meta_js['lock_expiration']
+
+    def relock(self, new: Dict, duration: float|int = 5, old: str|None = None) -> str|None:
+        meta = self.meta
+        if not self.lockable(meta, old):
+            raise RuntimeError(f'not lockable {meta = }')
+            logger.info('another valid lock exists')
+            return
+        new['lock_expiration'] = time() + duration
+        new_str = to_json(new)
+        try:
+            self.update_meta(meta, new_str)
+        except Error:
+            raise RuntimeError(f'failed to update {meta = } ---- {new_str = }')
+            logger.exception('failed to update metadata')
+            return
+        return new_str
+
+    @contextmanager
+    def _update_loop(self, lock, state_dict: Dict[str, Any], freq: int|float):
+        lock_duration = 2 * (freq + 0.2)
+        event = Event()
+        def inner(old, freq):
+            while event.wait(freq):
+                if event.is_set():
+                    return
+                old = self.relock(state_dict, lock_duration, old)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            fut = executor.submit(inner, lock, freq)
+            try:
+                yield
+            finally:
+                event.set()
+                fut.result()
+
+    def commit(self, result, cache: bool = True) -> Node:
+        if isinstance(result, Node):
+            result = result.ref
+        resp = self.invoke('commit', result, cache=cache)
+        assert isinstance(resp, Ref)
+        return Node(resp)

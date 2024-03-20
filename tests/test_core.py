@@ -1,4 +1,6 @@
-from typing import Any, Dict
+import re
+from concurrent.futures import ThreadPoolExecutor
+from time import sleep
 
 import daggerml as dml
 from tests.util import DmlTestBase
@@ -51,13 +53,39 @@ class TestApi(DmlTestBase):
         # from aaron.dml import run
         dag = self.new('test-dag0', 'this is the test dag')
         l0 = dag.put({'asdf': 12})
-        def f(x: Dict[Any, int]) -> Dict[Any, int]:
+        def f(x):
             return {k: v**2 for k, v in x.items()}
         # ====== start
         n1 = dag.call(f, l0)
         # ====== end
         assert isinstance(n1, dml.Node)
         assert dag.get_value(n1) == {'asdf': 144}
+
+    def test_update_loop(self):
+        def doit(dag):
+            with self.assertLogs('daggerml', level='DEBUG') as cm:
+                dag.call(f, l0, cache=True, update_freq=0.1)
+            assert cm.output[0] is None
+            assert any(re.match(r'.*running call', x) for x in  cm.output)
+            return
+        # from aaron.dml import run
+        dag = self.new('test-dag0', 'this is the test dag')
+        l0 = dag.put(12)
+        def f(x):
+            sleep(2)
+            return x**2
+        # ====== start
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            fut = executor.submit(doit, dag)
+            while not fut.running():
+                sleep(0.1)
+            sleep(0.1)
+            with self.assertLogs('daggerml', level='DEBUG') as cm:
+                assert dag.get_value(dag.call(f, l0, cache=True, update_freq=0.1)) == 144
+            # assert any(re.match(r'.*returning cached call', x) for x in  cm.output)
+            assert any(re.match(r'.*running call', x) for x in  cm.output)
+            fut.result()
+            # assert out is None
 
     def test_cache_basic(self):
         stash = [0]
@@ -71,6 +99,15 @@ class TestApi(DmlTestBase):
         stash[0] = 1
         n1 = dag.call(f, *args, cache=True)
         assert dag.get_value(n1) == 0
+
+    def test_fn_meta(self):
+        dag = self.new('test-dag0', 'this is the test dag')
+        args = dag.put(dml.Resource('a')), dag.put(12), dag.put(13)
+        fn = dag.start_fn(*args)
+        assert isinstance(fn, dml.Dag)
+        assert fn.meta == ''
+        fn.update_meta('', 'testing')
+        assert fn.meta == 'testing'
 
     def test_contextmanager(self):
         with self.assertRaises(ZeroDivisionError):
