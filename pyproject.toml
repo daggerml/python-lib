@@ -35,7 +35,18 @@ dependencies = [
 
 [project.optional-dependencies]
 aws = ["boto3"]
-all = ["daggerml[aws]"]
+ssh = ["paramiko"]
+cli = ["daggerml_cli"]
+all = ["daggerml[aws,ssh]"]
+
+[project.entry-points."daggerml_cli.executor"]
+py = "daggerml.executor.PyExecutor"
+conda = "daggerml.executor.CondaPyExecutor"
+hatch = "daggerml.executor.HatchPyExecutor"
+
+[project.entry-points."daggerml_cli.compute_env"]
+local = "daggerml.executor.Local"
+ssh = "daggerml.executor.RemoteSsh"
 
 [project.urls]
 Homepage = "https://daggerml.com"

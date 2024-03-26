@@ -8,12 +8,12 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from threading import Event
-from time import time
+from time import sleep, time
 from typing import Any, Dict, List
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
-uuid = uuid4().hex
+UUID = uuid4().hex
 
 DATA_TYPE = {}
 
@@ -119,14 +119,16 @@ class Node:
 
 @dataclass(frozen=True)
 class Dag:
-    token: str
+    tok: str
+    ref: Ref
     api_flags: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def new(cls, name: str, message: str, api_flags: Dict[str, str]|None = None) -> "Dag":
         api_flags = api_flags or {}
         tok = _api(*cls._to_flags(api_flags), 'dag', 'create', name, message)
-        return cls(tok, api_flags=api_flags.copy())
+        tok, ref = from_json(tok)
+        return cls(to_json(tok), ref, api_flags=api_flags.copy())
 
     @staticmethod
     def _to_flags(flag_dict: Dict[str, str]) -> List[str]:
@@ -140,7 +142,7 @@ class Dag:
 
     def _invoke(self, op, *args, **kwargs):
         payload = to_json([op, args, kwargs])
-        resp = self._api('dag', 'invoke', self.token, payload)
+        resp = self._api('dag', 'invoke', self.tok, payload)
         return resp
 
     def invoke(self, op, *args, **kwargs):
@@ -150,53 +152,53 @@ class Dag:
             raise data
         return data
 
+    def put(self, data) -> Node:
+        resp = self.invoke('put_literal', self.ref, data)
+        assert isinstance(resp, Ref)
+        return Node(resp)
+
+    def load(self, dag_name) -> Node:
+        resp = self.invoke('put_load', self.ref, dag_name)
+        assert isinstance(resp, Ref)
+        return Node(resp)
+
     def start_fn(self, *expr, cache: bool = True, retry: bool = False) -> "FnDag|Node":
         expr = [x if isinstance(x, Node) else self.put(x) for x in expr]
         expr = [x.ref for x in expr]
-        ref = self.invoke('start_fn', expr=expr, cache=cache, retry=retry)
+        ref = self.invoke('start_fn', expr=expr, dag=self.ref, cache=cache, retry=retry)
         assert isinstance(ref, Ref)
         if ref.type == 'node':
             return Node(ref)
-        assert ref.type == 'index'
-        token = to_json(ref)
-        return FnDag(token, api_flags=self.api_flags.copy())
+        return FnDag(self.tok, ref, par=self.ref, cache=cache, api_flags=self.api_flags.copy())
 
     def call(self, f, *args, cache: bool = True, retry: bool = False, update_freq: int|float = 5) -> Node:
-        resource = Resource(json.dumps({'exec': 'local', 'uuid': uuid, 'func_name': f.__qualname__}, separators=(',', ':')))
+        resource = Resource(json.dumps({'exec': 'local', 'func_name': f.__qualname__}, separators=(',', ':')))
         fndag = self.start_fn(self.put(resource), *args, cache=cache, retry=retry)
         if isinstance(fndag, Node):
             logger.debug('returning cached call')
             return fndag
         logger.debug('running call')
         lock_info = {'pid': os.getpid(), 'uid': uuid4().hex}
-        try:
-            lock = fndag.relock(lock_info, update_freq)
-        except Error as e:
-            raise RuntimeError(f'error: {e = } -- wtf')
+        lock = fndag.relock(lock_info, update_freq)
         if lock is None:
-            raise RuntimeError('lock was none?!')
-        with fndag._update_loop(lock, lock_info, freq=update_freq):
+            while True:
+                resp = self.start_fn(self.put(resource), *args, cache=cache, retry=retry)
+                if isinstance(resp, Node):
+                    return resp
+                sleep(update_freq)
+        if True:
+        # with fndag._update_loop(lock, lock_info, freq=update_freq):
             with fndag:
                 result = f(*fndag.expr[1:])
-                result = fndag.put(result)
-                node = fndag.commit(result, cache=cache)
+            result = fndag.put(result)
+            node = fndag.commit(result)
         assert isinstance(node, Node)
         return node
 
-    def put(self, data) -> Node:
-        resp = self.invoke('put_literal', data)
-        assert isinstance(resp, Ref)
-        return Node(resp)
-
-    def load(self, dag_name) -> Node:
-        resp = self.invoke('put_load', dag_name)
-        assert isinstance(resp, Ref)
-        return Node(resp)
-
-    def commit(self, result, cache: bool = True) -> None:
+    def commit(self, result) -> None:
         if isinstance(result, Node):
             result = result.ref
-        resp = self.invoke('commit', result, cache=cache)
+        resp = self.invoke('commit', self.ref, result)
         assert resp is None
         return resp
 
@@ -215,29 +217,31 @@ class Dag:
 
 @dataclass(frozen=True)
 class FnDag(Dag):
+    par: Ref = field(kw_only=True)
     expr: List[Node] = field(init=False)
+    cache: bool = True
 
     def __post_init__(self):
-        resp = self.invoke('get_expr')
+        resp = self.invoke('get_expr', self.ref)
         object.__setattr__(self, 'expr', resp)
 
     @property
     def meta(self) -> str:
-        return self.invoke('get_fn_meta')
+        return self.invoke('get_fn_meta', self.ref)
 
     def update_meta(self, old: str, new: str) -> bool:
-        return self.invoke('update_fn_meta', old, new)
+        return self.invoke('update_fn_meta', self.ref, old, new)
 
-    def lockable(self, meta: str|None = None, old: str|None = None) -> bool:
-        if meta is None:
-            meta = self.meta
+    @staticmethod
+    def lockable(meta: str, old: str|None = None) -> bool:
         if old is not None and meta != old:
             return False
         if meta == '':
             return True
         meta_js = from_json(meta)
         assert isinstance(meta_js, dict)
-        return time() >= meta_js['lock_expiration']
+        # expiration has passed
+        return meta_js['lock_expiration'] <= time()
 
     def relock(self, new: Dict, duration: float|int = 5, old: str|None = None) -> str|None:
         meta = self.meta
@@ -250,7 +254,7 @@ class FnDag(Dag):
         try:
             self.update_meta(meta, new_str)
         except Error:
-            raise RuntimeError(f'failed to update {meta = } ---- {new_str = }')
+            raise RuntimeError(f'failed to update {meta = } ---- {new_str = }') from None
             logger.exception('failed to update metadata')
             return
         return new_str
@@ -272,9 +276,12 @@ class FnDag(Dag):
                 event.set()
                 fut.result()
 
-    def commit(self, result, cache: bool = True) -> Node:
+    def commit(self, result, cache: bool|None = None) -> Node:
+        if cache is None:
+            cache = self.cache
         if isinstance(result, Node):
             result = result.ref
-        resp = self.invoke('commit', result, cache=cache)
+        resp = self.invoke('commit', self.ref, result, parent_dag=self.par, cache=cache)
         assert isinstance(resp, Ref)
+        assert resp.type == 'node'
         return Node(resp)

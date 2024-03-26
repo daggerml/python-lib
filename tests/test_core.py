@@ -1,5 +1,5 @@
 import re
-from concurrent.futures import ThreadPoolExecutor
+from threading import Thread
 from time import sleep
 
 import daggerml as dml
@@ -61,31 +61,47 @@ class TestApi(DmlTestBase):
         assert isinstance(n1, dml.Node)
         assert dag.get_value(n1) == {'asdf': 144}
 
-    def test_update_loop(self):
+    def test_dag_threads(self):
+        tmp = []
         def doit(dag):
+            assert dag.get_value(tmp[0]) == 'foopy'
+            tmp.append(dag.put('doopy'))
+            return
+        dag = self.new('test-dag0', 'this is the test dag')
+        tmp.append(dag.put('foopy'))
+        # ====== start
+        proc = Thread(target=doit, args=(dag,))
+        proc.start()
+        proc.join()
+        assert dag.get_value(tmp[1]) == 'doopy'
+
+    def test_update_loop(self):
+        def doit(dag, f):
+            dag.put('foopy')
             with self.assertLogs('daggerml', level='DEBUG') as cm:
-                dag.call(f, l0, cache=True, update_freq=0.1)
+                resp = dag.call(f, l0, cache=True, update_freq=0.1)
             assert cm.output[0] is None
             assert any(re.match(r'.*running call', x) for x in  cm.output)
+            assert isinstance(resp, dml.Node)
             return
-        # from aaron.dml import run
         dag = self.new('test-dag0', 'this is the test dag')
         l0 = dag.put(12)
+        tmp = []
         def f(x):
-            sleep(2)
+            sleep(1)
+            tmp.append(None)
             return x**2
         # ====== start
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            fut = executor.submit(doit, dag)
-            while not fut.running():
-                sleep(0.1)
-            sleep(0.1)
-            with self.assertLogs('daggerml', level='DEBUG') as cm:
-                assert dag.get_value(dag.call(f, l0, cache=True, update_freq=0.1)) == 144
-            # assert any(re.match(r'.*returning cached call', x) for x in  cm.output)
-            assert any(re.match(r'.*running call', x) for x in  cm.output)
-            fut.result()
-            # assert out is None
+        proc = Thread(target=doit, args=(dag, f))
+        proc.start()
+        sleep(0.2)
+        with self.assertLogs('daggerml', level='DEBUG') as cm:
+            node = dag.call(f, l0, cache=True, update_freq=0.1)
+        proc.join()
+        assert dag.get_value(node) == 144
+        # assert any(re.match(r'.*returning cached call', x) for x in  cm.output)
+        assert len(tmp) == 1
+        assert any(re.match(r'.*running call', x) for x in  cm.output)
 
     def test_cache_basic(self):
         stash = [0]
