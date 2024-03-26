@@ -4,10 +4,9 @@ import logging
 import os
 import subprocess
 import traceback as tb
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
-from threading import Event
+from threading import Event, Thread
 from time import sleep, time
 from typing import Any, Dict, List
 from uuid import uuid4
@@ -171,23 +170,28 @@ class Dag:
             return Node(ref)
         return FnDag(self.tok, ref, par=self.ref, cache=cache, api_flags=self.api_flags.copy())
 
-    def call(self, f, *args, cache: bool = True, retry: bool = False, update_freq: int|float = 5) -> Node:
+    def call(self, f, *args, cache: bool = True, retry: bool = False, update_freq: float|int = 5) -> Node:
         resource = Resource(json.dumps({'exec': 'local', 'func_name': f.__qualname__}, separators=(',', ':')))
-        fndag = self.start_fn(self.put(resource), *args, cache=cache, retry=retry)
+        expr = [self.put(resource), *args]
+        fndag = self.start_fn(*expr, cache=cache, retry=retry)
         if isinstance(fndag, Node):
             logger.debug('returning cached call')
             return fndag
-        logger.debug('running call')
+        logger.debug('checking dag: %r', fndag.ref.to)
         lock_info = {'pid': os.getpid(), 'uid': uuid4().hex}
-        lock = fndag.relock(lock_info, update_freq)
+        lock = fndag.relock(lock_info, 5 * update_freq, old='')
         if lock is None:
-            while True:
-                resp = self.start_fn(self.put(resource), *args, cache=cache, retry=retry)
-                if isinstance(resp, Node):
-                    return resp
+            logger.debug('no lock. waiting for result...')
+            while not fndag.lockable(fndag.meta, old=''):
                 sleep(update_freq)
-        if True:
-        # with fndag._update_loop(lock, lock_info, freq=update_freq):
+            resp = self.start_fn(*expr, cache=cache)
+            if isinstance(resp, FnDag):
+                err = Error('orphaned job')
+                resp.commit(err)
+                raise err
+            return resp
+        logger.debug('running function: %r', f.__qualname__)
+        with fndag._update_loop(lock, lock_info, freq=update_freq):
             with fndag:
                 result = f(*fndag.expr[1:])
             result = fndag.put(result)
@@ -246,7 +250,6 @@ class FnDag(Dag):
     def relock(self, new: Dict, duration: float|int = 5, old: str|None = None) -> str|None:
         meta = self.meta
         if not self.lockable(meta, old):
-            raise RuntimeError(f'not lockable {meta = }')
             logger.info('another valid lock exists')
             return
         new['lock_expiration'] = time() + duration
@@ -254,13 +257,12 @@ class FnDag(Dag):
         try:
             self.update_meta(meta, new_str)
         except Error:
-            raise RuntimeError(f'failed to update {meta = } ---- {new_str = }') from None
             logger.exception('failed to update metadata')
             return
         return new_str
 
     @contextmanager
-    def _update_loop(self, lock, state_dict: Dict[str, Any], freq: int|float):
+    def _update_loop(self, lock, state_dict: Dict[str, Any], freq: float|int):
         lock_duration = 2 * (freq + 0.2)
         event = Event()
         def inner(old, freq):
@@ -268,13 +270,13 @@ class FnDag(Dag):
                 if event.is_set():
                     return
                 old = self.relock(state_dict, lock_duration, old)
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            fut = executor.submit(inner, lock, freq)
-            try:
-                yield
-            finally:
-                event.set()
-                fut.result()
+        thread = Thread(target=inner, args=(lock, freq))
+        try:
+            thread.start()
+            yield event
+        finally:
+            event.set()
+            thread.join()
 
     def commit(self, result, cache: bool|None = None) -> Node:
         if cache is None:

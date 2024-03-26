@@ -1,5 +1,5 @@
-import re
-from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from time import sleep
 
 import daggerml as dml
@@ -62,46 +62,33 @@ class TestApi(DmlTestBase):
         assert dag.get_value(n1) == {'asdf': 144}
 
     def test_dag_threads(self):
-        tmp = []
-        def doit(dag):
-            assert dag.get_value(tmp[0]) == 'foopy'
-            tmp.append(dag.put('doopy'))
-            return
+        def doit(dag, i):
+            return dag.put(i)
         dag = self.new('test-dag0', 'this is the test dag')
-        tmp.append(dag.put('foopy'))
         # ====== start
-        proc = Thread(target=doit, args=(dag,))
-        proc.start()
-        proc.join()
-        assert dag.get_value(tmp[1]) == 'doopy'
+        with ThreadPoolExecutor(2) as pool:
+            resp = pool.map(partial(doit, dag), range(2))
+        for i, x in enumerate(resp):
+            assert dag.get_value(x) == i
 
     def test_update_loop(self):
-        def doit(dag, f):
-            dag.put('foopy')
-            with self.assertLogs('daggerml', level='DEBUG') as cm:
-                resp = dag.call(f, l0, cache=True, update_freq=0.1)
-            assert cm.output[0] is None
-            assert any(re.match(r'.*running call', x) for x in  cm.output)
-            assert isinstance(resp, dml.Node)
-            return
+        pool_size = 5
+        extra = 3
+        def f(x):
+            sleep(0.5)
+            return x**2
         dag = self.new('test-dag0', 'this is the test dag')
         l0 = dag.put(12)
-        tmp = []
-        def f(x):
-            sleep(1)
-            tmp.append(None)
-            return x**2
         # ====== start
-        proc = Thread(target=doit, args=(dag, f))
-        proc.start()
-        sleep(0.2)
         with self.assertLogs('daggerml', level='DEBUG') as cm:
-            node = dag.call(f, l0, cache=True, update_freq=0.1)
-        proc.join()
-        assert dag.get_value(node) == 144
-        # assert any(re.match(r'.*returning cached call', x) for x in  cm.output)
-        assert len(tmp) == 1
-        assert any(re.match(r'.*running call', x) for x in  cm.output)
+            with ThreadPoolExecutor(pool_size) as pool:
+                resp = pool.map(partial(dag.call, cache=True, update_freq=0.1),
+                                *zip(*[(f, l0) for _ in range(pool_size + extra)]))
+        assert len([x for x in cm.output if 'checking dag' in x]) == pool_size
+        assert len([x for x in cm.output if 'returning cached call' in x]) == extra
+        assert len([x for x in cm.output if f'running function: {f.__qualname__!r}' in x]) == 1
+        assert len([x for x in cm.output if 'no lock. waiting for result' in x]) == pool_size - 1
+        assert {dag.get_value(n) for n in resp} == {144}
 
     def test_cache_basic(self):
         stash = [0]
