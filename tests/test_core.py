@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import partial
 from time import sleep
 
@@ -48,6 +49,15 @@ class TestApi(DmlTestBase):
             node = dag.put(v)
             assert isinstance(node, dml.Node), f'{k = }'
             assert dag.get_value(node) == v, f'{k = }'
+
+    def test_composite(self):
+        dag = self.new('test-dag0', 'this is the test dag')
+        n0 = dag.put(3)
+        n1 = dag.put('x')
+        n2 = dag.put([n0, n1])
+        assert dag.get_value(n2) == [3, 'x']
+        n3 = dag.put({'y': n2})
+        assert dag.get_value(n3) == {'y': [3, 'x']}
 
     def test_in_process_sdk(self):
         # from aaron.dml import run
@@ -103,11 +113,29 @@ class TestApi(DmlTestBase):
         n1 = dag.call(f, *args, cache=True)
         assert dag.get_value(n1) == 0
 
+    def test_namespaces(self):
+        @dataclass
+        class Foo:
+            dag: dml.Dag|dml.Node
+            name = 'foo'
+            def x(self, y):
+                return y ** 2
+        dml.Dag.register_ns(Foo)
+        dag = self.new('test', 'this is a test')
+        assert isinstance(dag.foo, Foo)
+        assert dag.foo.x(3) == 9
+        n = dag.put(12)
+        with self.assertRaises(AttributeError, msg="'Node' object has no attribute 'foo'"):
+            _ = n.foo
+        dml.Node.register_ns(Foo)
+        assert n.foo.x(3) == 9
+
     def test_fn_meta(self):
         dag = self.new('test-dag0', 'this is the test dag')
         args = dag.put(dml.Resource('a')), dag.put(12), dag.put(13)
         fn = dag.start_fn(*args)
         assert isinstance(fn, dml.Dag)
+        assert isinstance(fn, dml.FnDag)
         assert fn.meta == ''
         fn.update_meta('', 'testing')
         assert fn.meta == 'testing'

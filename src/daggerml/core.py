@@ -6,6 +6,7 @@ import subprocess
 import traceback as tb
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 from threading import Event, Thread
 from time import sleep, time
 from typing import Any, Dict, List
@@ -16,6 +17,8 @@ UUID = uuid4().hex
 
 DATA_TYPE = {}
 
+CACHE_LOC = Path.home()/'.local/dml/cache'
+
 
 def dml_type(cls=None):
     def decorator(cls):
@@ -24,10 +27,28 @@ def dml_type(cls=None):
     return decorator(cls) if cls else decorator
 
 
+def js_dumps(js):
+    return json.dumps(js, separators=(',', ':'))
+
+
+class NamespacedObj:
+    @classmethod
+    def register_ns(cls, ns_cls):
+        setattr(cls, ns_cls.name, property(ns_cls))
+
+
 @dml_type
 @dataclass(frozen=True, slots=True)
-class Resource:
+class Resource(NamespacedObj):
     data: str
+
+    @property
+    def info(self):
+        return json.loads(self.data)
+
+    @classmethod
+    def from_dict(cls, d):
+        return cls(js_dumps(d))
 
 Scalar = str | int | float | bool | type(None) | Resource
 
@@ -51,7 +72,7 @@ class Error(Exception):
 
 @dml_type
 @dataclass(frozen=True)
-class Ref:
+class Ref(NamespacedObj):
     to: str
 
     @property
@@ -76,6 +97,8 @@ def from_data(data):
 
 
 def to_data(obj):
+    if isinstance(obj, Node):
+        obj = obj.ref
     if isinstance(obj, tuple):
         obj = list(obj)
     n = obj.__class__.__name__
@@ -95,7 +118,7 @@ def from_json(text):
 
 
 def to_json(obj):
-    return json.dumps(to_data(obj), separators=(',', ':'))
+    return js_dumps(to_data(obj))
 
 
 class ApiError(Error):
@@ -113,11 +136,11 @@ def _api(*args):
         raise Error.from_ex(e) from e
 
 @dataclass(frozen=True)
-class Node:
+class Node(NamespacedObj):
     ref: Ref
 
 @dataclass(frozen=True)
-class Dag:
+class Dag(NamespacedObj):
     tok: str
     ref: Ref
     api_flags: Dict[str, str] = field(default_factory=dict)
@@ -171,7 +194,7 @@ class Dag:
         return FnDag(self.tok, ref, par=self.ref, cache=cache, api_flags=self.api_flags.copy())
 
     def call(self, f, *args, cache: bool = True, retry: bool = False, update_freq: float|int = 5) -> Node:
-        resource = Resource(json.dumps({'exec': 'local', 'func_name': f.__qualname__}, separators=(',', ':')))
+        resource = Resource.from_dict({'exec': 'local', 'func_name': f.__qualname__})
         expr = [self.put(resource), *args]
         fndag = self.start_fn(*expr, cache=cache, retry=retry)
         if isinstance(fndag, Node):
@@ -200,9 +223,9 @@ class Dag:
         return node
 
     def commit(self, result) -> None:
-        if isinstance(result, Node):
-            result = result.ref
-        resp = self.invoke('commit', self.ref, result)
+        if not isinstance(result, Node):
+            result = self.put(result)
+        resp = self.invoke('commit', self.ref, result.ref)
         assert resp is None
         return resp
 
@@ -281,9 +304,9 @@ class FnDag(Dag):
     def commit(self, result, cache: bool|None = None) -> Node:
         if cache is None:
             cache = self.cache
-        if isinstance(result, Node):
-            result = result.ref
-        resp = self.invoke('commit', self.ref, result, parent_dag=self.par, cache=cache)
+        if not isinstance(result, Node):
+            result = self.put(result)
+        resp = self.invoke('commit', self.ref, result.ref, parent_dag=self.par, cache=cache)
         assert isinstance(resp, Ref)
         assert resp.type == 'node'
         return Node(resp)

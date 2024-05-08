@@ -1,282 +1,197 @@
 #!/usr/bin/env python3
-import asyncio
-import inspect
+import gzip
 import json
+import logging
 import os
-import shutil
+import subprocess
+import tarfile
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from hashlib import sha512
 from tempfile import NamedTemporaryFile, TemporaryDirectory
-from textwrap import dedent
-from typing import Dict
+from time import time
+from typing import Optional
+from urllib.parse import urlparse
 from uuid import uuid4
 
-import paramiko
+import boto3
 
 import daggerml as dml
+from daggerml.core import CACHE_LOC
 
+logger = logging.getLogger(__name__)
 dml_root = os.path.dirname(dml.__file__)
 
 
-@dataclass
-class ExecutionEnvironment:
-    def cat(*args, **kwargs):
-        raise NotImplementedError('cat has not been implemented')
-    def put_obj(*args, **kwargs):
-        raise NotImplementedError('put_obj has not been implemented')
-    def call(*args, **kwargs):
-        raise NotImplementedError('call has not been implemented')
-    @contextmanager
-    def tmpdir(*args, **kwargs):
-        raise NotImplementedError('tmpdir has not been implemented')
+@contextmanager
+def cd(path):
+   old_path = os.getcwd()
+   os.chdir(path)
+   try:
+       yield
+   finally:
+       os.chdir(old_path)
+
+
+def make_tarball(source_dir, output_filename):
+    with tarfile.open(output_filename, "w:gz") as tar:
+        tar.add(source_dir, arcname='/')
+    with gzip.open(output_filename, 'rb') as f:
+        _hash = sha512(f.read()[8:]).hexdigest()
+    return _hash
+    # js = {'exec': 'local', 'id': _hash, 'path': output_filename}
+    # return dml.Resource.from_dict(js)
+
+
+def extract_tarball(src, dest):
+    with tarfile.open(src, 'r:gz') as tf:
+        tf.extractall(dest)
+
+
+@contextmanager
+def tmp_untar(tarball):
+    with TemporaryDirectory(prefix='dml-') as tmpd:
+        extract_tarball(tarball, tmpd)
+        yield tmpd
+
+
+def _s3_upload(src, s3_uri, boto_session=boto3, **kw):
+    s3 = boto_session.client('s3')
+    uri = urlparse(s3_uri)
+    if uri.scheme != 's3':
+        msg = f'dest ({s3_uri!r}) is not a valid s3 uri'
+        raise ValueError(msg)
+    bucket, key = uri.netloc, uri.path[1:]
+    s3.upload_file(src, bucket, key)
+    js = {**kw, 'exec': 's3', 'id': s3_uri, 'uri': s3_uri, 'bucket': bucket, 'key': key}
+    return dml.Resource.from_dict(js)
 
 @dataclass
-class Local(ExecutionEnvironment):
+class ShDagNS:
+    dag: dml.Dag
+    name = 'sh'
 
-    def cat(self, loc):
-        with open(loc, 'r') as f:
-            return f.read()
-
-    def put(self, src: str|bytes, dst: str):
-        shutil.copyfile(src, dst)
-        return dst
-
-    def put_obj(self, obj: bytes, dst: str):
-        with open(dst, 'wb') as f:
-            f.write(obj)
-        return dst
-
-    async def acall(self, cmd):
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            stderr = stderr.decode()
-            msg = f'proc command failed unexpectedly\n\n{stderr}'
-            context = {'stderr': stderr}
-            code = 'infra'
-            raise dml.Error(msg, context=context, code=code)
-        return stdout
-
-    def call(self, cmd):
-        return asyncio.run(self.acall(cmd))
-
-    @contextmanager
-    def tmpdir(self):
-        with TemporaryDirectory() as tmpd:
-            yield tmpd
-
-@dataclass
-class RemoteSsh(ExecutionEnvironment):
-    user: str
-    host: str
-    port: int
-    key: str
-
-    def __post_init__(self):
-        if self.key is not None:
-            self.key = os.path.expanduser(self.key)
-
-    @contextmanager
-    def ssh(self):
-        client = paramiko.SSHClient()
-        client.load_system_host_keys()
-        client.connect(self.host, port=self.port, username=self.user, key_filename=self.key)
-        try:
-            yield client
-        finally:
-            client.close()
-
-    @contextmanager
-    def sftp(self):
-        with self.ssh() as ssh:
-            try:
-                sftp = ssh.open_sftp()
-                yield sftp
-            finally:
-                sftp.close()
-
-    def get(self, remote_loc, local_loc):
-        with self.sftp() as sftp:
-            sftp.get(remote_loc, local_loc)
-        return local_loc
-
-    def cat(self, remote_loc):
-        with NamedTemporaryFile() as tmpf:
-            self.get(remote_loc, tmpf.name)
-            with open(tmpf.name) as f:
-                return f.read()
-
-    def put(self, src: str|bytes, dst: str):
-        with self.sftp() as sftp:
-            sftp.put(src, dst)
-        return dst
-
-    def put_obj(self, obj: bytes, dst: str):
-        with NamedTemporaryFile() as tmpf:
-            with open(tmpf.name, 'wb') as f:
-                f.write(obj)
-            return self.put(tmpf.name, dst)
-
-    def call(self, cmd):
-        with self.ssh() as ssh:
-            stdin, stdout, stderr = ssh.exec_command(cmd)
-            return stdout.read()
-
-    @contextmanager
-    def tmpdir(self):
-        tmpd = None
-        try:
-            tmpd = self.call('mktemp -d')
-            yield tmpd
-        finally:
-            if tmpd is not None:
-                self.call(f'rm -rf {tmpd}')
-
-@dataclass
-class BaseExecutor:
-    cmd_tpl: str
-    exec_env: ExecutionEnvironment
-
-    def prepare(self, fn_dag, resp_file, **kw):
-        raise NotImplementedError('BaseExecutor should be subclassed')
-
-    @property
-    def meta(self):
-        return {
-            'executor': type(self).__name__,
-            'command-template': self.cmd_tpl,
-        }
-
-    def run(self, dag, args, cache: bool = True, retry: bool = False, **kw) -> dml.Node:
-        resource = dml.Resource(json.dumps(self.meta, separators=(',', ':'), sort_keys=True))
-        args = [x if isinstance(x, dml.Node) else dag.put(x) for x in args]
-        fndag = dag.start_fn(dag.put(resource), *args, cache=cache, retry=retry)
-        if isinstance(fndag, dml.Node):
-            return fndag
-        with self.exec_env.tmpdir() as tmpd:
-            resp_file = f'{tmpd}/result'
-            for k, v in self.prepare(fndag, resp_file, **kw):
-                self.exec_env.put_obj(v, f'{tmpd}/{k}')
-            self.exec_env.call(self.cmd_tpl.format(tmpd))
-            result = self.exec_env.cat(resp_file)
-        result = dml.from_json(result)
-        if isinstance(result, dml.Error):
-            raise result
-        node = fndag.commit(fndag.put(result))
-        return node
-
-@dataclass
-class PyExecutor(BaseExecutor):
-    python: str
-    cmd_tpl: str = field(init=False)
-
-    def __post_init__(self):
-        self.cmd_tpl = f'{self.python!r} "{{0}}/script.py" "{{0}}/args.json"'
+    def _resolve(self, obj: dml.Resource):
+        return (CACHE_LOC/obj.info['id'])
 
     @staticmethod
-    def make_script(fnname, src, result_file):
-        tpl = dedent(
-            """
-            import sys
-            try:
-                import daggerml as dml
-            except ImportError:
-                import dml_copy as dml
+    def _put_obj(src_path, file_id):
+        fpath = CACHE_LOC/file_id
+        if not (fpath).exists():
+            os.rename(src_path, fpath)
+            return True
+        return False
 
-            with open(sys.argv[1], 'r') as f:
-                expr = dml.from_json(f.read())
 
-            {src}
-
-            if __name__ == '__main__':
-                try:
-                    result = {fnname}(*expr)
-                except KeyboardInterrupt:
-                    raise
-                except Exception as e:
-                    result = dml.Error.from_ex(e)
-                import json
-                with open({result_file!r}, 'w') as f:
-                    json.dump(dml.to_data(result), f)
-            """
-        )
-        return tpl.format(
-            src=dedent(src),
-            fnname=fnname,
-            result_file=result_file,
-        )
-
-    def prepare(self, fn_dag: dml.Dag, result_file: str):
-        yield 'args.json', dml.to_json(fn_dag.expr[2:]).encode()
-        script = self.make_script(*fn_dag.expr[1], result_file)
-        yield 'script.py', script.encode()
-        with open(f'{dml_root}/core.py', 'rb') as f:
-            yield 'dml_copy.py', f.read()
-
-    def call(self, dag, fn, *args: dml.Node, cache: bool = True):
-        src = inspect.getsource(fn)
-        resp = self.run(dag, [[fn.__name__, src], *args], cache=cache)
-        return resp
-
-@dataclass
-class CondaPyExecutor(PyExecutor):
-
-    def __post_init__(self):
-        self.cmd_tpl = f'conda run -n {self.python} python "{{0}}/script.py" "{{0}}/args.json"'
-
-@dataclass
-class HatchPyExecutor(PyExecutor):
-
-    def __post_init__(self):
-        self.cmd_tpl = f'hatch -e {self.python!r} run python "{{0}}/script.py" "{{0}}/args.json"'
-
-@dataclass
-class InProcEnv(ExecutionEnvironment):
-    store: Dict = field(default_factory=dict)
-
-    def cat(self, loc):
-        store_key, obj_key = loc.split('/', 1)
-        return self.store[store_key][obj_key]
-
-    def put_obj(self, obj: bytes, dst: str):
-        store_key, obj_key = dst.split('/', 1)
-        self.store[store_key][obj_key] = obj
-        return dst
-
-    def call(self, store_id):
-        fn = self.store[store_id]['fn']
-        args = self.store[store_id]['args']
-        # args = [x.unroll() for x in args]
+    def tar_(self, src):
+        tmpf = NamedTemporaryFile(prefix='dml-', delete=False)
         try:
-            resp = fn(*args)
-        except Exception as e:
-            resp = dml.Error.from_ex(e)
-        result_key = self.store[store_id]['result']
-        self.put_obj(dml.to_json(resp).encode(), result_key)
-        return resp
+            _hash = make_tarball(src, tmpf.name)
+            file_id = f'{_hash}.tar.gz'
+            if not self._put_obj(tmpf.name, file_id):
+                os.unlink(tmpf.name)
+        except Exception:
+            os.unlink(tmpf.name)
+            raise
+        fndag = self.dag.start_fn(dml.Resource.from_dict({'exec': self.name}), 'local', file_id)
+        if isinstance(fndag, dml.Node):
+            logger.info('returning cached value')
+            return fndag
+        rsrc = dml.Resource.from_dict({'exec': self.name, 'id': file_id})
+        logger.info('committing result')
+        return fndag.commit(rsrc)
 
-    @contextmanager
-    def tmpdir(self):
-        _id = uuid4().hex
-        self.store[_id] = {}
-        yield _id
-        del self.store[_id]
+    def untar(self, rsrc: dml.Node, dest: Optional[str] = None):
+        rsrc = self.dag.get_value(rsrc)
+        tarball = self._resolve(rsrc)
+        if dest is not None:
+            return extract_tarball(tarball, dest)
+        return tmp_untar(tarball)
+
+    # def run(self):
+    #     script, *args = self.dag.expr
+    #     fndag = self.dag.start_fn(dml.Resource(self.name), tarball, dkr_path, cache=cache, retry=retry)
+    #     if isinstance(fndag, dml.Node):
+    #         return fndag
+    #     tb_path = self.dag.get_value(tarball).info['path']
+    #     ar_path = self.dag.get_value(dkr_path)
+    #     resp = docker_build(tb_path, dkr_path=ar_path)
+    #     rsrc = dml.Resource.from_dict({'id': ':'.join([resp['resource'], resp['tag']]), **resp})
+    #     return fndag.commit(rsrc)
+
+    def exists(self, obj: dml.Node):
+        obj = self.dag.get_value(obj)
+        return self._resolve(obj).is_file()
+
+
+dml.Dag.register_ns(ShDagNS)
+
+
+def docker_build(path, dkr_path=None, tag=None, flags=()):
+    img = 'dml'
+    tag = tag or f'id_{int(time())}_{uuid4().hex}'
+    cmd = ['docker', 'build', '-t', f'{img}:{tag}']
+    if dkr_path is not None:
+        cmd.extend(['-f', dkr_path])
+    with cd(path):
+        proc = subprocess.run([*cmd, *flags, '.'])
+    if proc.returncode != 0:
+        raise RuntimeError(f'docker build exited with code: {proc.returncode!r}')
+    return {
+        'repository': img,
+        'hash': tag,
+        'id': f'{img}:{tag}',
+    }
+
+def docker_run(dkr: dict, script: str):
+    with NamedTemporaryFile() as tmpf:
+        cmd = [
+            'docker', 'run',
+            f'--mount=type=bind,source={script},target={script}',
+            f'--mount=type=bind,source={tmpf.name},target={tmpf.name}',
+        ]
+        proc = subprocess.run([*cmd, dkr['id'], script, tmpf.name], capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f'{proc.returncode}:\n{proc.stderr}')
+        with open(tmpf.name, 'r') as f:
+            return dml.from_json(f.read())
 
 @dataclass
-class InProcExecutor(BaseExecutor):
-    cmd_tpl: str = field(default='{}')
-    exec_env: ExecutionEnvironment = field(default_factory=InProcEnv)
+class DkrDagNS:
+    dag: dml.Dag
+    name = 'dkr'
 
-    def prepare(self, fn_dag, result_file, fn):
-        yield 'fn', fn
-        yield 'args', fn_dag.expr[2:]
-        yield 'result', result_file
+    def build(self, tarball: dml.Node, dkr_path: Optional[str|dml.Node] = None, *, cache: bool = True, retry: bool = False):
+        """
+        build a docker image
 
-    def call(self, dag, fn, *args: dml.Node, cache: bool = True):
-        src = inspect.getsource(fn)
-        resp = self.run(dag, [[fn.__name__, src], *args], cache=cache, fn=fn)
-        return resp
+        Notes
+        -----
+        * This does not check to ensure the docker image exists locally.
+          If you're working locally, you'll have to check it yourself and retry if not
+        """
+        if isinstance(dkr_path, dml.Node):
+            ar_path = self.dag.get_value(dkr_path)
+        else:
+            ar_path = dkr_path
+            dkr_path = self.dag.put(ar_path)
+        fn_rsrc = dml.Resource.from_dict({'exec': self.name})
+        fndag = self.dag.start_fn(fn_rsrc, tarball, dkr_path, cache=cache, retry=retry)
+        if isinstance(fndag, dml.Node):
+            return fndag
+        with self.dag.sh.untar(tarball) as tb_path:
+            resp = docker_build(tb_path, dkr_path=ar_path)
+        rsrc = dml.Resource.from_dict({'id': f"{resp['repository']}@{resp['hash']}", **resp})
+        return fndag.commit(rsrc)
+
+    def exists(self, img: dml.Node):
+        cmd = ['docker', 'image', 'inspect', self.dag.get_value(img).info['id']]
+        print('command:', ' '.join(cmd))
+        resp = subprocess.run(cmd, check=False)
+        return resp.returncode == 0
+
+    def run(self, img: dml.Node, *args: dml.Node):
+        pass
+
+
+dml.Dag.register_ns(DkrDagNS)
