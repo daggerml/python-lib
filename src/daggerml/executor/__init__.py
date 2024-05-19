@@ -292,12 +292,6 @@ class DkrDagNS:
                             except KeyboardInterrupt:
                                 raise
                             except Exception as e:
-                                with open(__file__, 'r') as _f:
-                                    print('script.....')
-                                    print('=' * 80)
-                                    print(_f.read())
-                                    print('=' * 80)
-                                    print('end script.....')
                                 import daggerml as dml
                                 result = dml.Error.from_ex(e)
                             import sys
