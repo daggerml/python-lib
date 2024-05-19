@@ -93,7 +93,6 @@ def from_data(data):
     if n in DATA_TYPE:
         return DATA_TYPE[n](*[from_data(x) for x in args])
     raise ValueError(f'cannot `from_data` {data!r}')
-    # return Ref(data)
 
 
 def to_data(obj):
@@ -191,7 +190,7 @@ class Dag(NamespacedObj):
         assert isinstance(ref, Ref)
         if ref.type == 'node':
             return Node(ref)
-        return FnDag(self.tok, ref, par=self.ref, cache=cache, api_flags=self.api_flags.copy())
+        return FnDag(tok=self.tok, ref=ref, par=self.ref, cache=cache, api_flags=self.api_flags.copy())
 
     def call(self, f, *args, cache: bool = True, retry: bool = False, update_freq: float|int = 5) -> Node:
         resource = Resource.from_dict({'exec': 'local', 'func_name': f.__qualname__})
@@ -222,10 +221,19 @@ class Dag(NamespacedObj):
         assert isinstance(node, Node)
         return node
 
-    def commit(self, result) -> None:
-        if not isinstance(result, Node):
+    def _commit(self, result, cache: bool|None = None) -> None|Ref:
+        if not isinstance(result, (Node, Error)):
             result = self.put(result)
-        resp = self.invoke('commit', self.ref, result.ref)
+        if isinstance(result, Node):
+            result = result.ref
+        if cache is None:
+            cache = getattr(self, 'cache', None)
+        par = getattr(self, 'par', None)
+        resp = self.invoke('commit', self.ref, result, parent_dag=par, cache=cache)
+        return resp
+
+    def commit(self, result) -> None:
+        resp = self._commit(result)
         assert resp is None
         return resp
 
@@ -246,7 +254,7 @@ class Dag(NamespacedObj):
 class FnDag(Dag):
     par: Ref = field(kw_only=True)
     expr: List[Node] = field(init=False)
-    cache: bool = True
+    cache: bool = False
 
     def __post_init__(self):
         resp = self.invoke('get_expr', self.ref)
@@ -302,11 +310,7 @@ class FnDag(Dag):
             thread.join()
 
     def commit(self, result, cache: bool|None = None) -> Node:
-        if cache is None:
-            cache = self.cache
-        if not isinstance(result, Node):
-            result = self.put(result)
-        resp = self.invoke('commit', self.ref, result.ref, parent_dag=self.par, cache=cache)
+        resp = self._commit(result, cache=cache)
         assert isinstance(resp, Ref)
         assert resp.type == 'node'
         return Node(resp)

@@ -53,6 +53,14 @@ Homepage = "https://daggerml.com"
 Documentation = "https://daggerml.com/docs"
 Issues = "https://github.com/daggerml/python-lib/issues"
 
+[tool.pytest.ini_options]
+pythonpath = "tests/"
+minversion = "6.0"
+addopts = "-ra --ignore=submodules/"
+testpaths = [
+    "tests",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/daggerml"]
 
@@ -63,7 +71,7 @@ dependencies = [
   "pytest-cov",
 ]
 
-[tool.hatch.envs.test-env]
+[tool.hatch.envs.test-pandas]
 dependencies = [
   "pandas==2.0.1",
 ]
