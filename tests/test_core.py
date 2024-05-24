@@ -101,17 +101,33 @@ class TestApi(DmlTestBase):
         assert {dag.get_value(n) for n in resp} == {144}
 
     def test_cache_basic(self):
-        stash = [0]
-        def f(*_):
-            return stash[0]
+        some_global_variable = [5]
+        def fn(*_):
+            return some_global_variable[0]
         # rsrc = dml.Resource('b')
         dag = self.new('test-dag0', 'this is the test dag')
-        args = dag.put(12), dag.put(13)
-        n0 = dag.call(f, *args, cache=True)
-        assert dag.get_value(n0) == 0
-        stash[0] = 1
-        n1 = dag.call(f, *args, cache=True)
-        assert dag.get_value(n1) == 0
+        n0 = dag.call(fn, 12, 13, cache=True)
+        assert dag.get_value(n0) == 5
+        some_global_variable[0] = 1
+        n1 = dag.call(fn, 12, 13, cache=True)
+        assert dag.get_value(n1) == 5
+        n1 = dag.call(fn, 12, 14, cache=True)
+        assert dag.get_value(n1) == 1
+
+    def test_realish(self):
+        from itertools import product
+        dag = self.new('test', 'foo')
+        def f0(x, y):
+            return y * (x + 1)
+        def f1(x, y):
+            return x + y
+        xs = [1, 2, 3, 4, 5]
+        grid = list(product(range(5), repeat=2))
+        results = []
+        for a, b in grid:
+            tmp = [dag.call(f0, x, a, cache=True) for x in xs]
+            tmp = [dag.call(f1, x, b, cache=True) for x in tmp]
+            results.append({'a': a, 'b': b, 'ys': tmp})
 
     def test_namespaces(self):
         @dataclass

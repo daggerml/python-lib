@@ -61,49 +61,8 @@ def tmp_untar(**tarballs):
         yield tmpd
 
 
-def run_fn_local(
-        exec_fn: Callable[[str], List[str]],
-        resource: Resource,
-        dag: Dag,
-        fn: Callable[[Any], Any],
-        *args: Node,
-        cache: bool = False):
-    fndag = dag.start_fn(resource, dedent(inspect.getsource(fn)), *args, cache=cache)
-    assert isinstance(fndag, dml.FnDag)  # just to quiet pylint
-    with fndag:
-        _, src, *_args = fndag.expr
-        assert isinstance(src, str)
-        with TemporaryDirectory(prefix='dml-') as tmpd:
-            with open(f'{tmpd}/script.py', 'w') as f:
-                f.write('#!/usr/bin/env python3')
-                f.write(f'\n\n{src}\n')
-                f.write(dedent(f'''
-                if __name__ == '__main__':
-                    try:
-                        result = {fn.__name__}(*{_args!r})
-                    except KeyboardInterrupt:
-                        raise
-                    except Exception as e:
-                        import daggerml as dml
-                        result = dml.Error.from_ex(e)
-                    import daggerml as dml
-                    with open('{tmpd}/result.json', 'w') as f:
-                        f.write(dml.to_json(result))
-                    print('dml finished running', {fn.__name__!r})
-                '''))
-            subprocess.run(['chmod', '+x', f'{tmpd}/script.py'], check=True)
-            resp = subprocess.run(exec_fn(f'{tmpd}/script.py'), check=False, capture_output=True)
-            if resp.returncode != 0:
-                for line in resp.stderr.decode().split('\n'):
-                    print(line, file=sys.stderr)
-                raise RuntimeError('unknown error')
-            with open(f'{tmpd}/result.json', 'r') as f:
-                result = dml.from_json(f.read())
-        return fndag.commit(result)
-
-
 @dataclass
-class ShDagNS:
+class Sh:
     dag: dml.Dag
     name = 'sh'
 
@@ -134,11 +93,10 @@ class ShDagNS:
         try:
             _hash = make_tarball(src, tmpf.name, filter_fn=filter_fn)
             file_id = f'{_hash}.tar.gz'
-            if not self._put_obj(tmpf.name, file_id):
+            self._put_obj(tmpf.name, file_id)
+        finally:
+            if os.path.exists(tmpf.name):
                 os.unlink(tmpf.name)
-        except Exception:
-            os.unlink(tmpf.name)
-            raise
         fndag = self.dag.start_fn(self.resource(), 'local', file_id)
         if isinstance(fndag, dml.Node):
             logger.info('returning cached value')
@@ -146,35 +104,116 @@ class ShDagNS:
         logger.info('committing result')
         return fndag.commit(self.resource(id=file_id, type='tar'))
 
-    def untar(self, **rsrcs: dml.Node):
-        return tmp_untar(**{k: self._resolve(v) for k, v in rsrcs.items()})
+    def put_file_(self, src):
+        with open(src, 'rb') as f:
+            _hash = sha512(f.read()).hexdigest()
+        rsrc = self.resource(id=f'{_hash}.file', type='file')
+        shutil.copy(src, self._resolve(rsrc))
+        return self.dag.put(rsrc)
+
+    def put_bytes_(self, bts):
+        with NamedTemporaryFile(prefix='dml-bytes-', mode='wb+') as f:
+            f.write(bts)
+            f.flush()
+            f.seek(0)
+            return self.put_file_(f.name)
+
+    def store(self, x, **kw):
+        if isinstance(x, dml.Node):
+            return x
+        if os.path.isdir(x):
+            return self.tar_(x, **kw)
+        if os.path.isfile(x):
+            return self.put_file_(x, **kw)
+        # not a file nor directory
+        if isinstance(x, str):
+            return self.dag.put(x, **kw)
+        raise ValueError(f'invalid type: {type(x)}')
+
+    @contextmanager
+    def hydrate(self, **rsrcs: dml.Node):
+        with TemporaryDirectory(prefix='dml-hydrate-') as tmpd:
+            for k, v in rsrcs.items():
+                to = f'{tmpd}/{k}'
+                if isinstance(v, dml.Node):
+                    v = self.dag.get_value(v)
+                if isinstance(v, dml.Resource):
+                    if v.info['type'] == 'tar':
+                        extract_tarball(self._resolve(v), to)
+                    elif v.info['type'] in {'bytes', 'file'}:
+                        shutil.copy(self._resolve(v), to)
+                    else:
+                        raise ValueError(f'invalid type: {k} = {type(v)}')
+                elif isinstance(v, str):
+                    with open(to, 'w') as f:
+                        f.write(v)
+                else:
+                    raise TypeError(f'invalid type: ({k} = {type(v)})')
+            yield tmpd
 
     def exists(self, obj: dml.Node):
         obj = self.dag.get_value(obj)
         return self._resolve(obj).is_file()
 
-    def run_fn(self,
-               fn: Callable[[Any], Any],
-               *args: dml.Node,
-               executable: str = sys.executable,
-               cache: bool = False):
-        return run_fn_local(
-            lambda x: [executable, x],
-            self.resource(type='py-fn', id=executable),
-            self.dag, fn, *args, cache=cache)
+    def run_fn_local(
+        self,
+        exec_fn: Callable[..., List[str]],
+        resource: Resource,
+        fn: Callable[[Any], Any],
+        *args: Node,
+        mounts: Optional[Dict[str, dml.Node]] = None,
+        cache: bool = False
+    ):
+        if mounts is None:
+            mounts = {}
+        mounts = {k: self.store(v) for k, v in mounts.items()}
+        fndag = self.dag.start_fn(resource, dedent(inspect.getsource(fn)), mounts, *args, cache=cache)
+        if isinstance(fndag, dml.Node):
+            return fndag
+        assert isinstance(fndag, dml.FnDag)  # just to quiet pylint
+        _, src, mounts, *_args = fndag.expr
+        with self.hydrate(**mounts) as tmpd0:
+            with TemporaryDirectory(prefix='dml-') as tmpd:
+                # a different directory to avoid name clashing
+                with open(f'{tmpd}/script.py', 'w') as f:
+                    f.write('#!/usr/bin/env python3')
+                    f.write(f'\n\n{src}\n')
+                    f.write(dedent(f'''
+                    if __name__ == '__main__':
+                        try:
+                            result = {fn.__name__}(*{_args!r})
+                        except KeyboardInterrupt:
+                            raise
+                        except Exception as e:
+                            import daggerml as dml
+                            result = dml.Error.from_ex(e)
+                        import daggerml as dml
+                        with open('{tmpd}/result.json', 'w') as f:
+                            f.write(dml.to_json(result))
+                        print('dml finished running', {fn.__name__!r})
+                    '''))
+                subprocess.run(['chmod', '+x', f'{tmpd}/script.py'], check=True)
+                env = os.environ.copy()
+                env['PYTHONPATH'] = tmpd0
+                subprocess.run(exec_fn('bash', '-c', f'cd {tmpd} && {tmpd}/script.py'), check=True, env=env)
+                # subprocess.run(exec_fn(f'{tmpd}/script.py'), check=True, env=env)
+                with open(f'{tmpd}/result.json', 'r') as f:
+                    result = dml.from_json(f.read())
+            return fndag.commit(result)
 
     def run_hatch(self,
                   fn: Callable[[Any], Any],
                   *args: dml.Node,
                   env: str = 'default',
+                  mounts: Optional[Dict[str, dml.Node]] = None,
                   cache: bool = False):
-        return run_fn_local(
-            lambda x: ['hatch', '-e', env, 'run', 'python3', x],
+        return self.run_fn_local(
+            lambda *x: ['hatch', '-e', env, 'run', *x],
             self.resource(type='hatch-fn', id=env),
-            self.dag, fn, *args, cache=cache)
+            fn, *args, cache=cache, mounts=mounts)
 
 
-dml.Dag.register_ns(ShDagNS)
+dml.Dag.register_ns(Sh)
 
 
 def docker_build(path, dkr_path=None, tag=None, flags=()):
@@ -230,7 +269,7 @@ def docker_run(dkr: dict, script: str, **mounts: str):
             return dml.from_json(f.read())
 
 @dataclass
-class DkrDagNS:
+class Dkr:
     dag: dml.Dag
     name = 'dkr'
 
@@ -255,7 +294,7 @@ class DkrDagNS:
         fndag = self.dag.start_fn(self.resource(type='build'), tarball, dkr_path, cache=cache)
         if isinstance(fndag, dml.Node):
             return fndag
-        with self.dag.sh.untar(tarball=tarball) as tb_path:
+        with self.dag.sh.hydrate(tarball=tarball) as tb_path:
             resp = docker_build(f'{tb_path}/tarball', dkr_path=ar_path)
         print(resp)
         rsrc = self.resource(type='image', **resp)
@@ -271,6 +310,8 @@ class DkrDagNS:
             mounts: Optional[Dict[str, dml.Node]] = None,
             cache: bool = True):
         fndag = self.dag.start_fn(img, dedent(inspect.getsource(fn)), args, mounts, cache=cache)
+        if isinstance(fndag, dml.Node):
+            return fndag
         assert isinstance(fndag, dml.FnDag)  # just to quiet pylint
         with fndag:
             assert isinstance(fndag, dml.FnDag)  # just to quiet pylint
@@ -279,7 +320,7 @@ class DkrDagNS:
             if mounts is None:
                 mounts = {}
             assert isinstance(img, Resource)
-            with self.dag.sh.untar(**mounts) as d0:
+            with self.dag.sh.hydrate(**mounts) as d0:
                 mnt_dict = {f'{d0}/{k}': f'/opt/daggerml/{k}' for k in mounts}
                 with TemporaryDirectory(prefix='dml-') as d1:
                     with open(f'{d1}/script.py', 'w') as f:
@@ -306,4 +347,4 @@ class DkrDagNS:
             return fndag.commit(result)
 
 
-dml.Dag.register_ns(DkrDagNS)
+dml.Dag.register_ns(Dkr)

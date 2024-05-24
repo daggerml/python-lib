@@ -60,6 +60,10 @@ addopts = "-ra --ignore=submodules/"
 testpaths = [
     "tests",
 ]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "serial",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/daggerml"]
@@ -71,9 +75,30 @@ dependencies = [
   "pytest-cov",
 ]
 
+[tool.hatch.envs.test-jax]
+dependencies = [
+  "jax-metal==0.0.7",
+  "jaxlib==0.4.26",
+  "jax==0.4.26",
+  "flax",
+  "optax",
+  "numpy",
+  "tensorflow-datasets",
+  "tensorflow",
+  "ml-collections",
+  "scipy==1.10.1",
+  "tqdm",
+]
+
 [tool.hatch.envs.test-pandas]
 dependencies = [
   "pandas==2.0.1",
+  "scikit-learn==1.4",
+]
+
+[tool.hatch.envs.test-nevergrad]
+dependencies = [
+  "nevergrad==1.0.2",
 ]
 
 [tool.hatch.envs.test]

@@ -90,7 +90,7 @@ class TestShExec(DmlTestBase):
     def test_tar(self):
         dag = self.new('test-dag0', 'this is a test')
         rsrc = dag.sh.tar_(_here_)
-        with dag.sh.untar(x=rsrc) as tmpd:
+        with dag.sh.hydrate(x=rsrc) as tmpd:
             assert ls_r(f'{tmpd}/x/') == ls_r(_here_)
 
     def test_tmptar(self):
@@ -98,18 +98,8 @@ class TestShExec(DmlTestBase):
         sh = dag.sh
         tar = sh.tar_(_here_)
         assert isinstance(tar, dml.Node)
-        with dag.sh.untar(x=tar) as tmpd:
+        with dag.sh.hydrate(x=tar) as tmpd:
             assert ls_r(f'{tmpd}/x/') == ls_r(_here_)
-
-    def test_run_fn(self):
-        dag = self.new('test0', 'testing')
-
-        def foopy(x, y):
-            return x + y
-
-        for a, b in [('a', 'b'), (5, 7)]:
-            res = dag.sh.run_fn(foopy, a, b)
-            assert dag.get_value(res) == a + b
 
     def test_run_hatch(self):
         dag = self.new('test0', 'testing')
@@ -130,6 +120,39 @@ class TestShExec(DmlTestBase):
         """).strip()
         res = dag.sh.run_hatch(foopy, csv, env='test-pandas')
         assert dag.get_value(res) == {'a': 10, 'b': 30}
+
+    def test_bytes(self):
+        dag = self.new('test', 'asdf')
+        bts = b'testing 123'
+        node = dag.sh.put_bytes_(bts)
+        with dag.sh.hydrate(**{'x.bytes': node}) as tmpd:
+            with open(f'{tmpd}/x.bytes', 'rb') as f:
+                assert f.read() == bts
+
+    def test_run_hatch_script(self):
+        dag = self.new('test', 'foo')
+        def fn(conf):
+            from tempfile import TemporaryDirectory
+
+            import mnist
+            import numpy as np
+            from ml_collections import ConfigDict
+            config = ConfigDict(conf)
+            with TemporaryDirectory(prefix='mnist-') as tmpd:
+                result, loss = mnist.train_and_evaluate(config, tmpd)
+            # params_bytes = serialization.to_bytes(result.params)
+            return float(np.array(loss))
+        config = {
+            'num_epochs': 1,
+            'batch_size': 20,
+            'layer0_features': 32,
+            'layer1_features': 64,
+            'learning_rate': 0.01,
+            'momentum': 0.9,
+        }
+        node = dag.sh.run_hatch(fn, config, mounts={'mnist.py': _here_/'assets/mnist_jax.py'}, env='test-jax')
+        assert isinstance(dag.get_value(node), float)
+
 
 class TestDkrExec(DmlTestBase):
 
