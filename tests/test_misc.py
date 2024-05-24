@@ -139,9 +139,9 @@ class TestShExec(DmlTestBase):
             from ml_collections import ConfigDict
             config = ConfigDict(conf)
             with TemporaryDirectory(prefix='mnist-') as tmpd:
-                result, loss = mnist.train_and_evaluate(config, tmpd)
+                result, loss, accuracy = mnist.train_and_evaluate(config, tmpd)
             # params_bytes = serialization.to_bytes(result.params)
-            return float(np.array(loss))
+            return float(np.array(loss)), float(np.array(accuracy))
         config = {
             'num_epochs': 1,
             'batch_size': 20,
@@ -151,7 +151,7 @@ class TestShExec(DmlTestBase):
             'momentum': 0.9,
         }
         node = dag.sh.run_hatch(fn, config, mounts={'mnist.py': _here_/'assets/mnist_jax.py'}, env='test-jax')
-        assert isinstance(dag.get_value(node), float)
+        assert all(isinstance(x, float) for x in dag.get_value(node))
 
 
 class TestDkrExec(DmlTestBase):

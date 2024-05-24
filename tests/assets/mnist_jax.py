@@ -142,4 +142,4 @@ def train_and_evaluate(
         summary_writer.scalar('test_loss', test_loss, epoch)
         summary_writer.scalar('test_accuracy', test_accuracy, epoch)
     summary_writer.flush()
-    return state, test_loss
+    return state, test_loss, test_accuracy

@@ -2,68 +2,39 @@
 
 ## Prerequisites
 
-* [pipx](https://pypa.github.io/pipx/installation/)
-* [hatch](https://hatch.pypa.io/latest/install/#pipx) (via `pipx`)
-
-## Configure
-
-Get the DaggerML API endpoint from the `api-endpoint` output of your DaggerML
-infrastructure Terraform CDK stack. Then start a hatch shell with a Python
-virtual environment:
-
-```bash
-# start a hatch shell
-hatch shell
-```
-
-Within this shell you can use the `dml` executable to configure the DaggerML
-SDK for this project:
-
-```
-# configure API endpoint (in the ./.dml directory)
-dml configure --api-endpoint ${DML_API_ENDPOINT}
-```
-
-You can enable command completion for `dml` if you want:
-
-```bash
-# bash command completion
-pip install argcomplete
-
-# enable completion for dml in this shell, or add to your .bashrc file, or
-# see: https://kislyuk.github.io/argcomplete/#activating-global-completion
-eval "$(python "$(which register-python-argcomplete)" dml)"
-```
-
-You can also use `python -m daggerml` instead of `dml` if you prefer that.
+- [pipx](https://pypa.github.io/pipx/installation/)
+- [hatch](https://hatch.pypa.io/latest/install/#pipx) (via `pipx`)
 
 ## Usage
 
-You need AWS credentials for the region in which your DaggerML infrastructure
-is located.
+See unit tests (or example) for usage.
 
-```python
-import daggerml as dml
-d0 = dml.Dag.new('my-dag')
-d0.commit(42)
+## Example
+
+Without any environments active, run:
+
+```bash
+hatch -e test-nevergrad run ./tests/example_optimization.py
 ```
+
+Feel free to mess with the parameters, files, or defined functions in that file
+to see how it affects the cache. You can also increase `budget` and watch the
+dml cache in action.
+
+Under the hood, the script uses the `nevergrad` library from the
+`test-nevergrad` environment to optimize hyperparameters of a convolutional net
+for image classification (hand-written digits).
 
 ## Tests
 
-```bash
-# run tests against AWS infrastructure
-hatch run test
+To run all tests:
 
-# run tests locally (need local docker API server running)
-DML_TEST_LOCAL=true hatch run test
+```bash
+hatch run pytest
 ```
 
-## Docs
+Some of the tests (in particular the ones that build docker images) are super slow. To run all but those,
 
 ```bash
-# build the docs
-hatch run docs:build
-
-# start a server to view the docs
-hatch run docs:serve
+hatch run pytest -m 'not slow'
 ```

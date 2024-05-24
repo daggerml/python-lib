@@ -10,7 +10,6 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import tarfile
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -23,7 +22,7 @@ from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 import daggerml as dml
-from daggerml.core import CACHE_LOC, Dag, Node, Resource
+from daggerml.core import CACHE_LOC, Resource
 
 logger = logging.getLogger(__name__)
 dml_root = os.path.dirname(dml.__file__)
@@ -50,15 +49,6 @@ def make_tarball(source_dir, output_filename, filter_fn=lambda x: x):
 def extract_tarball(src, dest):
     with tarfile.open(src, 'r:gz') as tf:
         tf.extractall(dest)
-
-
-@contextmanager
-def tmp_untar(**tarballs):
-    with TemporaryDirectory(prefix='dml-untars-') as tmpd:
-        for k, v in tarballs.items():
-            to = f'{tmpd}/{k}'
-            extract_tarball(v, to)
-        yield tmpd
 
 
 @dataclass
@@ -160,7 +150,7 @@ class Sh:
         exec_fn: Callable[..., List[str]],
         resource: Resource,
         fn: Callable[[Any], Any],
-        *args: Node,
+        *args: dml.Node,
         mounts: Optional[Dict[str, dml.Node]] = None,
         cache: bool = False
     ):
@@ -196,7 +186,6 @@ class Sh:
                 env = os.environ.copy()
                 env['PYTHONPATH'] = tmpd0
                 subprocess.run(exec_fn('bash', '-c', f'cd {tmpd} && {tmpd}/script.py'), check=True, env=env)
-                # subprocess.run(exec_fn(f'{tmpd}/script.py'), check=True, env=env)
                 with open(f'{tmpd}/result.json', 'r') as f:
                     result = dml.from_json(f.read())
             return fndag.commit(result)
