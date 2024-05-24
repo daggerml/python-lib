@@ -1,0 +1,3 @@
+[submodule "submodules/daggerml_cli"]
+	path = submodules/daggerml_cli
+	url = git@github.com:daggerml/daggerml-cli.git
