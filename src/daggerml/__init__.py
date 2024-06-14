@@ -9,8 +9,7 @@ except PackageNotFoundError:
 
 del version, PackageNotFoundError
 
-def new(name, message, flags=None):
-    return Dag.new(name, message, api_flags=flags)
+new = Dag.new
 
 __all__ = (
     'Dag', 'Error', 'FnDag', 'Node', 'Resource', 'from_data', 'to_data', 'from_json', 'to_json', 'new'

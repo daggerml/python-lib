@@ -69,6 +69,14 @@ class Error(Exception):
         formatted_tb = tb.format_exception(type(ex), value=ex, tb=ex.__traceback__)
         return cls(str(ex), {'trace': formatted_tb}, type(ex).__name__)
 
+    def __str__(self):
+        msg = str(super())
+        msg += f'\n\ndml.Error({self.code}: {self.message})'
+        if 'trace' in self.context:
+            sep = '='*80
+            msg += f'\n{sep}\nTrace\n{sep}\n' + '\n'.join(self.context['trace'])
+        return msg
+
 
 @dml_type
 @dataclass(frozen=True)
