@@ -104,6 +104,20 @@ class Sh:
         logger.info('committing result')
         return fndag.commit(self.resource(id=file_id, type='tar'))
 
+    def _put_file_(self, src):
+        with open(src, 'rb') as f:
+            _hash = sha512(f.read()).hexdigest()
+        rsrc = self.resource(id=f'{_hash}.file', type='file')
+        shutil.copy(src, self._resolve(rsrc))
+        return rsrc
+
+    def _put_bytes_(self, bts):
+        with NamedTemporaryFile(prefix='dml-bytes-', mode='wb+') as f:
+            f.write(bts)
+            f.flush()
+            f.seek(0)
+            return self._put_file_(f.name)
+
     def put_file_(self, src):
         with open(src, 'rb') as f:
             _hash = sha512(f.read()).hexdigest()
@@ -117,6 +131,12 @@ class Sh:
             f.flush()
             f.seek(0)
             return self.put_file_(f.name)
+
+    @contextmanager
+    def get_file(self, rsrc):
+        with NamedTemporaryFile(prefix='dml-get-') as f:
+            shutil.copy(self._resolve(rsrc), f.name)
+            yield f.name
 
     def store(self, x, **kw):
         if isinstance(x, dml.Node):
@@ -174,14 +194,19 @@ class Sh:
         _, src, mounts, *_args = fndag.expr
         with self.hydrate(**mounts) as tmpd0:
             with TemporaryDirectory(prefix='dml-') as tmpd:
+                with open(f'{tmpd}/args.json', 'w') as f:
+                    f.write(dml.to_json(_args))
                 # a different directory to avoid name clashing
                 with open(f'{tmpd}/script.py', 'w') as f:
                     f.write('#!/usr/bin/env python3')
                     f.write(f'\n\n{src}\n')
                     f.write(dedent(f'''
                     if __name__ == '__main__':
+                        with open('{tmpd}/args.json') as f:
+                            import daggerml as dml
+                            _args = dml.from_json(f.read())
                         try:
-                            result = {fn.__name__}(*{_args!r})
+                            result = {fn.__name__}(*_args)
                         except KeyboardInterrupt:
                             raise
                         except Exception as e:
@@ -196,6 +221,55 @@ class Sh:
                 env = os.environ.copy()
                 env['PYTHONPATH'] = tmpd0
                 subprocess.run(exec_fn('bash', '-c', f'cd {tmpd} && {tmpd}/script.py'), check=True, env=env)
+                # subprocess.run(exec_fn(f'{tmpd}/script.py'), check=True, env=env)
+                with open(f'{tmpd}/result.json', 'r') as f:
+                    result = dml.from_json(f.read())
+            return fndag.commit(result)
+
+    def run(self,
+            fn: Callable[[Any], Any],
+            *args: dml.Node,
+            executable=sys.executable,
+            mounts: Optional[Dict[str, dml.Node]] = None,
+            cache: bool = False):
+        resource = self.resource(type='py-fn', id=executable)
+        if mounts is None:
+            mounts = {}
+        mounts = {k: self.store(v) for k, v in mounts.items()}
+        fndag = self.dag.start_fn(resource, dedent(inspect.getsource(fn)), mounts, *args, cache=cache)
+        if isinstance(fndag, dml.Node):
+            return fndag
+        assert isinstance(fndag, dml.FnDag)  # just to quiet pylint
+        _, src, mounts, *_args = fndag.expr
+        with self.hydrate(**mounts) as tmpd0:
+            with TemporaryDirectory(prefix='dml-') as tmpd:
+                with open(f'{tmpd}/args.json', 'w') as f:
+                    f.write(dml.to_json(_args))
+                # a different directory to avoid name clashing
+                with open(f'{tmpd}/script.py', 'w') as f:
+                    f.write('#!/usr/bin/env python3')
+                    f.write(f'\n\n{src}\n')
+                    f.write(dedent(f'''
+                    if __name__ == '__main__':
+                        with open('{tmpd}/args.json') as f:
+                            import daggerml as dml
+                            _args = dml.from_json(f.read())
+                        try:
+                            result = {fn.__name__}(*_args)
+                        except KeyboardInterrupt:
+                            raise
+                        except Exception as e:
+                            import daggerml as dml
+                            result = dml.Error.from_ex(e)
+                        import daggerml as dml
+                        with open('{tmpd}/result.json', 'w') as f:
+                            f.write(dml.to_json(result))
+                        print('dml finished running', {fn.__name__!r})
+                    '''))
+                subprocess.run(['chmod', '+x', f'{tmpd}/script.py'], check=True)
+                env = os.environ.copy()
+                env['PYTHONPATH'] = tmpd0
+                subprocess.run([executable, f'{tmpd}/script.py'], check=True, env=env)
                 # subprocess.run(exec_fn(f'{tmpd}/script.py'), check=True, env=env)
                 with open(f'{tmpd}/result.json', 'r') as f:
                     result = dml.from_json(f.read())
