@@ -103,13 +103,14 @@ class TestShExec(DmlTestBase):
 
     def test_run_hatch(self):
         dag = self.new('test0', 'testing')
-        def foopy(doc):
+        def foopy(fndag):
             from io import StringIO
 
             import pandas as pd
+            _, doc = fndag.expr
             print(doc)
             df = pd.read_csv(StringIO(doc))
-            return df.sum().to_dict()
+            return fndag.commit(df.sum().to_dict())
 
         csv = dedent("""
         a,b
@@ -129,19 +130,38 @@ class TestShExec(DmlTestBase):
             with open(f'{tmpd}/x.bytes', 'rb') as f:
                 assert f.read() == bts
 
+    def test_runpy(self):
+        dag = self.new('test', 'foo')
+        def fn(fndag):
+            import sys
+            _, x = fndag.expr
+            return fndag.commit([x, x + 1, sys.executable])
+        import subprocess
+        resp = subprocess.run(['hatch', '-e', 'test-pandas', 'run', 'which', 'python'], capture_output=True)
+        ex = resp.stdout.decode().strip()
+        node = dag.sh.run_py(fn, 2, executable=ex)
+        a, b, c = dag.get_value(node)
+        assert a == 2
+        assert b == 3
+        assert c == ex
+
     def test_run_hatch_script(self):
         dag = self.new('test', 'foo')
-        def fn(conf):
-            from tempfile import TemporaryDirectory
+        def fn(fndag):
+            import sys
 
-            import mnist
             import numpy as np
             from ml_collections import ConfigDict
+
+            from daggerml.executor import Sh
+            _, mn_rsrc, conf = fndag.expr
             config = ConfigDict(conf)
-            with TemporaryDirectory(prefix='mnist-') as tmpd:
+            with Sh(fndag).hydrate(**{'mnist.py': mn_rsrc}) as tmpd:
+                sys.path.append(tmpd)
+                import mnist
                 result, loss, accuracy = mnist.train_and_evaluate(config, tmpd)
             # params_bytes = serialization.to_bytes(result.params)
-            return float(np.array(loss)), float(np.array(accuracy))
+            return fndag.commit([float(np.array(loss)), float(np.array(accuracy))])
         config = {
             'num_epochs': 1,
             'batch_size': 20,
@@ -150,7 +170,8 @@ class TestShExec(DmlTestBase):
             'learning_rate': 0.01,
             'momentum': 0.9,
         }
-        node = dag.sh.run_hatch(fn, config, mounts={'mnist.py': _here_/'assets/mnist_jax.py'}, env='test-jax')
+        rsrc = dag.sh.store(_here_/'assets/mnist_jax.py')
+        node = dag.sh.run_hatch(fn, rsrc, config, env='test-jax')
         assert all(isinstance(x, float) for x in dag.get_value(node))
 
 

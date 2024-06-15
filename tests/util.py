@@ -27,4 +27,4 @@ class DmlTestBase(unittest.TestCase):
         self.pylib.__exit__(None, None, None)
 
     def new(self, name, message):
-        return dml.new(name, message, flags=self.flags)
+        return dml.new(name, message, api_flags=self.flags)

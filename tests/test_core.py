@@ -63,8 +63,9 @@ class TestApi(DmlTestBase):
         # from aaron.dml import run
         dag = self.new('test-dag0', 'this is the test dag')
         l0 = dag.put({'asdf': 12})
-        def f(x):
-            return {k: v**2 for k, v in x.items()}
+        def f(fndag):
+            _, x = fndag.expr
+            return fndag.commit({k: v**2 for k, v in x.items()})
         # ====== start
         n1 = dag.call(f, l0)
         # ====== end
@@ -84,9 +85,10 @@ class TestApi(DmlTestBase):
     def test_update_loop(self):
         pool_size = 5
         extra = 3
-        def f(x):
+        def f(fndag):
+            _, x = fndag.expr
             sleep(0.5)
-            return x**2
+            return fndag.commit(x**2)
         dag = self.new('test-dag0', 'this is the test dag')
         l0 = dag.put(12)
         # ====== start
@@ -102,8 +104,8 @@ class TestApi(DmlTestBase):
 
     def test_cache_basic(self):
         some_global_variable = [5]
-        def fn(*_):
-            return some_global_variable[0]
+        def fn(fndag):
+            return fndag.commit(some_global_variable[0])
         # rsrc = dml.Resource('b')
         dag = self.new('test-dag0', 'this is the test dag')
         n0 = dag.call(fn, 12, 13, cache=True)
@@ -117,10 +119,12 @@ class TestApi(DmlTestBase):
     def test_realish(self):
         from itertools import product
         dag = self.new('test', 'foo')
-        def f0(x, y):
-            return y * (x + 1)
-        def f1(x, y):
-            return x + y
+        def f0(fndag):
+            _, x, y = fndag.expr
+            return fndag.commit(y * (x + 1))
+        def f1(fndag):
+            _, x, y = fndag.expr
+            return fndag.commit(x + y)
         xs = [1, 2, 3, 4, 5]
         grid = list(product(range(5), repeat=2))
         results = []

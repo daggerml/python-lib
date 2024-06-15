@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -148,58 +149,65 @@ class Sh:
     def run_fn_local(
         self,
         exec_fn: Callable[..., List[str]],
-        resource: Resource,
+        resource_info: dict,
         fn: Callable[[Any], Any],
         *args: dml.Node,
-        mounts: Optional[Dict[str, dml.Node]] = None,
         cache: bool = False
     ):
-        if mounts is None:
-            mounts = {}
-        mounts = {k: self.store(v) for k, v in mounts.items()}
-        fndag = self.dag.start_fn(resource, dedent(inspect.getsource(fn)), mounts, *args, cache=cache)
+        source_code = dedent(inspect.getsource(fn))
+        resource = dml.Resource.from_dict({'__source__': source_code, **resource_info})
+        fndag = self.dag.start_fn(resource, *args, cache=cache)
         if isinstance(fndag, dml.Node):
             return fndag
         assert isinstance(fndag, dml.FnDag)  # just to quiet pylint
-        _, src, mounts, *_args = fndag.expr
-        with self.hydrate(**mounts) as tmpd0:
-            with TemporaryDirectory(prefix='dml-') as tmpd:
-                # a different directory to avoid name clashing
-                with open(f'{tmpd}/script.py', 'w') as f:
-                    f.write('#!/usr/bin/env python3')
-                    f.write(f'\n\n{src}\n')
-                    f.write(dedent(f'''
-                    if __name__ == '__main__':
-                        try:
-                            result = {fn.__name__}(*{_args!r})
-                        except KeyboardInterrupt:
-                            raise
-                        except Exception as e:
-                            import daggerml as dml
-                            result = dml.Error.from_ex(e)
+        with TemporaryDirectory(prefix='dml-') as tmpd:
+            with open(f'{tmpd}/dag.json', 'w') as f:
+                f.write(fndag.to_json())
+            with open(f'{tmpd}/script.py', 'w') as f:
+                f.write('#!/usr/bin/env python3')
+                f.write(f'\n\n{source_code}\n')
+                f.write(dedent(f'''
+                if __name__ == '__main__':
+                    import daggerml as dml
+                    with open('{tmpd}/dag.json') as f:
+                        fndag = dml.FnDag.from_json(f.read())
+                    try:
+                        result = {fn.__name__}(fndag)
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as e:
                         import daggerml as dml
-                        with open('{tmpd}/result.json', 'w') as f:
-                            f.write(dml.to_json(result))
-                        print('dml finished running', {fn.__name__!r})
-                    '''))
-                subprocess.run(['chmod', '+x', f'{tmpd}/script.py'], check=True)
-                env = os.environ.copy()
-                env['PYTHONPATH'] = tmpd0
-                subprocess.run(exec_fn('bash', '-c', f'cd {tmpd} && {tmpd}/script.py'), check=True, env=env)
-                with open(f'{tmpd}/result.json', 'r') as f:
-                    result = dml.from_json(f.read())
-            return fndag.commit(result)
+                        result = fndag.commit(dml.Error.from_ex(e))
+                    import daggerml as dml
+                    with open('{tmpd}/result.json', 'w') as f:
+                        f.write(result.ref.to)
+                    print('dml finished running', {fn.__name__!r})
+                '''))
+            subprocess.run(['chmod', '+x', f'{tmpd}/script.py'], check=True)
+            subprocess.run(exec_fn(f'{tmpd}/script.py'), check=True)
+            with open(f'{tmpd}/result.json', 'r') as f:
+                result = dml.Node(dml.Ref(f.read()))
+        return result
+
+    def run_py(self,
+               fn: Callable[[Any], Any],
+               *args: dml.Node,
+               executable: str = sys.executable,
+               cache: bool = False):
+        return self.run_fn_local(
+            lambda x: [executable, x],
+            dict(type='py-fn', id=executable),
+            fn, *args, cache=cache)
 
     def run_hatch(self,
                   fn: Callable[[Any], Any],
                   *args: dml.Node,
                   env: str = 'default',
-                  mounts: Optional[Dict[str, dml.Node]] = None,
                   cache: bool = False):
         return self.run_fn_local(
-            lambda *x: ['hatch', '-e', env, 'run', *x],
-            self.resource(type='hatch-fn', id=env),
-            fn, *args, cache=cache, mounts=mounts)
+            lambda x: ['hatch', '-e', env, 'run', x],
+            dict(type='hatch-fn', id=env),
+            fn, *args, cache=cache)
 
 
 dml.Dag.register_ns(Sh)

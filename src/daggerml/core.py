@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import inspect
 import json
 import logging
 import os
@@ -7,6 +8,7 @@ import traceback as tb
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
+from textwrap import dedent
 from threading import Event, Thread
 from time import sleep, time
 from typing import Any, Dict, List
@@ -159,6 +161,15 @@ class Dag(NamespacedObj):
         tok, ref = from_json(tok)
         return cls(to_json(tok), ref, api_flags=api_flags.copy())
 
+    def to_json(self):
+        return json.dumps({'tok': self.tok, 'ref': self.ref.to, 'api_flags': self.api_flags})
+
+    @classmethod
+    def from_json(cls, js):
+        js = json.loads(js)
+        js['ref'] = Ref(js['ref'])
+        return cls(**js)
+
     @staticmethod
     def _to_flags(flag_dict: Dict[str, str]) -> List[str]:
         out = []
@@ -201,7 +212,7 @@ class Dag(NamespacedObj):
         return FnDag(tok=self.tok, ref=ref, par=self.ref, cache=cache, api_flags=self.api_flags.copy())
 
     def call(self, f, *args, cache: bool = True, retry: bool = False, update_freq: float|int = 5) -> Node:
-        resource = Resource.from_dict({'exec': 'local', 'func_name': f.__qualname__})
+        resource = Resource.from_dict({'exec': 'local', 'func': dedent(inspect.getsource(f))})
         expr = [self.put(resource), *args]
         fndag = self.start_fn(*expr, cache=cache, retry=retry)
         if isinstance(fndag, Node):
@@ -223,11 +234,7 @@ class Dag(NamespacedObj):
         logger.debug('running function: %r', f.__qualname__)
         with fndag._update_loop(lock, lock_info, freq=update_freq):
             with fndag:
-                result = f(*fndag.expr[1:])
-            result = fndag.put(result)
-            node = fndag.commit(result)
-        assert isinstance(node, Node)
-        return node
+                return f(fndag)
 
     def _commit(self, result, cache: bool|None = None) -> None|Ref:
         if not isinstance(result, (Node, Error)):
@@ -267,6 +274,19 @@ class FnDag(Dag):
     def __post_init__(self):
         resp = self.invoke('get_expr', self.ref)
         object.__setattr__(self, 'expr', resp)
+
+    def to_json(self):
+        return json.dumps({
+            'tok': self.tok, 'ref': self.ref.to, 'api_flags': self.api_flags,
+            'par': self.par.to, 'cache': self.cache
+        })
+
+    @classmethod
+    def from_json(cls, js):
+        js = json.loads(js)
+        js['ref'] = Ref(js['ref'])
+        js['par'] = Ref(js['par'])
+        return cls(**js)
 
     @property
     def meta(self) -> str:
