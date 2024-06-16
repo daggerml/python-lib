@@ -1,8 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
-from daggerml.api import Dag, Node
-from daggerml.core import Datum, Error, Resource, Scalar
-from daggerml.util import ApiError
+from daggerml.core import Dag, Error, FnDag, Node, Resource, _api, from_data, from_json, to_data, to_json
 
 try:
     __version__ = version("daggerml")
@@ -11,7 +9,9 @@ except PackageNotFoundError:
 
 del version, PackageNotFoundError
 
+def new(name, message, flags=None):
+    return Dag.new(name, message, api_flags=flags)
 
 __all__ = (
-    'Dag', 'Datum', 'Error', 'Node', 'Resource', 'Scalar', 'ApiError'
+    'Dag', 'Error', 'FnDag', 'Node', 'Resource', 'from_data', 'to_data', 'from_json', 'to_json', 'new'
 )
