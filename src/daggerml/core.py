@@ -4,16 +4,11 @@ import logging
 import subprocess
 import traceback as tb
 from dataclasses import dataclass, field, fields
-from pathlib import Path
 from typing import Dict, List
-from uuid import uuid4
 
 logger = logging.getLogger(__name__)
-UUID = uuid4().hex
 
 DATA_TYPE = {}
-
-CACHE_LOC = Path.home()/'.local/dml/cache'
 
 
 def dml_type(cls=None):
@@ -27,15 +22,9 @@ def js_dumps(js):
     return json.dumps(js, separators=(',', ':'))
 
 
-class NamespacedObj:
-    @classmethod
-    def register_ns(cls, ns_cls):
-        setattr(cls, ns_cls.name, property(ns_cls))
-
-
 @dml_type
 @dataclass(frozen=True, slots=True)
-class Resource(NamespacedObj):
+class Resource:
     data: str
 
     @property
@@ -76,7 +65,7 @@ class Error(Exception):
 
 @dml_type
 @dataclass(frozen=True)
-class Ref(NamespacedObj):
+class Ref:
     to: str
 
     @property
@@ -142,10 +131,6 @@ def to_json(obj):
     return js_dumps(to_data(obj))
 
 
-class ApiError(Error):
-    pass
-
-
 def _api(*args):
     try:
         cmd = ['dml', *args]
@@ -157,7 +142,7 @@ def _api(*args):
         raise Error.from_ex(e) from e
 
 @dataclass(frozen=True)
-class Node(NamespacedObj):
+class Node:
     dag: "Dag"
     ref: Ref
 
@@ -165,7 +150,7 @@ class Node(NamespacedObj):
         return self.dag._invoke('get_node_value', self.ref)
 
 @dataclass(frozen=True)
-class Dag(NamespacedObj):
+class Dag:
     tok: str
     api_flags: Dict[str, str] = field(default_factory=dict)
 

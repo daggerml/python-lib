@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 
 import daggerml as dml
 from tests.util import DmlTestBase
@@ -73,23 +72,6 @@ class TestApi(DmlTestBase):
         waiter = dag.start_fn(r0, l0, use_cache=True)
         n1 = waiter.get_result()
         assert n1.value() == 23
-
-    def test_namespaces(self):
-        @dataclass
-        class Foo:
-            dag: dml.Dag|dml.Node
-            name = 'foo'
-            def x(self, y):
-                return y ** 2
-        dml.Dag.register_ns(Foo)
-        dag = self.new('test', 'this is a test')
-        assert isinstance(dag.foo, Foo)
-        assert dag.foo.x(3) == 9
-        n = dag.put(12)
-        with self.assertRaises(AttributeError, msg="'Node' object has no attribute 'foo'"):
-            _ = n.foo
-        dml.Node.register_ns(Foo)
-        assert n.foo.x(3) == 9
 
     def test_contextmanager(self):
         with self.assertRaises(ZeroDivisionError):
