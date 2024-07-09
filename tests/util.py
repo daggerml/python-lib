@@ -16,8 +16,8 @@ def use_repo():
         TemporaryDirectory(prefix='dml-test-wd-') as d1
     ):
         flags = {'config-dir': d0, 'project-dir': d1}
-        dml._api(*dml.Dag._to_flags(flags), 'repo', 'create', 'test')
-        dml._api(*dml.Dag._to_flags(flags), 'project', 'init', 'test')
+        daggerml.core._api(*dml.Dag._to_flags(flags), 'repo', 'create', 'test')
+        daggerml.core._api(*dml.Dag._to_flags(flags), 'project', 'init', 'test')
         yield flags
 
 

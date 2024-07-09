@@ -225,9 +225,8 @@ class Dag(NamespacedObj):
         expr = [x.ref for x in expr]
         ref, dump = self.invoke('start_fn', expr=expr, use_cache=use_cache)
         return FnWaiter(ref, dump, self)
-        # return FnDag(tok=self.tok, api_flags=self.api_flags.copy(), waiter=ref, dump=dump)
 
-    def _commit(self, result, cache: bool|None = None) -> None|Ref:
+    def commit(self, result, cache: bool|None = None) -> Ref:
         if not isinstance(result, (Node, Error)):
             result = self.put(result)
         if isinstance(result, Node):
@@ -235,11 +234,7 @@ class Dag(NamespacedObj):
         if cache is None:
             cache = getattr(self, 'cache', None)
         resp = self.invoke('commit', result)
-        return resp
-
-    def commit(self, result) -> None:
-        resp = self._commit(result)
-        # assert resp is None
+        assert isinstance(resp, Ref)
         return resp
 
     def get_value(self, node: Node) -> Any:

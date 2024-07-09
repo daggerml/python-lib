@@ -1,6 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
-from daggerml.core import Dag, Error, Node, Ref, Resource, _api, from_data, from_json, to_data, to_json
+from daggerml.core import Dag, Error, Node, Ref, Resource, from_data, from_json, to_data, to_json
 
 try:
     __version__ = version("daggerml")
