@@ -5,7 +5,7 @@ import subprocess
 import traceback as tb
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Dict, List
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -92,14 +92,14 @@ class FnWaiter:
     dag: "Dag"
 
     def get_result(self):
-        ref = self.dag.invoke('get_fn_result', self.ref)
+        ref = self.dag._invoke('get_fn_result', self.ref)
         if ref is None:
             return
         assert isinstance(ref, Ref)
         return Node(self.dag, ref)
 
     def cache(self):
-        self.dag.invoke('populate_cache', self.ref)
+        self.dag._invoke('populate_cache', self.ref)
 
 
 def from_data(data):
@@ -162,7 +162,7 @@ class Node(NamespacedObj):
     ref: Ref
 
     def value(self):
-        return self.dag.get_value(self)
+        return self.dag._invoke('get_node_value', self.ref)
 
 @dataclass(frozen=True)
 class Dag(NamespacedObj):
@@ -178,15 +178,7 @@ class Dag(NamespacedObj):
 
     @property
     def expr(self) -> List[Node]:
-        return self.invoke('get_expr')
-
-    def to_json(self):
-        return json.dumps({'tok': self.tok, 'api_flags': self.api_flags})
-
-    @classmethod
-    def from_json(cls, js):
-        js = json.loads(js)
-        return cls(**js)
+        return self._invoke('get_expr')
 
     @staticmethod
     def _to_flags(flag_dict: Dict[str, str]) -> List[str]:
@@ -195,35 +187,28 @@ class Dag(NamespacedObj):
             out.extend([f'--{k}', v])
         return out
 
-    def _api(self, *args):
-        return _api(*self._to_flags(self.api_flags), *args)
-
     def _invoke(self, op, *args, **kwargs):
         payload = to_json([op, args, kwargs])
-        resp = self._api('dag', 'invoke', self.tok, payload)
-        return resp
-
-    def invoke(self, op, *args, **kwargs):
-        resp = self._invoke(op, *args, **kwargs)
+        resp = _api(*self._to_flags(self.api_flags), 'dag', 'invoke', self.tok, payload)
         data = from_json(resp)
         if isinstance(data, Error):
             raise data
         return data
 
     def put(self, data) -> Node:
-        resp = self.invoke('put_literal', data)
+        resp = self._invoke('put_literal', data)
         assert isinstance(resp, Ref)
         return Node(self, resp)
 
     def load(self, dag_name) -> Node:
-        resp = self.invoke('put_load', dag_name)
+        resp = self._invoke('put_load', dag_name)
         assert isinstance(resp, Ref)
         return Node(self, resp)
 
     def start_fn(self, *expr, use_cache: bool = True):
         expr = [x if isinstance(x, Node) else self.put(x) for x in expr]
         expr = [x.ref for x in expr]
-        ref, dump = self.invoke('start_fn', expr=expr, use_cache=use_cache)
+        ref, dump = self._invoke('start_fn', expr=expr, use_cache=use_cache)
         return FnWaiter(ref, dump, self)
 
     def commit(self, result, cache: bool|None = None) -> Ref:
@@ -233,13 +218,9 @@ class Dag(NamespacedObj):
             result = result.ref
         if cache is None:
             cache = getattr(self, 'cache', None)
-        resp = self.invoke('commit', result)
+        resp = self._invoke('commit', result)
         assert isinstance(resp, Ref)
         return resp
-
-    def get_value(self, node: Node) -> Any:
-        val = self.invoke('get_node_value', node.ref)
-        return val
 
     def __enter__(self):
         return self
