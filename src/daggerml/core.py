@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-import inspect
 import json
 import logging
-import os
 import subprocess
 import traceback as tb
-from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from textwrap import dedent
-from threading import Event, Thread
-from time import sleep, time
 from typing import Any, Dict, List
 from uuid import uuid4
 
@@ -90,6 +84,24 @@ class Ref(NamespacedObj):
         return self.to.split('/')[0]
 
 
+@dml_type
+@dataclass
+class FnWaiter:
+    ref: Ref
+    dump: str
+    dag: "Dag"
+
+    def get_result(self):
+        ref = self.dag.invoke('get_fn_result', self.ref)
+        if ref is None:
+            return
+        assert isinstance(ref, Ref)
+        return Node(self.dag, ref)
+
+    def cache(self):
+        self.dag.invoke('populate_cache', self.ref)
+
+
 def from_data(data):
     n, *args = data if isinstance(data, list) else [None, data]
     if n is None:
@@ -146,28 +158,34 @@ def _api(*args):
 
 @dataclass(frozen=True)
 class Node(NamespacedObj):
+    dag: "Dag"
     ref: Ref
+
+    def value(self):
+        return self.dag.get_value(self)
 
 @dataclass(frozen=True)
 class Dag(NamespacedObj):
     tok: str
-    ref: Ref
     api_flags: Dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def new(cls, name: str, message: str, api_flags: Dict[str, str]|None = None) -> "Dag":
+    def new(cls, name: str, message: str, dump: str|None = None, api_flags: Dict[str, str]|None = None) -> "Dag":
         api_flags = api_flags or {}
-        tok = _api(*cls._to_flags(api_flags), 'dag', 'create', name, message)
-        tok, ref = from_json(tok)
-        return cls(to_json(tok), ref, api_flags=api_flags.copy())
+        extra = [] if dump is None else ['--dag-dump', dump]
+        tok = _api(*cls._to_flags(api_flags), 'dag', 'create', name, message, *extra)
+        return cls(tok, api_flags=api_flags.copy())
+
+    @property
+    def expr(self) -> List[Node]:
+        return self.invoke('get_expr')
 
     def to_json(self):
-        return json.dumps({'tok': self.tok, 'ref': self.ref.to, 'api_flags': self.api_flags})
+        return json.dumps({'tok': self.tok, 'api_flags': self.api_flags})
 
     @classmethod
     def from_json(cls, js):
         js = json.loads(js)
-        js['ref'] = Ref(js['ref'])
         return cls(**js)
 
     @staticmethod
@@ -193,48 +211,21 @@ class Dag(NamespacedObj):
         return data
 
     def put(self, data) -> Node:
-        resp = self.invoke('put_literal', self.ref, data)
+        resp = self.invoke('put_literal', data)
         assert isinstance(resp, Ref)
-        return Node(resp)
+        return Node(self, resp)
 
     def load(self, dag_name) -> Node:
-        resp = self.invoke('put_load', self.ref, dag_name)
+        resp = self.invoke('put_load', dag_name)
         assert isinstance(resp, Ref)
-        return Node(resp)
+        return Node(self, resp)
 
-    def start_fn(self, *expr, cache: bool = True, retry: bool = False) -> "FnDag|Node":
+    def start_fn(self, *expr, use_cache: bool = True):
         expr = [x if isinstance(x, Node) else self.put(x) for x in expr]
         expr = [x.ref for x in expr]
-        ref = self.invoke('start_fn', expr=expr, dag=self.ref, cache=cache, retry=retry)
-        assert isinstance(ref, Ref)
-        if ref.type == 'node':
-            return Node(ref)
-        return FnDag(tok=self.tok, ref=ref, par=self.ref, cache=cache, api_flags=self.api_flags.copy())
-
-    def call(self, f, *args, cache: bool = True, retry: bool = False, update_freq: float|int = 5) -> Node:
-        resource = Resource.from_dict({'exec': 'local', 'func': dedent(inspect.getsource(f))})
-        expr = [self.put(resource), *args]
-        fndag = self.start_fn(*expr, cache=cache, retry=retry)
-        if isinstance(fndag, Node):
-            logger.debug('returning cached call')
-            return fndag
-        logger.debug('checking dag: %r', fndag.ref.to)
-        lock_info = {'pid': os.getpid(), 'uid': uuid4().hex}
-        lock = fndag.relock(lock_info, 5 * update_freq, old='')
-        if lock is None:
-            logger.debug('no lock. waiting for result...')
-            while not fndag.lockable(fndag.meta, old=''):
-                sleep(update_freq)
-            resp = self.start_fn(*expr, cache=cache)
-            if isinstance(resp, FnDag):
-                err = Error('orphaned job')
-                resp.commit(err)
-                raise err
-            return resp
-        logger.debug('running function: %r', f.__qualname__)
-        with fndag._update_loop(lock, lock_info, freq=update_freq):
-            with fndag:
-                return f(fndag)
+        ref, dump = self.invoke('start_fn', expr=expr, use_cache=use_cache)
+        return FnWaiter(ref, dump, self)
+        # return FnDag(tok=self.tok, api_flags=self.api_flags.copy(), waiter=ref, dump=dump)
 
     def _commit(self, result, cache: bool|None = None) -> None|Ref:
         if not isinstance(result, (Node, Error)):
@@ -243,13 +234,12 @@ class Dag(NamespacedObj):
             result = result.ref
         if cache is None:
             cache = getattr(self, 'cache', None)
-        par = getattr(self, 'par', None)
-        resp = self.invoke('commit', self.ref, result, parent_dag=par, cache=cache)
+        resp = self.invoke('commit', result)
         return resp
 
     def commit(self, result) -> None:
         resp = self._commit(result)
-        assert resp is None
+        # assert resp is None
         return resp
 
     def get_value(self, node: Node) -> Any:
@@ -264,81 +254,3 @@ class Dag(NamespacedObj):
             ex = Error.from_ex(exc_val)
             logger.exception('failing dag with error code: %r', ex.code)
             self.commit(ex)
-
-@dataclass(frozen=True)
-class FnDag(Dag):
-    par: Ref = field(kw_only=True)
-    expr: List[Node] = field(init=False)
-    cache: bool = False
-
-    def __post_init__(self):
-        resp = self.invoke('get_expr', self.ref)
-        object.__setattr__(self, 'expr', resp)
-
-    def to_json(self):
-        return json.dumps({
-            'tok': self.tok, 'ref': self.ref.to, 'api_flags': self.api_flags,
-            'par': self.par.to, 'cache': self.cache
-        })
-
-    @classmethod
-    def from_json(cls, js):
-        js = json.loads(js)
-        js['ref'] = Ref(js['ref'])
-        js['par'] = Ref(js['par'])
-        return cls(**js)
-
-    @property
-    def meta(self) -> str:
-        return self.invoke('get_fn_meta', self.ref)
-
-    def update_meta(self, old: str, new: str) -> bool:
-        return self.invoke('update_fn_meta', self.ref, old, new)
-
-    @staticmethod
-    def lockable(meta: str, old: str|None = None) -> bool:
-        if old is not None and meta != old:
-            return False
-        if meta == '':
-            return True
-        meta_js = from_json(meta)
-        assert isinstance(meta_js, dict)
-        # expiration has passed
-        return meta_js['lock_expiration'] <= time()
-
-    def relock(self, new: Dict, duration: float|int = 5, old: str|None = None) -> str|None:
-        meta = self.meta
-        if not self.lockable(meta, old):
-            logger.info('another valid lock exists')
-            return
-        new['lock_expiration'] = time() + duration
-        new_str = to_json(new)
-        try:
-            self.update_meta(meta, new_str)
-        except Error:
-            logger.exception('failed to update metadata')
-            return
-        return new_str
-
-    @contextmanager
-    def _update_loop(self, lock, state_dict: Dict[str, Any], freq: float|int):
-        lock_duration = 2 * (freq + 0.2)
-        event = Event()
-        def inner(old, freq):
-            while event.wait(freq):
-                if event.is_set():
-                    return
-                old = self.relock(state_dict, lock_duration, old)
-        thread = Thread(target=inner, args=(lock, freq))
-        try:
-            thread.start()
-            yield event
-        finally:
-            event.set()
-            thread.join()
-
-    def commit(self, result, cache: bool|None = None) -> Node:
-        resp = self._commit(result, cache=cache)
-        assert isinstance(resp, Ref)
-        assert resp.type == 'node'
-        return Node(resp)
