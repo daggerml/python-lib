@@ -87,19 +87,14 @@ class TestCore(DmlTestBase):
 
 class TestShExec(DmlTestBase):
 
-    def test_tar(self):
-        dag = self.new('test-dag0', 'this is a test')
-        rsrc = dag.sh.tar_(_here_)
-        with dag.sh.hydrate(x=rsrc) as tmpd:
-            assert ls_r(f'{tmpd}/x/') == ls_r(_here_)
-
     def test_tmptar(self):
         dag = self.new('test-dag0', 'this is a test')
-        sh = dag.sh
+        sh = ec2.Sh(dag)
         tar = sh.tar_(_here_)
         assert isinstance(tar, dml.Node)
-        with dag.sh.hydrate(x=tar) as tmpd:
-            assert ls_r(f'{tmpd}/x/') == ls_r(_here_)
+        with sh.hydrate(x=tar) as tmpd:
+            ec2.extract_tarball(f'{tmpd}/x', f'{tmpd}/y/')
+            assert ls_r(f'{tmpd}/y/') == ls_r(_here_)
 
     def test_run_hatch(self):
         dag = self.new('test0', 'testing')
@@ -107,7 +102,7 @@ class TestShExec(DmlTestBase):
             from io import StringIO
 
             import pandas as pd
-            _, doc = fndag.expr
+            _, _, doc = fndag.expr
             print(doc)
             df = pd.read_csv(StringIO(doc))
             return fndag.commit(df.sum().to_dict())
@@ -119,28 +114,53 @@ class TestShExec(DmlTestBase):
         3,7
         4,6
         """).strip()
-        res = dag.sh.run_hatch(foopy, csv, env='test-pandas')
-        assert dag.get_value(res) == {'a': 10, 'b': 30}
+        sh = ec2.Sh(dag)
+        res = sh.run_hatch(foopy, csv, env='test-pandas')
+        assert res.value() == {'a': 10, 'b': 30}
 
     def test_bytes(self):
         dag = self.new('test', 'asdf')
         bts = b'testing 123'
-        node = dag.sh.put_bytes_(bts)
-        with dag.sh.hydrate(**{'x.bytes': node}) as tmpd:
+        sh = ec2.Sh(dag)
+        node = sh.put_bytes_(bts)
+        with sh.hydrate(**{'x.bytes': node}) as tmpd:
             with open(f'{tmpd}/x.bytes', 'rb') as f:
                 assert f.read() == bts
 
-    def test_runpy(self):
+    def test_dump(self):
+        dag = self.new('test', 'asdf')
+        res = dag.commit(dag.put([23]))
+        dump = dag.dump(res)
+        assert dml.from_json(dag.load_ref(dump)) == res
+
+    def test_run_py(self):
+        import os
+        import sys
+        dag = self.new('test', 'foo')
+        def fn(fndag):
+            import os
+            import sys
+            res = fndag.put([os.getpid(), sys.executable])
+            return fndag.commit(res)
+        sh = ec2.Sh(dag)
+        n2 = dag.put(2)
+        node = sh.run_py(fn, n2)
+        pid, executable = node.value()
+        assert executable == sys.executable
+        assert pid != os.getpid()
+
+    def test_runpy_v2(self):
         dag = self.new('test', 'foo')
         def fn(fndag):
             import sys
-            _, x = fndag.expr
-            return fndag.commit([x, x + 1, sys.executable])
+            _, _, x = fndag.expr
+            return fndag.commit(fndag.put([x, x + 1, sys.executable]))
         import subprocess
         resp = subprocess.run(['hatch', '-e', 'test-pandas', 'run', 'which', 'python'], capture_output=True)
         ex = resp.stdout.decode().strip()
-        node = dag.sh.run_py(fn, 2, executable=ex)
-        a, b, c = dag.get_value(node)
+        sh = ec2.Sh(dag)
+        node = sh.run_py(fn, dag.put(2), executable=ex)
+        a, b, c = node.value()
         assert a == 2
         assert b == 3
         assert c == ex
@@ -148,17 +168,15 @@ class TestShExec(DmlTestBase):
     def test_run_hatch_script(self):
         dag = self.new('test', 'foo')
         def fn(fndag):
-            import sys
+            from tempfile import TemporaryDirectory
 
+            import mnist
             import numpy as np
             from ml_collections import ConfigDict
 
-            from daggerml.executor import Sh
-            _, mn_rsrc, conf = fndag.expr
+            _, _, conf = fndag.expr
             config = ConfigDict(conf)
-            with Sh(fndag).hydrate(**{'mnist.py': mn_rsrc}) as tmpd:
-                sys.path.append(tmpd)
-                import mnist
+            with TemporaryDirectory() as tmpd:
                 result, loss, accuracy = mnist.train_and_evaluate(config, tmpd)
             # params_bytes = serialization.to_bytes(result.params)
             return fndag.commit([float(np.array(loss)), float(np.array(accuracy))])
@@ -170,9 +188,10 @@ class TestShExec(DmlTestBase):
             'learning_rate': 0.01,
             'momentum': 0.9,
         }
-        rsrc = dag.sh.store(_here_/'assets/mnist_jax.py')
-        node = dag.sh.run_hatch(fn, rsrc, config, env='test-jax')
-        assert all(isinstance(x, float) for x in dag.get_value(node))
+        sh = ec2.Sh(dag)
+        rsrc = sh.put_file_(_here_/'assets/mnist_jax.py')
+        node = sh.run_hatch(fn, dag.put(config), mounts={'mnist.py': rsrc}, env='test-jax')
+        assert all(isinstance(x, float) for x in node.value())
 
 
 class TestDkrExec(DmlTestBase):

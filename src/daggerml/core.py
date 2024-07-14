@@ -3,7 +3,8 @@ import json
 import logging
 import subprocess
 import traceback as tb
-from dataclasses import dataclass, field, fields
+from dataclasses import InitVar, dataclass, field, fields
+from tempfile import TemporaryDirectory
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
@@ -25,15 +26,7 @@ def js_dumps(js):
 @dml_type
 @dataclass(frozen=True, slots=True)
 class Resource:
-    data: str
-
-    @property
-    def info(self):
-        return json.loads(self.data)
-
-    @classmethod
-    def from_dict(cls, d):
-        return cls(js_dumps(d))
+    id: str
 
 Scalar = str | int | float | bool | type(None) | Resource
 
@@ -134,12 +127,61 @@ def to_json(obj):
 def _api(*args):
     try:
         cmd = ['dml', *args]
-        resp = subprocess.run(cmd, capture_output=True)
-        return resp.stdout.decode()
+        resp = subprocess.run(cmd, capture_output=True, check=True)
+        return resp.stdout.decode().strip()
     except KeyboardInterrupt:
         raise
     except Exception as e:
         raise Error.from_ex(e) from e
+
+@dataclass
+class Api:
+    config_dir: InitVar[str|None] = None
+    project_dir: InitVar[str|None] = None
+    initialize: InitVar[bool] = False
+    tmpdirs: List[TemporaryDirectory] = field(default_factory=list)
+    flags: Dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self, config_dir, project_dir, initialize):
+        if config_dir is None and 'config-dir' not in self.flags:
+            tmpd = TemporaryDirectory()
+            self.tmpdirs.append(tmpd)
+            self.flags['config-dir'] = tmpd.__enter__()
+        if project_dir is None and 'project-dir' not in self.flags:
+            tmpd = TemporaryDirectory()
+            self.tmpdirs.append(tmpd)
+            self.flags['project-dir'] = tmpd.__enter__()
+        if initialize:
+            self.init()
+
+    def init(self):
+        self('repo', 'create', 'test')
+        self('project', 'init', 'test')
+
+    @staticmethod
+    def _to_flags(flag_dict: Dict[str, str]) -> List[str]:
+        out = []
+        for k, v in sorted(flag_dict.items()):
+            out.extend([f'--{k}', v])
+        return out
+
+    def __call__(self, *args, **kwargs):
+        return _api(*self._to_flags(self.flags), *args, **kwargs)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *x, **kw):
+        for d in self.tmpdirs:
+            d.__exit__(*x, **kw)
+
+    def load(self, dump):
+        resp = self('repo', 'load-ref', dump)
+        return resp
+
+    def dump(self, ref):
+        resp = self('repo', 'dump-ref', to_json(ref))
+        return resp
 
 @dataclass(frozen=True)
 class Node:
@@ -149,32 +191,26 @@ class Node:
     def value(self):
         return self.dag._invoke('get_node_value', self.ref)
 
-@dataclass(frozen=True)
+@dataclass
 class Dag:
     tok: str
-    api_flags: Dict[str, str] = field(default_factory=dict)
+    api: Api
 
     @classmethod
-    def new(cls, name: str, message: str, dump: str|None = None, api_flags: Dict[str, str]|None = None) -> "Dag":
+    def new(cls, name: str|None, message: str, dump: str|None = None, api_flags: Dict[str, str]|None = None) -> "Dag":
         api_flags = api_flags or {}
         extra = [] if dump is None else ['--dag-dump', dump]
-        tok = _api(*cls._to_flags(api_flags), 'dag', 'create', name, message, *extra)
-        return cls(tok, api_flags=api_flags.copy())
+        api = Api(flags=api_flags)
+        tok = api('dag', 'create', *extra, name, message)
+        return cls(tok, api)
 
     @property
     def expr(self) -> List[Node]:
         return self._invoke('get_expr')
 
-    @staticmethod
-    def _to_flags(flag_dict: Dict[str, str]) -> List[str]:
-        out = []
-        for k, v in sorted(flag_dict.items()):
-            out.extend([f'--{k}', v])
-        return out
-
     def _invoke(self, op, *args, **kwargs):
         payload = to_json([op, args, kwargs])
-        resp = _api(*self._to_flags(self.api_flags), 'dag', 'invoke', self.tok, payload)
+        resp = self.api('dag', 'invoke', self.tok, payload)
         data = from_json(resp)
         if isinstance(data, Error):
             raise data
@@ -215,3 +251,11 @@ class Dag:
             ex = Error.from_ex(exc_val)
             logger.exception('failing dag with error code: %r', ex.code)
             self.commit(ex)
+
+    def load_ref(self, dump):
+        resp = self.api.load(dump)
+        return resp
+
+    def dump(self, ref):
+        resp = self.api.dump(ref)
+        return resp

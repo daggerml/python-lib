@@ -16,15 +16,16 @@ def use_repo():
         TemporaryDirectory(prefix='dml-test-wd-') as d1
     ):
         flags = {'config-dir': d0, 'project-dir': d1}
-        daggerml.core._api(*dml.Dag._to_flags(flags), 'repo', 'create', 'test')
-        daggerml.core._api(*dml.Dag._to_flags(flags), 'project', 'init', 'test')
+        api = daggerml.core.Api(flags=flags)
+        api('repo', 'create', 'test')
+        api('project', 'init', 'test')
         yield flags
 
 
 def _api(*args):
     runner = CliRunner()
     result = runner.invoke(cli, args)
-    return result.output
+    return result.output.strip()
 
 
 class DmlTestBase(unittest.TestCase):
@@ -37,5 +38,5 @@ class DmlTestBase(unittest.TestCase):
     def tearDown(self):
         self.pylib.__exit__(None, None, None)
 
-    def new(self, name, message):
-        return dml.new(name, message, api_flags=self.flags)
+    def new(self, name=None, message='', dump=None):
+        return dml.new(name=name, message=message, dump=dump, api_flags=self.flags)

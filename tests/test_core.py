@@ -15,7 +15,7 @@ class TestApi(DmlTestBase):
         r0 = dag.put(rsrc)
         waiter = dag.start_fn(r0, l0, l0)
         assert waiter.get_result() is None
-        f0 = dml.Dag.new('foo', 'message', dump=waiter.dump, api_flags=dag.api_flags)
+        f0 = dml.Dag.new('foo', 'message', dump=waiter.dump, api_flags=dag.api.flags)
         assert f0.expr[0] == rsrc
         l1 = f0.put({'qwer': 23})
         assert isinstance(l1, dml.Node)
@@ -63,7 +63,7 @@ class TestApi(DmlTestBase):
         l0 = dag.put({'asdf': 12})
         waiter = dag.start_fn(r0, l0, use_cache=True)
         assert waiter.get_result() is None
-        f0 = dml.Dag.new('foo', 'message', dump=waiter.dump, api_flags=dag.api_flags)
+        f0 = dml.Dag.new('foo', 'message', dump=waiter.dump, api_flags=dag.api.flags)
         f0.commit(f0.put(23))
         n1 = waiter.get_result()
         assert n1.value() == 23
