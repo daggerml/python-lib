@@ -102,8 +102,8 @@ class Cache:
 @dataclass
 class Sh:
     dag: dml.Dag
-    name = f'host:{HOSTNAME}/daggerml/sh'
     cache: Cache = field(default_factory=Cache)
+    name = f'daggerml/host:{HOSTNAME}/sh'
 
     @property
     def rsrc(self):
@@ -302,7 +302,7 @@ def docker_run(dkr: dict, script: str, **mounts: str):
 @dataclass
 class Dkr:
     dag: dml.Dag
-    name = f'host:{HOSTNAME}/docker'
+    name = f'daggerml/host:{HOSTNAME}/docker'
 
     def resource(self, **kw):
         return dml.Resource.from_dict({'exec': self.name, **kw})
