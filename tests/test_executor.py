@@ -96,28 +96,6 @@ class TestShExec(DmlTestBase):
             ec2.extract_tarball(f'{tmpd}/x', f'{tmpd}/y/')
             assert ls_r(f'{tmpd}/y/') == ls_r(_here_)
 
-    def test_run_hatch(self):
-        dag = self.new('test0', 'testing')
-        def foopy(fndag):
-            from io import StringIO
-
-            import pandas as pd
-            _, _, doc = fndag.expr
-            print(doc)
-            df = pd.read_csv(StringIO(doc))
-            return fndag.commit(df.sum().to_dict())
-
-        csv = dedent("""
-        a,b
-        1,9
-        2,8
-        3,7
-        4,6
-        """).strip()
-        sh = ec2.Sh(dag)
-        res = sh.run_hatch(foopy, csv, env='test-pandas')
-        assert res.value() == {'a': 10, 'b': 30}
-
     def test_bytes(self):
         dag = self.new('test', 'asdf')
         bts = b'testing 123'
@@ -140,12 +118,15 @@ class TestShExec(DmlTestBase):
         def fn(fndag):
             import os
             import sys
-            res = fndag.put([os.getpid(), sys.executable])
+
+            import daggerml as dml
+            res = fndag.put([os.getpid(), sys.executable, type(fndag) == dml.Dag])
             return fndag.commit(res)
         sh = ec2.Sh(dag)
         n2 = dag.put(2)
         node = sh.run_py(fn, n2)
-        pid, executable = node.value()
+        pid, executable, is_inst = node.value()
+        assert is_inst
         assert executable == sys.executable
         assert pid != os.getpid()
 
@@ -164,6 +145,28 @@ class TestShExec(DmlTestBase):
         assert a == 2
         assert b == 3
         assert c == ex
+
+    def test_run_hatch(self):
+        dag = self.new('test0', 'testing')
+        def foopy(fndag):
+            from io import StringIO
+
+            import pandas as pd
+            _, _, doc = fndag.expr
+            print(doc)
+            df = pd.read_csv(StringIO(doc))
+            return fndag.commit(df.sum().to_dict())
+
+        csv = dedent("""
+        a,b
+        1,9
+        2,8
+        3,7
+        4,6
+        """).strip()
+        sh = ec2.Sh(dag)
+        res = sh.run_hatch(foopy, csv, env='test-pandas')
+        assert res.value() == {'a': 10, 'b': 30}
 
     def test_run_hatch_script(self):
         dag = self.new('test', 'foo')
@@ -192,6 +195,23 @@ class TestShExec(DmlTestBase):
         rsrc = sh.put_file_(_here_/'assets/mnist_jax.py')
         node = sh.run_hatch(fn, dag.put(config), mounts={'mnist.py': rsrc}, env='test-jax')
         assert all(isinstance(x, float) for x in node.value())
+
+
+class TestLambdaExec(DmlTestBase):
+
+    def test_run_lambda(self):
+        import json
+        dag = self.new('test-dag0', 'this is a test')
+        expr = [1, 2, 3]
+        fn = dag.start_fn(*expr)
+        lmda = boto3.Session(profile_name='misc2', region_name='us-west-2').client('lambda')
+        resp = lmda.invoke(
+            FunctionName='test-fn',
+            Payload=json.dumps({'dump': fn.dump}),
+        )
+        dump = json.loads(resp['Payload'].read().decode())
+        dag.load_ref(dump['response'])
+        assert fn.get_result().value() == expr
 
 
 class TestDkrExec(DmlTestBase):

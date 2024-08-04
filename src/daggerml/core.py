@@ -232,13 +232,11 @@ class Dag:
         ref, dump = self._invoke('start_fn', expr=expr, use_cache=use_cache)
         return FnWaiter(ref, dump, self)
 
-    def commit(self, result, cache: bool|None = None) -> Ref:
+    def commit(self, result) -> Ref:
         if not isinstance(result, (Node, Error)):
             result = self.put(result)
         if isinstance(result, Node):
             result = result.ref
-        if cache is None:
-            cache = getattr(self, 'cache', None)
         resp = self._invoke('commit', result)
         assert isinstance(resp, Ref)
         return resp

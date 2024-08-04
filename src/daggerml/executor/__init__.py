@@ -112,6 +112,19 @@ class Sh:
     def resource(self, _id):
         return dml.Resource(f'{self.rsrc.id}/{_id}')
 
+    @contextmanager
+    def hydrate(self, **rsrcs: dml.Node):
+        with TemporaryDirectory(prefix='dml-hydrate-') as tmpd:
+            for k, v in rsrcs.items():
+                to = f'{tmpd}/{k}'
+                if isinstance(v, dml.Node):
+                    v = v.value()
+                if isinstance(v, dml.Resource):
+                    self.cache.copy(v, to)
+                else:
+                    raise TypeError(f'invalid type: ({k} = {type(v)})')
+            yield tmpd
+
     def tar_(self, src, filter_fn=lambda x: x):
         tmpf = NamedTemporaryFile(prefix='dml-', delete=False)
         try:
@@ -142,19 +155,6 @@ class Sh:
         assert isinstance(resource, dml.Resource)
         assert resource.id.startswith(self.name + '/')
         return self.cache.cat(resource)
-
-    @contextmanager
-    def hydrate(self, **rsrcs: dml.Node):
-        with TemporaryDirectory(prefix='dml-hydrate-') as tmpd:
-            for k, v in rsrcs.items():
-                to = f'{tmpd}/{k}'
-                if isinstance(v, dml.Node):
-                    v = v.value()
-                if isinstance(v, dml.Resource):
-                    self.cache.copy(v, to)
-                else:
-                    raise TypeError(f'invalid type: ({k} = {type(v)})')
-            yield tmpd
 
     def run_script(
         self,
@@ -246,8 +246,6 @@ class Sh:
 
 
 def docker_build(path, dkr_path=None, tag=None, flags=()):
-    if True:
-        return
     img = 'dml'
     tag = tag or f'id_{int(time())}_{uuid4().hex}'
     cmd = ['docker', 'build', '-t', f'{img}:{tag}']
@@ -304,19 +302,15 @@ class Dkr:
     dag: dml.Dag
     name = f'daggerml/host:{HOSTNAME}/docker'
 
-    def resource(self, **kw):
-        return dml.Resource.from_dict({'exec': self.name, **kw})
+    @property
+    def rsrc(self):
+        return dml.Resource(self.name)
+
+    def resource(self, _id):
+        return dml.Resource(f'{self.rsrc.id}/{_id}')
 
     def build(self, tarball: dml.Node, dkr_path: Optional[str|dml.Node] = None, *,
               cache: bool = True):
-        """
-        build a docker image
-
-        Notes
-        -----
-        * This does not check to ensure the docker image exists locally.
-          We need to implement `cache='replace'` as porcelain.
-        """
         if isinstance(dkr_path, dml.Node):
             ar_path = self.dag.get_value(dkr_path)
         else:
