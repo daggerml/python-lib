@@ -5,7 +5,7 @@ import subprocess
 import traceback as tb
 from dataclasses import InitVar, dataclass, field, fields
 from tempfile import TemporaryDirectory
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -143,15 +143,15 @@ class Api:
     flags: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self, config_dir, project_dir, initialize):
-        if config_dir is None and 'config-dir' not in self.flags:
-            tmpd = TemporaryDirectory()
-            self.tmpdirs.append(tmpd)
-            self.flags['config-dir'] = tmpd.__enter__()
-        if project_dir is None and 'project-dir' not in self.flags:
-            tmpd = TemporaryDirectory()
-            self.tmpdirs.append(tmpd)
-            self.flags['project-dir'] = tmpd.__enter__()
         if initialize:
+            if config_dir is None and 'config-dir' not in self.flags:
+                tmpd = TemporaryDirectory()
+                self.tmpdirs.append(tmpd)
+                self.flags['config-dir'] = tmpd.__enter__()
+            if project_dir is None and 'project-dir' not in self.flags:
+                tmpd = TemporaryDirectory()
+                self.tmpdirs.append(tmpd)
+                self.flags['project-dir'] = tmpd.__enter__()
             self.init()
 
     def init(self):
@@ -197,10 +197,13 @@ class Dag:
     api: Api
 
     @classmethod
-    def new(cls, name: str|None, message: str, dump: str|None = None, api_flags: Dict[str, str]|None = None) -> "Dag":
-        api_flags = api_flags or {}
+    def new(cls, name: str|None, message: str,
+            dump: Optional[str] = None,
+            api_flags: Dict[str, str]|None = None,
+            api: Optional[Api] = None) -> "Dag":
+        if api is None:
+            api = Api(flags=api_flags or {})
         extra = [] if dump is None else ['--dag-dump', dump]
-        api = Api(flags=api_flags)
         tok = api('dag', 'create', *extra, name, message)
         return cls(tok, api)
 

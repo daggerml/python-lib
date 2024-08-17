@@ -13,8 +13,5 @@ os.environ['PATH'] = f'{tmpd}/bin:' + os.getenv('PATH', '')
 sys.path.append(tmpd)
 
 def handler(event, context):
-    import daggerml as dml
-    with dml.Api(initialize=True) as api:
-        dag = dml.new('exec', 'executing dag', dump=event['dump'], api_flags=api.flags)
-        resp = dag.commit(dag.put(dag.expr))
-        return {'message': 'qwer', 'response': dag.dump(resp)}
+    proc = subprocess.run(['./dml_script'], input=event['dump'].encode(), capture_output=True, check=False)
+    return {'status': proc.returncode, 'stdout': proc.stdout.decode(), 'stderr': proc.stderr.decode()}
