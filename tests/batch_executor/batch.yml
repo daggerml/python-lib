@@ -146,7 +146,7 @@ Resources:
       JobDefinitionName: BatchJobDefinition
       Type: container
       ContainerProperties:
-        Image: public.ecr.aws/amazonlinux/amazonlinux:latest
+        Image: "python:3.11"
         Vcpus: 1
         Memory: 1024
         Command: ["python3", "-c", "print('Hello, World!')"]

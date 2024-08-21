@@ -1,12 +1,15 @@
+import json
 from pathlib import Path
+from time import sleep
 
 import boto3
 
 import daggerml as dml
 import daggerml.executor.lambda_ as lam
+import tests.batch_executor as tba
 from tests.util import DmlTestBase
 
-_here_ = Path(__file__).parent
+_root_ = Path(__file__).parent.parent
 TEST_BUCKET = 'amn-dgr'
 try:
     boto3.client('s3').list_objects_v2(Bucket=TEST_BUCKET)
@@ -19,14 +22,37 @@ except Exception:
 
 class TestCore(DmlTestBase):
 
+    def setUp(self):
+        super().setUp()
+        self._stack_name, lambda_arn = tba.up(self.id().replace('.', '-').replace('_', '-'))
+        self._rsrc = dml.Resource(json.dumps({'lambda_arn': lambda_arn}))
+
+    def tearDown(self):
+        tba.down(self._stack_name)
+        super().tearDown()
+
     def test_invoke(self):
-        dag = dml.new('test-dag0', 'this is a test')
-        # _id = f'dml-{uuid4().hex[:8]}'
-        # zip_file = f'lambda/{_id}.zip'
-        # subprocess.run(['zip', '-r', zip_file, '-x', '.git/*', '.dml/*', '__pycache__/*', 'tests/*', 'Makefile', 'lambda/*', '@', '.'])
-        # boto3.client('s3').upload_file(zip_file, 'dml-test-misc2', f'test/{_id}.zip')
-        # os.remove(zip_file)
-        rsrc_node = dag.load('test-lambda')
-        resp = lam.run(dag, [rsrc_node, 2], boto_session=boto3.Session(profile_name='misc2', region_name='us-west-2'))
-        assert isinstance(resp, dml.Node)
-        assert resp.value() == [rsrc_node.value(), 2]
+        nums = [2, 3, 5]
+        with dml.Api(initialize=True) as api:
+            api.new_dag('lambda', 'creating lambda function').commit(self._rsrc)
+            dag = api.new_dag('test-dag0', 'this is a test')
+            rsrc_node = dag.load('lambda')
+            waiter = lam.run(dag, [rsrc_node, *nums])
+            assert isinstance(waiter, dml.FnUpdater)
+            result = None
+            while result is None:
+                result = waiter.update()
+                sleep(10)
+            assert isinstance(result, dml.Node)
+            assert result.value() == [x + 1 for x in nums]
+        with dml.Api(initialize=True) as api:
+            api.new_dag('lambda', 'creating lambda function').commit(self._rsrc)
+            dag = api.new_dag('test-dag0', 'this is a test')
+            rsrc_node = dag.load('lambda')
+            # run again
+            waiter = lam.run(dag, [rsrc_node, *nums])
+            assert isinstance(waiter, dml.FnUpdater)
+            # waiter.update()
+            result = waiter.get_result()
+            assert isinstance(result, dml.Node)
+            assert result.value() == [x + 1 for x in nums]

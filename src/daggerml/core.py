@@ -5,7 +5,7 @@ import subprocess
 import traceback as tb
 from dataclasses import InitVar, dataclass, field, fields
 from tempfile import TemporaryDirectory
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,7 @@ class Ref:
 @dataclass
 class FnWaiter:
     ref: Ref
+    cache_key: str
     dump: str
     dag: "Dag"
 
@@ -80,8 +81,30 @@ class FnWaiter:
         assert isinstance(ref, Ref)
         return Node(self.dag, ref)
 
-    def cache(self):
-        self.dag._invoke('populate_cache', self.ref)
+
+@dataclass
+class FnUpdater(FnWaiter):
+    update_fn: Callable
+
+    @classmethod
+    def from_waiter(cls, waiter, update_fn):
+        f = {k.name: getattr(waiter, k.name) for k in fields(waiter)}
+        return cls(update_fn=update_fn, **f)
+
+    def update(self):
+        resp = self.get_result()
+        if resp is not None:
+            return resp
+        logger.info('Updater is not finished yet... updating now.')
+        try:
+            resp = self.update_fn(self.cache_key, self.dump)
+            if resp is not None:
+                logger.info('found non null resp... Loading %r into %r now.', resp, self.dag.tok)
+                self.dag.load_ref(resp)
+        except Exception as e:
+            dag = self.dag.api.new_dag('asdf', 'qwer', dump=self.dump)
+            dag.commit(Error.from_ex(e))
+        return self.get_result()
 
 
 def from_data(data):
@@ -183,6 +206,12 @@ class Api:
         resp = self('repo', 'dump-ref', to_json(ref))
         return resp
 
+    def new_dag(self,
+                name: str|None,
+                message: str,
+                dump: Optional[str] = None) -> "Dag":
+        return Dag.new(name, message, dump=dump, api=self)
+
 @dataclass(frozen=True)
 class Node:
     dag: "Dag"
@@ -229,11 +258,11 @@ class Dag:
         assert isinstance(resp, Ref)
         return Node(self, resp)
 
-    def start_fn(self, *expr, use_cache: bool = True):
+    def start_fn(self, *expr):
         expr = [x if isinstance(x, Node) else self.put(x) for x in expr]
         expr = [x.ref for x in expr]
-        ref, dump = self._invoke('start_fn', expr=expr, use_cache=use_cache)
-        return FnWaiter(ref, dump, self)
+        ref, cache_key, dump = self._invoke('start_fn', expr=expr)
+        return FnWaiter(ref, cache_key, dump, self)
 
     def commit(self, result) -> Ref:
         if not isinstance(result, (Node, Error)):

@@ -61,17 +61,59 @@ class TestApi(DmlTestBase):
         dag = self.new('test-dag0', 'this is the test dag')
         r0 = dag.put(dml.Resource('a'))
         l0 = dag.put({'asdf': 12})
-        waiter = dag.start_fn(r0, l0, use_cache=True)
+        waiter = dag.start_fn(r0, l0)
         assert waiter.get_result() is None
         f0 = dml.Dag.new('foo', 'message', dump=waiter.dump, api_flags=dag.api.flags)
         f0.commit(f0.put(23))
         n1 = waiter.get_result()
         assert n1.value() == 23
-        waiter.cache()
         # should be cached now
-        waiter = dag.start_fn(r0, l0, use_cache=True)
+        waiter = dag.start_fn(r0, l0)
         n1 = waiter.get_result()
         assert n1.value() == 23
+
+    def test_cache_cloud(self):
+        # self is cloud api
+        with dml.Api(initialize=True) as user0_api:
+            dag = user0_api.new_dag('test-dag0', 'this is the test dag')
+            r0 = dag.put(dml.Resource('a'))
+            l0 = dag.put({'asdf': 12})
+            waiter = dag.start_fn(r0, l0)
+            assert waiter.get_result() is None
+            # runs in the "cloud..."
+            f0 = self.new('foo', 'message', dump=waiter.dump)
+            f0_dump = f0.dump(f0.commit(f0.put(23)))
+            # back on user0's machine
+            dag.load_ref(f0_dump)
+            n1 = waiter.get_result()
+            assert n1.value() == 23
+        with dml.Api(initialize=True) as user1_api:
+            dag = user1_api.new_dag('test-dag0', 'this is the test dag')
+            r0 = dag.put(dml.Resource('a'))
+            l0 = dag.put({'asdf': 12})
+            waiter = dag.start_fn(r0, l0)
+            assert waiter.get_result() is None
+            # cloud returns with cached f0_dump
+            # back on user0's machine
+            dag.load_ref(f0_dump)
+            n1 = waiter.get_result()
+            assert n1.value() == 23
+
+    def test_cannot_commit_finished_dag(self):
+        dag = self.new('test-dag0', 'this is the test dag')
+        r0 = dag.put(dml.Resource('a'))
+        l0 = dag.put({'asdf': 12})
+        waiter = dag.start_fn(r0, l0)
+        assert waiter.get_result() is None
+        f0 = dml.Dag.new('foo', 'message', dump=waiter.dump, api_flags=dag.api.flags)
+        f0.commit(f0.put(23))
+        n1 = waiter.get_result()
+        assert n1.value() == 23
+        # should be cached now
+        waiter = dag.start_fn(r0, l0)
+        f0 = dml.Dag.new('foo', 'message', dump=waiter.dump, api_flags=dag.api.flags)
+        with self.assertRaisesRegex(dml.Error, 'dag has been committed already'):
+            f0.commit(f0.put(5854))
 
     def test_contextmanager(self):
         with self.assertRaises(ZeroDivisionError):
