@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from time import sleep
 
 import boto3
@@ -9,7 +8,6 @@ import daggerml.executor.lambda_ as lam
 import tests.batch_executor as tba
 from tests.util import DmlTestBase
 
-_root_ = Path(__file__).parent.parent
 TEST_BUCKET = 'amn-dgr'
 try:
     boto3.client('s3').list_objects_v2(Bucket=TEST_BUCKET)
@@ -47,7 +45,7 @@ class TestCore(DmlTestBase):
             assert result.value() == [x + 1 for x in nums]
         with dml.Api(initialize=True) as api:
             api.new_dag('lambda', 'creating lambda function').commit(self._rsrc)
-            dag = api.new_dag('test-dag0', 'this is a test')
+            dag = api.new_dag('test-dag1', 'this is a test')
             rsrc_node = dag.load('lambda')
             # run again
             waiter = lam.run(dag, [rsrc_node, *nums])
