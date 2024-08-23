@@ -2,6 +2,7 @@ import json
 from time import sleep
 
 import boto3
+import pytest
 
 import daggerml as dml
 import daggerml.executor.lambda_ as lam
@@ -29,6 +30,7 @@ class TestCore(DmlTestBase):
         tba.down(self._stack_name)
         super().tearDown()
 
+    @pytest.mark.slow
     def test_invoke(self):
         nums = [2, 3, 5]
         with dml.Api(initialize=True) as api:

@@ -220,6 +220,44 @@ class Node:
     def value(self):
         return self.dag._invoke('get_node_value', self.ref)
 
+    def _db_ex(self, fn_name, *x):
+        result = self.dag.start_fn(Resource(f'/daggerml/{fn_name}'), self, *x)
+        result = result.get_result()
+        assert result is not None
+        return result
+
+    def keys(self) -> "Node":
+        return self._db_ex('keys')
+
+    def __getitem__(self, key) -> "Node"|List["Node"]:
+        if isinstance(key, slice):
+            # Get the start, stop, and step from the slice
+            return [self[i] for i in range(*key.indices(len(self)))]
+        return self._db_ex('get', key)
+
+    def len(self) -> "Node":
+        return self._db_ex('len')
+
+    def type(self) -> "Node":
+        return self._db_ex('type')
+
+    def __len__(self):  # python requires this to be an int
+        result = self.len().value()
+        assert isinstance(result, int)
+        return result
+
+    def __iter__(self):
+        if self.type().value() == 'list':
+            for i in range(len(self)):
+                yield self[i]
+        elif self.type().value() == 'dict':
+            for k in self.keys():
+                yield k
+
+    def items(self):
+        for k in self:
+            yield k, self[k]
+
 @dataclass
 class Dag:
     tok: str
@@ -237,8 +275,10 @@ class Dag:
         return cls(tok, api)
 
     @property
-    def expr(self) -> List[Node]:
-        return self._invoke('get_expr')
+    def expr(self) -> Node:
+        ref = self._invoke('get_expr')
+        assert isinstance(ref, Ref)
+        return Node(self, ref)
 
     def _invoke(self, op, *args, **kwargs):
         payload = to_json([op, args, kwargs])

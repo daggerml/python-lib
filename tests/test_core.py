@@ -11,23 +11,32 @@ class TestApi(DmlTestBase):
         l0 = dag.put({'asdf': 12})
         assert isinstance(l0, dml.Node)
         assert l0.value() == {'asdf': 12}
-        rsrc = dml.Resource('a')
-        r0 = dag.put(rsrc)
-        waiter = dag.start_fn(r0, l0, l0)
-        assert waiter.get_result() is None
-        f0 = dml.Dag.new('foo', 'message', dump=waiter.dump, api_flags=dag.api.flags)
-        assert f0.expr[0] == rsrc
-        l1 = f0.put({'qwer': 23})
-        assert isinstance(l1, dml.Node)
-        f0.commit(l1)
-        n1 = waiter.get_result()
-        assert isinstance(n1, dml.Node)
-        assert n1.value() == {'qwer': 23}
-        dag.commit(n1)
-        dag = self.new('test-dag1', 'this is the second test dag')
-        n0 = dag.load('test-dag0')
-        assert isinstance(n0, dml.Node)
-        assert n0.value() == {'qwer': 23}
+        dag.commit(l0)
+
+    def test_db_funcs_dict(self):
+        dag = self.new('test-dag0', 'this is the test dag')
+        l0 = dag.put({'a': 3, 'b': 5})
+        assert l0.len().value() == 2
+        assert l0.keys().value() == ['a', 'b']
+        assert l0['a'].value() == l0[dag.put('a')].value() == 3
+        assert l0['b'].value() == l0[dag.put('b')].value() == 5
+
+    def test_db_funcs_list(self):
+        dag = self.new('test-dag0', 'this is the test dag')
+        l0 = dag.put(['a', 3, 'b', 5])
+        assert l0.len().value() == 4
+        with self.assertRaises(dml.Error):
+            l0.keys()
+        with self.assertRaises(dml.Error):
+            l0[-1]
+        with self.assertRaises(dml.Error):
+            l0[4]
+        assert [x.value() for x in l0[1:]] == [3, 'b', 5]
+        assert l0[0].value() == l0[dag.put(0)].value() == 'a'
+        assert [x.value() for x in l0] == ['a', 3, 'b', 5]
+        node = dag.put({'a': 3, 'b': 5})
+        for k, v in node.items():
+            assert node[k] == v
 
     def test_literal(self):
         data = {
