@@ -1,42 +1,33 @@
+import json
 import unittest
-from contextlib import contextmanager
-from tempfile import TemporaryDirectory
 
 from click.testing import CliRunner
 from daggerml_cli.cli import cli
 
 import daggerml as dml
-import daggerml.core
 
 
-@contextmanager
-def use_repo():
-    with (
-        TemporaryDirectory(prefix='dml-test-wd-') as d0,
-        TemporaryDirectory(prefix='dml-test-wd-') as d1
-    ):
-        flags = {'config-dir': d0, 'project-dir': d1}
-        api = daggerml.core.Api(flags=flags)
-        api('repo', 'create', 'test')
-        api('project', 'init', 'test')
-        yield flags
+class Api(dml.Api):
+    @staticmethod
+    def _api(*args):
+        runner = CliRunner()
+        result = runner.invoke(cli, args)
+        return result.output.strip()
 
-
-def _api(*args):
-    runner = CliRunner()
-    result = runner.invoke(cli, args)
-    return result.output.strip()
+    def jscall(self, *args):
+        resp = self(*args)
+        return [json.loads(x) for x in resp.split('\n') if len(x) > 0]
 
 
 class DmlTestBase(unittest.TestCase):
 
     def setUp(self):
-        self.pylib = use_repo()
-        self.flags = self.pylib.__enter__()
-        daggerml.core._api = _api
+        # daggerml.core._api = _api
+        self.api = Api(initialize=True)
+        self.ctx = self.api.__enter__()
 
     def tearDown(self):
-        self.pylib.__exit__(None, None, None)
+        self.ctx.__exit__(None, None, None)
 
     def new(self, name=None, message='', dump=None):
-        return dml.new(name=name, message=message, dump=dump, api_flags=self.flags)
+        return self.api.new_dag(name=name, message=message, dump=dump)

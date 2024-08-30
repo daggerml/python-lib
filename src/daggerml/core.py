@@ -5,7 +5,7 @@ import subprocess
 import traceback as tb
 from dataclasses import InitVar, dataclass, field, fields
 from tempfile import TemporaryDirectory
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, overload
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,17 @@ def js_dumps(js):
 @dml_type
 @dataclass(frozen=True, slots=True)
 class Resource:
-    id: str
+    uri: str
+
+    @property
+    def scheme(self):
+        car, cdr = self.uri.split(':', 1)
+        return car
+
+    @property
+    def id(self):
+        car, cdr = self.uri.split(':', 1)
+        return cdr
 
 Scalar = str | int | float | bool | type(None) | Resource
 
@@ -147,16 +157,6 @@ def to_json(obj):
     return js_dumps(to_data(obj))
 
 
-def _api(*args):
-    try:
-        cmd = ['dml', *args]
-        resp = subprocess.run(cmd, capture_output=True, check=True)
-        return resp.stdout.decode().strip()
-    except KeyboardInterrupt:
-        raise
-    except Exception as e:
-        raise Error.from_ex(e) from e
-
 @dataclass
 class Api:
     config_dir: InitVar[str|None] = None
@@ -188,8 +188,19 @@ class Api:
             out.extend([f'--{k}', v])
         return out
 
+    @staticmethod
+    def _api(*args):
+        try:
+            cmd = ['dml', *args]
+            resp = subprocess.run(cmd, capture_output=True, check=True)
+            return resp.stdout.decode().strip()
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            raise Error.from_ex(e) from e
+
     def __call__(self, *args, **kwargs):
-        return _api(*self._to_flags(self.flags), *args, **kwargs)
+        return self._api(*self._to_flags(self.flags), *args, **kwargs)
 
     def __enter__(self):
         return self
@@ -221,7 +232,7 @@ class Node:
         return self.dag._invoke('get_node_value', self.ref)
 
     def _db_ex(self, fn_name, *x):
-        result = self.dag.start_fn(Resource(f'/daggerml/{fn_name}'), self, *x)
+        result = self.dag.start_fn(Resource(f'daggerml:op/{fn_name}'), self, *x)
         result = result.get_result()
         assert result is not None
         return result
@@ -229,7 +240,17 @@ class Node:
     def keys(self) -> "Node":
         return self._db_ex('keys')
 
-    def __getitem__(self, key) -> "Node"|List["Node"]:
+    @overload
+    def __getitem__(self, key: slice) -> List["Node"]:
+        ...
+    @overload
+    def __getitem__(self, key: str|int) -> "Node":
+        ...
+    @overload
+    def __getitem__(self, key: "Node") -> "Node":
+        ...
+
+    def __getitem__(self, key):
         if isinstance(key, slice):
             # Get the start, stop, and step from the slice
             return [self[i] for i in range(*key.indices(len(self)))]

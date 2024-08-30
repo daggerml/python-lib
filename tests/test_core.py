@@ -1,6 +1,6 @@
 
 import daggerml as dml
-from tests.util import DmlTestBase
+from tests.util import Api, DmlTestBase
 
 
 class TestApi(DmlTestBase):
@@ -48,8 +48,8 @@ class TestApi(DmlTestBase):
             'list': [3, 4, 5],
             'map': {'a': 2, 'b': 'asdf'},
             'set': {12, 13, 'a', 3.4},
-            'resource': dml.Resource('a'),
-            'compound': {'a': 23, 'b': {5, dml.Resource('b')}}
+            'resource': dml.Resource('a:b'),
+            'compound': {'a': 23, 'b': {5, dml.Resource('b:b')}}
         }
         dag = self.new('test-dag0', 'this is the test dag')
         for k, v in data.items():
@@ -68,7 +68,7 @@ class TestApi(DmlTestBase):
 
     def test_cache_basic(self):
         dag = self.new('test-dag0', 'this is the test dag')
-        r0 = dag.put(dml.Resource('a'))
+        r0 = dag.put(dml.Resource('a:a'))
         l0 = dag.put({'asdf': 12})
         waiter = dag.start_fn(r0, l0)
         assert waiter.get_result() is None
@@ -82,11 +82,11 @@ class TestApi(DmlTestBase):
         assert n1.value() == 23
 
     def test_cache_cloud(self):
+        expr = [dml.Resource('a:b'), {'asdf': 12}]
         # self is cloud api
-        with dml.Api(initialize=True) as user0_api:
+        with Api(initialize=True) as user0_api:
             dag = user0_api.new_dag('test-dag0', 'this is the test dag')
-            r0 = dag.put(dml.Resource('a'))
-            l0 = dag.put({'asdf': 12})
+            r0, l0 = (dag.put(x) for x in expr)
             waiter = dag.start_fn(r0, l0)
             assert waiter.get_result() is None
             # runs in the "cloud..."
@@ -96,21 +96,20 @@ class TestApi(DmlTestBase):
             dag.load_ref(f0_dump)
             n1 = waiter.get_result()
             assert n1.value() == 23
-        with dml.Api(initialize=True) as user1_api:
+        with Api(initialize=True) as user1_api:
             dag = user1_api.new_dag('test-dag0', 'this is the test dag')
-            r0 = dag.put(dml.Resource('a'))
-            l0 = dag.put({'asdf': 12})
+            r0, l0 = (dag.put(x) for x in expr)
             waiter = dag.start_fn(r0, l0)
             assert waiter.get_result() is None
             # cloud returns with cached f0_dump
             # back on user0's machine
-            dag.load_ref(f0_dump)
+            user1_api.load(f0_dump)
             n1 = waiter.get_result()
             assert n1.value() == 23
 
     def test_cannot_commit_finished_dag(self):
         dag = self.new('test-dag0', 'this is the test dag')
-        r0 = dag.put(dml.Resource('a'))
+        r0 = dag.put(dml.Resource('a:a'))
         l0 = dag.put({'asdf': 12})
         waiter = dag.start_fn(r0, l0)
         assert waiter.get_result() is None
@@ -133,3 +132,32 @@ class TestApi(DmlTestBase):
         assert isinstance(n0, dml.Node)
         with self.assertRaises(dml.Error):
             n0.value()
+
+    def test_meta_api_calls(self):
+        self.api('branch', 'create', 'foopy')
+        self.api('branch', 'use', 'foopy')
+        expr = [dml.Resource('a:b'), {'asdf': 12}]
+        dag = self.new('test-dag0', 'this is the test dag')
+        waiter = dag.start_fn(*(dag.put(x) for x in expr))
+        # self is cloud api
+        with Api(initialize=True) as cloud_api:
+            # runs in the "cloud..."
+            f0 = cloud_api.new_dag('foo', 'message', dump=waiter.dump)
+            f0_dump = f0.dump(f0.commit(f0.put(23)))
+            # back on user0's machine
+        dag.load_ref(f0_dump)
+        n1 = waiter.get_result()
+        assert n1.value() == 23
+        ref = dag.commit(n1).to
+        assert {x['id']: x['name'] for x in self.api.jscall('dag', 'list')} == {ref: 'test-dag0'}
+        desc, = self.api.jscall('dag', 'describe', ref)
+        result = desc['result']
+        assert result in desc['nodes']
+        assert list(desc['edges']) == [result]
+        self.assertCountEqual(desc['nodes'], [result, *desc['edges'][result]])
+        assert sorted(self.api('branch', 'list').split('\n')) == ['foopy', 'main']
+        self.api('branch', 'use', 'main')
+        assert {x['id']: x['name'] for x in self.api.jscall('dag', 'list')} == {}
+        self.api('branch', 'delete', 'foopy')
+        assert sorted(self.api('branch', 'list').split('\n')) == ['main']
+        assert self.api('repo', 'gc') == f'{expr[0].uri}'

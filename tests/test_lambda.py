@@ -1,4 +1,3 @@
-import json
 from time import sleep
 
 import boto3
@@ -7,7 +6,7 @@ import pytest
 import daggerml as dml
 import daggerml.executor.lambda_ as lam
 import tests.batch_executor as tba
-from tests.util import DmlTestBase
+from tests.util import Api, DmlTestBase
 
 TEST_BUCKET = 'amn-dgr'
 try:
@@ -24,7 +23,7 @@ class TestCore(DmlTestBase):
     def setUp(self):
         super().setUp()
         self._stack_name, lambda_arn = tba.up(self.id().replace('.', '-').replace('_', '-'))
-        self._rsrc = dml.Resource(json.dumps({'lambda_arn': lambda_arn}))
+        self._rsrc = dml.Resource(lambda_arn)
 
     def tearDown(self):
         tba.down(self._stack_name)
@@ -33,7 +32,7 @@ class TestCore(DmlTestBase):
     @pytest.mark.slow
     def test_invoke(self):
         nums = [2, 3, 5]
-        with dml.Api(initialize=True) as api:
+        with Api(initialize=True) as api:
             api.new_dag('lambda', 'creating lambda function').commit(self._rsrc)
             dag = api.new_dag('test-dag0', 'this is a test')
             rsrc_node = dag.load('lambda')
@@ -45,7 +44,7 @@ class TestCore(DmlTestBase):
                 sleep(10)
             assert isinstance(result, dml.Node)
             assert result.value() == [x + 1 for x in nums]
-        with dml.Api(initialize=True) as api:
+        with Api(initialize=True) as api:
             api.new_dag('lambda', 'creating lambda function').commit(self._rsrc)
             dag = api.new_dag('test-dag1', 'this is a test')
             rsrc_node = dag.load('lambda')
