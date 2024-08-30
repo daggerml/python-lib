@@ -12,6 +12,8 @@ class Api(dml.Api):
     def _api(*args):
         runner = CliRunner()
         result = runner.invoke(cli, args)
+        if result.exit_code != 0:
+            raise RuntimeError(f'{result.output} ----- {result.return_value}')
         return result.output.strip()
 
     def jscall(self, *args):
