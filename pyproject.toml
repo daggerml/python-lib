@@ -39,15 +39,6 @@ ssh = ["paramiko"]
 cli = ["daggerml_cli"]
 all = ["daggerml[aws,ssh]"]
 
-[project.entry-points."daggerml_cli.executor"]
-py = "daggerml.executor.PyExecutor"
-conda = "daggerml.executor.CondaPyExecutor"
-hatch = "daggerml.executor.HatchPyExecutor"
-
-[project.entry-points."daggerml_cli.compute_env"]
-local = "daggerml.executor.Local"
-ssh = "daggerml.executor.RemoteSsh"
-
 [project.urls]
 Homepage = "https://daggerml.com"
 Documentation = "https://daggerml.com/docs"
@@ -71,42 +62,25 @@ packages = ["src/daggerml"]
 [tool.hatch.envs.default]
 python="3.10"
 dependencies = [
-  "pytest",
-  "pytest-cov",
-]
-
-[tool.hatch.envs.test-jax]
-dependencies = [
-  "jax-metal==0.0.7",
-  "jaxlib==0.4.26",
-  "jax==0.4.26",
-  "flax",
-  "optax",
-  "numpy",
-  "tensorflow-datasets",
-  "tensorflow",
-  "ml-collections",
-  "scipy==1.10.1",
-  "tqdm",
-]
-
-[tool.hatch.envs.test-pandas]
-dependencies = [
-  "pandas==2.0.1",
-  "scikit-learn==1.4",
-]
-
-[tool.hatch.envs.test-nevergrad]
-dependencies = [
-  "nevergrad==1.0.2",
+  "daggerml_cli @ {root:uri}/submodules/daggerml_cli",
 ]
 
 [tool.hatch.envs.test]
 dependencies = [
   "pytest",
   "pytest-cov",
+  "daggerml_cli @ {root:uri}/submodules/daggerml_cli",
   "pandas==2.0.1",
+  "numpy<2.0.0",  # pandas is incompatible with newer numpy
+  "pyarrow",
+  "polars==1",
+  "boto3",
 ]
+
+[tool.hatch.envs.test.env-vars]
+AWS_PROFILE = "misc2"
+AWS_REGION = 'us-west-2'
+AWS_DEFAULT_REGION = 'us-west-2'
 
 [tool.hatch.envs.test.scripts]
 test = 'pytest -vsx --log-cli-level=INFO --log-disable=botocore.credentials'
