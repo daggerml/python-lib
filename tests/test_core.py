@@ -139,12 +139,11 @@ class TestApi(DmlTestBase):
         expr = [dml.Resource('a:b'), {'asdf': 12}]
         dag = self.new('test-dag0', 'this is the test dag')
         waiter = dag.start_fn(*(dag.put(x) for x in expr))
-        # self is cloud api
         with Api(initialize=True) as cloud_api:
             # runs in the "cloud..."
             f0 = cloud_api.new_dag('foo', 'message', dump=waiter.dump)
             f0_dump = f0.dump(f0.commit(f0.put(23)))
-            # back on user0's machine
+            # back on user's machine
         dag.load_ref(f0_dump)
         n1 = waiter.get_result()
         assert n1.value() == 23
