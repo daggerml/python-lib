@@ -11,8 +11,7 @@ def run(dag, expr, boto_session=boto3):
     expr = [dag.put(x) for x in expr]
     waiter = dag.start_fn(*expr)
     resource, *_ = expr
-    resource_info = json.loads(resource.value().id)
-    lambda_arn = resource_info['lambda_arn']
+    lambda_arn = resource.value().uri
 
     def lambda_update_fn(cache_key, dump):
         resp = boto_session.client('lambda').invoke(
