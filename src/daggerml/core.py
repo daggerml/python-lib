@@ -5,7 +5,7 @@ import subprocess
 import traceback as tb
 from dataclasses import InitVar, dataclass, field, fields
 from tempfile import TemporaryDirectory
-from typing import Callable, Dict, List, Optional, overload
+from typing import Callable, Dict, List, Optional, Tuple, overload
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,11 @@ def js_dumps(js):
 @dataclass(frozen=True, slots=True)
 class Resource:
     uri: str
+    requires: Tuple["Resource"] = field(default_factory=tuple)
+
+    def __post_init__(self):
+        if isinstance(self.requires, list):
+            object.__setattr__(self, 'requires', tuple(self.requires))
 
     @property
     def scheme(self):

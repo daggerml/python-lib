@@ -13,8 +13,8 @@ import daggerml as dml
 
 try:
     import pandas as pd
-    import pandas.util
-except Exception:
+    import pandas.util  # noqa: F401
+except ImportError:
     pd = None
 
 try:
