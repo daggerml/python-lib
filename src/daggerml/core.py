@@ -27,7 +27,7 @@ def js_dumps(js):
 @dataclass(frozen=True, slots=True)
 class Resource:
     uri: str
-    requires: Tuple["Resource"] = field(default_factory=tuple)
+    requires: Tuple["Resource", ...] = field(default_factory=tuple)
 
     def __post_init__(self):
         if isinstance(self.requires, list):
@@ -104,7 +104,9 @@ class FnUpdater(FnWaiter):
     @classmethod
     def from_waiter(cls, waiter, update_fn):
         f = {k.name: getattr(waiter, k.name) for k in fields(waiter)}
-        return cls(update_fn=update_fn, **f)
+        out = cls(update_fn=update_fn, **f)
+        out.update()
+        return out
 
     def update(self):
         resp = self.get_result()
@@ -288,6 +290,7 @@ class Node:
 class Dag:
     tok: str
     api: Api
+    result: Ref|None = None
 
     @classmethod
     def new(cls, name: str|None, message: str,
@@ -337,6 +340,7 @@ class Dag:
             result = result.ref
         resp = self._invoke('commit', result)
         assert isinstance(resp, Ref)
+        self.result = resp
         return resp
 
     def __enter__(self):
