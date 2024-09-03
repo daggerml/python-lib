@@ -43,6 +43,20 @@ class Resource:
         car, cdr = self.uri.split(':', 1)
         return cdr
 
+    @classmethod
+    def from_data(cls, data):
+        return cls(data['uri'], tuple([cls.from_data(x) for x in data['requires']]))
+
+    @classmethod
+    def from_json(cls, dump):
+        return cls.from_data(json.loads(dump))
+
+    def to_data(self):
+        return {'uri': self.uri, 'requires': [x.to_data() for x in self.requires]}
+
+    def to_json(self):
+        return js_dumps(self.to_data())
+
 Scalar = str | int | float | bool | type(None) | Resource
 
 @dml_type
@@ -99,7 +113,8 @@ class FnWaiter:
 
 @dataclass
 class FnUpdater(FnWaiter):
-    update_fn: Callable
+    update_fn: Callable[[str, str, List[Dict]], str|None]
+    reqs: Tuple[Resource, ...] = ()
 
     @classmethod
     def from_waiter(cls, waiter, update_fn):
@@ -114,7 +129,7 @@ class FnUpdater(FnWaiter):
             return resp
         logger.info('Updater is not finished yet... updating now.')
         try:
-            resp = self.update_fn(self.cache_key, self.dump)
+            resp = self.update_fn(self.cache_key, self.dump, [x.to_data() for x in self.reqs])
             if resp is not None:
                 logger.info('found non null resp... Loading %r into %r now.', resp, self.dag.tok)
                 self.dag.load_ref(resp)

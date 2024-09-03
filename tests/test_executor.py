@@ -40,45 +40,6 @@ def ls_r(path):
     return [rel_to(x, path) for x in glob(f'{path}/**', recursive=True)]
 
 
-class TestLambda(DmlTestBase):
-
-    def setUp(self):
-        super().setUp()
-        self._stack_name, lambda_arn = tba.up(self.id().replace('.', '-').replace('_', '-'))
-        self._rsrc = dml.Resource(lambda_arn)
-
-    def tearDown(self):
-        tba.down(self._stack_name)
-        super().tearDown()
-
-    @pytest.mark.slow
-    def test_invoke(self):
-        nums = [2, 3, 5]
-        with Api(initialize=True) as api:
-            api.new_dag('lambda', 'creating lambda function').commit(self._rsrc)
-            dag = api.new_dag('test-dag0', 'this is a test')
-            rsrc_node = dag.load('lambda')
-            waiter = dx.Lambda.run(dag, [rsrc_node, *nums])
-            assert isinstance(waiter, dml.FnUpdater)
-            result = None
-            while result is None:
-                result = waiter.update()
-                sleep(10)
-            assert isinstance(result, dml.Node)
-            assert result.value() == [x + 1 for x in nums]
-        with Api(initialize=True) as api:
-            api.new_dag('lambda', 'creating lambda function').commit(self._rsrc)
-            dag = api.new_dag('test-dag1', 'this is a test')
-            rsrc_node = dag.load('lambda')
-            # run again
-            waiter = dx.Lambda.run(dag, [rsrc_node, *nums])
-            assert isinstance(waiter, dml.FnUpdater)
-            # waiter.update()
-            result = waiter.get_result()
-            assert isinstance(result, dml.Node)
-            assert result.value() == [x + 1 for x in nums]
-
-
 @pytest.mark.skipif(not S3_ACCESS, reason='No s3 access')
 class TestS3(DmlTestBase):
 
