@@ -334,13 +334,13 @@ def spin_up(name, template, capabilities):
     return {x['OutputKey']: x['OutputValue'] for x in desc['Outputs']}
 
 
-def get_code(path):
-    with open(_loc_/'lambda/entrypoint.py', 'r') as f:
+def get_code(fname):
+    with open(_loc_/fname, 'r') as f:
         code = f.read()
     # Create a zip file in memory
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w') as z:
-        z.writestr(path, code)  # Use a valid filename
+        z.writestr(fname, code)  # Use a valid filename
     zip_buffer.seek(0)
     return zip_buffer.read()
 
@@ -351,7 +351,7 @@ def up_cluster(bucket):
         boto3.client('lambda')
         .create_function(
             FunctionName='my_lambda',
-            Code={"ZipFile": get_code('lambda_function.py')},
+            Code={"ZipFile": get_code('lambda_entrypoint.py')},
             Environment={
                 "Variables": {
                     "DML_DYNAMO_TABLE": resp.pop("Dynamo"),
@@ -359,7 +359,7 @@ def up_cluster(bucket):
                     "DML_S3_PREFIX": "tmp",
                 }
             },
-            Handler='lambda_function.handler',
+            Handler='lambda_entrypoint.handler',
             MemorySize=128,
             Role=resp.pop("LambdaRole"),
             Runtime="python3.11",
