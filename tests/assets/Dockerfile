@@ -12,7 +12,7 @@ RUN apt-get update -y \
     && apt-get clean
 
 RUN --mount=type=bind,target=/tmp/mount,source=. \
-    && cp -r /tmp/mount /tmp/build \
+    cp -r /tmp/mount /tmp/build \
     && ls -Alh /tmp/build \
     && python3 -m pip install --no-cache-dir /tmp/build/submodules/daggerml_cli/ \
     && python3 -m pip install --no-cache-dir /tmp/build \
