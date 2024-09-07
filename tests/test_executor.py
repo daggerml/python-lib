@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 import batch_executor as bx
 import boto3
-from moto.server import ThreadedMotoServer
 
 import daggerml as dml
 import daggerml.executor as dx
@@ -31,9 +30,10 @@ def ls_r(path):
 class MotoTestBase(DmlTestBase):
 
     def setUp(self):
-        for k in os.environ:
-            if k.startswith('AWS_'):
+        for k in sorted(os.environ.keys()):
+            if k.startswith("AWS_"):
                 del os.environ[k]
+        from moto.server import ThreadedMotoServer
         super().setUp()
         self.server = ThreadedMotoServer(port=0)
         self.server.start()
