@@ -99,6 +99,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
         - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
 
   # Instance Profile
   InstanceProfile:
@@ -139,21 +140,12 @@ Resources:
         - Order: 1
           ComputeEnvironment: !Ref BatchComputeEnvironment
 
-  # Batch Job Definition
-  BatchJobDefinition:
-    Type: AWS::Batch::JobDefinition
+  Repo:
+    Type: AWS::ECR::Repository
     Properties:
-      JobDefinitionName: BatchJobDefinition
-      Type: container
-      ContainerProperties:
-        Image: "python:3.11"
-        Vcpus: 1
-        Memory: 1024
-        Command: ["python3", "-c", "print('Hello, World!')"]
-        Environment: []
-        JobRoleArn: !GetAtt InstanceRole.Arn
-      RetryStrategy:
-        Attempts: 1
+      RepositoryName: "asdf"
+      EmptyOnDelete: false
+      ImageTagMutability: IMMUTABLE
 
   # Batch Service Role
   BatchServiceRole:
@@ -170,11 +162,58 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole
 
+  # Batch Service Role
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSBatchFullAccess
+        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+  Dynamo:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions":
+        - AttributeName: cache_key
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      KeySchema":
+        - AttributeName: cache_key
+          KeyType: HASH
+  Lambda:
+    Type: AWS::Lambda::Function
+      Properties:
+        Code:
+          ZipFile: DML_CODE_REPLACE
+        Environment:
+          Variables:
+            DML_DYNAMO_TABLE: !Ref Dynamo
+            DML_JOB_QUEUE: !Ref BatchJobQueue
+        Handler: 'entrypoint.handler'
+        MemorySize: 128,
+        Role: !GetAtt Role.Arn
+        Runtime: "python3.11"
+        Timeout: 300
+
 Outputs:
   JobQueue:
     Description: The ARN of the Batch Job Queue
     Value: !Ref BatchJobQueue
 
-  JobDefinition:
-    Description: The ARN of the Batch Job Definition
-    Value: !Ref BatchJobDefinition
+  RepoName:
+    Description: The name of the ECR Repo
+    Value: !Ref Repo
+
+  RepoUri:
+    Description: The URI of the ECR Repo
+    Value: !GetAtt Repo.RepositoryUri

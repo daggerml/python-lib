@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import batch_executor as bx
 import boto3
 from moto.server import ThreadedMotoServer
 
@@ -151,10 +152,16 @@ class TestDocker(MotoTestBase):
 
     @classmethod
     def setUpClass(cls):
-        cls.dkr_img_id = dx._dkr_build(
-            _root_,
-            ['-f', 'tests/assets/Dockerfile', '-t', 'dml_test', '--platform=linux/amd64', '--load']
-        )
+        cls.dkr_name = 'dml_test'
+        cls.dkr_img_id = 'ba929964b5f0'
+        # cls.dkr_img_id = dx._dkr_build(
+        #     _root_,
+        #     [
+        #         '-f', 'tests/assets/Dockerfile',
+        #         '-t', cls.dkr_name,
+        #         '--platform=linux/amd64', '--load'
+        #     ]
+        # )
 
     def test_local(self):
         dkr = dx.Dkr()
@@ -190,5 +197,41 @@ class TestDocker(MotoTestBase):
         assert isinstance(fn, dml.Node)
         nums = [1, 2, 1, 5]
         result = dkr.run(dag, fn, *nums, s3=s3).get_result()
+        assert isinstance(result, dml.Node)
+        assert result.value() == [x + 1 for x in nums]
+
+    # @mock_aws(config={"lambda": {"use_docker": False}})
+    def test_remote(self):
+        dkr = dx.Dkr()
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
+        lam = dx.Lambda()
+        resp = bx.up_cluster(TEST_BUCKET)
+        tmp = boto3.client('lambda')
+        tmp = tmp.invoke(FunctionName=resp['LambdaArn'], Payload='{"x":2}')
+        assert tmp['Payload'].read() is None
+        r2 = bx.up_jobdef(f'{self.dkr_name}:latest')
+        def exclude_tests(x):
+            return None
+        dag = self.new('dag0', 'foopy')
+        node = s3.tar(dag, _root_, filter_fn=exclude_tests)
+        with patch('daggerml.executor._dkr_build', return_value=self.dkr_img_id):
+            img = dkr.build(dag, node, ['-f', 'tests/assets/Dockerfile'], s3).get_result()
+        tmp = dict(**resp, **r2)
+        _lam = dml.Resource(tmp['LambdaArn'])
+        _jd = dml.Resource(tmp['JobDef'])
+        _jq = dml.Resource(tmp['JobQueue'])
+
+        def add_one(fndag):
+            _, *nums = fndag.expr.value()
+            return dag.commit([x + 1 for x in nums])
+        script = s3.scriptify(dag, add_one)
+        # TODO: make fn and execute... Need to wrap things in resources and whatnot
+        fn = (
+            lam
+            .make_fn(dag, img, _lam, _jq, _jd, script)
+            .get_result()
+        )
+        nums = [1, 2, 1, 5]
+        result = lam.run(dag, fn, *nums).get_result()
         assert isinstance(result, dml.Node)
         assert result.value() == [x + 1 for x in nums]

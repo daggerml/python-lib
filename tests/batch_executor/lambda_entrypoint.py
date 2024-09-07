@@ -132,7 +132,6 @@ def dynamo(ex):
     return result, error
 
 def handler(event, context):
-    return {'status': 0, 'result': event}
     logger.setLevel(logging.DEBUG)
     try:
         ex = Execution(**event)
