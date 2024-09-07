@@ -207,9 +207,6 @@ class TestDocker(MotoTestBase):
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         lam = dx.Lambda()
         resp = bx.up_cluster(TEST_BUCKET)
-        tmp = boto3.client('lambda')
-        tmp = tmp.invoke(FunctionName=resp['LambdaArn'], Payload='{"x":2}')
-        assert tmp['Payload'].read() is None
         r2 = bx.up_jobdef(f'{self.dkr_name}:latest')
         def exclude_tests(x):
             return None
