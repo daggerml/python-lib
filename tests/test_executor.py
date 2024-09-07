@@ -214,6 +214,8 @@ class TestDocker(MotoTestBase):
         node = s3.tar(dag, _root_, filter_fn=exclude_tests)
         with patch('daggerml.executor._dkr_build', return_value=self.dkr_img_id):
             img = dkr.build(dag, node, ['-f', 'tests/assets/Dockerfile'], s3).get_result()
+        with patch('daggerml.executor.Ecr._push', return_value=f'{self.dkr_name}:latest'):
+            img = dx.Ecr('').push(dag, img)
         tmp = dict(**resp, **r2)
         _lam = dml.Resource(tmp['LambdaArn'])
         _jd = dml.Resource(tmp['JobDef'])
@@ -226,7 +228,33 @@ class TestDocker(MotoTestBase):
         # TODO: make fn and execute... Need to wrap things in resources and whatnot
         fn = (
             lam
-            .make_fn(dag, img, _lam, _jq, _jd, script)
+            .make_fn(dag, _lam, _jq, _jd, script)
+            .get_result()
+        )
+        nums = [1, 2, 1, 5]
+        result = lam.run(dag, fn, *nums).get_result()
+        assert isinstance(result, dml.Node)
+        assert result.value() == [x + 1 for x in nums]
+
+    def test_remote2(self):
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
+        lam = dx.Lambda()
+        cresp = bx.up_cluster(TEST_BUCKET)
+        jresp = bx.up_jobdef(f'{self.dkr_name}:latest')
+        # tmp = dict(**resp, **r2)
+        _lam = dml.Resource(cresp['LambdaArn'])
+        _jq = dml.Resource(cresp['JobQueue'])
+        _jd = dml.Resource(jresp['JobDef'])
+        dag = self.new('dag0', 'foopy')
+
+        def add_one(fndag):
+            _, *nums = fndag.expr.value()
+            return dag.commit([x + 1 for x in nums])
+        script = s3.scriptify(dag, add_one)
+        # TODO: make fn and execute... Need to wrap things in resources and whatnot
+        fn = (
+            lam
+            .make_fn(dag, _lam, _jq, _jd, script)
             .get_result()
         )
         nums = [1, 2, 1, 5]

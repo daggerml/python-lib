@@ -332,6 +332,13 @@ class Ecr:
             logger.error(msg)
             raise dml.Error(msg)
 
+    def _push(self, img_id):
+        self.login()
+        new_uri = f'{self.repo_uri}:{img_id}'
+        subprocess.run(['docker', 'tag', img_id, new_uri], check=True)
+        subprocess.run(['docker', 'push', new_uri], check=True)
+        return new_uri
+
     def push(self, dag, img):
         waiter = dag.start_fn(dag.put(dml.Resource(f'{self.scheme}:push')), img, self.repo)
         if waiter.get_result() is not None:
@@ -340,11 +347,7 @@ class Ecr:
             with dml.Api(initialize=True) as api:
                 with api.new_dag('asdf', 'qwer', dump=dump) as fndag:
                     _, img = fndag.expr.value()
-                    self.login()
-                    new_uri = f'{self.repo_uri}:{img.id}'
-                    subprocess.run(['docker', 'tag', img.id, new_uri], check=True)
-                    subprocess.run(['docker', 'push', new_uri], check=True)
-                    fndag.commit(fndag.put(dml.Resource(f'dkr:{new_uri}')))
+                    fndag.commit(fndag.put(dml.Resource(self._push(img.id))))
                 dump = api.dump(fndag.result)
             return dump
         return dml.FnUpdater.from_waiter(waiter, update_fn)
