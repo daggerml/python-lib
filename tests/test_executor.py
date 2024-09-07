@@ -1,5 +1,4 @@
 import os
-import platform
 import unittest
 from glob import glob
 from itertools import product
@@ -13,7 +12,7 @@ from moto.server import ThreadedMotoServer
 
 import daggerml as dml
 import daggerml.executor as dx
-from tests.util import DmlTestBase
+from tests.util import SYSTEM, DmlTestBase
 
 TEST_BUCKET = 'dml-test-doesnotexist'
 TEST_PREFIX = 'testico'
@@ -37,6 +36,9 @@ class MotoTestBase(DmlTestBase):
         self.server.start()
         self.moto_host, self.moto_port = self.server._server.server_address
         self.endpoint = f"http://{self.moto_host}:{self.moto_port}"
+        for k in os.environ:
+            if k.startswith('AWS_'):
+                del os.environ[k]
         os.environ["AWS_ENDPOINT_URL"] = self.endpoint
         os.environ['TEST_SERVER_MODE'] = 'true'
         os.environ['AWS_ACCESS_KEY_ID'] = 'foobar'
@@ -143,7 +145,7 @@ class TestS3(MotoTestBase):
             assert all(not y.startswith('tests/') for y in contents)
 
 
-@unittest.skipUnless(platform.system().lower() == 'darwin', 'docker is only figured out on osx for now')
+@unittest.skipIf(SYSTEM == 'darwin', 'docker is only figured out on linux for now')
 class TestDocker(MotoTestBase):
 
     def setUp(self):
@@ -153,15 +155,13 @@ class TestDocker(MotoTestBase):
     @classmethod
     def setUpClass(cls):
         cls.dkr_name = 'dml_test'
-        cls.dkr_img_id = 'ba929964b5f0'
-        # cls.dkr_img_id = dx._dkr_build(
-        #     _root_,
-        #     [
-        #         '-f', 'tests/assets/Dockerfile',
-        #         '-t', cls.dkr_name,
-        #         '--platform=linux/amd64', '--load'
-        #     ]
-        # )
+        # cls.dkr_img_id = 'ba929964b5f0'
+        flags = [
+            '-f', 'tests/assets/Dockerfile',
+            '-t', cls.dkr_name,
+            '--platform=linux/amd64', '--load'
+        ]
+        cls.dkr_img_id = dx._dkr_build(_root_, flags)
 
     def test_local(self):
         dkr = dx.Dkr()
@@ -200,7 +200,6 @@ class TestDocker(MotoTestBase):
         assert isinstance(result, dml.Node)
         assert result.value() == [x + 1 for x in nums]
 
-    # @mock_aws(config={"lambda": {"use_docker": False}})
     def test_remote(self):
         dkr = dx.Dkr()
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)

@@ -1,6 +1,7 @@
 import json
 import logging
 import logging.config
+import platform
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +9,8 @@ from click.testing import CliRunner
 from daggerml_cli.cli import cli
 
 import daggerml as dml
+
+SYSTEM = platform.system().lower()
 
 logging_config = {
     'version': 1,
