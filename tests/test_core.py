@@ -1,6 +1,6 @@
 
 import daggerml as dml
-from tests.util import Api, DmlTestBase
+from tests.util import DmlTestBase
 
 
 class TestApi(DmlTestBase):
@@ -84,7 +84,7 @@ class TestApi(DmlTestBase):
     def test_cache_cloud(self):
         expr = [dml.Resource('a:b'), {'asdf': 12}]
         # self is cloud api
-        with Api(initialize=True) as user0_api:
+        with dml.Api(initialize=True) as user0_api:
             dag = user0_api.new_dag('test-dag0', 'this is the test dag')
             r0, l0 = (dag.put(x) for x in expr)
             waiter = dag.start_fn(r0, l0)
@@ -96,7 +96,7 @@ class TestApi(DmlTestBase):
             dag.load_ref(f0_dump)
             n1 = waiter.get_result()
             assert n1.value() == 23
-        with Api(initialize=True) as user1_api:
+        with dml.Api(initialize=True) as user1_api:
             dag = user1_api.new_dag('test-dag0', 'this is the test dag')
             r0, l0 = (dag.put(x) for x in expr)
             waiter = dag.start_fn(r0, l0)
@@ -139,7 +139,7 @@ class TestApi(DmlTestBase):
         expr = [dml.Resource('a:b'), {'asdf': 12}]
         dag = self.new('test-dag0', 'this is the test dag')
         waiter = dag.start_fn(*(dag.put(x) for x in expr))
-        with Api(initialize=True) as cloud_api:
+        with dml.Api(initialize=True) as cloud_api:
             # runs in the "cloud..."
             f0 = cloud_api.new_dag('foo', 'message', dump=waiter.dump)
             f0_dump = f0.dump(f0.commit(f0.put(23)))

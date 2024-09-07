@@ -1,10 +1,40 @@
 import json
+import logging
+import logging.config
 import unittest
+from unittest.mock import patch
 
 from click.testing import CliRunner
 from daggerml_cli.cli import cli
 
 import daggerml as dml
+
+logging_config = {
+    'version': 1,
+    'disable_existing_loggers': True,
+    'formatters': {
+        'default': {
+            'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
+        }
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'default',
+        }
+    },
+    'root': {
+        'level': 'WARNING',
+        'handlers': ['console'],
+    },
+    'loggers': {
+        'daggerml': {
+            'level': 'DEBUG',  # or whatever level you want for your library
+            'handlers': ['console'],
+            'propagate': False,
+        }
+    }
+}
 
 
 class Api(dml.Api):
@@ -24,11 +54,14 @@ class Api(dml.Api):
 class DmlTestBase(unittest.TestCase):
 
     def setUp(self):
-        # daggerml.core._api = _api
-        self.api = Api(initialize=True)
+        self.api_patcher = patch('daggerml.Api', Api)
+        self.api_patcher.start()
+        self.api = dml.Api(initialize=True)
         self.ctx = self.api.__enter__()
+        logging.config.dictConfig(logging_config)
 
     def tearDown(self):
+        self.api_patcher.stop()
         self.ctx.__exit__(None, None, None)
 
     def new(self, name=None, message='', dump=None):
