@@ -1,35 +1,23 @@
-import logging
 import os
+import platform
+import unittest
 from glob import glob
 from itertools import product
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from time import sleep
+from unittest.mock import patch
 
 import boto3
-import pytest
+from moto.server import ThreadedMotoServer
 
 import daggerml as dml
 import daggerml.executor as dx
-import tests.batch_executor as tba
-from tests.util import Api, DmlTestBase
+from tests.util import DmlTestBase
 
-TEST_BUCKET = 'dml-test-misc2'
+TEST_BUCKET = 'dml-test-doesnotexist'
 TEST_PREFIX = 'testico'
-try:
-    boto3.client('s3').list_objects_v2(Bucket=TEST_BUCKET)
-    S3_ACCESS = True
-except KeyboardInterrupt:
-    raise
-except Exception:
-    S3_ACCESS = False
 
 _root_ = Path(__file__).parent.parent
-logging.getLogger('boto').setLevel(logging.CRITICAL)
-logging.getLogger('boto3').setLevel(logging.CRITICAL)
-logging.getLogger('botocore').setLevel(logging.CRITICAL)
-logging.getLogger('s3transfer').setLevel(logging.CRITICAL)
-logging.getLogger('urllib3').setLevel(logging.CRITICAL)
 
 
 def rel_to(x, rel):
@@ -40,90 +28,97 @@ def ls_r(path):
     return [rel_to(x, path) for x in glob(f'{path}/**', recursive=True)]
 
 
-@pytest.mark.skipif(not S3_ACCESS, reason='No s3 access')
-class TestS3(DmlTestBase):
+class MotoTestBase(DmlTestBase):
 
     def setUp(self):
         super().setUp()
-        self.api('branch', 'create', 'foo')
-        self.api('branch', 'use', 'foo')
-        self.s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
+        self.server = ThreadedMotoServer(port=0)
+        self.server.start()
+        self.moto_host, self.moto_port = self.server._server.server_address
+        self.endpoint = f"http://{self.moto_host}:{self.moto_port}"
+        os.environ["AWS_ENDPOINT_URL"] = self.endpoint
+        os.environ['TEST_SERVER_MODE'] = 'true'
+        os.environ['AWS_ACCESS_KEY_ID'] = 'foobar'
+        os.environ['AWS_SECRET_ACCESS_KEY'] = 'foobar'
+        boto3.client("s3", region_name='us-east-1').create_bucket(Bucket=TEST_BUCKET)
 
     def tearDown(self):
-        for js in self.api.jscall('index', 'list'):
-            print(f'{js = }')
-            self.api('index', 'delete', js['id'])
-        self.api('branch', 'use', 'main')
-        self.api('branch', 'delete', 'foo')
-        uris = self.api('repo', 'gc').strip().split('\n')
-        s3_uris = [x for x in uris if x.startswith('s3://')]
-        self.s3.delete(*s3_uris)
+        self.server.stop()
         super().tearDown()
 
+
+class TestS3(MotoTestBase):
+
     def test_bytes(self):
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         dag = self.new('dag0', 'message')
-        rsrc = self.s3.put_bytes(dag, b'qwer')
-        assert self.s3.get_bytes(rsrc) == b'qwer'
-        self.assertCountEqual(self.s3.list(), [rsrc.value().uri])
+        rsrc = s3.put_bytes(dag, b'qwer')
+        assert s3.get_bytes(rsrc) == b'qwer'
+        self.assertCountEqual(s3.list(), [rsrc.value().uri])
 
     def test_local_remote_file(self):
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         dag = self.new('dag0', 'message')
         content = 'asdf'
-        with self.s3.tmp_remote(dag) as tmpf:
+        with s3.tmp_remote(dag) as tmpf:
             with open(tmpf.name, mode='w') as f:
                 f.write(content)
         assert isinstance(tmpf.result, dml.Node)
-        assert self.s3.get_bytes(tmpf.result) == content.encode()
-        node = self.s3.put_bytes(dag, content.encode())
+        assert s3.get_bytes(tmpf.result) == content.encode()
+        node = s3.put_bytes(dag, content.encode())
         assert node.value().uri == tmpf.result.value().uri
-        with self.s3.tmp_local(node) as tmpf:
+        with s3.tmp_local(node) as tmpf:
             with open(tmpf, 'r') as f:
                 assert f.read().strip() == content
 
     def test_polars_df(self):
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         dag = self.new('dag0', 'msesages')
         import polars as pl
         df = pl.from_dicts([{'x': i, 'y': j} for i, j in product(range(5), repeat=2)])
-        resp = self.s3.write_parquet(dag, df)
+        resp = s3.write_parquet(dag, df)
         uri = resp.value().uri
         assert uri.startswith('s3://')
         assert uri.endswith('.parquet')
         df = pl.from_dicts([{'x': i, 'y': j} for i, j in product(range(5), repeat=2)])
-        resp = self.s3.write_parquet(dag, df)
+        resp = s3.write_parquet(dag, df)
         uri2 = resp.value().uri
         assert uri == uri2
 
     def test_pandas_df(self):
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         dag = self.new('dag0', 'msesages')
         import pandas as pd
         df = pd.DataFrame([{'x': i, 'y': j} for i, j in product(range(5), repeat=2)])
-        resp = self.s3.write_parquet(dag, df)
+        resp = s3.write_parquet(dag, df)
         uri = resp.value().uri
         assert uri.startswith('s3://')
         assert uri.endswith('.parquet')
         df = pd.DataFrame([{'x': i, 'y': j} for i, j in product(range(5), repeat=2)])
-        resp = self.s3.write_parquet(dag, df, index=False)
+        resp = s3.write_parquet(dag, df, index=False)
         uri2 = resp.value().uri
         assert uri == uri2
-        with self.s3.tmp_local(resp) as f:
+        with s3.tmp_local(resp) as f:
             df2 = pd.read_parquet(f)
         assert df2.equals(df)
 
     def test_pandas_df_index(self):
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         dag = self.new('dag0', 'msesages')
         import pandas as pd
         df = pd.DataFrame([{'x': i, 'y': j} for i, j in product(range(5), repeat=2)])
         df.index = pd.Index([f'x{i}' for i in df.index], name='IDX')
-        resp = self.s3.write_parquet(dag, df)
-        with self.s3.tmp_local(resp) as f:
+        resp = s3.write_parquet(dag, df)
+        with s3.tmp_local(resp) as f:
             df2 = pd.read_parquet(f)
         assert df2.equals(df)
-        resp = self.s3.write_parquet(dag, df, index=False)
-        with self.s3.tmp_local(resp) as f:
+        resp = s3.write_parquet(dag, df, index=False)
+        with s3.tmp_local(resp) as f:
             df2 = pd.read_parquet(f)
         assert not df2.equals(df)
 
     def test_tarball(self):
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         def exclude_tests(x):
             if x.name.startswith('.'):  # no hidden files should be necessary for this
                 return None
@@ -135,9 +130,9 @@ class TestS3(DmlTestBase):
                 return None
             return x
         dag = self.new('dag0', 'foopy')
-        node = self.s3.tar(dag, _root_, filter_fn=exclude_tests)
+        node = s3.tar(dag, _root_, filter_fn=exclude_tests)
         with TemporaryDirectory(prefix='dml-tests-') as tmpd:
-            self.s3.untar(node, tmpd)
+            s3.untar(node, tmpd)
             contents = set(ls_r(tmpd))
             # not empty
             assert 'src/daggerml/core.py' in contents
@@ -147,20 +142,21 @@ class TestS3(DmlTestBase):
             assert all(not y.startswith('tests/') for y in contents)
 
 
-class TestDocker(TestS3):
+@unittest.skipUnless(platform.system().lower() == 'darwin', 'docker is only figured out on osx for now')
+class TestDocker(MotoTestBase):
 
     def setUp(self):
-        super().setUp()
-        self.old_env = os.getenv('DOCKER_BUILDKIT', None)
         os.environ['DOCKER_BUILDKIT'] = '1'
+        super().setUp()
 
-    def tearDown(self):
-        super().tearDown()
-        del os.environ['DOCKER_BUILDKIT']
-        if self.old_env is not None:
-            os.environ['DOCKER_BUILDKIT'] = self.old_env
+    @classmethod
+    def setUpClass(cls):
+        cls.dkr_img_id = dx._dkr_build(
+            _root_,
+            ['-f', 'tests/assets/Dockerfile', '-t', 'dml_test', '--platform=linux/amd64', '--load']
+        )
 
-    def test_basic(self):
+    def test_local(self):
         dkr = dx.Dkr()
         def exclude_tests(x):
             if any(y.startswith('.') for y in x.name.split('/')):
@@ -171,17 +167,28 @@ class TestDocker(TestS3):
                 return None
             return x
         dag = self.new('dag0', 'foopy')
-        node = self.s3.tar(dag, _root_, filter_fn=exclude_tests)
-        img = dkr.build(dag, node, 'tests/assets/Dockerfile', self.s3).get_result()
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
+        node = s3.tar(dag, _root_, filter_fn=exclude_tests)
+        with patch('daggerml.executor._dkr_build', return_value=self.dkr_img_id):
+            img = dkr.build(dag, node, ['-f', 'tests/assets/Dockerfile'], s3).get_result()
         assert isinstance(img, dml.Node)
 
         def add_one(fndag):
             _, *nums = fndag.expr.value()
             return dag.commit([x + 1 for x in nums])
-        script = self.s3.scriptify(dag, add_one)
-        fn = dkr.make_fn(dag, img, script).get_result()
+        script = s3.scriptify(dag, add_one)
+        flags = [
+            '--add-host=host.docker.internal:host-gateway',
+            '-e', f'AWS_ENDPOINT_URL=http://host.docker.internal:{self.moto_port}',
+            '--platform=linux/amd64',
+        ]
+        fn = (
+            dkr
+            .make_fn(dag, img, script, flags)
+            .get_result()
+        )
         assert isinstance(fn, dml.Node)
         nums = [1, 2, 1, 5]
-        result = dkr.run(dag, fn, *nums, s3=self.s3).get_result()
+        result = dkr.run(dag, fn, *nums, s3=s3).get_result()
         assert isinstance(result, dml.Node)
         assert result.value() == [x + 1 for x in nums]

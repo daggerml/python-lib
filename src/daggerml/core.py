@@ -5,7 +5,7 @@ import subprocess
 import traceback as tb
 from dataclasses import InitVar, dataclass, field, fields
 from tempfile import TemporaryDirectory
-from typing import Callable, Dict, List, Optional, Tuple, overload
+from typing import Callable, Dict, List, Optional, overload
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +27,11 @@ def js_dumps(js):
 @dataclass(frozen=True, slots=True)
 class Resource:
     uri: str
-    requires: Tuple["Resource", ...] = field(default_factory=tuple)
+    data: str = ''
 
-    def __post_init__(self):
-        if isinstance(self.requires, list):
-            object.__setattr__(self, 'requires', tuple(self.requires))
+    @property
+    def js(self):
+        return json.loads(self.data)
 
     @property
     def scheme(self):
@@ -42,20 +42,6 @@ class Resource:
     def id(self):
         car, cdr = self.uri.split(':', 1)
         return cdr
-
-    @classmethod
-    def from_data(cls, data):
-        return cls(data['uri'], tuple([cls.from_data(x) for x in data['requires']]))
-
-    @classmethod
-    def from_json(cls, dump):
-        return cls.from_data(json.loads(dump))
-
-    def to_data(self):
-        return {'uri': self.uri, 'requires': [x.to_data() for x in self.requires]}
-
-    def to_json(self):
-        return js_dumps(self.to_data())
 
 Scalar = str | int | float | bool | type(None) | Resource
 
@@ -102,6 +88,7 @@ class FnWaiter:
     cache_key: str
     dump: str
     dag: "Dag"
+    resource_data: str
 
     def get_result(self):
         ref = self.dag._invoke('get_fn_result', self.ref)
@@ -113,8 +100,7 @@ class FnWaiter:
 
 @dataclass
 class FnUpdater(FnWaiter):
-    update_fn: Callable[[str, str, List[Dict]], str|None]
-    reqs: Tuple[Resource, ...] = ()
+    update_fn: Callable[[str, str, str], str|None]
 
     @classmethod
     def from_waiter(cls, waiter, update_fn):
@@ -129,7 +115,7 @@ class FnUpdater(FnWaiter):
             return resp
         logger.info('Updater is not finished yet... updating now.')
         try:
-            resp = self.update_fn(self.cache_key, self.dump, [x.to_data() for x in self.reqs])
+            resp = self.update_fn(self.cache_key, self.dump, self.resource_data)
             if resp is not None:
                 logger.info('found non null resp... Loading %r into %r now.', resp, self.dag.tok)
                 self.dag.load_ref(resp)
@@ -333,6 +319,10 @@ class Dag:
         return data
 
     def put(self, data) -> Node:
+        if isinstance(data, Node):
+            if data.dag != self:
+                raise ValueError('asdf')
+            return data
         resp = self._invoke('put_literal', data)
         assert isinstance(resp, Ref)
         return Node(self, resp)
@@ -344,9 +334,10 @@ class Dag:
 
     def start_fn(self, *expr):
         expr = [x if isinstance(x, Node) else self.put(x) for x in expr]
-        expr = [x.ref for x in expr]
-        ref, cache_key, dump = self._invoke('start_fn', expr=expr)
-        return FnWaiter(ref, cache_key, dump, self)
+        ref, cache_key, dump = self._invoke('start_fn', expr=[x.ref for x in expr])
+        rsrc = expr[0].value()
+        assert isinstance(rsrc, Resource)
+        return FnWaiter(ref, cache_key, dump, self, rsrc.data)
 
     def commit(self, result) -> Ref:
         if not isinstance(result, (Node, Error)):

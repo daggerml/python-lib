@@ -69,6 +69,7 @@ dependencies = [
 dependencies = [
   "pytest",
   "pytest-cov",
+  "moto[all,server]",
   "daggerml_cli @ {root:uri}/submodules/daggerml_cli",
   "pandas==2.0.1",
   "numpy<2.0.0",  # pandas is incompatible with newer numpy

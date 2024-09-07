@@ -21,6 +21,7 @@ from uuid import uuid4
 import boto3
 
 import daggerml as dml
+from daggerml.core import js_dumps
 
 try:
     import pandas as pd
@@ -36,27 +37,17 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class Lambda:
-    @staticmethod
-    def run(dag, expr, boto_session=boto3):
-        expr = [dag.put(x) for x in expr]
-        waiter = dag.start_fn(*expr)
-        resource, *_ = expr
-        lambda_arn = resource.value().uri
-
-        def lambda_update_fn(cache_key, dump, reqs):
-            resp = boto_session.client('lambda').invoke(
-                FunctionName=lambda_arn,
-                Payload=json.dumps({'dump': dump, 'cache_key': cache_key}).encode()
-            )
-            payload = json.loads(resp['Payload'].read().decode())
-            if payload['status'] != 0:
-                raise dml.Error(payload['error'])
-            return payload['result']
-        waiter = dml.FnUpdater.from_waiter(waiter, lambda_update_fn)
-        waiter.update()
-        return waiter
+def session_to_env(session: boto3.Session):
+    a = session.get_credentials()
+    out = {
+        "AWS_ACCESS_KEY_ID": a.access_key,
+        "AWS_SECRET_ACCESS_KEY": a.secret_key,
+        "AWS_SESSION_TOKEN": a.token,
+        "AWS_REGION": session.region_name,
+        "AWS_DEFAULT_REGION": session.region_name,
+    }
+    out = {k: v for k, v in out.items() if v is not None}
+    return out
 
 
 @dataclass
@@ -244,126 +235,154 @@ async def arun(*cmd, out=None, err=None):
     await proc.wait()
     return proc, stdout.store, stderr.store
 
+
+async def _adkr_build(path, flags):
+    cmd = ['docker', 'build', *flags]
+    proc, _, err = await arun(*cmd, path, err=r'^#[0-9]+ writing image sha256:([^\s]+)\s?(done)?$')
+    if proc.returncode != 0:
+        raise dml.Error('failed to build docker image')
+    id, = sorted(set(err))
+    if platform.system().lower() == 'darwin':
+        # docker in osx is weird
+        await arun('docker', 'images', '--no-trunc')
+    return id
+
+def _dkr_build(path, flags):
+    return asyncio.run(_adkr_build(path, flags))
+
 @dataclass
 class Dkr:
-    session: boto3.Session = field(default=None)
+    session: boto3.Session = field(default_factory=boto3.Session)
+    scheme = 'py-dkr'
 
-    def __post_init__(self):
-        self.session = self.session or boto3.Session()
 
-    async def _abuild(self, tarball: dml.Resource, s3: S3, dockerfile: str|None = None):
-        cmd = ['docker', 'build', '--platform=linux/amd64']
-        if dockerfile:
-            cmd.extend(['-f', dockerfile])
-        if platform.system().lower() == 'darwin':
-            cmd.append('--load')
-        with TemporaryDirectory(prefix='dml-dkr-') as tmpd:
-            s3.untar(tarball, tmpd)
-            proc, _, err = await arun(*cmd, tmpd, err=r'^#[0-9]+ writing image sha256:([^\s]+)\s?(done)?$')
-            if proc.returncode != 0:
-                raise dml.Error('failed to build docker image')
-        id, = sorted(set(err))
-        if platform.system().lower() == 'darwin':
-            # docker in osx is weird
-            await arun('docker', 'images', '--no-trunc')
-        return id
+    def build(self, dag, tarball, flags, s3):
+        resource = dml.Resource(f'{self.scheme}:build')
+        flags = flags or []  # in case it's None
+        waiter = dag.start_fn(resource, tarball, flags)
 
-    def build(self, dag: dml.Dag, tarball: dml.Node, dockerfile: str|dml.Node|None, s3: S3) -> dml.FnWaiter:
-        resource = dml.Resource('py-dkr:build')
-        expr = [dag.put(resource), tarball, dag.put(dockerfile)]
-        waiter = dag.start_fn(*expr)
-
-        def update_fn(cache_key, dump, reqs):
+        def update_fn(cache_key, dump, data):
             with dml.Api(initialize=True) as api:
                 with api.new_dag('asdf', 'qwer', dump=dump) as fndag:
-                    _, tball, dkrfile = fndag.expr.value()
-                    id = asyncio.run(self._abuild(tball, s3, dockerfile=dkrfile))
-                    rsrc = dml.Resource(f'dkr:{id}')
-                    fndag.commit(fndag.put(rsrc))
+                    _, tball, flags = fndag.expr.value()
+                    with TemporaryDirectory(prefix='dml-dkr-') as tmpd:
+                        s3.untar(tball, tmpd)
+                        id = _dkr_build(tmpd, flags)
+                    fndag.commit(fndag.put(dml.Resource(f'{self.scheme}:{id}')))
                 dump = api.dump(fndag.result)
             return dump
         return dml.FnUpdater.from_waiter(waiter, update_fn)
 
-    def push(self, dag: dml.Dag, img: dml.Node, repo: dml.Node):
-        expr = [dag.put(dml.Resource('py-dkr:push')), img, repo]
-        waiter = dag.start_fn(*expr)
-        if waiter.get_result() is not None:
-            return waiter
-        def docker_login(registry_url):
-            cmd0 = ['aws', 'ecr', 'get-login-password', '--region', self.session.region_name]
-            proc0 = subprocess.run(cmd0, capture_output=True)
-            cmd1 = ["docker", "login", "-u", 'AWS', "--password-stdin", registry_url]
-            proc1 = subprocess.run(cmd1, input=proc0.stdout, capture_output=True)
-            if proc1.returncode != 0:
-                msg = "Docker login failed. Error message: " + proc1.stderr.decode()
-                logger.error(msg)
-                raise dml.Error(msg)
-        def update_fn(cache_key, dump, reqs):
+    def make_fn(self, dag, image, script, flags):
+        waiter = dag.start_fn(dml.Resource(f'{self.scheme}:make_fn'), image, script, flags)
+        def update_fn(cache_key, dump, data):
             with dml.Api(initialize=True) as api:
                 with api.new_dag('asdf', 'qwer', dump=dump) as fndag:
-                    _, img, repo = fndag.expr
-                    _repo = repo.value()
-                    assert isinstance(_repo, dml.Resource)
-                    docker_login(_repo.id)
-                    img_id = img.value().id
-                    new_uri = f'{_repo.id}:{img_id}'
-                    subprocess.run(['docker', 'tag', img_id, new_uri], check=True)
+                    _, _img, _script, _flags = fndag.expr.value()
+                    _data = js_dumps([_img.id, _script.uri, _flags])
+                    fndag.commit(fndag.put(dml.Resource(f'{self.scheme}:run', data=_data)))
+                dump = api.dump(fndag.result)
+            return dump
+        return dml.FnUpdater.from_waiter(waiter, update_fn)
+
+    def run(self, dag, fn, *args, s3):
+        waiter = dag.start_fn(fn, *args)
+        def update_fn(cache_key, dump, data):
+            rsrc = fn.value()
+            assert isinstance(rsrc, dml.Resource)
+            img_id, script, flags = rsrc.js
+            with s3.tmpdir() as subs3:
+                dump_uri = subs3._put_bytes(waiter.dump.encode())
+                resp_uri = f's3://{subs3.bucket}/{subs3.prefix}/result.dump'
+                cmd = ['docker', 'run', '--rm', *flags]
+                for k, v in session_to_env(self.session).items():
+                    cmd.extend(['-e', f'{k}={v}'])
+                cmd.extend([
+                    '-e', f"DML_SCRIPT_URI={script}",
+                    '-e', f"DML_DUMP_URI={dump_uri}",
+                    '-e', f"DML_RESULT_URI={resp_uri}",
+                    img_id,
+                ])
+                logger.info('submitting cmd: %r', cmd)
+                proc, *_ = asyncio.run(arun(*cmd))
+                if proc.returncode != 0:
+                    raise RuntimeError('failed to run docker image')
+                dump = subs3.get_bytes(resp_uri)
+                return dump
+        return dml.FnUpdater.from_waiter(waiter, update_fn)
+
+
+@dataclass
+class Ecr:
+    repo: str
+    session: boto3.Session = field(default_factory=boto3.Session)
+    scheme = 'py-ecr'
+
+    @property
+    def repo_uri(self):
+        return self.repo if isinstance(self.repo, str) else self.repo.value().id
+
+    def login(self):
+        cmd0 = ['aws', 'ecr', 'get-login-password', '--region', self.session.region_name]
+        proc0 = subprocess.run(cmd0, capture_output=True)
+        cmd1 = ["docker", "login", "-u", 'AWS', "--password-stdin", self.repo_uri]
+        proc1 = subprocess.run(cmd1, input=proc0.stdout, capture_output=True)
+        if proc1.returncode != 0:
+            msg = "Docker login failed. Error message: " + proc1.stderr.decode()
+            logger.error(msg)
+            raise dml.Error(msg)
+
+    def push(self, dag, img):
+        waiter = dag.start_fn(dag.put(dml.Resource(f'{self.scheme}:push')), img, self.repo)
+        if waiter.get_result() is not None:
+            return waiter
+        def update_fn(cache_key, dump, data):
+            with dml.Api(initialize=True) as api:
+                with api.new_dag('asdf', 'qwer', dump=dump) as fndag:
+                    _, img = fndag.expr.value()
+                    self.login()
+                    new_uri = f'{self.repo_uri}:{img.id}'
+                    subprocess.run(['docker', 'tag', img.id, new_uri], check=True)
                     subprocess.run(['docker', 'push', new_uri], check=True)
-                    rsrc = dml.Resource(f'dkr:{new_uri}', requires=(_repo,))
-                    fndag.commit(fndag.put(rsrc))
+                    fndag.commit(fndag.put(dml.Resource(f'dkr:{new_uri}')))
                 dump = api.dump(fndag.result)
             return dump
         return dml.FnUpdater.from_waiter(waiter, update_fn)
 
-    def make_fn(self, dag: dml.Dag, image: dml.Node, script: dml.Node) -> dml.FnWaiter:
-        expr = [dag.put(dml.Resource('py-dkr:make_fn')), image, script]
-        waiter = dag.start_fn(*expr)
-        if waiter.get_result() is not None:
-            return waiter
-        def update_fn(cache_key, dump, reqs):
+
+@dataclass
+class Lambda:
+    session: boto3.Session = field(default_factory=boto3.Session)
+    scheme = 'py-dkr-lambda'
+
+    def make_fn(self, dag, lam, script):
+        expr = [dag.put(dml.Resource(f'{self.scheme}:make_fn')), lam, script]
+        def update_fn(cache_key, dump, data):
             with dml.Api(initialize=True) as api:
                 with api.new_dag('asdf', 'qwer', dump=dump) as fndag:
-                    _, _img, _script = fndag.expr
-                    rsrc = dml.Resource('py-dkr:run', requires=(_img.value(), _script.value()))
+                    _, _lam, _script = fndag.expr
+                    _script = _script.value()
+                    assert isinstance(_script, dml.Resource)
+                    _lam = _lam.value()
+                    assert isinstance(_lam, dml.Resource)
+                    _data = js_dumps([_lam.id, _script.uri])
+                    rsrc = dml.Resource(f'{self.scheme}:run', data=_data)
                     fndag.commit(fndag.put(rsrc))
                 dump = api.dump(fndag.result)
             return dump
-        return dml.FnUpdater.from_waiter(waiter, update_fn)
+        return dml.FnUpdater.from_waiter(dag.start_fn(*expr), update_fn)
 
-    async def arun(self, dag: dml.Dag, fn: dml.Node, *args, s3: S3) -> dml.FnWaiter:
+    def run(self, dag: dml.Dag, fn: dml.Node, *args) -> dml.FnUpdater:
         expr = [fn, *[dag.put(x) for x in args]]
-        waiter = dag.start_fn(*expr)
-        if waiter.get_result() is not None:
-            return waiter
-        rsrc = fn.value()
-        assert isinstance(rsrc, dml.Resource)
-        img_id = rsrc.requires[0].id
-        script = rsrc.requires[1].uri
-        with s3.tmpdir() as subs3:
-            dump_uri = subs3._put_bytes(waiter.dump.encode())
-            resp_uri = f's3://{subs3.bucket}/{subs3.prefix}/result.dump'
-            cmd = ['docker', 'run', '--platform=linux/amd64', '--rm']
-            a = self.session.get_credentials()
-            if a.access_key is not None:
-                cmd.extend(['-e', f'AWS_ACCESS_KEY_ID={a.access_key}'])
-            if a.secret_key is not None:
-                cmd.extend(['-e', f'AWS_SECRET_ACCESS_KEY={a.secret_key}'])
-            if a.token is not None:
-                cmd.extend(['-e', f'AWS_SESSION_TOKEN={a.token}'])
-            cmd = [
-                *cmd,
-                '-e', f"DML_SCRIPT_URI={script}",
-                '-e', f"DML_DUMP_URI={dump_uri}",
-                '-e', f"DML_RESULT_URI={resp_uri}",
-                img_id,
-            ]
-            logger.info('submitting cmd: %r', cmd)
-            proc, *_ = await arun(*cmd)
-            if proc.returncode != 0:
-                raise RuntimeError('failed to run docker image')
-            dump = subs3.get_bytes(resp_uri)
-        dag.api.load(dump)
-        return waiter
-
-    def run(self, dag: dml.Dag, fn: dml.Node, *args, s3: S3) -> dml.FnWaiter:
-        return asyncio.run(self.arun(dag, fn, *args, s3=s3))
+        def update_fn(cache_key, dump, data):
+            rsrc = fn.value()
+            assert isinstance(rsrc, dml.Resource)
+            resp = self.session.client('lambda').invoke(
+                FunctionName=rsrc.id,
+                Payload=js_dumps({'dump': dump, 'cache_key': cache_key, 'data': data}).encode()
+            )
+            payload = json.loads(resp['Payload'].read().decode())
+            if payload['status'] != 0:
+                raise dml.Error(payload['error'])
+            return payload['result']
+        return dml.FnUpdater.from_waiter(dag.start_fn(*expr), update_fn)
