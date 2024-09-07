@@ -159,8 +159,9 @@ class TestDocker(MotoTestBase):
         flags = [
             '-f', 'tests/assets/Dockerfile',
             '-t', cls.dkr_name,
-            '--platform=linux/amd64', '--load'
         ]
+        if SYSTEM == 'darwin':
+            flags.extend(['--platform=linux/amd64', '--load'])
         cls.dkr_img_id = dx._dkr_build(_root_, flags)
 
     def test_local(self):
