@@ -1,7 +1,27 @@
+import pytest
 
 import daggerml as dml
 from tests.util import DmlTestBase
 
+data = {
+    'int': 23,
+    'float': 12.43,
+    'bool': True,
+    'null': None,
+    'string': 'qwer',
+    'list': [3, 4, 5],
+    'map': {'a': 2, 'b': 'asdf'},
+    'set': {12, 13, 'a', 3.4},
+    'resource': dml.Resource('a:b', data='{"x":23}'),
+    'compound': {'a': 23, 'b': {5, dml.Resource('b:b')}}
+}
+
+@pytest.mark.parametrize("x", list(data.values()), ids=list(data))
+def test_literal(x):
+    dag = dml.Api(initialize=True).new_dag('test-dag0', 'this is the test dag')
+    node = dag.put(x)
+    assert isinstance(node, dml.Node)
+    assert node.value() == x
 
 class TestApi(DmlTestBase):
 
@@ -37,25 +57,6 @@ class TestApi(DmlTestBase):
         node = dag.put({'a': 3, 'b': 5})
         for k, v in node.items():
             assert node[k] == v
-
-    def test_literal(self):
-        data = {
-            'int': 23,
-            'float': 12.43,
-            'bool': True,
-            'null': None,
-            'string': 'qwer',
-            'list': [3, 4, 5],
-            'map': {'a': 2, 'b': 'asdf'},
-            'set': {12, 13, 'a', 3.4},
-            'resource': dml.Resource('a:b'),
-            'compound': {'a': 23, 'b': {5, dml.Resource('b:b')}}
-        }
-        dag = self.new('test-dag0', 'this is the test dag')
-        for k, v in data.items():
-            node = dag.put(v)
-            assert isinstance(node, dml.Node), f'{k = }'
-            assert node.value() == v, f'{k = }'
 
     def test_composite(self):
         dag = self.new('test-dag0', 'this is the test dag')
