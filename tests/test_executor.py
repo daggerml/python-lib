@@ -31,14 +31,14 @@ def ls_r(path):
 class MotoTestBase(DmlTestBase):
 
     def setUp(self):
+        for k in os.environ:
+            if k.startswith('AWS_'):
+                del os.environ[k]
         super().setUp()
         self.server = ThreadedMotoServer(port=0)
         self.server.start()
         self.moto_host, self.moto_port = self.server._server.server_address
         self.endpoint = f"http://{self.moto_host}:{self.moto_port}"
-        for k in os.environ:
-            if k.startswith('AWS_'):
-                del os.environ[k]
         os.environ["AWS_ENDPOINT_URL"] = self.endpoint
         os.environ['TEST_SERVER_MODE'] = 'true'
         os.environ['AWS_ACCESS_KEY_ID'] = 'foobar'
