@@ -1,4 +1,6 @@
+import io
 import json
+import zipfile
 from pathlib import Path
 from time import sleep
 
@@ -331,16 +333,25 @@ def spin_up(name, template, capabilities):
         status = desc['StackStatus']
     return {x['OutputKey']: x['OutputValue'] for x in desc['Outputs']}
 
-def up_cluster(bucket):
-    resp = spin_up('cluster', cluster_json(), ALL_CAPS)
+
+def get_code(path):
     with open(_loc_/'lambda/entrypoint.py', 'r') as f:
         code = f.read()
+    # Create a zip file in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w') as z:
+        z.writestr(path, code)  # Use a valid filename
+    zip_buffer.seek(0)
+    return zip_buffer.read()
+
+def up_cluster(bucket):
+    resp = spin_up('cluster', cluster_json(), ALL_CAPS)
     # lambda functions are not implemented in moto v5.0.12
     lam_cli = (
         boto3.client('lambda')
         .create_function(
-            FunctionName='lambda',
-            Code={"ZipFile": code},
+            FunctionName='my_lambda',
+            Code={"ZipFile": get_code('lambda_function.py')},
             Environment={
                 "Variables": {
                     "DML_DYNAMO_TABLE": resp.pop("Dynamo"),
@@ -348,7 +359,7 @@ def up_cluster(bucket):
                     "DML_S3_PREFIX": "tmp",
                 }
             },
-            Handler='handler',
+            Handler='lambda_function.handler',
             MemorySize=128,
             Role=resp.pop("LambdaRole"),
             Runtime="python3.11",

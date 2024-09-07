@@ -1,6 +1,4 @@
 import json
-import logging
-import logging.config
 import platform
 import unittest
 from unittest.mock import patch
@@ -62,7 +60,7 @@ class DmlTestBase(unittest.TestCase):
         self.api_patcher.start()
         self.api = dml.Api(initialize=True)
         self.ctx = self.api.__enter__()
-        logging.config.dictConfig(logging_config)
+        # logging.config.dictConfig(logging_config)
 
     def tearDown(self):
         self.api_patcher.stop()
