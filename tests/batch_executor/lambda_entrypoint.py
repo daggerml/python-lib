@@ -38,7 +38,7 @@ class Execution:
         return f'{PREFIX}/{self.cache_key}/output.json'
 
     def start(self):
-        s3 = boto3.client('s3')
+        s3 = boto3.client('s3', endpoint_url=os.getenv("MOTO_HTTP_ENDPOINT"))
         s3.put_object(Bucket=BUCKET, Key=self.input_key, Body=self.dump.encode())
         job_queue, job_def, script = json.loads(self.data)
         cmd = dedent(self.cmd_tpl.format(
@@ -47,7 +47,7 @@ class Execution:
             script_loc=script,
         )).strip()
 
-        response = boto3.client('batch').submit_job(
+        response = boto3.client('batch', endpoint_url=os.getenv("MOTO_HTTP_ENDPOINT")).submit_job(
             jobName=f'{PREFIX}-{self.cache_key.replace("/", "-")}',
             jobQueue=job_queue.split(':', 1)[1],
             jobDefinition=job_def.split(':', 1)[1],
@@ -60,7 +60,7 @@ class Execution:
     @staticmethod
     def poll(job_info):
         info = json.loads(job_info)
-        resp = boto3.client('batch').describe_jobs(jobs=[info['job_id']])
+        resp = boto3.client('batch', endpoint_url=os.getenv("MOTO_HTTP_ENDPOINT")).describe_jobs(jobs=[info['job_id']])
         job, = resp['jobs']
         logger.info(json.dumps(job, indent=2, default=str))
         info['status'] = job['status']
@@ -73,12 +73,12 @@ class Execution:
         return status, json.dumps(info)
 
     def get_result(self, job_info):
-        resp = boto3.client('s3').get_object(Bucket=BUCKET, Key=self.output_key)
+        resp = boto3.client('s3', endpoint_url=os.getenv("MOTO_HTTP_ENDPOINT")).get_object(Bucket=BUCKET, Key=self.output_key)
         result = resp['Body'].read().decode()
         return result
 
 def dynamo(ex):
-    dyn = boto3.client('dynamodb')
+    dyn = boto3.client('dynamodb', endpoint_url=os.getenv("MOTO_HTTP_ENDPOINT"))
     _id = uuid4().hex
     item = {'cache_key': ex.cache_key, 'status': 'reserved', 'info': _id}
     logger.info('checking item: %r', item)
