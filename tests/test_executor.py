@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 import batch_executor as bx
 import boto3
-import requests
 
 import daggerml as dml
 import daggerml.executor as dx
@@ -34,8 +33,6 @@ class MotoTestBase(DmlTestBase):
         for k in sorted(os.environ.keys()):
             if k.startswith("AWS_"):
                 del os.environ[k]
-        # os.environ["MOTO_DOCKER_NETWORK_MODE"] = "host moto_server"
-        os.environ["TEST_SERVER_MODE"] = "true"
         os.environ["AWS_ACCESS_KEY_ID"] = "foobar"
         os.environ["AWS_SECRET_ACCESS_KEY"] = "foobar"
         os.environ["AWS_REGION"] = os.environ["AWS_DEFAULT_REGION"] = "us-west-2"
@@ -150,14 +147,9 @@ class TestS3(MotoTestBase):
 
 class TestDocker(MotoTestBase):
 
-    def setUp(self):
-        os.environ['DOCKER_BUILDKIT'] = '1'
-        super().setUp()
-
     @classmethod
     def setUpClass(cls):
         cls.dkr_name = 'dml_test'
-        # cls.dkr_img_id = 'ba929964b5f0'
         flags = [
             '-f', 'tests/assets/Dockerfile',
             '-t', cls.dkr_name,
@@ -203,7 +195,7 @@ class TestDocker(MotoTestBase):
         assert isinstance(result, dml.Node)
         assert result.value() == [x + 1 for x in nums]
 
-    @unittest.skipIf(SYSTEM == "darwin", "the moto impl of lambda doesn't work on mac (docker issues)")
+    @unittest.skipIf(SYSTEM == "darwin", "moto impl of lambda doesn't work on mac (docker stuff)")
     def test_remote(self):
         dkr = dx.Dkr()
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
@@ -227,47 +219,6 @@ class TestDocker(MotoTestBase):
             _, *nums = fndag.expr.value()
             return dag.commit([x + 1 for x in nums])
         script = s3.scriptify(dag, add_one)
-        # TODO: make fn and execute... Need to wrap things in resources and whatnot
-        fn = (
-            lam
-            .make_fn(dag, _lam, _jq, _jd, script)
-            .get_result()
-        )
-        nums = [1, 2, 1, 5]
-        result = lam.run(dag, fn, *nums).get_result()
-        assert isinstance(result, dml.Node)
-        assert result.value() == [x + 1 for x in nums]
-
-    @unittest.skipIf(SYSTEM == "darwin", "the moto impl of lambda doesn't work on mac (docker issues)")
-    def test_remote2(self):
-        options = {
-            "batch": {"use_docker": True},
-            "lambda": {"use_docker": True},
-            "stepfunctions": {"execute_state_machine": True}
-        }
-        requests.post(f"{self.endpoint}/moto-api/config", json=options)
-        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
-        lam = dx.Lambda()
-        cresp = bx.up_cluster(TEST_BUCKET)
-        jresp = bx.up_jobdef(f'{self.dkr_name}:latest')
-        # tmp = boto3.client('lambda').invoke(
-        #     FunctionName=cresp['LambdaArn'],
-        #     Payload='{"x":1}',
-        # )
-        # tmp = tmp['Payload'].read().decode()
-        # with open('tmp.json', 'w') as f:
-        #     f.write(tmp)
-        # assert tmp is None
-        _lam = dml.Resource(cresp['LambdaArn'])
-        _jq = dml.Resource(cresp['JobQueue'])
-        _jd = dml.Resource(jresp['JobDef'])
-        dag = self.new('dag0', 'foopy')
-
-        def add_one(fndag):
-            _, *nums = fndag.expr.value()
-            return dag.commit([x + 1 for x in nums])
-        script = s3.scriptify(dag, add_one)
-        # TODO: make fn and execute... Need to wrap things in resources and whatnot
         fn = (
             lam
             .make_fn(dag, _lam, _jq, _jd, script)
