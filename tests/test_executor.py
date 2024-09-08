@@ -14,8 +14,8 @@ import daggerml as dml
 import daggerml.executor as dx
 from tests.util import SYSTEM, DmlTestBase
 
-TEST_BUCKET = 'dml-test-doesnotexist'
-TEST_PREFIX = 'testico'
+TEST_BUCKET = "dml-test-doesnotexist"
+TEST_PREFIX = "testico"
 
 _root_ = Path(__file__).parent.parent
 
@@ -25,7 +25,7 @@ def rel_to(x, rel):
 
 
 def ls_r(path):
-    return [rel_to(x, path) for x in glob(f'{path}/**', recursive=True)]
+    return [rel_to(x, path) for x in glob(f"{path}/**", recursive=True)]
 
 
 class MotoTestBase(DmlTestBase):
@@ -35,18 +35,18 @@ class MotoTestBase(DmlTestBase):
             if k.startswith("AWS_"):
                 del os.environ[k]
         # os.environ["MOTO_DOCKER_NETWORK_MODE"] = "host moto_server"
-        os.environ['TEST_SERVER_MODE'] = 'true'
-        os.environ['AWS_ACCESS_KEY_ID'] = 'foobar'
-        os.environ['AWS_SECRET_ACCESS_KEY'] = 'foobar'
-        os.environ['AWS_REGION'] = os.environ['AWS_DEFAULT_REGION'] = 'us-west-2'
+        os.environ["TEST_SERVER_MODE"] = "true"
+        os.environ["AWS_ACCESS_KEY_ID"] = "foobar"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "foobar"
+        os.environ["AWS_REGION"] = os.environ["AWS_DEFAULT_REGION"] = "us-west-2"
         from moto.server import ThreadedMotoServer
         super().setUp()
-        self.server = ThreadedMotoServer(port=0)
+        self.server = ThreadedMotoServer(ip_address="0.0.0.0", port=0)
         self.server.start()
         self.moto_host, self.moto_port = self.server._server.server_address
         self.endpoint = f"http://{self.moto_host}:{self.moto_port}"
         os.environ["AWS_ENDPOINT_URL"] = self.endpoint
-        boto3.client("s3", region_name='us-east-1').create_bucket(Bucket=TEST_BUCKET)
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=TEST_BUCKET)
 
     def tearDown(self):
         self.server.stop()
@@ -57,31 +57,31 @@ class TestS3(MotoTestBase):
 
     def test_bytes(self):
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
-        dag = self.new('dag0', 'message')
-        rsrc = s3.put_bytes(dag, b'qwer')
-        assert s3.get_bytes(rsrc) == b'qwer'
+        dag = self.new("dag0", "message")
+        rsrc = s3.put_bytes(dag, b"qwer")
+        assert s3.get_bytes(rsrc) == b"qwer"
         self.assertCountEqual(s3.list(), [rsrc.value().uri])
 
     def test_local_remote_file(self):
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
-        dag = self.new('dag0', 'message')
-        content = 'asdf'
+        dag = self.new("dag0", "message")
+        content = "asdf"
         with s3.tmp_remote(dag) as tmpf:
-            with open(tmpf.name, mode='w') as f:
+            with open(tmpf.name, mode="w") as f:
                 f.write(content)
         assert isinstance(tmpf.result, dml.Node)
         assert s3.get_bytes(tmpf.result) == content.encode()
         node = s3.put_bytes(dag, content.encode())
         assert node.value().uri == tmpf.result.value().uri
         with s3.tmp_local(node) as tmpf:
-            with open(tmpf, 'r') as f:
+            with open(tmpf, "r") as f:
                 assert f.read().strip() == content
 
     def test_polars_df(self):
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
-        dag = self.new('dag0', 'msesages')
+        dag = self.new("dag0", "msesages")
         import polars as pl
-        df = pl.from_dicts([{'x': i, 'y': j} for i, j in product(range(5), repeat=2)])
+        df = pl.from_dicts([{"x": i, "y": j} for i, j in product(range(5), repeat=2)])
         resp = s3.write_parquet(dag, df)
         uri = resp.value().uri
         assert uri.startswith('s3://')
