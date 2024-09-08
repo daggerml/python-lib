@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import json
 import logging
 import subprocess
@@ -165,6 +164,17 @@ def to_json(obj):
     return js_dumps(to_data(obj))
 
 
+def _api(*args):
+    try:
+        cmd = ['dml', *args]
+        resp = subprocess.run(cmd, capture_output=True, check=True)
+        return resp.stdout.decode().strip()
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        raise Error.from_ex(e) from e
+
+
 @dataclass
 class Api:
     config_dir: InitVar[str|None] = None
@@ -196,19 +206,11 @@ class Api:
             out.extend([f'--{k}', v])
         return out
 
-    @staticmethod
-    def _api(*args):
-        try:
-            cmd = ['dml', *args]
-            resp = subprocess.run(cmd, capture_output=True, check=True)
-            return resp.stdout.decode().strip()
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            raise Error.from_ex(e) from e
-
-    def __call__(self, *args, **kwargs):
-        return self._api(*self._to_flags(self.flags), *args, **kwargs)
+    def __call__(self, *args, output='text'):
+        resp = _api(*self._to_flags(self.flags), *args)
+        if output == 'json':
+            return [json.loads(x) for x in resp.split('\n') if len(x) > 0]
+        return resp
 
     def __enter__(self):
         return self

@@ -25,5 +25,6 @@ del version, PackageNotFoundError
 new = Dag.new
 
 __all__ = (
-    'Api', 'Dag', 'Error', 'FnUpdater', 'FnWaiter', 'Node', 'Ref', 'Resource', 'from_data', 'to_data', 'from_json', 'to_json', 'new'
+    'Api', 'Dag', 'Error', 'FnUpdater', 'FnWaiter', 'Node', 'Ref', 'Resource',
+    'from_data', 'to_data', 'from_json', 'to_json', 'new',
 )

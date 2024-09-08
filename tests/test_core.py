@@ -149,15 +149,15 @@ class TestApi(DmlTestBase):
         n1 = waiter.get_result()
         assert n1.value() == 23
         ref = dag.commit(n1).to
-        assert {x['id']: x['name'] for x in self.api.jscall('dag', 'list')} == {ref: 'test-dag0'}
-        desc, = self.api.jscall('dag', 'describe', ref)
+        assert {x['id']: x['name'] for x in self.api('dag', 'list', output='json')} == {ref: 'test-dag0'}
+        desc, = self.api('dag', 'describe', ref, output='json')
         result = desc['result']
         assert result in desc['nodes']
         assert list(desc['edges']) == [result]
         self.assertCountEqual(desc['nodes'], [result, *desc['edges'][result]])
         assert sorted(self.api('branch', 'list').split('\n')) == ['foopy', 'main']
         self.api('branch', 'use', 'main')
-        assert {x['id']: x['name'] for x in self.api.jscall('dag', 'list')} == {}
+        assert {x['id']: x['name'] for x in self.api('dag', 'list', output='json')} == {}
         self.api('branch', 'delete', 'foopy')
         assert sorted(self.api('branch', 'list').split('\n')) == ['main']
         assert self.api('repo', 'gc') == f'{expr[0].uri}'
