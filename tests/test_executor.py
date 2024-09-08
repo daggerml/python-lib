@@ -33,6 +33,11 @@ class MotoTestBase(DmlTestBase):
         for k in sorted(os.environ.keys()):
             if k.startswith("AWS_"):
                 del os.environ[k]
+        os.environ["MOTO_DOCKER_NETWORK_MODE"] = "host moto_server"
+        os.environ['TEST_SERVER_MODE'] = 'true'
+        os.environ['AWS_ACCESS_KEY_ID'] = 'foobar'
+        os.environ['AWS_SECRET_ACCESS_KEY'] = 'foobar'
+        os.environ['AWS_REGION'] = os.environ['AWS_DEFAULT_REGION'] = 'us-west-2'
         from moto.server import ThreadedMotoServer
         super().setUp()
         self.server = ThreadedMotoServer(port=0)
@@ -40,10 +45,6 @@ class MotoTestBase(DmlTestBase):
         self.moto_host, self.moto_port = self.server._server.server_address
         self.endpoint = f"http://{self.moto_host}:{self.moto_port}"
         os.environ["AWS_ENDPOINT_URL"] = self.endpoint
-        os.environ['TEST_SERVER_MODE'] = 'true'
-        os.environ['AWS_ACCESS_KEY_ID'] = 'foobar'
-        os.environ['AWS_SECRET_ACCESS_KEY'] = 'foobar'
-        os.environ['AWS_REGION'] = os.environ['AWS_DEFAULT_REGION'] = 'us-west-2'
         boto3.client("s3", region_name='us-east-1').create_bucket(Bucket=TEST_BUCKET)
 
     def tearDown(self):
