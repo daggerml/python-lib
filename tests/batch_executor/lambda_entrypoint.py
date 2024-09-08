@@ -52,8 +52,8 @@ class Execution:
 
         response = boto3.client('batch', **BOTO_KW).submit_job(
             jobName=f'{PREFIX}-{self.cache_key.replace("/", "-")}',
-            jobQueue=job_queue.split(':', 1)[1],
-            jobDefinition=job_def.split(':', 1)[1],
+            jobQueue=job_queue,
+            jobDefinition=job_def,
             containerOverrides={
                 'command': ["bash", "-c", cmd]
             }
