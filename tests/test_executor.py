@@ -146,7 +146,6 @@ class TestS3(MotoTestBase):
             assert all(not y.startswith('tests/') for y in contents)
 
 
-@unittest.skipIf(SYSTEM == 'darwin', 'docker is only figured out on linux for now')
 class TestDocker(MotoTestBase):
 
     def setUp(self):
@@ -202,6 +201,7 @@ class TestDocker(MotoTestBase):
         assert isinstance(result, dml.Node)
         assert result.value() == [x + 1 for x in nums]
 
+    @unittest.skipIf(SYSTEM == "darwin", "the moto impl of lambda doesn't work on mac (docker issues)")
     def test_remote(self):
         dkr = dx.Dkr()
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
@@ -236,6 +236,7 @@ class TestDocker(MotoTestBase):
         assert isinstance(result, dml.Node)
         assert result.value() == [x + 1 for x in nums]
 
+    @unittest.skipIf(SYSTEM == "darwin", "the moto impl of lambda doesn't work on mac (docker issues)")
     def test_remote2(self):
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         lam = dx.Lambda()
