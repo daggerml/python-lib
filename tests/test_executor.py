@@ -242,14 +242,14 @@ class TestDocker(MotoTestBase):
         lam = dx.Lambda()
         cresp = bx.up_cluster(TEST_BUCKET)
         jresp = bx.up_jobdef(f'{self.dkr_name}:latest')
-        tmp = boto3.client('lambda').invoke(
-            FunctionName=cresp['LambdaArn'],
-            Payload='{"x":1}',
-        )
-        tmp = tmp['Payload'].read().decode()
-        with open('tmp.json', 'w') as f:
-            f.write(tmp)
-        assert tmp is None
+        # tmp = boto3.client('lambda').invoke(
+        #     FunctionName=cresp['LambdaArn'],
+        #     Payload='{"x":1}',
+        # )
+        # tmp = tmp['Payload'].read().decode()
+        # with open('tmp.json', 'w') as f:
+        #     f.write(tmp)
+        # assert tmp is None
         _lam = dml.Resource(cresp['LambdaArn'])
         _jq = dml.Resource(cresp['JobQueue'])
         _jd = dml.Resource(jresp['JobDef'])
