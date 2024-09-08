@@ -15,7 +15,7 @@ BUCKET = os.environ["DML_S3_BUCKET"]
 PREFIX = os.getenv("DML_S3_PREFIX", "")
 MOTO_URL = os.environ.get("MOTO_HTTP_ENDPOINT")
 MOTO_PORT = os.environ.get("MOTO_PORT")
-BOTO_KW = {} if MOTO_PORT is None else {"endpoint_url": f'localhost:{MOTO_PORT}'}
+BOTO_KW = {} if MOTO_PORT is None else {"endpoint_url": f'http://localhost:{MOTO_PORT}'}
 
 def now():
     return datetime.now().astimezone(timezone.utc)
