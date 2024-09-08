@@ -56,13 +56,6 @@ markers = [
     "serial",
 ]
 
-[tool.pytest.ini_options.log_cli_levels]
-moto = "WARNING"
-boto3 = "WARNING"
-botocore = "WARNING"
-requests = "WARNING"
-urllib3 = "WARNING"
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/daggerml"]
 
