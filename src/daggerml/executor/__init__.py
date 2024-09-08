@@ -374,6 +374,7 @@ class Lambda:
     def run(self, dag, fn, *args) -> dml.FnUpdater:
         def update_fn(cache_key, dump, data):
             rsrc = fn.value()
+            logger.info('calling lambda %r', rsrc.uri)
             assert isinstance(rsrc, dml.Resource)
             resp = self.session.client('lambda').invoke(
                 FunctionName=rsrc.uri,
