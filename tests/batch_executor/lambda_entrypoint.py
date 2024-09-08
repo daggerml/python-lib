@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 BUCKET = os.environ['DML_S3_BUCKET']
 PREFIX = os.getenv('DML_S3_PREFIX', '')
+MOTO_URL = os.environ.get("MOTO_HTTP_ENDPOINT")
 
 def now():
     return datetime.now().astimezone(timezone.utc)
@@ -136,6 +137,6 @@ def handler(event, context):
     try:
         ex = Execution(**event)
         result, error = dynamo(ex)
-        return {'status': 0, 'result': result, 'error': error}
+        return {'status': 0, 'result': result, 'error': error, 'url': MOTO_URL}
     except Exception as e:
-        return {'status': 1, 'result': None, 'error': str(e)}
+        return {'status': 1, 'result': None, 'error': str(e), 'env': dict(os.environ)}
