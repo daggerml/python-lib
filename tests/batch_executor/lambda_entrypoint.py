@@ -9,7 +9,7 @@ from uuid import uuid4
 import boto3
 from botocore.exceptions import ClientError
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('daggerml.lambda.entrypoint')
 
 BUCKET = os.environ["DML_S3_BUCKET"]
 PREFIX = os.getenv("DML_S3_PREFIX", "")
