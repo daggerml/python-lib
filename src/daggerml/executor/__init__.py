@@ -377,7 +377,7 @@ class Lambda:
             assert isinstance(rsrc, dml.Resource)
             resp = self.session.client('lambda').invoke(
                 FunctionName=rsrc.uri,
-                Payload=js_dumps({'dump': dump, 'cache_key': cache_key, 'data': data}).encode()
+                Payload=js_dumps({'cache_key': cache_key, 'data': data, 'dump': dump}).encode()
             )
             payload = json.loads(resp['Payload'].read().decode())
             if payload['status'] != 0:

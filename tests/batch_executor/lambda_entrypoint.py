@@ -139,6 +139,6 @@ def handler(event, context):
     try:
         ex = Execution(**event)
         result, error = dynamo(ex)
-        return {'status': 0, 'result': result, 'error': error, 'url': MOTO_URL}
+        return {'status': 0, 'result': result, 'error': error}
     except Exception as e:
-        return {'status': 1, 'result': None, 'error': str(e), 'env': dict(os.environ)}
+        return {'status': 1, 'result': None, 'error': str(e)}
