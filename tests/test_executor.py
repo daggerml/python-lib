@@ -246,10 +246,9 @@ class TestDocker(MotoTestBase):
             FunctionName=cresp['LambdaArn'],
             Payload='{"x":1}',
         )
-        tmp = tmp['Payload'].read()
+        tmp = tmp['Payload'].read().decode()
         with open('tmp.json', 'w') as f:
-            import json
-            json.dump(tmp, f, default=str)
+            f.write(tmp)
         assert tmp is None
         _lam = dml.Resource(cresp['LambdaArn'])
         _jq = dml.Resource(cresp['JobQueue'])
