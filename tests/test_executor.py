@@ -246,6 +246,7 @@ class TestDocker(MotoTestBase):
             FunctionName=cresp['LambdaArn'],
             Payload='{"x":1}',
         )
+        tmp = tmp['Payload'].read()
         with open('tmp.json', 'w') as f:
             import json
             json.dump(tmp, f, default=str)
