@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import batch_executor as bx
 import boto3
+import requests
 
 import daggerml as dml
 import daggerml.executor as dx
@@ -239,6 +240,12 @@ class TestDocker(MotoTestBase):
 
     @unittest.skipIf(SYSTEM == "darwin", "the moto impl of lambda doesn't work on mac (docker issues)")
     def test_remote2(self):
+        options = {
+            "batch": {"use_docker": True},
+            "lambda": {"use_docker": True},
+            "stepfunctions": {"execute_state_machine": True}
+        }
+        requests.post(f"{self.endpoint}/moto-api/config", json=options)
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
         lam = dx.Lambda()
         cresp = bx.up_cluster(TEST_BUCKET)
