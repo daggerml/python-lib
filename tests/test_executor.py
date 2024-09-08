@@ -33,7 +33,7 @@ class MotoTestBase(DmlTestBase):
         for k in sorted(os.environ.keys()):
             if k.startswith("AWS_"):
                 del os.environ[k]
-        os.environ["MOTO_DOCKER_NETWORK_MODE"] = "host moto_server"
+        # os.environ["MOTO_DOCKER_NETWORK_MODE"] = "host moto_server"
         os.environ['TEST_SERVER_MODE'] = 'true'
         os.environ['AWS_ACCESS_KEY_ID'] = 'foobar'
         os.environ['AWS_SECRET_ACCESS_KEY'] = 'foobar'
