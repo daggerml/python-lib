@@ -194,20 +194,27 @@ class Api:
                 self.tmpdirs.append(tmpd)
                 self.flags['project-dir'] = tmpd.__enter__()
             self.init()
+        if 'config-dir' not in self.flags:
+            assert config_dir is not None
+            self.flags['config-dir'] = config_dir
+        if 'project-dir' not in self.flags:
+            assert project_dir is not None
+            self.flags['project-dir'] = project_dir
 
     def init(self):
         self('repo', 'create', 'test')
         self('project', 'init', 'test')
 
     @staticmethod
-    def _to_flags(flag_dict: Dict[str, str]) -> List[str]:
+    def _to_flags(flag_dict: Dict[str, str], **kw: str) -> List[str]:
         out = []
+        flag_dict = dict(**flag_dict, **kw)
         for k, v in sorted(flag_dict.items()):
             out.extend([f'--{k}', v])
         return out
 
     def __call__(self, *args, output='text'):
-        resp = _api(*self._to_flags(self.flags), *args)
+        resp = _api(*self._to_flags(self.flags, output=output), *args)
         if output == 'json':
             return [json.loads(x) for x in resp.split('\n') if len(x) > 0]
         return resp
