@@ -9,11 +9,13 @@ from uuid import uuid4
 import boto3
 from botocore.exceptions import ClientError
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('daggerml.lambda.entrypoint')
 
-BUCKET = 'dml-test-misc2'
-PREFIX = 'batch'
-JOB_NAME_PREFIX = 'dml-misc'
+BUCKET = os.environ["DML_S3_BUCKET"]
+PREFIX = os.getenv("DML_S3_PREFIX", "")
+MOTO_URL = os.environ.get("MOTO_HTTP_ENDPOINT")
+MOTO_PORT = os.environ.get("MOTO_PORT")
+BOTO_KW = {} if MOTO_PORT is None else {"endpoint_url": f'http://localhost:{MOTO_PORT}'}
 
 def now():
     return datetime.now().astimezone(timezone.utc)
@@ -22,18 +24,8 @@ def now():
 class Execution:
     cache_key: str
     dump: str
+    data: str
     cmd_tpl = """
-        apt-get update -y
-        apt-get install -y unzip curl
-        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
-        unzip awscliv2.zip &>/dev/null
-        ./aws/install
-        rm -rf awscliv2.zip aws/
-        mkdir /tmp/dml
-        aws s3 cp "{lib_path}" /tmp/dml/dml_lib.zip
-        (cd /tmp/dml && unzip dml_lib.zip && rm dml_lib.zip) &>/dev/null
-        export PYTHONPATH=/tmp/dml
-        export PATH="/tmp/dml/bin:$PATH"
         aws s3 cp {script_loc} /tmp/dml_script.py
         aws s3 cp {input_dump} /tmp/dag-input.json
         cat /tmp/dag-input.json | python3 /tmp/dml_script.py > /tmp/dag-output.json
@@ -42,31 +34,26 @@ class Execution:
 
     @property
     def input_key(self):
-        return f'{JOB_NAME_PREFIX}/{self.cache_key}/input.json'
+        return f'{PREFIX}/{self.cache_key}/input.json'
 
     @property
     def output_key(self):
-        return f'{JOB_NAME_PREFIX}/{self.cache_key}/output.json'
-
-    @property
-    def script_key(self):
-        return f'{JOB_NAME_PREFIX}/{self.cache_key}/script.py'
+        return f'{PREFIX}/{self.cache_key}/output.json'
 
     def start(self):
-        s3 = boto3.client('s3')
-        s3.upload_file('/var/task/add_one.py', BUCKET, self.script_key)
+        s3 = boto3.client('s3', **BOTO_KW)
         s3.put_object(Bucket=BUCKET, Key=self.input_key, Body=self.dump.encode())
+        job_queue, job_def, script = json.loads(self.data)
         cmd = dedent(self.cmd_tpl.format(
-            lib_path=f"s3://{BUCKET}/test/python-lib.zip",
             input_dump=f's3://{BUCKET}/{self.input_key}',
             output_dump=f's3://{BUCKET}/{self.output_key}',
-            script_loc=f's3://{BUCKET}/{self.script_key}',
+            script_loc=script,
         )).strip()
 
-        response = boto3.client('batch').submit_job(
-            jobName=f'{JOB_NAME_PREFIX}-{self.cache_key.replace("/", "-")}',
-            jobQueue=os.getenv('DML_JOB_QUEUE'),
-            jobDefinition=os.getenv('DML_JOB_DEF'),
+        response = boto3.client('batch', **BOTO_KW).submit_job(
+            jobName=f'{PREFIX}-{self.cache_key.replace("/", "-")}',
+            jobQueue=job_queue,
+            jobDefinition=job_def,
             containerOverrides={
                 'command': ["bash", "-c", cmd]
             }
@@ -76,7 +63,7 @@ class Execution:
     @staticmethod
     def poll(job_info):
         info = json.loads(job_info)
-        resp = boto3.client('batch').describe_jobs(jobs=[info['job_id']])
+        resp = boto3.client('batch', **BOTO_KW).describe_jobs(jobs=[info['job_id']])
         job, = resp['jobs']
         logger.info(json.dumps(job, indent=2, default=str))
         info['status'] = job['status']
@@ -89,12 +76,12 @@ class Execution:
         return status, json.dumps(info)
 
     def get_result(self, job_info):
-        resp = boto3.client('s3').get_object(Bucket=BUCKET, Key=self.output_key)
+        resp = boto3.client('s3', **BOTO_KW).get_object(Bucket=BUCKET, Key=self.output_key)
         result = resp['Body'].read().decode()
         return result
 
 def dynamo(ex):
-    dyn = boto3.client('dynamodb')
+    dyn = boto3.client('dynamodb', **BOTO_KW)
     _id = uuid4().hex
     item = {'cache_key': ex.cache_key, 'status': 'reserved', 'info': _id}
     logger.info('checking item: %r', item)
@@ -150,7 +137,7 @@ def dynamo(ex):
 def handler(event, context):
     logger.setLevel(logging.DEBUG)
     try:
-        ex = Execution(event['cache_key'], event['dump'])
+        ex = Execution(**event)
         result, error = dynamo(ex)
         return {'status': 0, 'result': result, 'error': error}
     except Exception as e:

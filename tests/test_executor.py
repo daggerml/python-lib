@@ -1,5 +1,4 @@
 import os
-import platform
 import unittest
 from glob import glob
 from itertools import product
@@ -7,15 +6,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import batch_executor as bx
 import boto3
-from moto.server import ThreadedMotoServer
 
 import daggerml as dml
 import daggerml.executor as dx
-from tests.util import DmlTestBase
+from tests.util import SYSTEM, DmlTestBase
 
-TEST_BUCKET = 'dml-test-doesnotexist'
-TEST_PREFIX = 'testico'
+TEST_BUCKET = "dml-test-doesnotexist"
+TEST_PREFIX = "testico"
 
 _root_ = Path(__file__).parent.parent
 
@@ -25,22 +24,28 @@ def rel_to(x, rel):
 
 
 def ls_r(path):
-    return [rel_to(x, path) for x in glob(f'{path}/**', recursive=True)]
+    return [rel_to(x, path) for x in glob(f"{path}/**", recursive=True)]
 
 
 class MotoTestBase(DmlTestBase):
 
     def setUp(self):
+        # clear out env variables for safety
+        for k in sorted(os.environ.keys()):
+            if k.startswith("AWS_"):
+                del os.environ[k]
+        os.environ["AWS_ACCESS_KEY_ID"] = "foobar"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "foobar"
+        os.environ["AWS_REGION"] = os.environ["AWS_DEFAULT_REGION"] = "us-west-2"
+        # this loads env vars, so import after clearing
+        from moto.server import ThreadedMotoServer
         super().setUp()
         self.server = ThreadedMotoServer(port=0)
         self.server.start()
         self.moto_host, self.moto_port = self.server._server.server_address
         self.endpoint = f"http://{self.moto_host}:{self.moto_port}"
         os.environ["AWS_ENDPOINT_URL"] = self.endpoint
-        os.environ['TEST_SERVER_MODE'] = 'true'
-        os.environ['AWS_ACCESS_KEY_ID'] = 'foobar'
-        os.environ['AWS_SECRET_ACCESS_KEY'] = 'foobar'
-        boto3.client("s3", region_name='us-east-1').create_bucket(Bucket=TEST_BUCKET)
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=TEST_BUCKET)
 
     def tearDown(self):
         self.server.stop()
@@ -51,31 +56,31 @@ class TestS3(MotoTestBase):
 
     def test_bytes(self):
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
-        dag = self.new('dag0', 'message')
-        rsrc = s3.put_bytes(dag, b'qwer')
-        assert s3.get_bytes(rsrc) == b'qwer'
+        dag = self.new("dag0", "message")
+        rsrc = s3.put_bytes(dag, b"qwer")
+        assert s3.get_bytes(rsrc) == b"qwer"
         self.assertCountEqual(s3.list(), [rsrc.value().uri])
 
     def test_local_remote_file(self):
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
-        dag = self.new('dag0', 'message')
-        content = 'asdf'
+        dag = self.new("dag0", "message")
+        content = "asdf"
         with s3.tmp_remote(dag) as tmpf:
-            with open(tmpf.name, mode='w') as f:
+            with open(tmpf.name, mode="w") as f:
                 f.write(content)
         assert isinstance(tmpf.result, dml.Node)
         assert s3.get_bytes(tmpf.result) == content.encode()
         node = s3.put_bytes(dag, content.encode())
         assert node.value().uri == tmpf.result.value().uri
         with s3.tmp_local(node) as tmpf:
-            with open(tmpf, 'r') as f:
+            with open(tmpf, "r") as f:
                 assert f.read().strip() == content
 
     def test_polars_df(self):
         s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
-        dag = self.new('dag0', 'msesages')
+        dag = self.new("dag0", "msesages")
         import polars as pl
-        df = pl.from_dicts([{'x': i, 'y': j} for i, j in product(range(5), repeat=2)])
+        df = pl.from_dicts([{"x": i, "y": j} for i, j in product(range(5), repeat=2)])
         resp = s3.write_parquet(dag, df)
         uri = resp.value().uri
         assert uri.startswith('s3://')
@@ -142,19 +147,18 @@ class TestS3(MotoTestBase):
             assert all(not y.startswith('tests/') for y in contents)
 
 
-@unittest.skipUnless(platform.system().lower() == 'darwin', 'docker is only figured out on osx for now')
 class TestDocker(MotoTestBase):
-
-    def setUp(self):
-        os.environ['DOCKER_BUILDKIT'] = '1'
-        super().setUp()
 
     @classmethod
     def setUpClass(cls):
-        cls.dkr_img_id = dx._dkr_build(
-            _root_,
-            ['-f', 'tests/assets/Dockerfile', '-t', 'dml_test', '--platform=linux/amd64', '--load']
-        )
+        cls.dkr_name = 'dml_test'
+        flags = [
+            '-f', 'tests/assets/Dockerfile',
+            '-t', cls.dkr_name,
+        ]
+        if SYSTEM == 'darwin':
+            flags.extend(['--platform=linux/amd64', '--load'])
+        cls.dkr_img_id = dx._dkr_build(_root_, flags)
 
     def test_local(self):
         dkr = dx.Dkr()
@@ -190,5 +194,41 @@ class TestDocker(MotoTestBase):
         assert isinstance(fn, dml.Node)
         nums = [1, 2, 1, 5]
         result = dkr.run(dag, fn, *nums, s3=s3).get_result()
+        assert isinstance(result, dml.Node)
+        assert result.value() == [x + 1 for x in nums]
+
+    # @unittest.skipIf(SYSTEM == "darwin", "moto impl of lambda doesn't work on mac (docker stuff)")
+    @unittest.skip("I haven't figured out how to get moto's lambda to communicate with moto server (to submit jobs)")
+    def test_remote(self):
+        """There are two issues here (both above)"""
+        dkr = dx.Dkr()
+        s3 = dx.S3(TEST_BUCKET, TEST_PREFIX)
+        lam = dx.Lambda()
+        resp = bx.up_cluster(TEST_BUCKET)
+        r2 = bx.up_jobdef(f'{self.dkr_name}:latest')
+        def exclude_tests(x):
+            return None
+        dag = self.new('dag0', 'foopy')
+        node = s3.tar(dag, _root_, filter_fn=exclude_tests)
+        with patch('daggerml.executor._dkr_build', return_value=self.dkr_img_id):
+            img = dkr.build(dag, node, ['-f', 'tests/assets/Dockerfile'], s3).get_result()
+        with patch('daggerml.executor.Ecr._push', return_value=f'{self.dkr_name}:latest'):
+            img = dx.Ecr('').push(dag, img)
+        tmp = dict(**resp, **r2)
+        _lam = dml.Resource(tmp['LambdaArn'])
+        _jd = dml.Resource(tmp['JobDef'])
+        _jq = dml.Resource(tmp['JobQueue'])
+
+        def add_one(fndag):
+            _, *nums = fndag.expr.value()
+            return dag.commit([x + 1 for x in nums])
+        script = s3.scriptify(dag, add_one)
+        fn = (
+            lam
+            .make_fn(dag, _lam, _jq, _jd, script)
+            .get_result()
+        )
+        nums = [1, 2, 1, 5]
+        result = lam.run(dag, fn, *nums).get_result()
         assert isinstance(result, dml.Node)
         assert result.value() == [x + 1 for x in nums]

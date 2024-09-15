@@ -1,7 +1,27 @@
+import pytest
 
 import daggerml as dml
 from tests.util import DmlTestBase
 
+data = {
+    'int': 23,
+    'float': 12.43,
+    'bool': True,
+    'null': None,
+    'string': 'qwer',
+    'list': [3, 4, 5],
+    'map': {'a': 2, 'b': 'asdf'},
+    'set': {12, 13, 'a', 3.4},
+    'resource': dml.Resource('a:b', data='{"x":23}'),
+    'compound': {'a': 23, 'b': {5, dml.Resource('b:b')}}
+}
+
+@pytest.mark.parametrize("x", list(data.values()), ids=list(data))
+def test_literal(x):
+    dag = dml.Api(initialize=True).new_dag('test-dag0', 'this is the test dag')
+    node = dag.put(x)
+    assert isinstance(node, dml.Node)
+    assert node.value() == x
 
 class TestApi(DmlTestBase):
 
@@ -37,25 +57,6 @@ class TestApi(DmlTestBase):
         node = dag.put({'a': 3, 'b': 5})
         for k, v in node.items():
             assert node[k] == v
-
-    def test_literal(self):
-        data = {
-            'int': 23,
-            'float': 12.43,
-            'bool': True,
-            'null': None,
-            'string': 'qwer',
-            'list': [3, 4, 5],
-            'map': {'a': 2, 'b': 'asdf'},
-            'set': {12, 13, 'a', 3.4},
-            'resource': dml.Resource('a:b'),
-            'compound': {'a': 23, 'b': {5, dml.Resource('b:b')}}
-        }
-        dag = self.new('test-dag0', 'this is the test dag')
-        for k, v in data.items():
-            node = dag.put(v)
-            assert isinstance(node, dml.Node), f'{k = }'
-            assert node.value() == v, f'{k = }'
 
     def test_composite(self):
         dag = self.new('test-dag0', 'this is the test dag')
@@ -148,15 +149,15 @@ class TestApi(DmlTestBase):
         n1 = waiter.get_result()
         assert n1.value() == 23
         ref = dag.commit(n1).to
-        assert {x['id']: x['name'] for x in self.api.jscall('dag', 'list')} == {ref: 'test-dag0'}
-        desc, = self.api.jscall('dag', 'describe', ref)
+        assert {x['id']: x['name'] for x in self.api('dag', 'list', output='json')} == {ref: 'test-dag0'}
+        desc, = self.api('dag', 'describe', ref, output='json')
         result = desc['result']
         assert result in desc['nodes']
         assert list(desc['edges']) == [result]
         self.assertCountEqual(desc['nodes'], [result, *desc['edges'][result]])
         assert sorted(self.api('branch', 'list').split('\n')) == ['foopy', 'main']
         self.api('branch', 'use', 'main')
-        assert {x['id']: x['name'] for x in self.api.jscall('dag', 'list')} == {}
+        assert {x['id']: x['name'] for x in self.api('dag', 'list', output='json')} == {}
         self.api('branch', 'delete', 'foopy')
         assert sorted(self.api('branch', 'list').split('\n')) == ['main']
         assert self.api('repo', 'gc') == f'{expr[0].uri}'

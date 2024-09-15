@@ -1,20 +1,23 @@
-FROM python:3.12.3-bullseye
+FROM python:3.12
+# .3-bullseye
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-RUN --mount=type=bind,target=/tmp/mount,source=. \
-    apt-get update -y \
+RUN apt-get update -y \
     && apt-get install -y unzip curl \
     && curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip \
     && unzip awscliv2.zip \
     && ./aws/install \
-    && cp -r /tmp/mount /tmp/build \
+    && rm -rf awscliv2.zip aws/ /var/cache/apt \
+    && apt-get clean
+
+RUN --mount=type=bind,target=/tmp/mount,source=. \
+    cp -r /tmp/mount /tmp/build \
     && ls -Alh /tmp/build \
     && python3 -m pip install --no-cache-dir /tmp/build/submodules/daggerml_cli/ \
     && python3 -m pip install --no-cache-dir /tmp/build \
-    && rm -rf /tmp/build awscliv2.zip aws/ /var/cache/apt \
-    && apt-get clean \
+    && rm -rf /tmp/build \
     && echo done
 
 COPY <<EOT /bin/dml-runner.sh

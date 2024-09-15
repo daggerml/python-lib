@@ -332,6 +332,13 @@ class Ecr:
             logger.error(msg)
             raise dml.Error(msg)
 
+    def _push(self, img_id):
+        self.login()
+        new_uri = f'{self.repo_uri}:{img_id}'
+        subprocess.run(['docker', 'tag', img_id, new_uri], check=True)
+        subprocess.run(['docker', 'push', new_uri], check=True)
+        return new_uri
+
     def push(self, dag, img):
         waiter = dag.start_fn(dag.put(dml.Resource(f'{self.scheme}:push')), img, self.repo)
         if waiter.get_result() is not None:
@@ -340,11 +347,7 @@ class Ecr:
             with dml.Api(initialize=True) as api:
                 with api.new_dag('asdf', 'qwer', dump=dump) as fndag:
                     _, img = fndag.expr.value()
-                    self.login()
-                    new_uri = f'{self.repo_uri}:{img.id}'
-                    subprocess.run(['docker', 'tag', img.id, new_uri], check=True)
-                    subprocess.run(['docker', 'push', new_uri], check=True)
-                    fndag.commit(fndag.put(dml.Resource(f'dkr:{new_uri}')))
+                    fndag.commit(fndag.put(dml.Resource(self._push(img.id))))
                 dump = api.dump(fndag.result)
             return dump
         return dml.FnUpdater.from_waiter(waiter, update_fn)
@@ -355,34 +358,30 @@ class Lambda:
     session: boto3.Session = field(default_factory=boto3.Session)
     scheme = 'py-dkr-lambda'
 
-    def make_fn(self, dag, lam, script):
-        expr = [dag.put(dml.Resource(f'{self.scheme}:make_fn')), lam, script]
+    def make_fn(self, dag, lam, *args):
+        rsrc = dml.Resource(f'{self.scheme}:make_fn')
         def update_fn(cache_key, dump, data):
             with dml.Api(initialize=True) as api:
                 with api.new_dag('asdf', 'qwer', dump=dump) as fndag:
-                    _, _lam, _script = fndag.expr
-                    _script = _script.value()
-                    assert isinstance(_script, dml.Resource)
-                    _lam = _lam.value()
-                    assert isinstance(_lam, dml.Resource)
-                    _data = js_dumps([_lam.id, _script.uri])
-                    rsrc = dml.Resource(f'{self.scheme}:run', data=_data)
+                    _, _lam, *_data = fndag.expr.value()
+                    _data = js_dumps([x.uri for x in _data])
+                    rsrc = dml.Resource(_lam.uri, data=_data)
                     fndag.commit(fndag.put(rsrc))
                 dump = api.dump(fndag.result)
             return dump
-        return dml.FnUpdater.from_waiter(dag.start_fn(*expr), update_fn)
+        return dml.FnUpdater.from_waiter(dag.start_fn(rsrc, lam, *args), update_fn)
 
-    def run(self, dag: dml.Dag, fn: dml.Node, *args) -> dml.FnUpdater:
-        expr = [fn, *[dag.put(x) for x in args]]
+    def run(self, dag, fn, *args) -> dml.FnUpdater:
         def update_fn(cache_key, dump, data):
             rsrc = fn.value()
+            logger.info('calling lambda %r', rsrc.uri)
             assert isinstance(rsrc, dml.Resource)
             resp = self.session.client('lambda').invoke(
-                FunctionName=rsrc.id,
-                Payload=js_dumps({'dump': dump, 'cache_key': cache_key, 'data': data}).encode()
+                FunctionName=rsrc.uri,
+                Payload=js_dumps({'cache_key': cache_key, 'data': data, 'dump': dump}).encode()
             )
             payload = json.loads(resp['Payload'].read().decode())
             if payload['status'] != 0:
                 raise dml.Error(payload['error'])
             return payload['result']
-        return dml.FnUpdater.from_waiter(dag.start_fn(*expr), update_fn)
+        return dml.FnUpdater.from_waiter(dag.start_fn(fn, *args), update_fn)

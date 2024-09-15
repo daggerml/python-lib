@@ -78,11 +78,6 @@ dependencies = [
   "boto3",
 ]
 
-[tool.hatch.envs.test.env-vars]
-AWS_PROFILE = "misc2"
-AWS_REGION = 'us-west-2'
-AWS_DEFAULT_REGION = 'us-west-2'
-
 [tool.hatch.envs.test.scripts]
 test = 'pytest -vsx --log-cli-level=INFO --log-disable=botocore.credentials'
 
@@ -102,6 +97,11 @@ ban-relative-imports = "all"
 "__init__.py" = ["F401", "E402"]
 
 [tool.pyright]
+include = ["src"]
+defineConstant = { DEBUG = true }
 typeCheckingMode = "basic"
-reportOptionalMemberAccess = false
+reportGeneralTypeIssues = false
+reportMissingImports = "error"
+reportMissingTypeStubs = false
 reportOptionalCall = false
+reportOptionalMemberAccess = false

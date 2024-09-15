@@ -1,6 +1,5 @@
-import json
-import logging
 import logging.config
+import platform
 import unittest
 from unittest.mock import patch
 
@@ -9,9 +8,11 @@ from daggerml_cli.cli import cli
 
 import daggerml as dml
 
+SYSTEM = platform.system().lower()
+
 logging_config = {
     'version': 1,
-    'disable_existing_loggers': True,
+    'disable_existing_loggers': False,
     'formatters': {
         'default': {
             'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
@@ -20,6 +21,7 @@ logging_config = {
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
+            'level': 'DEBUG',
             'formatter': 'default',
         }
     },
@@ -37,24 +39,19 @@ logging_config = {
 }
 
 
-class Api(dml.Api):
-    @staticmethod
-    def _api(*args):
-        runner = CliRunner()
-        result = runner.invoke(cli, args)
-        if result.exit_code != 0:
-            raise RuntimeError(f'{result.output} ----- {result.return_value}')
-        return result.output.strip()
-
-    def jscall(self, *args):
-        resp = self(*args)
-        return [json.loads(x) for x in resp.split('\n') if len(x) > 0]
+def _api(*args):
+    print('running patched cli via click')
+    runner = CliRunner()
+    result = runner.invoke(cli, args)
+    if result.exit_code != 0:
+        raise RuntimeError(f'{result.output} ----- {result.return_value}')
+    return result.output.strip()
 
 
 class DmlTestBase(unittest.TestCase):
 
     def setUp(self):
-        self.api_patcher = patch('daggerml.Api', Api)
+        self.api_patcher = patch('daggerml.core._api', _api)
         self.api_patcher.start()
         self.api = dml.Api(initialize=True)
         self.ctx = self.api.__enter__()
