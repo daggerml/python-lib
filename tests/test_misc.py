@@ -58,3 +58,17 @@ class TestMisc(DmlTestBase):
                 fn = lx.make_fn(dag, get_range_through_torch, 'conda', 'torch')
                 resp = lx.run(dag, fn, n)
                 assert resp.get_result().value() == list(range(n))
+
+    def test_fn_indentation(self):
+        # Note: this will fail unless you have a conda env named torch with pytorch and dml installed
+        def foo(dag):
+            n = dag.expr[1].value()
+            import torch
+            dag.commit(torch.arange(n).tolist())
+        n = 6
+        with dml.Api(initialize=True) as api:
+            with api.new_dag('foo', 'bar') as dag:
+                lx = dx.Local()
+                fn = lx.make_fn(dag, foo, 'conda', 'torch')
+                resp = lx.run(dag, fn, n)
+                assert resp.get_result().value() == list(range(n))
