@@ -62,8 +62,8 @@ class TestMisc(DmlTestBase):
     def test_fn_indentation(self):
         # Note: this will fail unless you have a conda env named torch with pytorch and dml installed
         def foo(dag):
-            n = dag.expr[1].value()
             import torch
+            n = dag.expr[1].value()
             dag.commit(torch.arange(n).tolist())
         n = 6
         with dml.Api(initialize=True) as api:
