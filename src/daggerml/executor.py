@@ -1,10 +1,12 @@
 import asyncio
+import fcntl
 import gzip
 import inspect
 import json
 import logging
 import platform
 import re
+import stat
 import subprocess
 import tarfile
 from collections import defaultdict
@@ -12,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from textwrap import dedent
 from typing import Any, Callable, List
 from urllib.parse import urlparse
@@ -35,6 +37,7 @@ except ImportError:
     pl = None
 
 logger = logging.getLogger(__name__)
+CACHE_LOC = Path.home() / '.local/dml/cache'
 
 
 def session_to_env(session: boto3.Session):
@@ -60,6 +63,31 @@ def id_fn(path):
     with open(path, 'rb') as f:
         return sha256(f.read()).hexdigest()
 
+def scriptify(fn: Callable) -> dml.Node:
+    src = dedent(inspect.getsource(fn))
+    txt = []
+    txt.append('#!/usr/bin/env python3')
+    txt.append(f'\n\n{src}\n')
+    txt.append(dedent(f'''
+    if __name__ == '__main__':
+        import contextlib
+        import sys
+
+        import daggerml as dml
+
+        with dml.Api(initialize=True) as api:
+            with contextlib.redirect_stdout(sys.stderr):
+                dump = sys.stdin.read()
+                print('found dump:', dump)
+                with api.new_dag('execution', 'misc-message', dump=dump) as dag:
+                    print('Starting dag...')
+                    {fn.__name__}(dag)
+                if dag.result is None:
+                    dag.commit(dml.Error('dag finished without a result'))
+                print('dml finished running', {fn.__name__!r})
+            print(api.dump(dag.result))
+    '''))
+    return '\n'.join(txt)
 
 @dataclass
 class S3:
@@ -180,25 +208,9 @@ class S3:
                 tf.extractall(to)
 
     def scriptify(self, dag: dml.Dag, fn: Callable) -> dml.Node:
-        src = dedent(inspect.getsource(fn))
         with self.tmp_remote(dag, suffix='py') as tmpf:
             with open(tmpf.name, 'w') as f:
-                f.write('#!/usr/bin/env python3')
-                f.write(f'\n\n{src}\n')
-                f.write(dedent(f'''
-                if __name__ == '__main__':
-                    import sys
-
-                    import daggerml as dml
-
-                    with dml.Api(initialize=True) as api:
-                        with api.new_dag('execution', 'misc-message', dump=sys.stdin.read()) as dag:
-                            {fn.__name__}(dag)
-                        if dag.result is None:
-                            dag.commit(dml.Error('dag finished without a result'))
-                        print(api.dump(dag.result))
-                    print('dml finished running', {fn.__name__!r}, file=sys.stderr)
-                '''))
+                f.write(scriptify(fn))
         assert isinstance(tmpf.result, dml.Node)
         return tmpf.result
 
@@ -254,7 +266,6 @@ def _dkr_build(path, flags):
 class Dkr:
     session: boto3.Session = field(default_factory=boto3.Session)
     scheme = 'py-dkr'
-
 
     def build(self, dag, tarball, flags, s3):
         resource = dml.Resource(f'{self.scheme}:build')
@@ -385,3 +396,81 @@ class Lambda:
                 raise dml.Error(payload['error'])
             return payload['result']
         return dml.FnUpdater.from_waiter(dag.start_fn(fn, *args), update_fn)
+
+
+@dataclass
+class Cache:
+    path: Path
+    lockfile: Path = field(init=False)
+
+    def __post_init__(self):
+        if not isinstance(self.path, Path):
+            self.path = Path(self.path)
+        self.lockfile = Path(f'{self.path}.lock')
+        self.lockfile.touch()
+
+    @contextmanager
+    def lock(self):
+        with open(self.lockfile, 'w') as lf:
+            try:
+                fcntl.lockf(lf, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.lockf(lf, fcntl.LOCK_UN)
+
+    @contextmanager
+    def open(self, *x, **kw):
+        with open(self.path, *x, **kw) as f:
+            yield f
+
+    def exists(self):
+        return self.path.exists()
+
+    def put(self, data):
+        with self.open('w') as f:
+            f.write(js_dumps(data))
+
+    def get(self):
+        if not self.path.exists():
+            return
+        with self.open() as f:
+            return json.load(f)
+
+    def delete(self):
+        self.path.unlink()
+        self.lockfile.unlink()
+
+    def __enter__(self):
+        yield self
+
+    def __exit__(self, *errs, **kw):
+        self.delete()
+
+@dataclass
+class Local:
+    scheme = 'py-local'
+
+    def make_fn(self, dag, fn, flavor, env, host=None):
+        data = {"source": scriptify(fn), "flavor": flavor, "env": env, "host": host}
+        return dag.put(dml.Resource(f'{self.scheme}:run', data=js_dumps(data)))
+
+    def run(self, dag, fn_rsrc, *args) -> dml.FnUpdater:
+        def update_fn(cache_key, dump, data):
+            rsrc = json.loads(data)
+            env = rsrc["env"]
+            flavor = rsrc["flavor"]
+            with NamedTemporaryFile(suffix='.py') as tmpf:
+                tmpf.write(rsrc["source"].encode())
+                tmpf.seek(0)
+                script = Path(tmpf.name)
+                script.chmod(script.stat().st_mode | stat.S_IEXEC)  # chmod +x
+                if flavor == 'conda':
+                    cmd = ['conda', 'run', '--no-capture-output', '-n', env, str(script)]
+                else:
+                    msg = f'unrecognized python flavor: {flavor}'
+                    raise ValueError(msg)
+                proc = subprocess.run(cmd, input=dump, capture_output=True, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr)
+            return proc.stdout
+        return dml.FnUpdater.from_waiter(dag.start_fn(fn_rsrc, *args), update_fn)
