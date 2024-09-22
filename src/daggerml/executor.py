@@ -1,10 +1,12 @@
 import asyncio
+import fcntl
 import gzip
 import inspect
 import json
 import logging
 import platform
 import re
+import stat
 import subprocess
 import tarfile
 from collections import defaultdict
@@ -12,13 +14,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 from textwrap import dedent
 from typing import Any, Callable, List
 from urllib.parse import urlparse
 from uuid import uuid4
 
-import boto3
+import boto3  # TODO: Refactor so that these are optional
+import paramiko
 
 import daggerml as dml
 from daggerml.core import js_dumps
@@ -35,6 +38,7 @@ except ImportError:
     pl = None
 
 logger = logging.getLogger(__name__)
+CACHE_LOC = Path.home() / '.local/dml/cache'
 
 
 def session_to_env(session: boto3.Session):
@@ -60,6 +64,31 @@ def id_fn(path):
     with open(path, 'rb') as f:
         return sha256(f.read()).hexdigest()
 
+def scriptify(fn: Callable) -> dml.Node:
+    src = dedent(inspect.getsource(fn))
+    txt = []
+    txt.append('#!/usr/bin/env python3')
+    txt.append(f'\n\n{src}\n')
+    txt.append(dedent(f'''
+    if __name__ == '__main__':
+        import contextlib
+        import sys
+
+        import daggerml as dml
+
+        with dml.Api(initialize=True) as api:
+            with contextlib.redirect_stdout(sys.stderr):
+                dump = sys.stdin.read()
+                print('found dump:', dump)
+                with api.new_dag('execution', 'misc-message', dump=dump) as dag:
+                    print('Starting dag...')
+                    {fn.__name__}(dag)
+                if dag.result is None:
+                    dag.commit(dml.Error('dag finished without a result'))
+                print('dml finished running', {fn.__name__!r})
+            print(api.dump(dag.result))
+    '''))
+    return '\n'.join(txt)
 
 @dataclass
 class S3:
@@ -180,25 +209,9 @@ class S3:
                 tf.extractall(to)
 
     def scriptify(self, dag: dml.Dag, fn: Callable) -> dml.Node:
-        src = dedent(inspect.getsource(fn))
         with self.tmp_remote(dag, suffix='py') as tmpf:
             with open(tmpf.name, 'w') as f:
-                f.write('#!/usr/bin/env python3')
-                f.write(f'\n\n{src}\n')
-                f.write(dedent(f'''
-                if __name__ == '__main__':
-                    import sys
-
-                    import daggerml as dml
-
-                    with dml.Api(initialize=True) as api:
-                        with api.new_dag('execution', 'misc-message', dump=sys.stdin.read()) as dag:
-                            {fn.__name__}(dag)
-                        if dag.result is None:
-                            dag.commit(dml.Error('dag finished without a result'))
-                        print(api.dump(dag.result))
-                    print('dml finished running', {fn.__name__!r}, file=sys.stderr)
-                '''))
+                f.write(scriptify(fn))
         assert isinstance(tmpf.result, dml.Node)
         return tmpf.result
 
@@ -254,7 +267,6 @@ def _dkr_build(path, flags):
 class Dkr:
     session: boto3.Session = field(default_factory=boto3.Session)
     scheme = 'py-dkr'
-
 
     def build(self, dag, tarball, flags, s3):
         resource = dml.Resource(f'{self.scheme}:build')
@@ -385,3 +397,152 @@ class Lambda:
                 raise dml.Error(payload['error'])
             return payload['result']
         return dml.FnUpdater.from_waiter(dag.start_fn(fn, *args), update_fn)
+
+
+@dataclass
+class Cache:
+    path: Path
+    lockfile: Path = field(init=False)
+
+    def __post_init__(self):
+        if not isinstance(self.path, Path):
+            self.path = Path(self.path)
+        self.lockfile = Path(f'{self.path}.lock')
+        self.lockfile.touch()
+
+    @contextmanager
+    def lock(self):
+        with open(self.lockfile, 'w') as lf:
+            try:
+                fcntl.lockf(lf, fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.lockf(lf, fcntl.LOCK_UN)
+
+    @contextmanager
+    def open(self, *x, **kw):
+        with open(self.path, *x, **kw) as f:
+            yield f
+
+    def exists(self):
+        return self.path.exists()
+
+    def put(self, data):
+        with self.open('w') as f:
+            f.write(js_dumps(data))
+
+    def get(self):
+        if not self.path.exists():
+            return
+        with self.open() as f:
+            return json.load(f)
+
+    def delete(self):
+        self.path.unlink()
+        self.lockfile.unlink()
+
+    def __enter__(self):
+        yield self
+
+    def __exit__(self, *errs, **kw):
+        self.delete()
+
+@dataclass
+class Ssh:
+    conn_params: dict
+    client: paramiko.SSHClient = field(default_factory=paramiko.SSHClient)
+    tmpfiles: list = field(default_factory=list)
+
+    def __post_init__(self):
+        if isinstance(self.conn_params, str):
+            self.conn_params = {"hostname": self.conn_params}
+        if isinstance(self.conn_params.get("pkey"), str):
+            self.conn_params["pkey"] = paramiko.RSAKey(filename=self.conn_params["pkey"])
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self.client.load_system_host_keys()
+
+    def __enter__(self):
+        self.client.connect(**self.conn_params)
+        return self
+
+    def __exit__(self, *errs):
+        for tmpf in self.tmpfiles:
+            try:
+                self.run(f'rm {tmpf}')
+            except KeyboardInterrupt:
+                raise
+            except dml.Error as e:
+                logger.warning('failed to delete temporary file: %r with error %s', tmpf, e)
+        self.tmpfiles.clear()
+        self.client.close()
+
+    def cp(self, localpath, remotepath, is_tmp=False):
+        sftp = self.client.open_sftp()
+        try:
+            sftp.put(localpath, remotepath)
+            if is_tmp:
+                self.tmpfiles.append(remotepath)
+        finally:
+            sftp.close()
+
+    def run(self, cmd, input=None):
+        stdin, stdout, stderr = self.client.exec_command(cmd)
+        if input is not None:
+            stdin.write(input.encode())
+            stdin.channel.shutdown_write()
+        exit_status = stdout.channel.recv_exit_status()
+        if exit_status != 0:
+            stderr = stderr.read().decode().strip()
+            logger.error('remote execution failed with stderr: %s', stderr)
+            raise dml.Error('remote ssh command failed',
+                            {"returncode": exit_status, "stderr": stderr},
+                            'failed_remote_execution')
+        return stdout.read().decode().strip()
+
+def run_local_cmd(cmd, input):
+    proc = subprocess.run(cmd, input=input, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise dml.Error('local command failed',
+                        {"returncode": proc.returncode, "stderr": proc.stderr.strip()},
+                        'failed_local_execution')
+    return proc.stdout.strip()
+
+@dataclass
+class Local:
+    scheme = 'py-local'
+
+    def make_fn(self, dag, fn, flavor, env, host=None, preambles=None):
+        data = {
+            "source": scriptify(fn),
+            "flavor": flavor,
+            "env": env,
+            "host": host,
+            "preambles": preambles or []
+        }
+        return dag.put(dml.Resource(f'{self.scheme}:run', data=js_dumps(data)))
+
+    def run(self, dag, fn_rsrc, *args) -> dml.FnUpdater:
+        def update_fn(cache_key, dump, data):
+            # TODO: This should do the double-fork trick to detach this process
+            # and write the PID to disk using cache_key. The proc can then check
+            # it and work async.
+            data = json.loads(data)
+            env = data["env"]
+            flavor = data["flavor"]
+            host = data["host"]
+            preambles = data["preambles"]
+            with NamedTemporaryFile(dir='/tmp/', suffix='.py') as tmpf:
+                tmpf.write(data["source"].encode())
+                tmpf.seek(0)
+                script = Path(tmpf.name)
+                script.chmod(script.stat().st_mode | stat.S_IEXEC)  # chmod +x
+                if flavor == 'conda':
+                    cmd = [*preambles, 'conda', 'run', '--no-capture-output', '-n', env, str(script)]
+                else:
+                    msg = f'unrecognized python flavor: {flavor}'
+                    raise ValueError(msg)
+                if host is None:
+                    return run_local_cmd(cmd, dump)
+                with Ssh(host) as ssh:
+                    return ssh.run(" ".join(cmd), dump)
+        return dml.FnUpdater.from_waiter(dag.start_fn(fn_rsrc, *args), update_fn)

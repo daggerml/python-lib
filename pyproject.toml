@@ -31,13 +31,15 @@ classifiers = [
 dependencies = [
   "dataclasses; python_version < '3.7'",
   "importlib_metadata; python_version < '3.8'",
+  "boto3",
+  "paramiko",
 ]
 
 [project.optional-dependencies]
 aws = ["boto3"]
 ssh = ["paramiko"]
 cli = ["daggerml_cli"]
-all = ["daggerml[aws,ssh]"]
+all = ["daggerml[aws,ssh,cli]"]
 
 [project.urls]
 Homepage = "https://daggerml.com"
