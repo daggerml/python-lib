@@ -20,7 +20,8 @@ from typing import Any, Callable, List
 from urllib.parse import urlparse
 from uuid import uuid4
 
-import boto3
+import boto3  # TODO: Refactor so that these are optional
+import paramiko
 
 import daggerml as dml
 from daggerml.core import js_dumps
@@ -447,30 +448,101 @@ class Cache:
         self.delete()
 
 @dataclass
+class Ssh:
+    conn_params: dict
+    client: paramiko.SSHClient = field(default_factory=paramiko.SSHClient)
+    tmpfiles: list = field(default_factory=list)
+
+    def __post_init__(self):
+        if isinstance(self.conn_params, str):
+            self.conn_params = {"hostname": self.conn_params}
+        if isinstance(self.conn_params.get("pkey"), str):
+            self.conn_params["pkey"] = paramiko.RSAKey(filename=self.conn_params["pkey"])
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self.client.load_system_host_keys()
+
+    def __enter__(self):
+        self.client.connect(**self.conn_params)
+        return self
+
+    def __exit__(self, *errs):
+        for tmpf in self.tmpfiles:
+            try:
+                self.run(f'rm {tmpf}')
+            except KeyboardInterrupt:
+                raise
+            except dml.Error as e:
+                logger.warning('failed to delete temporary file: %r with error %s', tmpf, e)
+        self.tmpfiles.clear()
+        self.client.close()
+
+    def cp(self, localpath, remotepath, is_tmp=False):
+        sftp = self.client.open_sftp()
+        try:
+            sftp.put(localpath, remotepath)
+            if is_tmp:
+                self.tmpfiles.append(remotepath)
+        finally:
+            sftp.close()
+
+    def run(self, cmd, input=None):
+        stdin, stdout, stderr = self.client.exec_command(cmd)
+        if input is not None:
+            stdin.write(input.encode())
+            stdin.channel.shutdown_write()
+        exit_status = stdout.channel.recv_exit_status()
+        if exit_status != 0:
+            stderr = stderr.read().decode().strip()
+            logger.error('remote execution failed with stderr: %s', stderr)
+            raise dml.Error('remote ssh command failed',
+                            {"returncode": exit_status, "stderr": stderr},
+                            'failed_remote_execution')
+        return stdout.read().decode().strip()
+
+def run_local_cmd(cmd, input):
+    proc = subprocess.run(cmd, input=input, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise dml.Error('local command failed',
+                        {"returncode": proc.returncode, "stderr": proc.stderr.strip()},
+                        'failed_local_execution')
+    return proc.stdout.strip()
+
+@dataclass
 class Local:
     scheme = 'py-local'
 
-    def make_fn(self, dag, fn, flavor, env, host=None):
-        data = {"source": scriptify(fn), "flavor": flavor, "env": env, "host": host}
+    def make_fn(self, dag, fn, flavor, env, host=None, preambles=None):
+        data = {
+            "source": scriptify(fn),
+            "flavor": flavor,
+            "env": env,
+            "host": host,
+            "preambles": preambles or []
+        }
         return dag.put(dml.Resource(f'{self.scheme}:run', data=js_dumps(data)))
 
     def run(self, dag, fn_rsrc, *args) -> dml.FnUpdater:
         def update_fn(cache_key, dump, data):
-            rsrc = json.loads(data)
-            env = rsrc["env"]
-            flavor = rsrc["flavor"]
-            with NamedTemporaryFile(suffix='.py') as tmpf:
-                tmpf.write(rsrc["source"].encode())
+            # TODO: This should do the double-fork trick to detach this process
+            # and write the PID to disk using cache_key. The proc can then check
+            # it and work async.
+            data = json.loads(data)
+            env = data["env"]
+            flavor = data["flavor"]
+            host = data["host"]
+            preambles = data["preambles"]
+            with NamedTemporaryFile(dir='/tmp/', suffix='.py') as tmpf:
+                tmpf.write(data["source"].encode())
                 tmpf.seek(0)
                 script = Path(tmpf.name)
                 script.chmod(script.stat().st_mode | stat.S_IEXEC)  # chmod +x
                 if flavor == 'conda':
-                    cmd = ['conda', 'run', '--no-capture-output', '-n', env, str(script)]
+                    cmd = [*preambles, 'conda', 'run', '--no-capture-output', '-n', env, str(script)]
                 else:
                     msg = f'unrecognized python flavor: {flavor}'
                     raise ValueError(msg)
-                proc = subprocess.run(cmd, input=dump, capture_output=True, text=True)
-            if proc.returncode != 0:
-                raise RuntimeError(proc.stderr)
-            return proc.stdout
+                if host is None:
+                    return run_local_cmd(cmd, dump)
+                with Ssh(host) as ssh:
+                    return ssh.run(" ".join(cmd), dump)
         return dml.FnUpdater.from_waiter(dag.start_fn(fn_rsrc, *args), update_fn)

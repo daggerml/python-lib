@@ -13,7 +13,7 @@ import daggerml as dml
 import daggerml.executor as dx
 from tests.util import SYSTEM, DmlTestBase
 
-TEST_BUCKET = "dml-test-doesnotexist"
+TEST_BUCKET = "dml-s3-test-doesnotexist"
 TEST_PREFIX = "testico"
 
 _root_ = Path(__file__).parent.parent
