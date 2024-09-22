@@ -169,6 +169,37 @@ class TestRemote(MotoTestBase):
                 resp = lx.run(dag, fn, n)
                 assert resp.get_result().value() == list(range(n))
 
+    def test_hatch_exec(self):
+        from packaging.version import InvalidVersion, Version
+        def is_valid_version_string(version_str):
+            try:
+                Version(version_str)
+                return True
+            except InvalidVersion:
+                return False
+        def foo(dag):
+            import sklearn
+            dag.commit(sklearn.__version__)
+        repo_root = str(Path(__file__).parent.parent)
+        with dml.Api(initialize=True) as api:
+            with api.new_dag('foo', 'bar') as dag:
+                lx = dx.Local()
+                fn = lx.make_fn(dag, foo, 'hatch', 'other-test',
+                                host=self.conn_params,
+                                preambles=[f"cd {repo_root};",
+                                           "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH;"])
+                resp = lx.run(dag, fn)
+                vers = resp.get_result().value()
+                assert is_valid_version_string(vers)
+                # wrong env
+                fn = lx.make_fn(dag, foo, 'hatch', 'test',
+                                host=self.conn_params,
+                                preambles=[f"cd {repo_root};",
+                                           "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH;"])
+                with self.assertRaises(dml.Error):
+                    resp = lx.run(dag, fn)
+                    vers = resp.get_result().value()
+
     def test_fn_indentation(self):
         # Note: this will fail unless you have a conda env named torch with pytorch and dml installed
         def foo(dag):

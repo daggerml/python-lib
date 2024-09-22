@@ -538,6 +538,8 @@ class Local:
                 script.chmod(script.stat().st_mode | stat.S_IEXEC)  # chmod +x
                 if flavor == 'conda':
                     cmd = [*preambles, 'conda', 'run', '--no-capture-output', '-n', env, str(script)]
+                elif flavor == 'hatch':
+                    cmd = [*preambles, 'hatch', '-e', env, 'run', str(script)]
                 else:
                     msg = f'unrecognized python flavor: {flavor}'
                     raise ValueError(msg)
