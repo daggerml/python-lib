@@ -451,7 +451,6 @@ class Cache:
 class Ssh:
     conn_params: dict
     client: paramiko.SSHClient = field(default_factory=paramiko.SSHClient)
-    tmpfiles: list = field(default_factory=list)
 
     def __post_init__(self):
         if isinstance(self.conn_params, str):
@@ -466,24 +465,7 @@ class Ssh:
         return self
 
     def __exit__(self, *errs):
-        for tmpf in self.tmpfiles:
-            try:
-                self.run(f'rm {tmpf}')
-            except KeyboardInterrupt:
-                raise
-            except dml.Error as e:
-                logger.warning('failed to delete temporary file: %r with error %s', tmpf, e)
-        self.tmpfiles.clear()
         self.client.close()
-
-    def cp(self, localpath, remotepath, is_tmp=False):
-        sftp = self.client.open_sftp()
-        try:
-            sftp.put(localpath, remotepath)
-            if is_tmp:
-                self.tmpfiles.append(remotepath)
-        finally:
-            sftp.close()
 
     def run(self, cmd, input=None):
         stdin, stdout, stderr = self.client.exec_command(cmd)
@@ -519,7 +501,38 @@ class Local:
             "host": host,
             "preambles": preambles or []
         }
-        return dag.put(dml.Resource(f'{self.scheme}:run', data=js_dumps(data)))
+        return dag.put(dml.Resource(f"{self.scheme}:run", data=js_dumps(data)))
+
+    @staticmethod
+    def _flavor_to_cmd(flavor, env, script_loc):
+        if flavor == "conda":
+            return ["conda", "run", "--no-capture-output", "-n", env, script_loc]
+        elif flavor == "hatch":
+            return ["hatch", "-e", env, "run", script_loc]
+        else:
+            msg = f"unrecognized python flavor: {flavor}"
+            raise ValueError(msg)
+
+    def _submit_local(self, source, flavor, env, preambles, dump):
+        with NamedTemporaryFile(dir="/tmp/", suffix=".py") as tmpf:
+            tmpf.write(source.encode())
+            tmpf.seek(0)
+            script = Path(tmpf.name)
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)  # chmod +x
+            cmd = [*preambles, *self._flavor_to_cmd(flavor, env, str(script))]
+            return run_local_cmd(cmd, dump)
+
+    def _submit_remote(self, source, flavor, env, preambles, dump, host):
+        script_loc = f"/tmp/dml-{uuid4().hex[:8]}.py"
+        cmd = [*preambles, *self._flavor_to_cmd(flavor, env, script_loc)]
+        with Ssh(host) as ssh:
+            ssh.run(f'cat > {script_loc}', input=source)
+            try:
+                ssh.run(f'chmod +x {script_loc}')
+                resp = ssh.run(" ".join(cmd), dump)
+                return resp
+            finally:
+                ssh.run(f"rm {script_loc} || echo Failed to delete {script_loc!r}")
 
     def run(self, dag, fn_rsrc, *args) -> dml.FnUpdater:
         def update_fn(cache_key, dump, data):
@@ -527,22 +540,8 @@ class Local:
             # and write the PID to disk using cache_key. The proc can then check
             # it and work async.
             data = json.loads(data)
-            env = data["env"]
-            flavor = data["flavor"]
-            host = data["host"]
-            preambles = data["preambles"]
-            with NamedTemporaryFile(dir='/tmp/', suffix='.py') as tmpf:
-                tmpf.write(data["source"].encode())
-                tmpf.seek(0)
-                script = Path(tmpf.name)
-                script.chmod(script.stat().st_mode | stat.S_IEXEC)  # chmod +x
-                if flavor == 'conda':
-                    cmd = [*preambles, 'conda', 'run', '--no-capture-output', '-n', env, str(script)]
-                else:
-                    msg = f'unrecognized python flavor: {flavor}'
-                    raise ValueError(msg)
-                if host is None:
-                    return run_local_cmd(cmd, dump)
-                with Ssh(host) as ssh:
-                    return ssh.run(" ".join(cmd), dump)
+            host = data.pop("host", None)
+            if host is None:
+                return self._submit_local(dump=dump, **data)
+            return self._submit_remote(dump=dump, host=host, **data)
         return dml.FnUpdater.from_waiter(dag.start_fn(fn_rsrc, *args), update_fn)
