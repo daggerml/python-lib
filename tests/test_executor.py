@@ -7,11 +7,11 @@ from shutil import which
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-import batch_executor as bx
 import boto3
 
 import daggerml as dml
 import daggerml.executor as dx
+import tests.batch_executor as bx
 from tests.util import SYSTEM, DmlTestBase
 
 TEST_BUCKET = "dml-s3-test-doesnotexist"
