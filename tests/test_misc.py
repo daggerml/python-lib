@@ -2,8 +2,10 @@ import os
 import socket
 import subprocess
 import time
+import unittest
 from glob import glob
 from pathlib import Path
+from shutil import which
 from tempfile import TemporaryDirectory
 from textwrap import dedent
 
@@ -55,6 +57,7 @@ class TestMisc(DmlTestBase):
             cache.delete()
             assert cache.get() is None
 
+    @unittest.skipIf(which("conda") is None, "conda is not available.")
     def test_conda_exec(self):
         # Note: this will fail unless you have a conda env named torch with pytorch and dml installed
         n = 6
@@ -65,6 +68,7 @@ class TestMisc(DmlTestBase):
                 resp = lx.run(dag, fn, n)
                 assert resp.get_result().value() == list(range(n))
 
+    @unittest.skipIf(which("conda") is None, "conda is not available.")
     def test_fn_indentation(self):
         # Note: this will fail unless you have a conda env named torch with pytorch and dml installed
         def foo(dag):
@@ -142,7 +146,12 @@ class TestRemote(MotoTestBase):
             print(stderr)
             print('=' * 80)
             cls.fail(f"SSHD failed to start on port {cls.port}")
-        cls.conn_params = {"hostname": "localhost", "username": os.getlogin(), "port": cls.port, "pkey": cls.client_private_key}
+        cls.conn_params = {
+            "hostname": "localhost",
+            "username": os.getlogin(),
+            "port": cls.port,
+            "pkey": cls.client_private_key
+        }
 
     @classmethod
     def tearDownClass(cls):
@@ -157,6 +166,7 @@ class TestRemote(MotoTestBase):
             resp = ssh.run('cat', txt)
             assert resp == txt
 
+    @unittest.skipIf(which("conda") is None, "conda is not available.")
     def test_conda_exec(self):
         # Note: this will fail unless you have a conda env named torch with pytorch and dml installed
         n = 6
@@ -169,6 +179,7 @@ class TestRemote(MotoTestBase):
                 resp = lx.run(dag, fn, n)
                 assert resp.get_result().value() == list(range(n))
 
+    @unittest.skipIf(which("hatch") is None, "hatch is not available.")
     def test_hatch_exec(self):
         from packaging.version import InvalidVersion, Version
         def is_valid_version_string(version_str):
@@ -200,6 +211,7 @@ class TestRemote(MotoTestBase):
                     resp = lx.run(dag, fn)
                     vers = resp.get_result().value()
 
+    @unittest.skipIf(which("conda") is None, "conda is not available.")
     def test_fn_indentation(self):
         # Note: this will fail unless you have a conda env named torch with pytorch and dml installed
         def foo(dag):

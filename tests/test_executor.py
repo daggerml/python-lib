@@ -3,6 +3,7 @@ import unittest
 from glob import glob
 from itertools import product
 from pathlib import Path
+from shutil import which
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -147,6 +148,7 @@ class TestS3(MotoTestBase):
             assert all(not y.startswith('tests/') for y in contents)
 
 
+@unittest.skipIf(which("docker") is None, "docker is not available.")
 class TestDocker(MotoTestBase):
 
     @classmethod

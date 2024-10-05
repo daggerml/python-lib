@@ -40,6 +40,16 @@ aws = ["boto3"]
 ssh = ["paramiko"]
 cli = ["daggerml_cli"]
 all = ["daggerml[aws,ssh,cli]"]
+test = [
+  "boto3",
+  "moto[all,server]",
+  "numpy<2.0.0",  # pandas is incompatible with newer numpy
+  "pandas==2.0.1",
+  "polars==1",
+  "pyarrow",
+  "pytest",
+  "pytest-cov",
+]
 
 [project.urls]
 Homepage = "https://daggerml.com"
@@ -75,15 +85,8 @@ dependencies = [
 
 [tool.hatch.envs.test]
 dependencies = [
-  "pytest",
-  "pytest-cov",
-  "moto[all,server]",
   "daggerml_cli @ {root:uri}/submodules/daggerml_cli",
-  "pandas==2.0.1",
-  "numpy<2.0.0",  # pandas is incompatible with newer numpy
-  "pyarrow",
-  "polars==1",
-  "boto3",
+  "daggerml[test]",
 ]
 
 [tool.hatch.envs.test.scripts]
@@ -92,17 +95,19 @@ coverage-report = 'pytest --cov-report term-missing --cov=daggerml tests/'
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.lint]
 select = ["E", "F", "B", "I", "PGH004"]
 ignore = []
 unfixable = ["B"]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["daggerml"]
 
-[tool.ruff.flake8-tidy-imports]
+[tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
-[tool.ruff.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "E402"]
 
 [tool.pyright]

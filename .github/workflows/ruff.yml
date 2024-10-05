@@ -1,0 +1,31 @@
+# cannot get recursive submodules yet, so no pytest.
+name: CI
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # strategy:
+    #   matrix:
+    #     python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        # with:
+        #   ssh-key: ${{ secrets.SUBMODULE_SSH_KEY }}
+        #   submodules: true
+      - name: Set up Python # ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          # python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # pip install ./submodules/daggerml_cli/
+          # pip install .[test]
+      # - name: pytest
+      #   run: pytest -m "not slow" .
+      - name: Install ruff
+        run: pip install ruff
+      # Update output format to enable automatic inline annotations.
+      - name: Run Ruff
+        run: ruff check --output-format=github .
