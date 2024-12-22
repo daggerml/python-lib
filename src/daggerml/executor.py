@@ -63,30 +63,31 @@ def id_fn(path):
     with open(path, 'rb') as f:
         return sha256(f.read()).hexdigest()
 
-def scriptify(fn: Callable) -> dml.Node:
+def scriptify(fn: Callable) -> str:
     src = dedent(inspect.getsource(fn))
-    txt = []
-    txt.append('#!/usr/bin/env python3')
-    txt.append(f'\n\n{src}\n')
-    txt.append(dedent(f'''
-    if __name__ == '__main__':
-        import contextlib
-        import sys
+    txt = [
+        "#!/usr/bin/env python3",
+        f"\n\n{src}\n",
+        dedent(f"""
+        if __name__ == '__main__':
+            import contextlib
+            import sys
 
-        import daggerml as dml
+            import daggerml as dml
 
-        with dml.Api(initialize=True) as api:
-            with contextlib.redirect_stdout(sys.stderr):
-                dump = sys.stdin.read()
-                print('found dump:', dump)
-                with api.new_dag('execution', 'misc-message', dump=dump) as dag:
-                    print('Starting dag...')
-                    {fn.__name__}(dag)
-                if dag.result is None:
-                    dag.commit(dml.Error('dag finished without a result'))
-                print('dml finished running', {fn.__name__!r})
-            print(api.dump(dag.result))
-    '''))
+            with dml.Api(initialize=True) as api:
+                with contextlib.redirect_stdout(sys.stderr):
+                    dump = sys.stdin.read()
+                    print('found dump:', dump)
+                    with api.new_dag('execution', 'misc-message', dump=dump) as dag:
+                        print('Starting dag...')
+                        {fn.__name__}(dag)
+                    if dag.result is None:
+                        dag.commit(dml.Error('dag finished without a result'))
+                    print('dml finished running', {fn.__name__!r})
+                print(api.dump(dag.result))
+        """).strip(),
+    ]
     return '\n'.join(txt)
 
 @dataclass
@@ -181,7 +182,7 @@ class S3:
             assert isinstance(tmp.result, dml.Node)
             return tmp.result
         elif pd is not None and isinstance(df, pd.DataFrame):
-            for x in pd.util.hash_pandas_object(df):
+            for x in pandas.util.hash_pandas_object(df):
                 hsh.update(x.to_bytes(64, 'little'))
             hsh = hsh.hexdigest()
             with self.tmp_remote(dag, id_fn=lambda x: hsh, suffix='pd.parquet') as tmp:
