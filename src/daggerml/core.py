@@ -194,11 +194,9 @@ class Api:
                 self.tmpdirs.append(tmpd)
                 self.flags['project-dir'] = tmpd.__enter__()
             self.init()
-        if 'config-dir' not in self.flags:
-            assert config_dir is not None
+        if config_dir is not None:
             self.flags['config-dir'] = config_dir
-        if 'project-dir' not in self.flags:
-            assert project_dir is not None
+        if project_dir is not None:
             self.flags['project-dir'] = project_dir
 
     def init(self):
@@ -311,6 +309,7 @@ class Dag:
             api = Api(flags=api_flags or {})
         extra = [] if dump is None else ['--dag-dump', dump]
         tok = api('dag', 'create', *extra, name, message)
+        assert isinstance(tok, str)
         return cls(tok, api)
 
     @property

@@ -21,7 +21,6 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import boto3  # TODO: Refactor so that these are optional
-import paramiko
 
 import daggerml as dml
 from daggerml.core import js_dumps
@@ -449,37 +448,56 @@ class Cache:
 
 @dataclass
 class Ssh:
-    conn_params: dict
-    client: paramiko.SSHClient = field(default_factory=paramiko.SSHClient)
+    host: str
+    port: int|None = None
+    user: str|None = None
+    pkey: str|None = None
+    opts: list = field(default_factory=list)
 
-    def __post_init__(self):
-        if isinstance(self.conn_params, str):
-            self.conn_params = {"hostname": self.conn_params}
-        if isinstance(self.conn_params.get("pkey"), str):
-            self.conn_params["pkey"] = paramiko.RSAKey(filename=self.conn_params["pkey"])
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.client.load_system_host_keys()
+    def execute_ssh_command(self, command, input=None, timeout=60):
+        """
+        Executes a command on a remote host via SSH using the system's ssh command.
 
-    def __enter__(self):
-        self.client.connect(**self.conn_params)
-        return self
+        Args:
+            command (str): The command to execute on the remote host.
+            timeout (int, optional): Timeout for the SSH command in seconds. Default is 10.
 
-    def __exit__(self, *errs):
-        self.client.close()
+        Returns:
+            tuple: A tuple containing (stdout, stderr, exit_code) from the command execution.
+        """
+        ssh_command = [
+            "ssh",
+            f"{self.user}@{self.host}" if self.user is not None else self.host,
+        ]
+        if self.port is not None:
+            ssh_command.extend(["-p", str(self.port)])
+        if self.pkey is not None:
+            ssh_command.extend(["-i", self.pkey])
+        ssh_command.extend(self.opts)
+        ssh_command.append(command)
+        try:
+            process = subprocess.run(
+                ssh_command,
+                input=f"{input}\n",
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+            return process.stdout, process.stderr, process.returncode
+        except subprocess.TimeoutExpired as e:
+            return "", f"Command timed out after {timeout} seconds: {e}", 2
+        except Exception as e:
+            return "", str(e), 1
 
     def run(self, cmd, input=None):
-        stdin, stdout, stderr = self.client.exec_command(cmd)
-        if input is not None:
-            stdin.write(input.encode())
-            stdin.channel.shutdown_write()
-        exit_status = stdout.channel.recv_exit_status()
-        if exit_status != 0:
-            stderr = stderr.read().decode().strip()
-            logger.error('remote execution failed with stderr: %s', stderr)
-            raise dml.Error('remote ssh command failed',
-                            {"returncode": exit_status, "stderr": stderr},
-                            'failed_remote_execution')
-        return stdout.read().decode().strip()
+        stdout, stderr, return_code = self.execute_ssh_command(cmd, input=input)
+        if return_code != 0:
+            stderr = stderr.strip()
+            logger.error("remote execution failed with stderr: %s", stderr)
+            raise dml.Error("remote ssh command failed",
+                            {"returncode": return_code, "stderr": stderr},
+                            "failed_remote_execution")
+        return stdout.strip()
 
 def run_local_cmd(cmd, input):
     proc = subprocess.run(cmd, input=input, capture_output=True, text=True)
@@ -493,14 +511,15 @@ def run_local_cmd(cmd, input):
 class Local:
     scheme = 'py-local'
 
-    def make_fn(self, dag, fn, flavor, env, host=None, preambles=None):
+    def make_fn(self, dag, fn, flavor, env, conn_params=None, preambles=None):
         data = {
             "source": scriptify(fn),
             "flavor": flavor,
             "env": env,
-            "host": host,
             "preambles": preambles or []
         }
+        if conn_params is not None:
+            data["conn_params"] = conn_params
         return dag.put(dml.Resource(f"{self.scheme}:run", data=js_dumps(data)))
 
     @staticmethod
@@ -522,17 +541,17 @@ class Local:
             cmd = [*preambles, *self._flavor_to_cmd(flavor, env, str(script))]
             return run_local_cmd(cmd, dump)
 
-    def _submit_remote(self, source, flavor, env, preambles, dump, host):
+    def _submit_remote(self, source, flavor, env, preambles, dump, conn_params):
         script_loc = f"/tmp/dml-{uuid4().hex[:8]}.py"
         cmd = [*preambles, *self._flavor_to_cmd(flavor, env, script_loc)]
-        with Ssh(host) as ssh:
-            ssh.run(f'cat > {script_loc}', input=source)
-            try:
-                ssh.run(f'chmod +x {script_loc}')
-                resp = ssh.run(" ".join(cmd), dump)
-                return resp
-            finally:
-                ssh.run(f"rm {script_loc} || echo Failed to delete {script_loc!r}")
+        ssh = Ssh(**conn_params)
+        ssh.run(f'cat > {script_loc}', input=source)
+        try:
+            ssh.run(f'chmod +x {script_loc}')
+            resp = ssh.run(" ".join(cmd), dump)
+            return resp
+        finally:
+            ssh.run(f"rm {script_loc} || echo Failed to delete {script_loc!r}")
 
     def run(self, dag, fn_rsrc, *args) -> dml.FnUpdater:
         def update_fn(cache_key, dump, data):
@@ -540,8 +559,7 @@ class Local:
             # and write the PID to disk using cache_key. The proc can then check
             # it and work async.
             data = json.loads(data)
-            host = data.pop("host", None)
-            if host is None:
-                return self._submit_local(dump=dump, **data)
-            return self._submit_remote(dump=dump, host=host, **data)
+            if "conn_params" in data:
+                return self._submit_remote(dump=dump, **data)
+            return self._submit_local(dump=dump, **data)
         return dml.FnUpdater.from_waiter(dag.start_fn(fn_rsrc, *args), update_fn)

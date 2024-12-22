@@ -145,12 +145,18 @@ class TestRemote(MotoTestBase):
             print('stderr:')
             print(stderr)
             print('=' * 80)
-            cls.fail(f"SSHD failed to start on port {cls.port}")
+            raise RuntimeError(f"SSHD failed to start on port {cls.port}")
         cls.conn_params = {
-            "hostname": "localhost",
-            "username": os.getlogin(),
+            "host": "localhost",
+            # "user": os.getlogin(),
             "port": cls.port,
-            "pkey": cls.client_private_key
+            "pkey": cls.client_private_key,
+            "opts": [
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+            ],
         }
 
     @classmethod
@@ -162,9 +168,9 @@ class TestRemote(MotoTestBase):
 
     def test_ssh(self):
         txt = 'hello world!'
-        with dx.Ssh(self.conn_params) as ssh:
-            resp = ssh.run('cat', txt)
-            assert resp == txt
+        ssh = dx.Ssh(**self.conn_params)
+        resp = ssh.run('cat', txt)
+        assert resp == txt
 
     @unittest.skipIf(which("conda") is None, "conda is not available.")
     def test_conda_exec(self):
@@ -174,7 +180,7 @@ class TestRemote(MotoTestBase):
             with api.new_dag('foo', 'bar') as dag:
                 lx = dx.Local()
                 fn = lx.make_fn(dag, get_range_through_torch, 'conda', 'torch',
-                                host=self.conn_params,
+                                conn_params=self.conn_params,
                                 preambles=["source", "~/.local/conda/etc/profile.d/conda.sh;"])
                 resp = lx.run(dag, fn, n)
                 assert resp.get_result().value() == list(range(n))
@@ -196,7 +202,7 @@ class TestRemote(MotoTestBase):
             with api.new_dag('foo', 'bar') as dag:
                 lx = dx.Local()
                 fn = lx.make_fn(dag, foo, 'hatch', 'other-test',
-                                host=self.conn_params,
+                                conn_params=self.conn_params,
                                 preambles=[f"cd {repo_root};",
                                            "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH;"])
                 resp = lx.run(dag, fn)
@@ -204,7 +210,7 @@ class TestRemote(MotoTestBase):
                 assert is_valid_version_string(vers)
                 # wrong env
                 fn = lx.make_fn(dag, foo, 'hatch', 'test',
-                                host=self.conn_params,
+                                conn_params=self.conn_params,
                                 preambles=[f"cd {repo_root};",
                                            "export PATH=$HOME/.local/bin:/opt/homebrew/bin:$PATH;"])
                 with self.assertRaises(dml.Error):
@@ -223,7 +229,7 @@ class TestRemote(MotoTestBase):
             with api.new_dag('foo', 'bar') as dag:
                 lx = dx.Local()
                 fn = lx.make_fn(dag, foo, 'conda', 'torch',
-                                host=self.conn_params,
+                                conn_params=self.conn_params,
                                 preambles=["source", "~/.local/conda/etc/profile.d/conda.sh;"])
                 resp = lx.run(dag, fn, n)
                 assert resp.get_result().value() == list(range(n))

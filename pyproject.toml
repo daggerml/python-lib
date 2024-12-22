@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "daggerml"
-version = "0.0.15"
+version = "0.0.16"
 authors = [
   { name="DaggerML", email="engineering@daggerml.com" }
 ]
@@ -31,15 +31,12 @@ classifiers = [
 dependencies = [
   "dataclasses; python_version < '3.7'",
   "importlib_metadata; python_version < '3.8'",
-  "boto3",
-  "paramiko",
 ]
 
 [project.optional-dependencies]
 aws = ["boto3"]
-ssh = ["paramiko"]
 cli = ["daggerml_cli"]
-all = ["daggerml[aws,ssh,cli]"]
+all = ["daggerml[aws,cli]"]
 test = [
   "boto3",
   "moto[all,server]",
