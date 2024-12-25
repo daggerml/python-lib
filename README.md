@@ -19,4 +19,10 @@ See unit tests (or example) for usage.
 hatch -e test run pytest .
 ```
 
+To build:
+
+```console
+hatch -e test run dml-build pypi
+```
+
 Note: You might have to reinstall the cli with the editable flag set (e.g. `pip uninstall daggerml-cli; pip install -e ./submodules/daggerml_cli/`)

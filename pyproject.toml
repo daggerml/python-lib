@@ -82,6 +82,7 @@ dependencies = [
 
 [tool.hatch.envs.test]
 dependencies = [
+  "twine",
   "daggerml_cli @ {root:uri}/submodules/daggerml_cli",
   "daggerml[test]",
 ]
@@ -89,6 +90,7 @@ dependencies = [
 [tool.hatch.envs.test.scripts]
 test = 'pytest -vsx --log-cli-level=INFO --log-disable=botocore.credentials'
 coverage-report = 'pytest --cov-report term-missing --cov=daggerml tests/'
+dml-build = "hatch build && twine upload -r {args:tests} dist/*"
 
 [tool.ruff]
 line-length = 120
