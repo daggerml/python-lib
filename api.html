@@ -1,0 +1,1611 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="./" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>API Documentation &#8212; DaggerML Documentation foopy</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=a746c00c" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/sphinx-book-theme.css?v=a3416100" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="_static/documentation_options.js?v=baac2cea"></script>
+    <script src="_static/doctools.js?v=9bcbadda"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'api';</script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Contributing Guide" href="contributing.html" />
+    <link rel="prev" title="How-To Guide" href="howto.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.0.16" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="_static/logo-nobg.png" class="logo__image only-light" alt="DaggerML Documentation foopy - Home"/>
+    <img src="_static/logo-nobg.png" class="logo__image only-dark pst-js-only" alt="DaggerML Documentation foopy - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        
+        <ul class="nav bd-sidenav bd-sidenav__home-link">
+            <li class="toctree-l1">
+                <a class="reference internal" href="index.html">
+                    DaggerML Documentation
+                </a>
+            </li>
+        </ul>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="howto.html">How-To Guide</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="contributing.html">Contributing Guide</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+<a href="https://github.com/daggerml/python-lib" target="_blank"
+   class="btn btn-sm btn-source-repository-button"
+   title="Source repository"
+   data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+
+</a>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="_sources/api.rst" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.rst</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>API Documentation</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api"><code class="docutils literal notranslate"><span class="pre">Api</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.__init__"><code class="docutils literal notranslate"><span class="pre">Api.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.config_dir"><code class="docutils literal notranslate"><span class="pre">Api.config_dir</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.dump"><code class="docutils literal notranslate"><span class="pre">Api.dump()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.flags"><code class="docutils literal notranslate"><span class="pre">Api.flags</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.init"><code class="docutils literal notranslate"><span class="pre">Api.init()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.initialize"><code class="docutils literal notranslate"><span class="pre">Api.initialize</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.load"><code class="docutils literal notranslate"><span class="pre">Api.load()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.new_dag"><code class="docutils literal notranslate"><span class="pre">Api.new_dag()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.project_dir"><code class="docutils literal notranslate"><span class="pre">Api.project_dir</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.tmpdirs"><code class="docutils literal notranslate"><span class="pre">Api.tmpdirs</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag"><code class="docutils literal notranslate"><span class="pre">Dag</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.__init__"><code class="docutils literal notranslate"><span class="pre">Dag.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.api"><code class="docutils literal notranslate"><span class="pre">Dag.api</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.commit"><code class="docutils literal notranslate"><span class="pre">Dag.commit()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.dump"><code class="docutils literal notranslate"><span class="pre">Dag.dump()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.expr"><code class="docutils literal notranslate"><span class="pre">Dag.expr</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.load"><code class="docutils literal notranslate"><span class="pre">Dag.load()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.load_ref"><code class="docutils literal notranslate"><span class="pre">Dag.load_ref()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.new"><code class="docutils literal notranslate"><span class="pre">Dag.new()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.put"><code class="docutils literal notranslate"><span class="pre">Dag.put()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.result"><code class="docutils literal notranslate"><span class="pre">Dag.result</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.start_fn"><code class="docutils literal notranslate"><span class="pre">Dag.start_fn()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.tok"><code class="docutils literal notranslate"><span class="pre">Dag.tok</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error"><code class="docutils literal notranslate"><span class="pre">Error</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.__init__"><code class="docutils literal notranslate"><span class="pre">Error.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.code"><code class="docutils literal notranslate"><span class="pre">Error.code</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.context"><code class="docutils literal notranslate"><span class="pre">Error.context</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.from_ex"><code class="docutils literal notranslate"><span class="pre">Error.from_ex()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.message"><code class="docutils literal notranslate"><span class="pre">Error.message</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater"><code class="docutils literal notranslate"><span class="pre">FnUpdater</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater.__init__"><code class="docutils literal notranslate"><span class="pre">FnUpdater.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater.from_waiter"><code class="docutils literal notranslate"><span class="pre">FnUpdater.from_waiter()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater.update"><code class="docutils literal notranslate"><span class="pre">FnUpdater.update()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater.update_fn"><code class="docutils literal notranslate"><span class="pre">FnUpdater.update_fn</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter"><code class="docutils literal notranslate"><span class="pre">FnWaiter</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.__init__"><code class="docutils literal notranslate"><span class="pre">FnWaiter.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.cache_key"><code class="docutils literal notranslate"><span class="pre">FnWaiter.cache_key</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.dag"><code class="docutils literal notranslate"><span class="pre">FnWaiter.dag</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.dump"><code class="docutils literal notranslate"><span class="pre">FnWaiter.dump</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.get_result"><code class="docutils literal notranslate"><span class="pre">FnWaiter.get_result()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.ref"><code class="docutils literal notranslate"><span class="pre">FnWaiter.ref</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.resource_data"><code class="docutils literal notranslate"><span class="pre">FnWaiter.resource_data</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node"><code class="docutils literal notranslate"><span class="pre">Node</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.__init__"><code class="docutils literal notranslate"><span class="pre">Node.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.dag"><code class="docutils literal notranslate"><span class="pre">Node.dag</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.items"><code class="docutils literal notranslate"><span class="pre">Node.items()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.keys"><code class="docutils literal notranslate"><span class="pre">Node.keys()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.len"><code class="docutils literal notranslate"><span class="pre">Node.len()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.ref"><code class="docutils literal notranslate"><span class="pre">Node.ref</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.type"><code class="docutils literal notranslate"><span class="pre">Node.type()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.value"><code class="docutils literal notranslate"><span class="pre">Node.value()</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Ref"><code class="docutils literal notranslate"><span class="pre">Ref</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Ref.__init__"><code class="docutils literal notranslate"><span class="pre">Ref.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Ref.to"><code class="docutils literal notranslate"><span class="pre">Ref.to</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Ref.type"><code class="docutils literal notranslate"><span class="pre">Ref.type</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource"><code class="docutils literal notranslate"><span class="pre">Resource</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.__init__"><code class="docutils literal notranslate"><span class="pre">Resource.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.data"><code class="docutils literal notranslate"><span class="pre">Resource.data</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.id"><code class="docutils literal notranslate"><span class="pre">Resource.id</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.js"><code class="docutils literal notranslate"><span class="pre">Resource.js</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.scheme"><code class="docutils literal notranslate"><span class="pre">Resource.scheme</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.uri"><code class="docutils literal notranslate"><span class="pre">Resource.uri</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.from_data"><code class="docutils literal notranslate"><span class="pre">from_data()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.from_json"><code class="docutils literal notranslate"><span class="pre">from_json()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.new"><code class="docutils literal notranslate"><span class="pre">new()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.to_data"><code class="docutils literal notranslate"><span class="pre">to_data()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.to_json"><code class="docutils literal notranslate"><span class="pre">to_json()</span></code></a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="module-daggerml">
+<span id="api-documentation"></span><h1>API Documentation<a class="headerlink" href="#module-daggerml" title="Link to this heading">#</a></h1>
+<dl class="py class">
+<dt class="sig sig-object py" id="daggerml.Api">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">Api</span></span><a class="reference internal" href="_modules/daggerml/core.html#Api"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Api" title="Link to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>A dml api client.</p>
+<section id="parameters">
+<h2>Parameters<a class="headerlink" href="#parameters" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>config_dir<span class="classifier">str, optional</span></dt><dd><p>The configuration directory. Default is None.</p>
+</dd>
+<dt>project_dir<span class="classifier">str, optional</span></dt><dd><p>The project directory. Default is None.</p>
+</dd>
+<dt>initialize<span class="classifier">bool, optional</span></dt><dd><p>Whether to initialize the api. Default is False.</p>
+</dd>
+<dt>tmpdirs<span class="classifier">List[TemporaryDirectory], optional</span></dt><dd><p>The temporary directories. Default is [].</p>
+</dd>
+<dt>flags<span class="classifier">Dict[str, str], optional</span></dt><dd><p>The flags. Default is {}.</p>
+</dd>
+</dl>
+</section>
+<section id="attributes">
+<h2>Attributes<a class="headerlink" href="#attributes" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>config_dir<span class="classifier">str</span></dt><dd><p>The configuration directory.</p>
+</dd>
+<dt>project_dir<span class="classifier">str</span></dt><dd><p>The project directory.</p>
+</dd>
+<dt>tmpdirs<span class="classifier">List[TemporaryDirectory]</span></dt><dd><p>The temporary directories.</p>
+</dd>
+<dt>flags<span class="classifier">Dict[str, str]</span></dt><dd><p>The flags.</p>
+</dd>
+</dl>
+</section>
+<section id="examples">
+<h2>Examples<a class="headerlink" href="#examples" title="Link to this heading">#</a></h2>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Api.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config_dir=None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_dir=None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initialize=False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">tmpdirs=&lt;factory&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">flags=&lt;factory&gt;</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.Api.__init__" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config_dir</strong> (<em>dataclasses.InitVar</em><em>[</em><em>str</em><em> | </em><em>None</em><em>]</em>)</p></li>
+<li><p><strong>project_dir</strong> (<em>dataclasses.InitVar</em><em>[</em><em>str</em><em> | </em><em>None</em><em>]</em>)</p></li>
+<li><p><strong>initialize</strong> (<em>dataclasses.InitVar</em><em>[</em><em>bool</em><em>]</em>)</p></li>
+<li><p><strong>tmpdirs</strong> (<em>List</em><em>[</em><em>TemporaryDirectory</em><em>]</em>)</p></li>
+<li><p><strong>flags</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Api.config_dir">
+<span class="sig-name descname"><span class="pre">config_dir</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">InitVar</span></code></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#daggerml.Api.config_dir" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Api.dump">
+<span class="sig-name descname"><span class="pre">dump</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ref</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Api.dump"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Api.dump" title="Link to this definition">#</a></dt>
+<dd><p>Dump a reference.</p>
+<section id="id1">
+<h3>Parameters<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>ref<span class="classifier">Ref</span></dt><dd><p>The reference to dump.</p>
+</dd>
+</dl>
+</section>
+<section id="returns">
+<h3>Returns<a class="headerlink" href="#returns" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>str</dt><dd><p>The dumped reference</p>
+</dd>
+</dl>
+</section>
+<section id="id2">
+<h3>Examples<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dag_ref</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">commit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dump</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">dag_ref</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">_</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">dump</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Api.flags">
+<span class="sig-name descname"><span class="pre">flags</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">Dict</span></code><span class="pre">[</span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code><span class="pre">,</span> <code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code><span class="pre">]</span></em><a class="headerlink" href="#daggerml.Api.flags" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Api.init">
+<span class="sig-name descname"><span class="pre">init</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Api.init"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Api.init" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Api.initialize">
+<span class="sig-name descname"><span class="pre">initialize</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">InitVar</span></code></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">False</span></em><a class="headerlink" href="#daggerml.Api.initialize" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Api.load">
+<span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dump</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Api.load"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Api.load" title="Link to this definition">#</a></dt>
+<dd><p>Load a reference.</p>
+<section id="id3">
+<h3>Parameters<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>dump<span class="classifier">str</span></dt><dd><p>The dumped reference.</p>
+</dd>
+</dl>
+</section>
+<section id="id4">
+<h3>Returns<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>str</dt><dd><p>The loaded reference</p>
+</dd>
+</dl>
+</section>
+<section id="id5">
+<h3>Examples<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dag_ref</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">commit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dump</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">dag_ref</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">_</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">dump</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Api.new_dag">
+<span class="sig-name descname"><span class="pre">new_dag</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">message</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dump</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Api.new_dag"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Api.new_dag" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Dag" title="daggerml.core.Dag"><code class="xref py py-class docutils literal notranslate"><span class="pre">Dag</span></code></a></span></p>
+</dd>
+<dt class="field-even">Parameters<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>name</strong> (<em>str</em><em> | </em><em>None</em>)</p></li>
+<li><p><strong>message</strong> (<em>str</em>)</p></li>
+<li><p><strong>dump</strong> (<em>str</em><em> | </em><em>None</em>)</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Api.project_dir">
+<span class="sig-name descname"><span class="pre">project_dir</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">InitVar</span></code></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#daggerml.Api.project_dir" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Api.tmpdirs">
+<span class="sig-name descname"><span class="pre">tmpdirs</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">List</span></code><span class="pre">[</span><code class="xref py py-class docutils literal notranslate"><span class="pre">TemporaryDirectory</span></code><span class="pre">]</span></em><a class="headerlink" href="#daggerml.Api.tmpdirs" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+</section>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="daggerml.Dag">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">Dag</span></span><a class="reference internal" href="_modules/daggerml/core.html#Dag"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Dag" title="Link to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>A dml dag.</p>
+<section id="id6">
+<h2>Parameters<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>tok<span class="classifier">str</span></dt><dd><p>The opaque internal reference to the dag.</p>
+</dd>
+<dt>api<span class="classifier">Api</span></dt><dd><p>The api.</p>
+</dd>
+<dt>result<span class="classifier">Ref, optional</span></dt><dd><p>The result of the dag (only populated if the dag has finished). Default
+is None.</p>
+</dd>
+</dl>
+</section>
+<section id="id7">
+<h2>Attributes<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>tok<span class="classifier">str</span></dt><dd><p>The opaque internal reference to the dag.</p>
+</dd>
+<dt>api<span class="classifier">Api</span></dt><dd><p>The api.</p>
+</dd>
+<dt>result<span class="classifier">Ref</span></dt><dd><p>The result of the dag (only populated if the dag has finished).</p>
+</dd>
+<dt>expr<span class="classifier">Node</span></dt><dd><p>The expression of the dag (only for fn dags).</p>
+</dd>
+</dl>
+</section>
+<section id="id8">
+<h2>Examples<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">node</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">_</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">commit</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="notes">
+<h2>Notes<a class="headerlink" href="#notes" title="Link to this heading">#</a></h2>
+<p>The <cite>Dag</cite> class is a context manager. If an exception is raised within the
+context, the dag will be failed with the exception. If no value has been
+committed when exit is called, the dag will be failed with a generic error.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Dag.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tok</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">api</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">result</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.Dag.__init__" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>tok</strong> (<em>str</em>)</p></li>
+<li><p><strong>api</strong> (<a class="reference internal" href="#daggerml.Api" title="daggerml.core.Api"><em>Api</em></a>)</p></li>
+<li><p><strong>result</strong> (<a class="reference internal" href="#daggerml.Ref" title="daggerml.core.Ref"><em>Ref</em></a><em> | </em><em>None</em>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Dag.api">
+<span class="sig-name descname"><span class="pre">api</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#daggerml.Api" title="daggerml.core.Api"><code class="xref py py-class docutils literal notranslate"><span class="pre">Api</span></code></a></em><a class="headerlink" href="#daggerml.Dag.api" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Dag.commit">
+<span class="sig-name descname"><span class="pre">commit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">result</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Dag.commit"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Dag.commit" title="Link to this definition">#</a></dt>
+<dd><p>Commit the result of the dag.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Ref" title="daggerml.core.Ref"><code class="xref py py-class docutils literal notranslate"><span class="pre">Ref</span></code></a></span></p>
+</dd>
+</dl>
+<section id="id9">
+<h3>Parameters<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>result<span class="classifier">Scalar, Node, Error</span></dt><dd><p>The result of the dag.</p>
+</dd>
+</dl>
+</section>
+<section id="id10">
+<h3>Returns<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>Ref</dt><dd><p>A reference to the dag in DML.</p>
+</dd>
+</dl>
+</section>
+<section id="id11">
+<h3>Examples<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dc</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">commit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Dag.dump">
+<span class="sig-name descname"><span class="pre">dump</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ref</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Dag.dump"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Dag.dump" title="Link to this definition">#</a></dt>
+<dd><p>Dump a reference from the dag.</p>
+<section id="id12">
+<h3>Parameters<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>ref<span class="classifier">Ref</span></dt><dd><p>The reference to dump.</p>
+</dd>
+</dl>
+</section>
+<section id="id13">
+<h3>Returns<a class="headerlink" href="#id13" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>str</dt><dd><p>The dumped reference</p>
+</dd>
+</dl>
+</section>
+<section id="id14">
+<h3>Examples<a class="headerlink" href="#id14" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dag_ref</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">commit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dump</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">dag_ref</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">_</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">load_ref</span><span class="p">(</span><span class="n">dump</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="id15">
+<h3>Notes<a class="headerlink" href="#id15" title="Link to this heading">#</a></h3>
+<p>This function is used in function applications to dump the result of a
+function application.</p>
+</section>
+</dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="daggerml.Dag.expr">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">expr</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#daggerml.Node" title="daggerml.core.Node"><span class="pre">Node</span></a></em><a class="headerlink" href="#daggerml.Dag.expr" title="Link to this definition">#</a></dt>
+<dd><p>Get the expression of the dag (only for fn dags).</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Dag.load">
+<span class="sig-name descname"><span class="pre">load</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dag_name</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Dag.load"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Dag.load" title="Link to this definition">#</a></dt>
+<dd><p>Load the result of a dag into this dag.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Node" title="daggerml.core.Node"><code class="xref py py-class docutils literal notranslate"><span class="pre">Node</span></code></a></span></p>
+</dd>
+</dl>
+<section id="id16">
+<h3>Parameters<a class="headerlink" href="#id16" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>dag_name<span class="classifier">str</span></dt><dd><p>The name of the dag to load.</p>
+</dd>
+</dl>
+</section>
+<section id="id17">
+<h3>Returns<a class="headerlink" href="#id17" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>Node</dt><dd><p>The node that was loaded into the dag.</p>
+</dd>
+</dl>
+</section>
+<section id="id18">
+<h3>Examples<a class="headerlink" href="#id18" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">_</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">commit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dag2</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test2&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">node</span> <span class="o">=</span> <span class="n">dag2</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">node</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Dag.load_ref">
+<span class="sig-name descname"><span class="pre">load_ref</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dump</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Dag.load_ref"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Dag.load_ref" title="Link to this definition">#</a></dt>
+<dd><p>Load a reference into the dag.</p>
+<section id="id19">
+<h3>Parameters<a class="headerlink" href="#id19" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>dump<span class="classifier">str</span></dt><dd><p>The dumped reference.</p>
+</dd>
+</dl>
+</section>
+<section id="id20">
+<h3>Returns<a class="headerlink" href="#id20" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>str</dt><dd><p>The loaded reference</p>
+</dd>
+</dl>
+</section>
+<section id="id21">
+<h3>Examples<a class="headerlink" href="#id21" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dag_ref</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">commit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">dump</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">dag_ref</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">_</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">load_ref</span><span class="p">(</span><span class="n">dump</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="id22">
+<h3>Notes<a class="headerlink" href="#id22" title="Link to this heading">#</a></h3>
+<p>This function is used in function applications to load the result of a
+function application.</p>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Dag.new">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">new</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">message</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dump</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">api_flags</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">api</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Dag.new"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Dag.new" title="Link to this definition">#</a></dt>
+<dd><p>Create a new dag.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Dag" title="daggerml.core.Dag"><code class="xref py py-class docutils literal notranslate"><span class="pre">Dag</span></code></a></span></p>
+</dd>
+<dt class="field-even">Parameters<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>name</strong> (<em>str</em><em> | </em><em>None</em>)</p></li>
+<li><p><strong>message</strong> (<em>str</em>)</p></li>
+<li><p><strong>dump</strong> (<em>str</em><em> | </em><em>None</em>)</p></li>
+<li><p><strong>api_flags</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>] </em><em>| </em><em>None</em>)</p></li>
+<li><p><strong>api</strong> (<a class="reference internal" href="#daggerml.Api" title="daggerml.core.Api"><em>Api</em></a><em> | </em><em>None</em>)</p></li>
+</ul>
+</dd>
+</dl>
+<section id="id23">
+<h3>Parameters<a class="headerlink" href="#id23" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>name<span class="classifier">str</span></dt><dd><p>The name of the dag.</p>
+</dd>
+<dt>message<span class="classifier">str</span></dt><dd><p>The message of the dag.</p>
+</dd>
+<dt>dump<span class="classifier">str, optional</span></dt><dd><p>The dump of the dag. Default is None.</p>
+</dd>
+<dt>api_flags<span class="classifier">Dict[str, str], optional</span></dt><dd><p>The flags for the api. Default is None.</p>
+</dd>
+<dt>api<span class="classifier">Api, optional</span></dt><dd><p>The api. Default is None.</p>
+</dd>
+</dl>
+</section>
+<section id="id24">
+<h3>Returns<a class="headerlink" href="#id24" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>Dag</dt><dd><p>The new dag.</p>
+</dd>
+</dl>
+</section>
+<section id="id25">
+<h3>Examples<a class="headerlink" href="#id25" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">Dag</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">,</span> <span class="n">api</span><span class="o">=</span><span class="n">api</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Dag.put">
+<span class="sig-name descname"><span class="pre">put</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Dag.put"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Dag.put" title="Link to this definition">#</a></dt>
+<dd><p>Put a value into the dag.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Node" title="daggerml.core.Node"><code class="xref py py-class docutils literal notranslate"><span class="pre">Node</span></code></a></span></p>
+</dd>
+</dl>
+<section id="id26">
+<h3>Parameters<a class="headerlink" href="#id26" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>data<span class="classifier">Scalar, Node</span></dt><dd><p>The value to put into the dag.</p>
+</dd>
+</dl>
+</section>
+<section id="id27">
+<h3>Returns<a class="headerlink" href="#id27" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>Node</dt><dd><p>The node that was put into the dag.</p>
+</dd>
+</dl>
+</section>
+<section id="raises">
+<h3>Raises<a class="headerlink" href="#raises" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>ValueError</dt><dd><p>If the data is a node from a different dag or if the data is not a
+type daggerml understands.</p>
+</dd>
+</dl>
+</section>
+<section id="id28">
+<h3>Examples<a class="headerlink" href="#id28" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">node</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">node</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Dag.result">
+<span class="sig-name descname"><span class="pre">result</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#daggerml.Ref" title="daggerml.core.Ref"><code class="xref py py-class docutils literal notranslate"><span class="pre">Ref</span></code></a> <span class="pre">|</span> <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#daggerml.Dag.result" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Dag.start_fn">
+<span class="sig-name descname"><span class="pre">start_fn</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">expr</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Dag.start_fn"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Dag.start_fn" title="Link to this definition">#</a></dt>
+<dd><p>Start a function execution.</p>
+<section id="id29">
+<h3>Parameters<a class="headerlink" href="#id29" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>expr<span class="classifier">List[Node]</span></dt><dd><p>The expression to execute. Expressions are a list of nodes where the
+first node is the function to execute and the rest are arguments to
+the function (like lisp). In this case, the function is a Resource
+object.</p>
+</dd>
+</dl>
+</section>
+<section id="id30">
+<h3>Returns<a class="headerlink" href="#id30" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>FnWaiter</dt><dd><p>The waiter for the function result.</p>
+</dd>
+</dl>
+</section>
+<section id="id31">
+<h3>Examples<a class="headerlink" href="#id31" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">node</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">Resource</span><span class="p">(</span><span class="s1">&#39;my-lib:op/add&#39;</span><span class="p">))</span>
+<span class="gp">... </span>    <span class="n">fnwaiter</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">start_fn</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">fnwaiter</span><span class="o">.</span><span class="n">get_result</span><span class="p">()</span> <span class="ow">is</span> <span class="kc">None</span>
+<span class="gp">... </span>    <span class="n">fndag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test2&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">,</span> <span class="n">dump</span><span class="o">=</span><span class="n">fnwaiter</span><span class="o">.</span><span class="n">dump</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">_</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span> <span class="o">=</span> <span class="n">fndag</span><span class="o">.</span><span class="n">expr</span><span class="o">.</span><span class="n">value</span><span class="p">()</span>
+<span class="gp">... </span>    <span class="n">_</span> <span class="o">=</span> <span class="n">fndag</span><span class="o">.</span><span class="n">commit</span><span class="p">(</span><span class="nb">sum</span><span class="p">(</span><span class="n">args</span><span class="p">))</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">fnwaiter</span><span class="o">.</span><span class="n">get_result</span><span class="p">()</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Dag.tok">
+<span class="sig-name descname"><span class="pre">tok</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></em><a class="headerlink" href="#daggerml.Dag.tok" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+</section>
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="daggerml.Error">
+<em class="property"><span class="pre">exception</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">Error</span></span><a class="reference internal" href="_modules/daggerml/core.html#Error"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Error" title="Link to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">Exception</span></code></p>
+<p>An error that occurred during execution</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Error.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">message</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">context=&lt;factory&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">code=None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.Error.__init__" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>message</strong> (<em>str</em>)</p></li>
+<li><p><strong>context</strong> (<em>dict</em>)</p></li>
+<li><p><strong>code</strong> (<em>str</em><em> | </em><em>None</em>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Error.code">
+<span class="sig-name descname"><span class="pre">code</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> <span class="pre">|</span> <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#daggerml.Error.code" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Error.context">
+<span class="sig-name descname"><span class="pre">context</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">dict</span></code></em><a class="headerlink" href="#daggerml.Error.context" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Error.from_ex">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_ex</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ex</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Error.from_ex"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Error.from_ex" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Error.message">
+<span class="sig-name descname"><span class="pre">message</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></em><a class="headerlink" href="#daggerml.Error.message" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="daggerml.FnUpdater">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">FnUpdater</span></span><a class="reference internal" href="_modules/daggerml/core.html#FnUpdater"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.FnUpdater" title="Link to this definition">#</a></dt>
+<dd><p>Bases: <a class="reference internal" href="#daggerml.FnWaiter" title="daggerml.core.FnWaiter"><code class="xref py py-class docutils literal notranslate"><span class="pre">FnWaiter</span></code></a></p>
+<p>A waiter for a function result that updates the result.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.FnUpdater.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ref</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dump</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dag</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resource_data</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">update_fn</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.FnUpdater.__init__" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>ref</strong> (<a class="reference internal" href="#daggerml.Ref" title="daggerml.core.Ref"><em>Ref</em></a>)</p></li>
+<li><p><strong>cache_key</strong> (<em>str</em>)</p></li>
+<li><p><strong>dump</strong> (<em>str</em>)</p></li>
+<li><p><strong>dag</strong> (<a class="reference internal" href="#daggerml.Dag" title="daggerml.core.Dag"><em>Dag</em></a>)</p></li>
+<li><p><strong>resource_data</strong> (<em>str</em>)</p></li>
+<li><p><strong>update_fn</strong> (<em>Callable</em><em>[</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>str</em><em>]</em><em>, </em><em>str</em><em> | </em><em>None</em><em>]</em>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.FnUpdater.from_waiter">
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_waiter</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">waiter</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">update_fn</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#FnUpdater.from_waiter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.FnUpdater.from_waiter" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.FnUpdater.update">
+<span class="sig-name descname"><span class="pre">update</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#FnUpdater.update"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.FnUpdater.update" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.FnUpdater.update_fn">
+<span class="sig-name descname"><span class="pre">update_fn</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-data docutils literal notranslate"><span class="pre">Callable</span></code><span class="pre">[[</span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code><span class="pre">,</span> <code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code><span class="pre">,</span> <code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code><span class="pre">],</span> <code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code> <span class="pre">|</span> <code class="xref py py-obj docutils literal notranslate"><span class="pre">None</span></code><span class="pre">]</span></em><a class="headerlink" href="#daggerml.FnUpdater.update_fn" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="daggerml.FnWaiter">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">FnWaiter</span></span><a class="reference internal" href="_modules/daggerml/core.html#FnWaiter"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.FnWaiter" title="Link to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>A waiter for a function result.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.FnWaiter.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">ref</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_key</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dump</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dag</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resource_data</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.FnWaiter.__init__" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>ref</strong> (<a class="reference internal" href="#daggerml.Ref" title="daggerml.core.Ref"><em>Ref</em></a>)</p></li>
+<li><p><strong>cache_key</strong> (<em>str</em>)</p></li>
+<li><p><strong>dump</strong> (<em>str</em>)</p></li>
+<li><p><strong>dag</strong> (<a class="reference internal" href="#daggerml.Dag" title="daggerml.core.Dag"><em>Dag</em></a>)</p></li>
+<li><p><strong>resource_data</strong> (<em>str</em>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.FnWaiter.cache_key">
+<span class="sig-name descname"><span class="pre">cache_key</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></em><a class="headerlink" href="#daggerml.FnWaiter.cache_key" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.FnWaiter.dag">
+<span class="sig-name descname"><span class="pre">dag</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#daggerml.Dag" title="daggerml.core.Dag"><code class="xref py py-class docutils literal notranslate"><span class="pre">Dag</span></code></a></em><a class="headerlink" href="#daggerml.FnWaiter.dag" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.FnWaiter.dump">
+<span class="sig-name descname"><span class="pre">dump</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></em><a class="headerlink" href="#daggerml.FnWaiter.dump" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.FnWaiter.get_result">
+<span class="sig-name descname"><span class="pre">get_result</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#FnWaiter.get_result"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.FnWaiter.get_result" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.FnWaiter.ref">
+<span class="sig-name descname"><span class="pre">ref</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#daggerml.Ref" title="daggerml.core.Ref"><code class="xref py py-class docutils literal notranslate"><span class="pre">Ref</span></code></a></em><a class="headerlink" href="#daggerml.FnWaiter.ref" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.FnWaiter.resource_data">
+<span class="sig-name descname"><span class="pre">resource_data</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></em><a class="headerlink" href="#daggerml.FnWaiter.resource_data" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="daggerml.Node">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">Node</span></span><a class="reference internal" href="_modules/daggerml/core.html#Node"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Node" title="Link to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>A node in dml.</p>
+<section id="id32">
+<h2>Parameters<a class="headerlink" href="#id32" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>dag<span class="classifier">Dag</span></dt><dd><p>The dag.</p>
+</dd>
+<dt>ref<span class="classifier">Ref</span></dt><dd><p>An opaque internal reference to the node.</p>
+</dd>
+</dl>
+</section>
+<section id="id33">
+<h2>Attributes<a class="headerlink" href="#id33" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>dag<span class="classifier">Dag</span></dt><dd><p>The dag.</p>
+</dd>
+<dt>ref<span class="classifier">Ref</span></dt><dd><p>An opaque internal reference to the node.</p>
+</dd>
+</dl>
+</section>
+<section id="id34">
+<h2>Examples<a class="headerlink" href="#id34" title="Link to this heading">#</a></h2>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">node</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">node</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span>
+<span class="gp">... </span>    <span class="c1"># we can index into nodes</span>
+<span class="gp">... </span>    <span class="n">node</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">({</span><span class="s1">&#39;a&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">node</span><span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">1</span>
+</pre></div>
+</div>
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Node.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dag</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ref</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.Node.__init__" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>dag</strong> (<a class="reference internal" href="#daggerml.Dag" title="daggerml.core.Dag"><em>Dag</em></a>)</p></li>
+<li><p><strong>ref</strong> (<a class="reference internal" href="#daggerml.Ref" title="daggerml.core.Ref"><em>Ref</em></a>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Node.dag">
+<span class="sig-name descname"><span class="pre">dag</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#daggerml.Dag" title="daggerml.core.Dag"><code class="xref py py-class docutils literal notranslate"><span class="pre">Dag</span></code></a></em><a class="headerlink" href="#daggerml.Node.dag" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Node.items">
+<span class="sig-name descname"><span class="pre">items</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Node.items"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Node.items" title="Link to this definition">#</a></dt>
+<dd><p>Get the items of the node. This is only valid for dictionaries.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Node.keys">
+<span class="sig-name descname"><span class="pre">keys</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Node.keys"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Node.keys" title="Link to this definition">#</a></dt>
+<dd><p>Get the keys of the node.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Node" title="daggerml.core.Node"><code class="xref py py-class docutils literal notranslate"><span class="pre">Node</span></code></a></span></p>
+</dd>
+</dl>
+<section id="id35">
+<h3>Returns<a class="headerlink" href="#id35" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>Node</dt><dd><p>The keys of the node.</p>
+</dd>
+</dl>
+</section>
+<section id="id36">
+<h3>Raises<a class="headerlink" href="#id36" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>Error</dt><dd><p>If the node value is not a dictionary</p>
+</dd>
+</dl>
+</section>
+<section id="id37">
+<h3>Examples<a class="headerlink" href="#id37" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="n">node</span> <span class="o">=</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">({</span><span class="s1">&#39;a&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">node</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">]</span>
+</pre></div>
+</div>
+</section>
+<section id="id38">
+<h3>Notes<a class="headerlink" href="#id38" title="Link to this heading">#</a></h3>
+<p>This function raises an error if the node value is not a dictionary.</p>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Node.len">
+<span class="sig-name descname"><span class="pre">len</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Node.len"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Node.len" title="Link to this definition">#</a></dt>
+<dd><p>Get the length of the node.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Node" title="daggerml.core.Node"><code class="xref py py-class docutils literal notranslate"><span class="pre">Node</span></code></a></span></p>
+</dd>
+</dl>
+<section id="id39">
+<h3>Returns<a class="headerlink" href="#id39" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>Node</dt><dd><p>The length of the node.</p>
+</dd>
+</dl>
+</section>
+<section id="id40">
+<h3>Raises<a class="headerlink" href="#id40" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>Error</dt><dd><p>If the node value is not a list, dictionary, set, or string.</p>
+</dd>
+</dl>
+</section>
+<section id="id41">
+<h3>Examples<a class="headerlink" href="#id41" title="Link to this heading">#</a></h3>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">api</span><span class="o">.</span><span class="n">new_dag</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">)</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">3</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">({</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">})</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="s2">&quot;asdf&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">4</span>
+<span class="gp">... </span>    <span class="k">assert</span> <span class="n">dag</span><span class="o">.</span><span class="n">put</span><span class="p">({</span><span class="s1">&#39;a&#39;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">:</span> <span class="mi">2</span><span class="p">})</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">.</span><span class="n">value</span><span class="p">()</span> <span class="o">==</span> <span class="mi">2</span>
+</pre></div>
+</div>
+</section>
+<section id="id42">
+<h3>Notes<a class="headerlink" href="#id42" title="Link to this heading">#</a></h3>
+<p>This function raises an error if the node value is not a list, dict,
+set, or string.</p>
+</section>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Node.ref">
+<span class="sig-name descname"><span class="pre">ref</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><a class="reference internal" href="#daggerml.Ref" title="daggerml.core.Ref"><code class="xref py py-class docutils literal notranslate"><span class="pre">Ref</span></code></a></em><a class="headerlink" href="#daggerml.Node.ref" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Node.type">
+<span class="sig-name descname"><span class="pre">type</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Node.type"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Node.type" title="Link to this definition">#</a></dt>
+<dd><p>Get the type of the node.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Node" title="daggerml.core.Node"><code class="xref py py-class docutils literal notranslate"><span class="pre">Node</span></code></a></span></p>
+</dd>
+</dl>
+<section id="id43">
+<h3>Returns<a class="headerlink" href="#id43" title="Link to this heading">#</a></h3>
+<dl class="simple">
+<dt>str</dt><dd><p>The type of the node (e.g. ‘list’, ‘dict’, ‘set’, ‘str’).</p>
+</dd>
+</dl>
+</section>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Node.value">
+<span class="sig-name descname"><span class="pre">value</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#Node.value"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Node.value" title="Link to this definition">#</a></dt>
+<dd><p>Get the value of the node.</p>
+<section id="id44">
+<h3>Notes<a class="headerlink" href="#id44" title="Link to this heading">#</a></h3>
+<p>Anything you do with the value will not be recorded in the dag. You will
+have to call <cite>dag.put</cite> to record whatever output.</p>
+</section>
+</dd></dl>
+
+</section>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="daggerml.Ref">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">Ref</span></span><a class="reference internal" href="_modules/daggerml/core.html#Ref"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Ref" title="Link to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>A reference to a value in the dml.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Ref.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">to</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.Ref.__init__" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>to</strong> (<em>str</em>)</p>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Ref.to">
+<span class="sig-name descname"><span class="pre">to</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></em><a class="headerlink" href="#daggerml.Ref.to" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="daggerml.Ref.type">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">type</span></span><a class="headerlink" href="#daggerml.Ref.type" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="daggerml.Resource">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">Resource</span></span><a class="reference internal" href="_modules/daggerml/core.html#Resource"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.Resource" title="Link to this definition">#</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>An externally managed value (e.g. dataset or otherwise).</p>
+<section id="id45">
+<h2>Parameters<a class="headerlink" href="#id45" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>uri<span class="classifier">str</span></dt><dd><p>The URI of the resource.</p>
+</dd>
+<dt>data<span class="classifier">str, optional</span></dt><dd><p>The data of the resource. Default is ‘’.</p>
+</dd>
+</dl>
+</section>
+<section id="id46">
+<h2>Attributes<a class="headerlink" href="#id46" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>uri<span class="classifier">str</span></dt><dd><p>The URI of the resource.</p>
+</dd>
+<dt>data<span class="classifier">str</span></dt><dd><p>The data of the resource.</p>
+</dd>
+<dt>js<span class="classifier">dict</span></dt><dd><p>The data of the resource as a dictionary.</p>
+</dd>
+<dt>scheme<span class="classifier">str</span></dt><dd><p>The scheme of the URI.</p>
+</dd>
+<dt>id<span class="classifier">str</span></dt><dd><p>The ID of the resource.</p>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="daggerml.Resource.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.Resource.__init__" title="Link to this definition">#</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>uri</strong> (<em>str</em>)</p></li>
+<li><p><strong>data</strong> (<em>str</em>)</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Resource.data">
+<span class="sig-name descname"><span class="pre">data</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></em><a class="headerlink" href="#daggerml.Resource.data" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="daggerml.Resource.id">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">id</span></span><a class="headerlink" href="#daggerml.Resource.id" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="daggerml.Resource.js">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">js</span></span><a class="headerlink" href="#daggerml.Resource.js" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py property">
+<dt class="sig sig-object py" id="daggerml.Resource.scheme">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">scheme</span></span><a class="headerlink" href="#daggerml.Resource.scheme" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="daggerml.Resource.uri">
+<span class="sig-name descname"><span class="pre">uri</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><code class="xref py py-class docutils literal notranslate"><span class="pre">str</span></code></em><a class="headerlink" href="#daggerml.Resource.uri" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+</section>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="daggerml.from_data">
+<span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">from_data</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#from_data"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.from_data" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="daggerml.from_json">
+<span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">from_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">text</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#from_json"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.from_json" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="daggerml.new">
+<span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">new</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">message</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dump</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">api_flags</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">api</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#daggerml.new" title="Link to this definition">#</a></dt>
+<dd><p>Create a new dag.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><span class="sphinx_autodoc_typehints-type"><a class="reference internal" href="#daggerml.Dag" title="daggerml.core.Dag"><code class="xref py py-class docutils literal notranslate"><span class="pre">Dag</span></code></a></span></p>
+</dd>
+<dt class="field-even">Parameters<span class="colon">:</span></dt>
+<dd class="field-even"><ul class="simple">
+<li><p><strong>name</strong> (<em>str</em><em> | </em><em>None</em>)</p></li>
+<li><p><strong>message</strong> (<em>str</em>)</p></li>
+<li><p><strong>dump</strong> (<em>str</em><em> | </em><em>None</em>)</p></li>
+<li><p><strong>api_flags</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>] </em><em>| </em><em>None</em>)</p></li>
+<li><p><strong>api</strong> (<a class="reference internal" href="#daggerml.Api" title="daggerml.core.Api"><em>Api</em></a><em> | </em><em>None</em>)</p></li>
+</ul>
+</dd>
+</dl>
+<section id="id47">
+<h2>Parameters<a class="headerlink" href="#id47" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>name<span class="classifier">str</span></dt><dd><p>The name of the dag.</p>
+</dd>
+<dt>message<span class="classifier">str</span></dt><dd><p>The message of the dag.</p>
+</dd>
+<dt>dump<span class="classifier">str, optional</span></dt><dd><p>The dump of the dag. Default is None.</p>
+</dd>
+<dt>api_flags<span class="classifier">Dict[str, str], optional</span></dt><dd><p>The flags for the api. Default is None.</p>
+</dd>
+<dt>api<span class="classifier">Api, optional</span></dt><dd><p>The api. Default is None.</p>
+</dd>
+</dl>
+</section>
+<section id="id48">
+<h2>Returns<a class="headerlink" href="#id48" title="Link to this heading">#</a></h2>
+<dl class="simple">
+<dt>Dag</dt><dd><p>The new dag.</p>
+</dd>
+</dl>
+</section>
+<section id="id49">
+<h2>Examples<a class="headerlink" href="#id49" title="Link to this heading">#</a></h2>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="k">with</span> <span class="n">Api</span><span class="p">(</span><span class="n">initialize</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">api</span><span class="p">:</span>
+<span class="gp">... </span>    <span class="n">dag</span> <span class="o">=</span> <span class="n">Dag</span><span class="o">.</span><span class="n">new</span><span class="p">(</span><span class="s1">&#39;test&#39;</span><span class="p">,</span> <span class="s1">&#39;asdf&#39;</span><span class="p">,</span> <span class="n">api</span><span class="o">=</span><span class="n">api</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="daggerml.to_data">
+<span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">to_data</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">obj</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#to_data"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.to_data" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="daggerml.to_json">
+<span class="sig-prename descclassname"><span class="pre">daggerml.</span></span><span class="sig-name descname"><span class="pre">to_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">obj</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/daggerml/core.html#to_json"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#daggerml.to_json" title="Link to this definition">#</a></dt>
+<dd></dd></dl>
+
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="howto.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">How-To Guide</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="contributing.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Contributing Guide</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api"><code class="docutils literal notranslate"><span class="pre">Api</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.__init__"><code class="docutils literal notranslate"><span class="pre">Api.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.config_dir"><code class="docutils literal notranslate"><span class="pre">Api.config_dir</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.dump"><code class="docutils literal notranslate"><span class="pre">Api.dump()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.flags"><code class="docutils literal notranslate"><span class="pre">Api.flags</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.init"><code class="docutils literal notranslate"><span class="pre">Api.init()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.initialize"><code class="docutils literal notranslate"><span class="pre">Api.initialize</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.load"><code class="docutils literal notranslate"><span class="pre">Api.load()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.new_dag"><code class="docutils literal notranslate"><span class="pre">Api.new_dag()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.project_dir"><code class="docutils literal notranslate"><span class="pre">Api.project_dir</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Api.tmpdirs"><code class="docutils literal notranslate"><span class="pre">Api.tmpdirs</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag"><code class="docutils literal notranslate"><span class="pre">Dag</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.__init__"><code class="docutils literal notranslate"><span class="pre">Dag.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.api"><code class="docutils literal notranslate"><span class="pre">Dag.api</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.commit"><code class="docutils literal notranslate"><span class="pre">Dag.commit()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.dump"><code class="docutils literal notranslate"><span class="pre">Dag.dump()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.expr"><code class="docutils literal notranslate"><span class="pre">Dag.expr</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.load"><code class="docutils literal notranslate"><span class="pre">Dag.load()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.load_ref"><code class="docutils literal notranslate"><span class="pre">Dag.load_ref()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.new"><code class="docutils literal notranslate"><span class="pre">Dag.new()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.put"><code class="docutils literal notranslate"><span class="pre">Dag.put()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.result"><code class="docutils literal notranslate"><span class="pre">Dag.result</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.start_fn"><code class="docutils literal notranslate"><span class="pre">Dag.start_fn()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Dag.tok"><code class="docutils literal notranslate"><span class="pre">Dag.tok</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error"><code class="docutils literal notranslate"><span class="pre">Error</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.__init__"><code class="docutils literal notranslate"><span class="pre">Error.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.code"><code class="docutils literal notranslate"><span class="pre">Error.code</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.context"><code class="docutils literal notranslate"><span class="pre">Error.context</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.from_ex"><code class="docutils literal notranslate"><span class="pre">Error.from_ex()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Error.message"><code class="docutils literal notranslate"><span class="pre">Error.message</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater"><code class="docutils literal notranslate"><span class="pre">FnUpdater</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater.__init__"><code class="docutils literal notranslate"><span class="pre">FnUpdater.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater.from_waiter"><code class="docutils literal notranslate"><span class="pre">FnUpdater.from_waiter()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater.update"><code class="docutils literal notranslate"><span class="pre">FnUpdater.update()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnUpdater.update_fn"><code class="docutils literal notranslate"><span class="pre">FnUpdater.update_fn</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter"><code class="docutils literal notranslate"><span class="pre">FnWaiter</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.__init__"><code class="docutils literal notranslate"><span class="pre">FnWaiter.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.cache_key"><code class="docutils literal notranslate"><span class="pre">FnWaiter.cache_key</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.dag"><code class="docutils literal notranslate"><span class="pre">FnWaiter.dag</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.dump"><code class="docutils literal notranslate"><span class="pre">FnWaiter.dump</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.get_result"><code class="docutils literal notranslate"><span class="pre">FnWaiter.get_result()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.ref"><code class="docutils literal notranslate"><span class="pre">FnWaiter.ref</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.FnWaiter.resource_data"><code class="docutils literal notranslate"><span class="pre">FnWaiter.resource_data</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node"><code class="docutils literal notranslate"><span class="pre">Node</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.__init__"><code class="docutils literal notranslate"><span class="pre">Node.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.dag"><code class="docutils literal notranslate"><span class="pre">Node.dag</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.items"><code class="docutils literal notranslate"><span class="pre">Node.items()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.keys"><code class="docutils literal notranslate"><span class="pre">Node.keys()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.len"><code class="docutils literal notranslate"><span class="pre">Node.len()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.ref"><code class="docutils literal notranslate"><span class="pre">Node.ref</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.type"><code class="docutils literal notranslate"><span class="pre">Node.type()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Node.value"><code class="docutils literal notranslate"><span class="pre">Node.value()</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Ref"><code class="docutils literal notranslate"><span class="pre">Ref</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Ref.__init__"><code class="docutils literal notranslate"><span class="pre">Ref.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Ref.to"><code class="docutils literal notranslate"><span class="pre">Ref.to</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Ref.type"><code class="docutils literal notranslate"><span class="pre">Ref.type</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource"><code class="docutils literal notranslate"><span class="pre">Resource</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.__init__"><code class="docutils literal notranslate"><span class="pre">Resource.__init__()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.data"><code class="docutils literal notranslate"><span class="pre">Resource.data</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.id"><code class="docutils literal notranslate"><span class="pre">Resource.id</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.js"><code class="docutils literal notranslate"><span class="pre">Resource.js</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.scheme"><code class="docutils literal notranslate"><span class="pre">Resource.scheme</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.Resource.uri"><code class="docutils literal notranslate"><span class="pre">Resource.uri</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.from_data"><code class="docutils literal notranslate"><span class="pre">from_data()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.from_json"><code class="docutils literal notranslate"><span class="pre">from_json()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.new"><code class="docutils literal notranslate"><span class="pre">new()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.to_data"><code class="docutils literal notranslate"><span class="pre">to_data()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daggerml.to_json"><code class="docutils literal notranslate"><span class="pre">to_json()</span></code></a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By Aaron Niskin and Micha Niskin
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025, Aaron Niskin and Micha Niskin.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
