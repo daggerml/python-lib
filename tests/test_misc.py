@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 import subprocess
@@ -14,6 +15,7 @@ import daggerml.executor as dx
 from tests.test_executor import MotoTestBase
 from tests.util import DmlTestBase
 
+logger = logging.getLogger(__name__)
 
 def rel_to(x, rel):
     return str(Path(x).relative_to(rel))
@@ -96,10 +98,10 @@ class TestRemote(MotoTestBase):
         cls.home_dir = os.path.join(cls.temp_dir.name, "root")
         os.makedirs(cls.home_dir)
         cls.host_key_rsa = os.path.join(cls.temp_dir.name, 'ssh_host_rsa_key')
-        subprocess.run(['ssh-keygen', '-t', 'rsa', '-f', cls.host_key_rsa, '-N', ''])
+        subprocess.run(['ssh-keygen', '-t', 'rsa', '-f', cls.host_key_rsa, '-N', ''], capture_output=True)
         cls.client_private_key = os.path.join(cls.temp_dir.name, 'id_rsa')
         cls.client_public_key = f"{cls.client_private_key}.pub"
-        subprocess.run(['ssh-keygen', '-t', 'rsa', '-b', '2048', '-f', cls.client_private_key, '-N', ''])
+        subprocess.run(['ssh-keygen', '-t', 'rsa', '-b', '2048', '-f', cls.client_private_key, '-N', ''], capture_output=True)
 
         ssh_dir = os.path.join(cls.home_dir, '.ssh')
         os.makedirs(ssh_dir)
@@ -133,7 +135,7 @@ class TestRemote(MotoTestBase):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 result = sock.connect_ex(('127.0.0.1', cls.port))
                 if result == 0:
-                    print(f"SSHD started and listening on port {cls.port}")
+                    logger.debug("SSHD started and listening on port %d", cls.port)
                     break
         else:
             stdout, stderr = cls.sshd_process.communicate(timeout=5)

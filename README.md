@@ -1,19 +1,27 @@
 # Dagger-ML Python Library
 
-## Prerequisites
+## Installation
 
-- [pipx](https://pypa.github.io/pipx/installation/)
-- [hatch](https://hatch.pypa.io/latest/install/#pipx) (via `pipx`)
+### Prerequisites
 
-## Setup
-
-install hatch however you want and clone the repo with submodules.
+If you don't already have `daggerml_cli` installed in your path (not necessarily in this environment), please do so.
 
 ## Usage
 
 See unit tests (or example) for usage.
 
-## How to run tests:
+## Dev work
+
+### Prerequisites
+
+- [pipx](https://pypa.github.io/pipx/installation/)
+- [hatch](https://hatch.pypa.io/latest/install/#pipx) (via `pipx`)
+
+### Setup
+
+install hatch however you want and clone the repo with submodules.
+
+### How to run tests:
 
 ```bash
 hatch -e test run pytest .

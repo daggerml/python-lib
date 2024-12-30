@@ -64,6 +64,18 @@ def id_fn(path):
         return sha256(f.read()).hexdigest()
 
 def scriptify(fn: Callable) -> str:
+    """put a python function into a script
+    
+    Parameters
+    ----------
+    fn: callable
+        the function you want scriptified. It should take a fndag as its
+        argument, and it should commit the desired value.
+
+    Returns
+    -------
+    str
+    """
     src = dedent(inspect.getsource(fn))
     txt = [
         "#!/usr/bin/env python3",
