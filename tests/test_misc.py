@@ -17,6 +17,11 @@ from tests.util import DmlTestBase
 
 logger = logging.getLogger(__name__)
 
+def run_cmd(*cmd, capture_output=True, **kwargs):
+    logger.debug(f'running: {cmd}')
+    resp = subprocess.run(cmd, capture_output=capture_output, **kwargs)
+    return resp
+
 def rel_to(x, rel):
     return str(Path(x).relative_to(rel))
 
@@ -98,10 +103,10 @@ class TestRemote(MotoTestBase):
         cls.home_dir = os.path.join(cls.temp_dir.name, "root")
         os.makedirs(cls.home_dir)
         cls.host_key_rsa = os.path.join(cls.temp_dir.name, 'ssh_host_rsa_key')
-        subprocess.run(['ssh-keygen', '-t', 'rsa', '-f', cls.host_key_rsa, '-N', ''], capture_output=True)
+        run_cmd('ssh-keygen', '-t', 'rsa', '-f', cls.host_key_rsa, '-N', '')
         cls.client_private_key = os.path.join(cls.temp_dir.name, 'id_rsa')
         cls.client_public_key = f"{cls.client_private_key}.pub"
-        subprocess.run(['ssh-keygen', '-t', 'rsa', '-b', '2048', '-f', cls.client_private_key, '-N', ''], capture_output=True)
+        run_cmd('ssh-keygen', '-t', 'rsa', '-b', '2048', '-f', cls.client_private_key, '-N', '')
 
         ssh_dir = os.path.join(cls.home_dir, '.ssh')
         os.makedirs(ssh_dir)
