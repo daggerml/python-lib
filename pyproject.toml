@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "daggerml"
-version = "0.0.16"
+version = "0.0.17"
 authors = [
   { name="DaggerML", email="engineering@daggerml.com" }
 ]
@@ -90,7 +90,7 @@ dependencies = [
 [tool.hatch.envs.test.scripts]
 test = 'pytest -vsx {args}'
 coverage-report = 'pytest --cov-report term-missing --cov=daggerml tests/'
-dml-build = "hatch build && twine upload -r {args:tests} dist/*"
+dml-build = "hatch build && twine upload -r {args:testpypi} dist/*"
 
 [tool.ruff]
 line-length = 120
