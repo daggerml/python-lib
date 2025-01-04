@@ -88,7 +88,7 @@ dependencies = [
 ]
 
 [tool.hatch.envs.test.scripts]
-test = 'pytest -vsx --log-cli-level=INFO --log-disable=botocore.credentials'
+test = 'pytest -vsx {args}'
 coverage-report = 'pytest --cov-report term-missing --cov=daggerml tests/'
 dml-build = "hatch build && twine upload -r {args:tests} dist/*"
 

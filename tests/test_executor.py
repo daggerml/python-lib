@@ -1,5 +1,6 @@
 import os
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from glob import glob
 from itertools import product
 from pathlib import Path
@@ -42,7 +43,8 @@ class MotoTestBase(DmlTestBase):
         from moto.server import ThreadedMotoServer
         super().setUp()
         self.server = ThreadedMotoServer(port=0)
-        self.server.start()
+        with redirect_stderr(None), redirect_stdout(None):
+            self.server.start()
         self.moto_host, self.moto_port = self.server._server.server_address
         self.endpoint = f"http://{self.moto_host}:{self.moto_port}"
         os.environ["AWS_ENDPOINT_URL"] = self.endpoint

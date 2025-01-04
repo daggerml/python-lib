@@ -224,15 +224,15 @@ class StreamReader:
     store: List[str] = field(default_factory=list)
 
     async def read_stream(self):
-        logger.info('starting to read stream: %r', self.prefix)
+        logger.debug('starting to read stream: %r', self.prefix)
         while True:
             line = await self.stream.readline()
             if not line:
                 break
             line = line.decode('utf-8').strip()
-            logger.info('%s <==> %s', self.prefix, line)
+            logger.debug('%s <==> %s', self.prefix, line)
             if self.pattern and re.search(self.pattern, line):
-                logger.info('%s <==> storing previous line', self.prefix)
+                logger.debug('%s <==> storing previous line', self.prefix)
                 self.store.append(re.search(self.pattern, line).groups()[0])
 
 
@@ -315,7 +315,7 @@ class Dkr:
                     '-e', f"DML_RESULT_URI={resp_uri}",
                     img_id,
                 ])
-                logger.info('submitting cmd: %r', cmd)
+                logger.debug('submitting cmd: %r', cmd)
                 proc, *_ = asyncio.run(arun(*cmd))
                 if proc.returncode != 0:
                     raise RuntimeError('failed to run docker image')
@@ -386,7 +386,7 @@ class Lambda:
     def run(self, dag, fn, *args) -> dml.FnUpdater:
         def update_fn(cache_key, dump, data):
             rsrc = fn.value()
-            logger.info('calling lambda %r', rsrc.uri)
+            logger.debug('calling lambda %r', rsrc.uri)
             assert isinstance(rsrc, dml.Resource)
             resp = self.session.client('lambda').invoke(
                 FunctionName=rsrc.uri,

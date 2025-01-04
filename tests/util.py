@@ -1,4 +1,4 @@
-import logging.config
+import logging
 import platform
 import unittest
 from unittest.mock import patch
@@ -9,38 +9,10 @@ from daggerml_cli.cli import cli
 import daggerml as dml
 
 SYSTEM = platform.system().lower()
-
-logging_config = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'default': {
-            'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
-        }
-    },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'level': 'DEBUG',
-            'formatter': 'default',
-        }
-    },
-    'root': {
-        'level': 'WARNING',
-        'handlers': ['console'],
-    },
-    'loggers': {
-        'daggerml': {
-            'level': 'DEBUG',  # or whatever level you want for your library
-            'handlers': ['console'],
-            'propagate': False,
-        }
-    }
-}
-
+logger = logging.getLogger(__name__)
 
 def _api(*args):
-    print('running patched cli via click')
+    logger.debug('running patched cli via click')
     runner = CliRunner()
     result = runner.invoke(cli, args)
     if result.exit_code != 0:
@@ -55,7 +27,7 @@ class DmlTestBase(unittest.TestCase):
         self.api_patcher.start()
         self.api = dml.Api(initialize=True)
         self.ctx = self.api.__enter__()
-        logging.config.dictConfig(logging_config)
+        # logging.config.dictConfig(logging_config)
 
     def tearDown(self):
         self.api_patcher.stop()

@@ -33,6 +33,15 @@ class TestApi(DmlTestBase):
         assert l0.value() == {'asdf': 12}
         dag.commit(l0)
 
+    def put_node_node_value(self):
+        dag = self.new("test-dag0", "this is the test dag")
+        n0 = dag.put(3)
+        n1 = dag.put(n0)
+        assert n1.value() == 3
+        assert dag.put({n0}).value() == {3}
+        assert dag.put([n0]).value() == [3]
+        assert dag.put({"foo": n0}).value() == {"foo": 3}
+
     def test_db_funcs_dict(self):
         dag = self.new('test-dag0', 'this is the test dag')
         l0 = dag.put({'a': 3, 'b': 5})

@@ -25,6 +25,28 @@ def js_dumps(js):
 @dml_type
 @dataclass(frozen=True, slots=True)
 class Resource:
+    """An externally managed value (e.g. dataset or otherwise).
+
+    Parameters
+    ----------
+    uri : str
+        The URI of the resource.
+    data : str, optional
+        The data of the resource. Default is ''.
+
+    Attributes
+    ----------
+    uri : str
+        The URI of the resource.
+    data : str
+        The data of the resource.
+    js : dict
+        The data of the resource as a dictionary.
+    scheme : str
+        The scheme of the URI.
+    id : str
+        The ID of the resource.
+    """
     uri: str
     data: str = ''
 
@@ -47,6 +69,7 @@ Scalar = str | int | float | bool | type(None) | Resource
 @dml_type
 @dataclass
 class Error(Exception):
+    """An error that occurred during execution"""
     message: str
     context: dict = field(default_factory=dict)
     code: str|None = None
@@ -59,21 +82,25 @@ class Error(Exception):
         if isinstance(ex, Error):
             return ex
         formatted_tb = tb.format_exception(type(ex), value=ex, tb=ex.__traceback__)
-        return cls(str(ex), {'trace': formatted_tb}, type(ex).__name__)
+        return cls(str(ex), {"trace": formatted_tb}, type(ex).__name__)
 
     def __str__(self):
-        msg = str(super())
-        msg += f'\n\ndml.Error({self.code}: {self.message})'
-        if 'trace' in self.context:
-            sep = '='*80
-            msg += f'\n{sep}\nTrace\n{sep}\n' + '\n'.join(self.context['trace'])
+        msg = f"dml.Error({self.code}: {self.message!r})"
+        if "trace" in self.context:
+            sep = "=" * 80
+            msg += f"\n{sep}\nTrace\n{sep}\n" + "\n".join(self.context["trace"])
         return msg
 
 
 @dml_type
 @dataclass(frozen=True)
 class Ref:
+    """A reference to a value in the dml."""
     to: str
+
+    @property
+    def id(self):
+        return self.to.split('/')[1]
 
     @property
     def type(self):
@@ -83,6 +110,7 @@ class Ref:
 @dml_type
 @dataclass
 class FnWaiter:
+    """A waiter for a function result."""
     ref: Ref
     cache_key: str
     dump: str
@@ -99,6 +127,7 @@ class FnWaiter:
 
 @dataclass
 class FnUpdater(FnWaiter):
+    """A waiter for a function result that updates the result."""
     update_fn: Callable[[str, str, str], str|None]
 
     @classmethod
@@ -112,11 +141,11 @@ class FnUpdater(FnWaiter):
         resp = self.get_result()
         if resp is not None:
             return resp
-        logger.info('Updater is not finished yet... updating now.')
+        logger.debug('Updater is not finished yet... updating now.')
         try:
             resp = self.update_fn(self.cache_key, self.dump, self.resource_data)
             if resp is not None:
-                logger.info('found non null resp... Loading %r into %r now.', resp, self.dag.tok)
+                logger.debug('found non null resp... Loading %r into %r now.', resp, self.dag.tok)
                 self.dag.load_ref(resp)
         except Exception as e:
             dag = self.dag.api.new_dag('asdf', 'qwer', dump=self.dump)
@@ -177,6 +206,37 @@ def _api(*args):
 
 @dataclass
 class Api:
+    """A dml api client.
+
+    Parameters
+    ----------
+    config_dir : str, optional
+        The configuration directory. Default is None.
+    project_dir : str, optional
+        The project directory. Default is None.
+    initialize : bool, optional
+        Whether to initialize the api. Default is False.
+    tmpdirs : List[TemporaryDirectory], optional
+        The temporary directories. Default is [].
+    flags : Dict[str, str], optional
+        The flags. Default is {}.
+
+    Attributes
+    ----------
+    config_dir : str
+        The configuration directory.
+    project_dir : str
+        The project directory.
+    tmpdirs : List[TemporaryDirectory]
+        The temporary directories.
+    flags : Dict[str, str]
+        The flags.
+
+    Examples
+    --------
+    >>> with Api(initialize=True) as api:
+    ...     dag = api.new_dag('test', 'asdf')
+    """
     config_dir: InitVar[str|None] = None
     project_dir: InitVar[str|None] = None
     initialize: InitVar[bool] = False
@@ -220,15 +280,58 @@ class Api:
     def __enter__(self):
         return self
 
-    def __exit__(self, *x, **kw):
+    def cleanup(self):
         for d in self.tmpdirs:
-            d.__exit__(*x, **kw)
+            d.cleanup()
+
+    def __exit__(self, *x, **kw):
+        self.cleanup()
 
     def load(self, dump):
+        """Load a reference.
+
+        Parameters
+        ----------
+        dump : str
+            The dumped reference.
+
+        Returns
+        -------
+        str
+            The loaded reference
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     dag_ref = dag.commit(1)
+        ...     dump = api.dump(dag_ref)
+        ...     _ = api.load(dump)
+        """
         resp = self('repo', 'load-ref', dump)
         return resp
 
     def dump(self, ref):
+        """Dump a reference.
+
+        Parameters
+        ----------
+        ref : Ref
+            The reference to dump.
+
+        Returns
+        -------
+        str
+            The dumped reference
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     dag_ref = dag.commit(1)
+        ...     dump = api.dump(dag_ref)
+        ...     _ = api.load(dump)
+        """
         resp = self('repo', 'dump-ref', to_json(ref))
         return resp
 
@@ -240,10 +343,49 @@ class Api:
 
 @dataclass(frozen=True)
 class Node:
+    """A node in dml.
+
+    Parameters
+    ----------
+    dag : Dag
+        The dag.
+    ref : Ref
+        An opaque internal reference to the node.
+
+    Attributes
+    ----------
+    dag : Dag
+        The dag.
+    ref : Ref
+        An opaque internal reference to the node.
+
+    Examples
+    --------
+    >>> with Api(initialize=True) as api:
+    ...     dag = api.new_dag('test', 'asdf')
+    ...     node = dag.put(1)
+    ...     assert node.value() == 1
+    ...     # we can index into nodes
+    ...     node = dag.put({'a': 1})
+    ...     assert node['a'].value() == 1
+    """
     dag: "Dag"
     ref: Ref
 
+    def __repr__(self):
+        return f'{self.__class__.__name__}({self.ref.id})'
+
+    def __hash__(self):
+        return hash(self.ref)
+
     def value(self):
+        """Get the value of the node.
+        
+        Notes
+        -----
+        Anything you do with the value will not be recorded in the dag. You will
+        have to call `dag.put` to record whatever output.
+        """
         return self.dag._invoke('get_node_value', self.ref)
 
     def _db_ex(self, fn_name, *x):
@@ -253,6 +395,29 @@ class Node:
         return result
 
     def keys(self) -> "Node":
+        """Get the keys of the node.
+
+        Returns
+        -------
+        Node
+            The keys of the node.
+
+        Raises
+        ------
+        Error
+            If the node value is not a dictionary
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     node = dag.put({'a': 1})
+        ...     assert node.keys().value() == ['a']
+
+        Notes
+        -----
+        This function raises an error if the node value is not a dictionary.
+        """
         return self._db_ex('keys')
 
     @overload
@@ -272,9 +437,42 @@ class Node:
         return self._db_ex('get', key)
 
     def len(self) -> "Node":
+        """Get the length of the node.
+
+        Returns
+        -------
+        Node
+            The length of the node.
+
+        Raises
+        ------
+        Error
+            If the node value is not a list, dictionary, set, or string.
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     assert dag.put([1, 2, 3]).len().value() == 3
+        ...     assert dag.put({1, 2, 2}).len().value() == 2
+        ...     assert dag.put("asdf").len().value() == 4
+        ...     assert dag.put({'a': 1, 'b': 2}).len().value() == 2
+
+        Notes
+        -----
+        This function raises an error if the node value is not a list, dict,
+        set, or string.
+        """
         return self._db_ex('len')
 
     def type(self) -> "Node":
+        """Get the type of the node.
+
+        Returns
+        -------
+        str
+            The type of the node (e.g. 'list', 'dict', 'set', 'str').
+        """
         return self._db_ex('type')
 
     def __len__(self):  # python requires this to be an int
@@ -291,11 +489,48 @@ class Node:
                 yield k
 
     def items(self):
+        """Get the items of the node. This is only valid for dictionaries."""
         for k in self:
             yield k, self[k]
 
 @dataclass
 class Dag:
+    """A dml dag.
+
+    Parameters
+    ----------
+    tok : str
+        The opaque internal reference to the dag.
+    api : Api
+        The api.
+    result : Ref, optional
+        The result of the dag (only populated if the dag has finished). Default
+        is None.
+
+    Attributes
+    ----------
+    tok : str
+        The opaque internal reference to the dag.
+    api : Api
+        The api.
+    result : Ref
+        The result of the dag (only populated if the dag has finished).
+    expr : Node
+        The expression of the dag (only for fn dags).
+
+    Examples
+    --------
+    >>> with Api(initialize=True) as api:
+    ...     dag = api.new_dag('test', 'asdf')
+    ...     node = dag.put(1)
+    ...     _ = dag.commit(node)
+
+    Notes
+    -----
+    The `Dag` class is a context manager. If an exception is raised within the
+    context, the dag will be failed with the exception. If no value has been
+    committed when exit is called, the dag will be failed with a generic error.
+    """
     tok: str
     api: Api
     result: Ref|None = None
@@ -305,6 +540,31 @@ class Dag:
             dump: Optional[str] = None,
             api_flags: Dict[str, str]|None = None,
             api: Optional[Api] = None) -> "Dag":
+        """Create a new dag.
+
+        Parameters
+        ----------
+        name : str
+            The name of the dag.
+        message : str
+            The message of the dag.
+        dump : str, optional
+            The dump of the dag. Default is None.
+        api_flags : Dict[str, str], optional
+            The flags for the api. Default is None.
+        api : Api, optional
+            The api. Default is None.
+
+        Returns
+        -------
+        Dag
+            The new dag.
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = Dag.new('test', 'asdf', api=api)
+        """
         if api is None:
             api = Api(flags=api_flags or {})
         extra = [] if dump is None else ['--dag-dump', dump]
@@ -314,6 +574,7 @@ class Dag:
 
     @property
     def expr(self) -> Node:
+        """Get the expression of the dag (only for fn dags)."""
         ref = self._invoke('get_expr')
         assert isinstance(ref, Ref)
         return Node(self, ref)
@@ -327,6 +588,31 @@ class Dag:
         return data
 
     def put(self, data) -> Node:
+        """Put a value into the dag.
+
+        Parameters
+        ----------
+        data : Scalar, Node
+            The value to put into the dag.
+
+        Returns
+        -------
+        Node
+            The node that was put into the dag.
+
+        Raises
+        ------
+        ValueError
+            If the data is a node from a different dag or if the data is not a
+            type daggerml understands.
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     node = dag.put(1)
+        ...     assert node.value() == 1
+        """
         if isinstance(data, Node):
             if data.dag != self:
                 raise ValueError('asdf')
@@ -336,11 +622,59 @@ class Dag:
         return Node(self, resp)
 
     def load(self, dag_name) -> Node:
+        """Load the result of a dag into this dag.
+
+        Parameters
+        ----------
+        dag_name : str
+            The name of the dag to load.
+
+        Returns
+        -------
+        Node
+            The node that was loaded into the dag.
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     _ = dag.commit(1)
+        ...     dag2 = api.new_dag('test2', 'asdf')
+        ...     node = dag2.load('test')
+        ...     assert node.value() == 1
+        """
         resp = self._invoke('put_load', dag_name)
         assert isinstance(resp, Ref)
         return Node(self, resp)
 
     def start_fn(self, *expr):
+        """Start a function execution.
+        
+        Parameters
+        ----------
+        expr : List[Node]
+            The expression to execute. Expressions are a list of nodes where the
+            first node is the function to execute and the rest are arguments to
+            the function (like lisp). In this case, the function is a Resource
+            object.
+
+        Returns
+        -------
+        FnWaiter
+            The waiter for the function result.
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     node = dag.put(Resource('my-lib:op/add'))
+        ...     fnwaiter = dag.start_fn(node, 1, 2)
+        ...     assert fnwaiter.get_result() is None
+        ...     fndag = api.new_dag('test2', 'asdf', dump=fnwaiter.dump)
+        ...     _, *args = fndag.expr.value()
+        ...     _ = fndag.commit(sum(args))
+        ...     assert fnwaiter.get_result().value() == 3
+        """
         expr = [x if isinstance(x, Node) else self.put(x) for x in expr]
         ref, cache_key, dump = self._invoke('start_fn', expr=[x.ref for x in expr])
         rsrc = expr[0].value()
@@ -348,6 +682,24 @@ class Dag:
         return FnWaiter(ref, cache_key, dump, self, rsrc.data)
 
     def commit(self, result) -> Ref:
+        """Commit the result of the dag.
+
+        Parameters
+        ----------
+        result : Scalar, Node, Error
+            The result of the dag.
+
+        Returns
+        -------
+        Ref
+            A reference to the dag in DML.
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     dc = dag.commit(1)
+        """
         if not isinstance(result, (Node, Error)):
             result = self.put(result)
         if isinstance(result, Node):
@@ -363,13 +715,63 @@ class Dag:
     def __exit__(self, err_type, exc_val, err_tb):
         if exc_val is not None:
             ex = Error.from_ex(exc_val)
-            logger.exception('failing dag with error code: %r', ex.code)
+            logger.debug('failing dag with error code: %r', ex.code)
             self.commit(ex)
 
     def load_ref(self, dump):
+        """Load a reference into the dag.
+
+        Parameters
+        ----------
+        dump : str
+            The dumped reference.
+
+        Returns
+        -------
+        str
+            The loaded reference
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     dag_ref = dag.commit(1)
+        ...     dump = dag.dump(dag_ref)
+        ...     _ = dag.load_ref(dump)
+
+        Notes
+        -----
+        This function is used in function applications to load the result of a
+        function application.
+        """
         resp = self.api.load(dump)
         return resp
 
     def dump(self, ref):
+        """Dump a reference from the dag.
+
+        Parameters
+        ----------
+        ref : Ref
+            The reference to dump.
+
+        Returns
+        -------
+        str
+            The dumped reference
+
+        Examples
+        --------
+        >>> with Api(initialize=True) as api:
+        ...     dag = api.new_dag('test', 'asdf')
+        ...     dag_ref = dag.commit(1)
+        ...     dump = dag.dump(dag_ref)
+        ...     _ = dag.load_ref(dump)
+
+        Notes
+        -----
+        This function is used in function applications to dump the result of a
+        function application.
+        """
         resp = self.api.dump(ref)
         return resp
