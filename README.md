@@ -1,28 +1,54 @@
-# Dagger-ML Python Library
+# Getting started
 
-## Prerequisites
+## Installation
 
-- [pipx](https://pypa.github.io/pipx/installation/)
-- [hatch](https://hatch.pypa.io/latest/install/#pipx) (via `pipx`)
-
-## Setup
-
-install hatch however you want and clone the repo with submodules.
-
-## Usage
-
-See unit tests (or example) for usage.
-
-## How to run tests:
+First install `daggerml-cli` via
 
 ```bash
-hatch -e test run pytest .
+pipx install daggerml-cli
 ```
 
-To build:
+Install `daggerml` in whatever [virtual environment](https://docs.python.org/3/tutorial/venv.html) you want:
 
-```console
-hatch -e test run dml-build pypi
+```bash
+pip install daggerml
 ```
 
-Note: You might have to reinstall the cli with the editable flag set (e.g. `pip uninstall daggerml-cli; pip install -e ./submodules/daggerml_cli/`)
+## Setting up a repo
+
+Now we create a repo using the commandline.
+
+```bash
+dml repo create $repo_name
+```
+
+We initialize our current project (e.g. tell the project which repo and branch to use).
+
+```bash
+dml project init $repo_name
+```
+
+Now we can create dags or whatever we want using this repo.
+
+```python
+import daggerml as dml
+
+dag = dml.new("test", "this dag is a test")
+_ = dag.commit(42)
+```
+
+Now we can list repos, dags, 
+
+```bash
+dml dag list
+```
+
+## Clean up
+
+```bash
+dml repo delete $repo_name
+```
+
+## Docs
+
+For more info, check out the docs at [daggerml.com](https://daggerml.com).
