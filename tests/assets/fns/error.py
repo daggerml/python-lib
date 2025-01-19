@@ -15,10 +15,13 @@ try:
         f.write('ASYNC EXECUTING\n')
 
     if os.path.isfile(cache_file):
-        with Dml.init() as dml:
-            with dml.new('test', 'test', dump) as d0:
-                d0.commit(42)
-        print(d0.dump)
+        try:
+            with Dml.init() as dml:
+                with dml.new('test', 'test', dump) as d0:
+                    d0.commit(1/0)
+                    print(d0.dump)
+        except Exception:
+            print(d0.dump)
     else:
         open(cache_file, 'w').close()
 except Exception as e:

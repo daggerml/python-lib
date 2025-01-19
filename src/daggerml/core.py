@@ -117,7 +117,7 @@ class Dml:  # noqa: F811
     def init(cls, **kwargs):
         return cls(kwargs2opts(kwargs))
 
-    def __call__(self, *args: list[str], as_text: bool = False) -> Any:
+    def __call__(self, *args: str, as_text: bool = False) -> Any:
         resp = None
         path = shutil.which('dml')
         argv = [path, *self.opts, *args]
@@ -143,7 +143,7 @@ class Dml:  # noqa: F811
 class Dag:  # noqa: F811
     dml: Dml
     token: str
-    result: Node | None = None
+    dump: str | None = None
 
     def __post_init__(self):
         self.dml = replace(self.dml, token=self.token)
@@ -161,19 +161,18 @@ class Dag:  # noqa: F811
         assert isinstance(ref, Ref)
         return Node(self, ref)
 
-    def put(self, value: Scalar | Collection) -> Node:
+    def put(self, value: Scalar | Collection, *, name=None, doc=None) -> Node:
         assert not isinstance(value, Node) or value.dag == self
-        return Node(self, self.dml.put_literal(value))
+        return Node(self, self.dml.put_literal(value, name=name, doc=doc))
+
+    def load(self, dag_name, *, name=None, doc=None) -> Node:
+        return Node(self, self.dml.put_load(dag_name, name=name, doc=doc))
 
     def commit(self, value) -> Node:
         if isinstance(value, Error):
             pass
-        val = value if isinstance(value, (Node, Error)) else self.put(value)
-        self.result = Node(self, self.dml.commit(val))
-        return self.result
-
-    def dump(self, node):
-        return self.dml('ref', 'dump', to_json(node.ref))
+        value = value if isinstance(value, (Node, Error)) else self.put(value)
+        self.dump = self.dml.commit(value)
 
 
 @dataclass(frozen=True)
@@ -218,20 +217,20 @@ class Node:  # noqa: F811
             for k in self.keys():
                 yield k
 
-    def __call__(self, *args, **kwargs) -> Node:
+    def __call__(self, *args, name=None, doc=None) -> Node:
         while True:
-            resp = raise_ex(self.dag.dml.start_fn([self, *args], **kwargs))
+            resp = raise_ex(self.dag.dml.start_fn([self, *args], name=name, doc=doc))
             if resp:
                 return Node(self.dag, resp)
 
-    def keys(self) -> Node:
-        return Node(self.dag, self.dag.dml.keys(self))
+    def keys(self, *, name=None, doc=None) -> Node:
+        return Node(self.dag, self.dag.dml.keys(self, name=name, doc=doc))
 
-    def len(self) -> Node:
-        return Node(self.dag, self.dag.dml.len(self))
+    def len(self, *, name=None, doc=None) -> Node:
+        return Node(self.dag, self.dag.dml.len(self, name=name, doc=doc))
 
-    def type(self) -> Node:
-        return Node(self.dag, self.dag.dml.type(self))
+    def type(self, *, name=None, doc=None) -> Node:
+        return Node(self.dag, self.dag.dml.type(self, name=name, doc=doc))
 
     def items(self):
         for k in self:
