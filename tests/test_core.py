@@ -68,8 +68,7 @@ class TestBasic(TestCase):
                             n0()
                     with open(debug_file, 'r') as f:
                         self.assertEqual(len([1 for _ in f]), 2)
-                    import json
-                    print(json.dumps(dml('dag', 'list'), indent=2))
+                    # TODO: Verify fndag was correctly committed.
 
     def test_load(self):
         with Dml.init() as dml:
