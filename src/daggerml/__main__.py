@@ -19,6 +19,6 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         raise
     except Exception as e:
-        result = dml.Error.from_ex(e)
+        result = dml.Error(e)
     with open(args['response_file'], 'w') as f:
         json.dump(dml.to_data(result), f)
