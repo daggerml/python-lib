@@ -5,8 +5,8 @@ from unittest import TestCase, mock
 from daggerml import Error, Node, Resource
 from daggerml.helper import Dml
 
-ASYNC = Resource('./tests/assets/fns/async.py', adapter='dml-python-in-process-adapter')
-ERROR = Resource('./tests/assets/fns/error.py', adapter='dml-python-in-process-adapter')
+ASYNC = Resource('./tests/assets/fns/async.py', adapter='dml-python-fork-adapter')
+ERROR = Resource('./tests/assets/fns/error.py', adapter='dml-python-fork-adapter')
 
 
 class TestBasic(TestCase):
