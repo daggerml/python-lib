@@ -2,9 +2,9 @@ import json
 import logging
 import shutil
 import subprocess
-import traceback as tb
 from dataclasses import dataclass, field, fields
 from tempfile import TemporaryDirectory
+from traceback import format_exception
 from typing import Any, Callable, List, NewType, overload
 
 from daggerml.util import kwargs2opts, raise_ex
@@ -100,7 +100,7 @@ class Error(Exception):  # noqa: F811
         elif isinstance(self.message, Exception):
             ex = self.message
             self.message = str(ex)
-            self.context = {'trace': tb.format_exception(type(ex), value=ex, tb=ex.__traceback__)}
+            self.context = {'trace': format_exception(type(ex), value=ex, tb=ex.__traceback__)}
             self.code = type(ex).__name__
         else:
             self.code = type(self).__name__ if self.code is None else self.code
@@ -116,6 +116,10 @@ class Dml:  # noqa: F811
         self.kwargs = kwargs
         self.opts = kwargs2opts(**kwargs)
         self.token = None
+        self.tmpdirs = None
+        self.cache_key = None
+        self.dag_dump = None
+        self.message_handler = None
 
     def __call__(self, *args: str, as_text: bool = False) -> Any:
         resp = None
