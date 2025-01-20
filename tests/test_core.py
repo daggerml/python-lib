@@ -6,6 +6,7 @@ from daggerml import Dml, Error, Node, Resource
 
 ASYNC = Resource('./tests/assets/fns/async.py', adapter='dml-python-fork-adapter')
 ERROR = Resource('./tests/assets/fns/error.py', adapter='dml-python-fork-adapter')
+TIMEOUT = Resource('./tests/assets/fns/timeout.py', adapter='dml-python-fork-adapter')
 
 
 class TestBasic(TestCase):
@@ -39,6 +40,9 @@ class TestBasic(TestCase):
                 n3 = n2.items()
                 self.assertIsInstance([x for x in n3], list)
                 self.assertDictEqual({k.value(): v.value() for k, v in n2.items()}, {'x': n0.value(), 'y': 'z'})
+                n4 = d0.put([1, 2, 3, 4, 5])
+                n5 = n4[1:]
+                self.assertListEqual([x.value() for x in n5], [2, 3, 4, 5])
                 d0.commit(n0)
                 self.assertIsInstance(d0.dump, str)
                 dag = dml('dag', 'list')[0]
@@ -51,7 +55,7 @@ class TestBasic(TestCase):
                 with Dml() as dml:
                     with dml.new('d0', 'd0') as d0:
                         n0 = d0.put(ASYNC)
-                        n1 = n0(1, 2, 3, timeout=1000)
+                        n1 = n0(1, 2, 3, timeout=500)
                         d0.commit(n1)
                         self.assertEqual(n1.value(), 6)
                         with open(debug_file, 'r') as f:
@@ -64,9 +68,16 @@ class TestBasic(TestCase):
                     with self.assertRaises(Error):
                         with dml.new('d0', 'd0') as d0:
                             n0 = d0.put(ERROR)
-                            n0(1, 2, 3, timeout=1000)
+                            n0(1, 2, 3, timeout=500)
                     info = [x for x in dml('dag', 'list') if x['name'] == 'd0']
                     self.assertEqual(len(info), 1)
+
+    def test_async_fn_timeout(self):
+        with Dml() as dml:
+            with self.assertRaises(TimeoutError):
+                with dml.new('d0', 'd0') as d0:
+                    n0 = d0.put(TIMEOUT)
+                    n0(1, 2, 3, timeout=500)
 
     def test_load(self):
         with Dml() as dml:
