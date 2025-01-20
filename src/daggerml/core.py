@@ -244,6 +244,7 @@ class Node:  # noqa: F811
                 yield k
 
     def __call__(self, *args, name=None, doc=None, timeout=30000) -> Node:
+        args = [self.dag.put(x) for x in args]
         end = current_time_millis() + timeout
         while current_time_millis() < end:
             resp = raise_ex(self.dag.dml.start_fn([self, *args], name=name, doc=doc))

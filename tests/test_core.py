@@ -44,27 +44,27 @@ class TestBasic(TestCase):
                 dag = dml('dag', 'list')[0]
                 self.assertEqual(dag['result'], n0.ref.to.split('/', 1)[1])
 
-    def test_fn(self):
+    def test_async_fn_ok(self):
         with TemporaryDirectory() as fn_cache_dir:
             with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=fn_cache_dir):
                 debug_file = os.path.join(fn_cache_dir, 'debug')
                 with Dml() as dml:
                     with dml.new('d0', 'd0') as d0:
                         n0 = d0.put(ASYNC)
-                        n1 = n0(timeout=1000)
+                        n1 = n0(1, 2, 3, timeout=1000)
                         d0.commit(n1)
-                        self.assertEqual(n1.value(), 42)
+                        self.assertEqual(n1.value(), 6)
                         with open(debug_file, 'r') as f:
                             self.assertEqual(len([1 for _ in f]), 2)
 
-    def test_fn_error(self):
+    def test_async_fn_error(self):
         with TemporaryDirectory() as fn_cache_dir:
             with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=fn_cache_dir):
                 with Dml() as dml:
                     with self.assertRaises(Error):
                         with dml.new('d0', 'd0') as d0:
                             n0 = d0.put(ERROR)
-                            n0(timeout=1000)
+                            n0(1, 2, 3, timeout=1000)
                     info = [x for x in dml('dag', 'list') if x['name'] == 'd0']
                     self.assertEqual(len(info), 1)
 
