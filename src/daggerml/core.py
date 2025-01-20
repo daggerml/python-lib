@@ -108,14 +108,11 @@ class Error(Exception):  # noqa: F811
         return ''.join(self.context.get('trace', [self.message]))
 
 
-@dataclass
 class Dml:  # noqa: F811
-    opts: list = field(default_factory=list)
-    token: str | None = None
-
-    @classmethod
-    def init(cls, **kwargs):
-        return cls(kwargs2opts(kwargs))
+    def __init__(self, *args, **kwargs):
+        self.kwargs = kwargs
+        self.opts = kwargs2opts(**kwargs)
+        self.token = None
 
     def __call__(self, *args: str, as_text: bool = False) -> Any:
         resp = None
@@ -134,9 +131,9 @@ class Dml:  # noqa: F811
         return invoke
 
     def new(self, name: str, message: str, dag_dump: str | None = None) -> Dag:
-        opts = [] if not dag_dump else ['--dag-dump', dag_dump]
-        token = self('dag', 'create', *opts, name, message, as_text=True)
-        return Dag(self, token)
+        opts = [] if not dag_dump else kwargs2opts(dag_dump=dag_dump)
+        self.token = self('dag', 'create', *opts, name, message, as_text=True)
+        return Dag(self, self.token)
 
 
 @dataclass
@@ -144,9 +141,6 @@ class Dag:  # noqa: F811
     dml: Dml
     token: str
     dump: str | None = None
-
-    def __post_init__(self):
-        self.dml = replace(self.dml, token=self.token)
 
     def __enter__(self):
         return self

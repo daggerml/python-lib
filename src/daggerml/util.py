@@ -6,8 +6,8 @@ def flatten(nested: list[list]) -> list:
     return [x for xs in nested for x in xs]
 
 
-def kwargs2opts(x: dict) -> list[str]:
-    x = {f'--{snake2kebab(k)}': v for k, v in x.items()}
+def kwargs2opts(*args, **kwargs) -> list[str]:
+    x = {f'--{snake2kebab(k)}': v for k, v in kwargs.items()}
     return flatten([[k] if v is True else [k, v] for k, v in x.items()])
 
 
