@@ -18,7 +18,7 @@ class Dag(RealDag):
 
 
 class Dml(RealDml):
-    def __init__(self, data=None, message_handler=print, **kwargs):
+    def __init__(self, data=None, message_handler=None, **kwargs):
         tmpdirs = [TemporaryDirectory() for _ in range(2)]
         super().__init__(**{
             'config_dir': tmpdirs[0].__enter__(),
@@ -31,8 +31,7 @@ class Dml(RealDml):
         self.data = data
         self.message_handler = message_handler
         self.tmpdirs = tmpdirs
-        ref, self.dag_dump = from_json(data or to_json([None, None]))
-        self.cache_key = ref.to.split('/', 1).pop() if ref else None
+        self.cache_key, self.dag_dump = from_json(data or to_json([None, None]))
         if self.kwargs['repo'] not in [x['name'] for x in self('repo', 'list')]:
             self('repo', 'create', self.kwargs['repo'])
         if self.kwargs['branch'] not in self('branch', 'list'):

@@ -3,7 +3,7 @@ import sys
 
 from daggerml.helper import Dml
 
-with Dml(data=sys.stdin.read()) as dml:
+with Dml(data=sys.stdin.read(), message_handler=print) as dml:
     cache_dir = os.getenv('DML_FN_CACHE_DIR', '')
     cache_file = os.path.join(cache_dir, dml.cache_key)
     debug_file = os.path.join(cache_dir, 'debug')

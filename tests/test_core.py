@@ -52,13 +52,9 @@ class TestBasic(TestCase):
                 with Dml() as dml:
                     with dml.new('d0', 'd0') as d0:
                         n0 = d0.put(ASYNC)
-                        try:
-                            n1 = n0()
-                            d0.commit(n1)
-                            self.assertEqual(n1.value(), 42)
-                        except Exception as e:
-                            print(f'{e=}')
-                            print(f'{str(Error(e))=}')
+                        n1 = n0()
+                        d0.commit(n1)
+                        self.assertEqual(n1.value(), 42)
                         with open(debug_file, 'r') as f:
                             self.assertEqual(len([1 for _ in f]), 2)
 
