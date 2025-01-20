@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "daggerml"
-version = "0.0.19a"
+version = "0.0.20"
 authors = [
   { name="DaggerML", email="engineering@daggerml.com" }
 ]
