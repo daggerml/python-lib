@@ -20,13 +20,14 @@ class Dag(RealDag):
 class Dml(RealDml):
     def __init__(self, data=None, message_handler=print, **kwargs):
         tmpdirs = [TemporaryDirectory() for _ in range(2)]
-        super().__init__(**{**{
+        super().__init__(**{
             'config_dir': tmpdirs[0].__enter__(),
             'project_dir': tmpdirs[1].__enter__(),
             'repo': 'test',
             'user': 'test',
             'branch': 'main',
-        }, **kwargs})
+            **kwargs,
+        })
         self.data = data
         self.message_handler = message_handler
         self.tmpdirs = tmpdirs
