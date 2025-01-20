@@ -1,3 +1,6 @@
+import time
+
+
 def snake2kebab(x: str) -> str:
     return x.replace('_', '-')
 
@@ -20,3 +23,7 @@ def raise_ex(x):
 def assocattr(x, k, v):
     setattr(x, k, v)
     return x
+
+
+def current_time_millis():
+    return round(time.time() * 1000)

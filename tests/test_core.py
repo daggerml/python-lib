@@ -51,7 +51,7 @@ class TestBasic(TestCase):
                 with Dml() as dml:
                     with dml.new('d0', 'd0') as d0:
                         n0 = d0.put(ASYNC)
-                        n1 = n0()
+                        n1 = n0(timeout=1000)
                         d0.commit(n1)
                         self.assertEqual(n1.value(), 42)
                         with open(debug_file, 'r') as f:
@@ -64,7 +64,7 @@ class TestBasic(TestCase):
                     with self.assertRaises(Error):
                         with dml.new('d0', 'd0') as d0:
                             n0 = d0.put(ERROR)
-                            n0()
+                            n0(timeout=1000)
                     info = [x for x in dml('dag', 'list') if x['name'] == 'd0']
                     self.assertEqual(len(info), 1)
 

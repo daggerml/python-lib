@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from traceback import format_exception
 from typing import Any, Callable, List, NewType, overload
 
-from daggerml.util import kwargs2opts, raise_ex
+from daggerml.util import current_time_millis, kwargs2opts, raise_ex
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,6 @@ class Dml:  # noqa: F811
         self.tmpdirs = None
         self.cache_key = None
         self.dag_dump = None
-        self.message_handler = None
 
     def __call__(self, *args: str, as_text: bool = False) -> Any:
         resp = None
@@ -244,11 +243,13 @@ class Node:  # noqa: F811
             for k in self.keys():
                 yield k
 
-    def __call__(self, *args, name=None, doc=None) -> Node:
-        while True:
+    def __call__(self, *args, name=None, doc=None, timeout=30000) -> Node:
+        end = current_time_millis() + timeout
+        while current_time_millis() < end:
             resp = raise_ex(self.dag.dml.start_fn([self, *args], name=name, doc=doc))
             if resp:
                 return Node(self.dag, resp)
+        raise TimeoutError(f'invoking function: {self.value()}')
 
     def keys(self, *, name=None, doc=None) -> Node:
         return Node(self.dag, self.dag.dml.keys(self, name=name, doc=doc))
