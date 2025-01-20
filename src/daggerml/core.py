@@ -226,8 +226,7 @@ class Node:  # noqa: F811
 
     def __getitem__(self, key):
         if isinstance(key, slice):
-            # Get the start, stop, and step from the slice
-            return [self[i] for i in range(*key.indices(len(self)))]
+            return Node(self.dag, self.dag.dml.slice(self, key.start, key.stop, key.step))
         return Node(self.dag, self.dag.dml.get(self, key))
 
     def __len__(self):  # python requires this to be an int
