@@ -3,7 +3,7 @@ import logging
 import shutil
 import subprocess
 import traceback as tb
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from typing import Any, List, NewType, overload
 
 from daggerml.util import kwargs2opts, raise_ex
