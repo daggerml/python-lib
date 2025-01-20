@@ -4,7 +4,8 @@ import shutil
 import subprocess
 import traceback as tb
 from dataclasses import dataclass, field, fields
-from typing import Any, List, NewType, overload
+from tempfile import TemporaryDirectory
+from typing import Any, Callable, List, NewType, overload
 
 from daggerml.util import kwargs2opts, raise_ex
 
@@ -109,7 +110,9 @@ class Error(Exception):  # noqa: F811
 
 
 class Dml:  # noqa: F811
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *, data=None, message_handler=None, **kwargs):
+        self.data = data
+        self.message_handler = message_handler
         self.kwargs = kwargs
         self.opts = kwargs2opts(**kwargs)
         self.token = None
@@ -130,10 +133,33 @@ class Dml:  # noqa: F811
             return from_data(self('dag', 'invoke', self.token, to_json([name, args, kwargs])))
         return invoke
 
-    def new(self, name: str, message: str, dag_dump: str | None = None) -> Dag:
-        opts = [] if not dag_dump else kwargs2opts(dag_dump=dag_dump)
+    def __enter__(self):
+        self.tmpdirs = [TemporaryDirectory() for _ in range(2)]
+        self.kwargs = {
+            'config_dir': self.tmpdirs[0].__enter__(),
+            'project_dir': self.tmpdirs[1].__enter__(),
+            'repo': 'test',
+            'user': 'test',
+            'branch': 'main',
+            **self.kwargs,
+        }
+        self.opts = kwargs2opts(**self.kwargs)
+        self.cache_key, self.dag_dump = from_json(self.data or to_json([None, None]))
+        if self.kwargs['repo'] not in [x['name'] for x in self('repo', 'list')]:
+            self('repo', 'create', self.kwargs['repo'])
+        if self.kwargs['branch'] not in self('branch', 'list'):
+            self('branch', 'create', self.kwargs['branch'])
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        [x.__exit__(exc_type, exc_value, traceback) for x in self.tmpdirs]
+        if exc_value and self.message_handler:
+            self.message_handler(to_json(Error(exc_value)))
+
+    def new(self, name: str, message: str) -> Dag:
+        opts = [] if not self.dag_dump else kwargs2opts(dag_dump=self.dag_dump)
         self.token = self('dag', 'create', *opts, name, message, as_text=True)
-        return Dag(self, self.token)
+        return Dag(self, self.token, self.dag_dump, self.message_handler)
 
 
 @dataclass
@@ -141,6 +167,7 @@ class Dag:  # noqa: F811
     dml: Dml
     token: str
     dump: str | None = None
+    message_handler: Callable | None = None
 
     def __enter__(self):
         return self
@@ -148,6 +175,8 @@ class Dag:  # noqa: F811
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_value is not None:
             self.commit(Error(exc_value))
+        if self.dump and self.message_handler:
+            self.message_handler(self.dump)
 
     @property
     def expr(self) -> Node:

@@ -1,7 +1,7 @@
 import os
 import sys
 
-from daggerml.helper import Dml
+from daggerml import Dml
 
 with Dml(data=sys.stdin.read(), message_handler=print) as dml:
     cache_dir = os.getenv('DML_FN_CACHE_DIR', '')

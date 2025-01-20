@@ -2,8 +2,7 @@ import os
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
-from daggerml import Error, Node, Resource
-from daggerml.helper import Dml
+from daggerml import Dml, Error, Node, Resource
 
 ASYNC = Resource('./tests/assets/fns/async.py', adapter='dml-python-fork-adapter')
 ERROR = Resource('./tests/assets/fns/error.py', adapter='dml-python-fork-adapter')
