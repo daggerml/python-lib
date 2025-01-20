@@ -226,7 +226,7 @@ class Node:  # noqa: F811
 
     def __getitem__(self, key):
         if isinstance(key, slice):
-            return Node(self.dag, self.dag.dml.slice(self, key.start, key.stop, key.step))
+            key = [key.start, key.stop, key.step]
         return Node(self.dag, self.dag.dml.get(self, key))
 
     def __len__(self):  # python requires this to be an int
