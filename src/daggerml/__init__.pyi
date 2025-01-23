@@ -13,7 +13,7 @@ Collection = Union[list, tuple, set, dict]
 
 __version__: str
 
-def new(name: str, message: str, data: Optional[str] = None) -> 'Dag':
+def new(name: str, message: str) -> 'Dag':
     """
     Create a new DAG with the given name and message.
 
@@ -23,8 +23,6 @@ def new(name: str, message: str, data: Optional[str] = None) -> 'Dag':
         Name of the DAG
     message : str
         Commit message or description
-    data : str, optional
-        Serialized DAG data for initialization
 
     Returns
     -------
@@ -112,7 +110,7 @@ class Error(Exception):
     message: Union[str, Exception]
     context: Dict[str, Any] = field(default_factory=dict)
     code: Optional[str] = None
-    
+
     def __str__(self) -> str: ...
 
 class Dml:
@@ -135,10 +133,11 @@ class Dml:
     ...     with dml.new("d0", "message") as dag:
     ...         pass
     """
-    
-    def __init__(self, *, data: Optional[Any] = None, 
-                 message_handler: Optional[Callable] = None, **kwargs: Any) -> None: ...
-    
+
+    def __init__(self, *,
+                 data: Optional[Any] = None,
+                 message_handler: Optional[Callable] = None,
+                 **kwargs: Any) -> None: ...
     def __call__(self, *args: str, as_text: bool = False) -> Any:
         """
         Call the dml cli with the given arguments.
@@ -167,8 +166,7 @@ class Dml:
     def __exit__(self, exc_type: Optional[Type[BaseException]], 
                  exc_value: Optional[BaseException],
                  traceback: Optional[TracebackType]) -> None: ...
-    
-    def new(self, name: str, message: str) -> 'Dag':
+    def new(self, name: str, message: str) -> "Dag":
         """
         Create a new DAG.
 
@@ -211,12 +209,11 @@ class Dag:
     token: str
     dump: Optional[str] = None
     message_handler: Optional[Callable] = None
-    
+
     def __enter__(self) -> 'Dag': ...
     def __exit__(self, exc_type: Optional[Type[BaseException]], 
                  exc_value: Optional[BaseException],
                  traceback: Optional[TracebackType]) -> None: ...
-    
     @property
     def expr(self) -> "Node":
         """
@@ -228,7 +225,7 @@ class Dag:
             Root expression node
         """
         ...
-    
+
     def put(self, value: Union[Scalar, Collection], *, 
             name: Optional[str] = None, doc: Optional[str] = None) -> "Node":
         """
@@ -249,7 +246,7 @@ class Dag:
             Node representing the value
         """
         ...
-    
+
     def load(self, dag_name: str, *, 
              name: Optional[str] = None,
              doc: Optional[str] = None) -> "Node":
@@ -271,7 +268,7 @@ class Dag:
             Node representing the loaded DAG
         """
         ...
-    
+
     def commit(self, value: Union["Node", Error, Any]) -> None:
         """
         Commit a value to the DAG.
@@ -297,20 +294,17 @@ class Node:
     """
     dag: Dag
     ref: Ref
-    
+
     def __repr__(self) -> str: ...
     def __hash__(self) -> int: ...
-    
     @overload
     def __getitem__(self, key: slice) -> List[Node]: ...
     @overload
     def __getitem__(self, key: Union[str, int]) -> Node: ...
     @overload
     def __getitem__(self, key: Node) -> Node: ...
-    
     def __len__(self) -> int: ...
     def __iter__(self) -> Iterator[Union[Node, str]]: ...
-    
     def __call__(self, *args: Any,
                  name: Optional[str] = None, 
                  doc: Optional[str] = None,
@@ -340,7 +334,7 @@ class Node:
             If the function call exceeds the timeout
         """
         ...
-    
+
     def keys(self, *, name: Optional[str] = None, doc: Optional[str] = None) -> Node:
         """
         Get the keys of a dictionary node.
@@ -358,7 +352,7 @@ class Node:
             Node containing the dictionary keys
         """
         ...
-    
+
     def len(self, *, name: Optional[str] = None, doc: Optional[str] = None) -> Node:
         """
         Get the length of a collection node.
@@ -376,7 +370,7 @@ class Node:
             Node containing the length
         """
         ...
-    
+
     def type(self, *, name: Optional[str] = None, doc: Optional[str] = None) -> Node:
         """
         Get the type of this node.
@@ -394,7 +388,7 @@ class Node:
             Node containing the type information
         """
         ...
-    
+
     def items(self) -> Iterator[tuple[Node, Node]]:
         """
         Iterate over key-value pairs of a dictionary node.
@@ -405,7 +399,7 @@ class Node:
             Iterator over (key, value) pairs
         """
         ...
-    
+
     def value(self) -> Any:
         """
         Get the concrete value of this node.

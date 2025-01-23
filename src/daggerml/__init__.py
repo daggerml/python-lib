@@ -11,7 +11,7 @@ del version, PackageNotFoundError
 
 
 def new(name, message):
-    return Dml(data=Resource).new(name, message)
+    return Dml().new(name, message)
 
 
 __all__ = ('Dml', 'Dag', 'Error', 'Node', 'Ref', 'Resource', 'from_json', 'to_json')
