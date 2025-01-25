@@ -187,6 +187,7 @@ class Dml:  # noqa: F811
     ...     with dml.new("d0", "message") as dag:
     ...         pass
     """
+
     def __init__(self, *, data=None, message_handler=None, **kwargs):
         self.data = data
         self.message_handler = message_handler
@@ -223,9 +224,11 @@ class Dml:  # noqa: F811
         resp = None
         path = shutil.which('dml')
         argv = [path, *self.opts, *args]
-        resp = subprocess.run(argv, check=True, capture_output=True, text=True).stdout or ''
+        resp = subprocess.run(argv, check=True, capture_output=True, text=True)
+        if resp.stderr:
+            logger.error(resp.stderr.rstrip())
         try:
-            resp = resp if as_text else json.loads(resp)
+            resp = resp.stdout or '' if as_text else json.loads(resp.stdout or 'null')
         except json.decoder.JSONDecodeError:
             pass
         return resp
@@ -401,7 +404,7 @@ class Node:  # noqa: F811
     def __hash__(self):
         return hash(self.ref)
 
-    def __getitem__(self, key: slice|str|int|Node) -> Node:
+    def __getitem__(self, key: slice | str | int | Node) -> Node:
         """
         Get the `key` item. It should be the same as if you were working on the
         actual value.
