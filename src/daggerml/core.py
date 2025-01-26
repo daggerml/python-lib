@@ -319,6 +319,9 @@ class Dag:  # noqa: F811
         if self.dump and self.message_handler:
             self.message_handler(self.dump)
 
+    def __getitem__(self, name):
+        pass
+
     @property
     def expr(self) -> Node:
         "Access the dag's expr node"
@@ -556,6 +559,14 @@ class Node:  # noqa: F811
             Node containing the type information
         """
         return Node(self.dag, self.dag.dml.type(self, name=name, doc=doc))
+
+    def get(self, key, default=None, *, name=None, doc=None):
+        """
+        For a dict node, return the value for key if key exists, else default.
+
+        If default is not given, it defaults to None, so that this method never raises a KeyError.
+        """
+        return Node(self.dag, self.dag.dml.get(self, key, default, name=name, doc=doc))
 
     def items(self):
         """
