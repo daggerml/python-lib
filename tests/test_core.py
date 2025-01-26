@@ -19,7 +19,6 @@ class TestBasic(TestCase):
                 'user': dml.kwargs.get('user'),
                 'config_dir': dml.kwargs.get('config_dir'),
                 'project_dir': dml.kwargs.get('project_dir'),
-                'repo_path': f'{os.path.join(dml.kwargs.get("config_dir"), "repo", dml.kwargs.get("repo"))}',
             })
 
     def test_dag(self):

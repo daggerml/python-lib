@@ -368,7 +368,7 @@ class Dag:  # noqa: F811
         Node
             Node representing the loaded DAG
         """
-        return Node(self, self.dml.put_load(dag_name, name=name, doc=doc))
+        return Node(self, raise_ex(self.dml.put_load(dag_name, name=name, doc=doc)))
 
     def commit(self, value) -> Node:
         """
