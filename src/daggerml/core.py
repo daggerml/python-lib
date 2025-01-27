@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from traceback import format_exception
 from typing import Any, Callable, NewType
 
-from daggerml.util import current_time_millis, kwargs2opts, raise_ex
+from daggerml.util import current_time_millis, kwargs2opts, properties, raise_ex, replace, setter
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,9 @@ Scalar = str | int | float | bool | type(None) | Resource | Node
 Collection = list | tuple | set | dict
 
 
-def dml_type(cls=None):
+def dml_type(cls=None, **opts):
     def decorator(cls):
-        DATA_TYPE[cls.__name__] = cls
+        DATA_TYPE[opts.get('alias', None) or cls.__name__] = cls
         return cls
     return decorator(cls) if cls else decorator
 
@@ -193,7 +193,7 @@ class Dml:  # noqa: F811
         self.message_handler = message_handler
         self.kwargs = kwargs
         self.opts = kwargs2opts(**kwargs)
-        self.token = None
+        self.token = '["l"]'
         self.tmpdirs = None
         self.cache_key = None
         self.dag_dump = None
@@ -284,8 +284,17 @@ class Dml:  # noqa: F811
         ...     pass
         """
         opts = [] if not self.dag_dump else kwargs2opts(dag_dump=self.dag_dump)
-        self.token = self('dag', 'create', *opts, name, message, as_text=True)
-        return Dag(self, self.token, self.dag_dump, self.message_handler)
+        token = self('dag', 'create', *opts, name, message, as_text=True)
+        return Dag(replace(self, token=token), self.dag_dump, self.message_handler)
+
+    def load(self, name: str) -> Dag:
+        ref = raise_ex(self.get_dag(name))
+        return Dag(replace(self, token='["l"]'), None, _ref=ref)
+
+
+@dataclass
+class Boxed:
+    value: Any
 
 
 @dataclass
@@ -295,41 +304,80 @@ class Dag:  # noqa: F811
 
     Parameters
     ----------
-    dml : Dml
+    _dml : Dml
         DaggerML instance
-    token : str
-        DAG token
-    dump : str, optional
-        Serialized DAG data
-    message_handler : callable, optional
-        Function to handle messages
+    _dump : str, optional
+        Serialized DAG data.
+    _message_handler : callable, optional
+        Function to handle messages.
+    _init_complete : bool, optional
+        True when object initialization is complete.
     """
-    dml: Dml
-    token: str
-    dump: str | None = None
-    message_handler: Callable | None = None
+    _dml: Dml
+    _dump: str | None = None
+    _message_handler: Callable | None = None
+    _init_complete: bool = False
+    _ref: Ref | None = None
+
+    def __post_init__(self):
+        self._init_complete = True
 
     def __enter__(self):
         "Catch exceptions and commit an Error"
+        assert not self._ref
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_value is not None:
-            self.commit(Error(exc_value))
-        if self.dump and self.message_handler:
-            self.message_handler(self.dump)
+            self._commit(Error(exc_value))
+        if self._dump and self._message_handler:
+            self._message_handler(self._dump)
 
     def __getitem__(self, name):
-        pass
+        node = raise_ex(self._dml.get_node(name, self._ref))
+        return (Import(self, node) if self._ref else Node(self, node))
+
+    def __setitem__(self, name, value):
+        assert not self._ref
+        if isinstance(value, Ref):
+            return self._dml.set_node(name, value)
+        elif isinstance(value, Import):
+            return self._load(value.dag, value.ref, name=name)
+        return self._dml.put_literal(value, name=name)
+
+    def __setattr__(self, name, value):
+        priv = name.startswith('_')
+        flds = name in {x.name for x in fields(self)}
+        prps = name in properties(self)
+        init = not self._init_complete
+        boxd = isinstance(value, Boxed)
+        if (flds and init) or (not self._ref and ((not flds and not priv) or prps or boxd)):
+            value = value.value if boxd else value
+            if flds or (prps and setter(self, name)):
+                return super(Dag, self).__setattr__(name, value)
+            elif not prps:
+                return self.__setitem__(name, value)
+        raise AttributeError(f"can't set attribute: '{name}'")
+
+    def __getattr__(self, name):
+        return self.__getitem__(name)
 
     @property
-    def expr(self) -> Node:
+    def argv(self) -> Node:
         "Access the dag's expr node"
-        ref = self.dml.get_expr()
-        assert isinstance(ref, Ref)
-        return Node(self, ref)
+        ref = raise_ex(self._dml.get_expr())
+        return (Import(self, ref) if self._ref else Node(self, ref))
 
-    def put(self, value: Scalar | Collection, *, name=None, doc=None) -> Node:
+    @property
+    def result(self) -> Node:
+        ref = raise_ex(self._dml.get_result(self._ref))
+        return (Import(self, ref) if self._ref else Node(self, ref))
+
+    @result.setter
+    def result(self, value):
+        return self._commit(value)
+
+    def _put(self, value: Scalar | Collection, *, name=None, doc=None) -> Node:
         """
         Add a value to the DAG.
 
@@ -348,9 +396,9 @@ class Dag:  # noqa: F811
             Node representing the value
         """
         assert not isinstance(value, Node) or value.dag == self
-        return Node(self, self.dml.put_literal(value, name=name, doc=doc))
+        return Node(self, raise_ex(self._dml.put_literal(value, name=name, doc=doc)))
 
-    def load(self, dag_name, *, name=None, doc=None) -> Node:
+    def _load(self, dag_name, node=None, *, name=None, doc=None) -> Node:
         """
         Load a DAG by name.
 
@@ -368,9 +416,10 @@ class Dag:  # noqa: F811
         Node
             Node representing the loaded DAG
         """
-        return Node(self, raise_ex(self.dml.put_load(dag_name, name=name, doc=doc)))
+        dag = dag_name if isinstance(dag_name, str) else dag_name._ref
+        return Node(self, raise_ex(self._dml.put_load(dag, node, name=name, doc=doc)))
 
-    def commit(self, value) -> Node:
+    def _commit(self, value) -> Node:
         """
         Commit a value to the DAG.
 
@@ -379,10 +428,8 @@ class Dag:  # noqa: F811
         value : Union[Node, Error, Any]
             Value to commit
         """
-        if isinstance(value, Error):
-            pass
-        value = value if isinstance(value, (Node, Error)) else self.put(value)
-        self.dump = self.dml.commit(value)
+        value = value if isinstance(value, (Node, Error)) else self._put(value)
+        self._dump = Boxed(raise_ex(self._dml.commit(value)))
 
 
 @dataclass(frozen=True)
@@ -424,12 +471,12 @@ class Node:  # noqa: F811
 
         Examples
         --------
-        >>> node = dag.put({"a": 1, "b": 5})
+        >>> node = dag._put({"a": 1, "b": 5})
         >>> assert node["a"].value() == 1
         """
         if isinstance(key, slice):
             key = [key.start, key.stop, key.step]
-        return Node(self.dag, self.dag.dml.get(self, key))
+        return Node(self.dag, self.dag._dml.get(self, key))
 
     def __len__(self):  # python requires this to be an int
         """
@@ -498,10 +545,10 @@ class Node:  # noqa: F811
         Error
             If the function returns an error
         """
-        args = [self.dag.put(x) for x in args]
+        args = [self.dag._put(x) for x in args]
         end = current_time_millis() + timeout
         while current_time_millis() < end:
-            resp = raise_ex(self.dag.dml.start_fn([self, *args], name=name, doc=doc))
+            resp = raise_ex(self.dag._dml.start_fn([self, *args], name=name, doc=doc))
             if resp:
                 return Node(self.dag, resp)
         raise TimeoutError(f'invoking function: {self.value()}')
@@ -522,7 +569,7 @@ class Node:  # noqa: F811
         Node
             Node containing the dictionary keys
         """
-        return Node(self.dag, self.dag.dml.keys(self, name=name, doc=doc))
+        return Node(self.dag, self.dag._dml.keys(self, name=name, doc=doc))
 
     def len(self, *, name=None, doc=None) -> Node:
         """
@@ -540,7 +587,7 @@ class Node:  # noqa: F811
         Node
             Node containing the length
         """
-        return Node(self.dag, self.dag.dml.len(self, name=name, doc=doc))
+        return Node(self.dag, self.dag._dml.len(self, name=name, doc=doc))
 
     def type(self, *, name=None, doc=None) -> Node:
         """
@@ -558,7 +605,7 @@ class Node:  # noqa: F811
         Node
             Node containing the type information
         """
-        return Node(self.dag, self.dag.dml.type(self, name=name, doc=doc))
+        return Node(self.dag, self.dag._dml.type(self, name=name, doc=doc))
 
     def get(self, key, default=None, *, name=None, doc=None):
         """
@@ -566,7 +613,7 @@ class Node:  # noqa: F811
 
         If default is not given, it defaults to None, so that this method never raises a KeyError.
         """
-        return Node(self.dag, self.dag.dml.get(self, key, default, name=name, doc=doc))
+        return Node(self.dag, self.dag._dml.get(self, key, default, name=name, doc=doc))
 
     def items(self):
         """
@@ -589,4 +636,9 @@ class Node:  # noqa: F811
         Any
             The actual value represented by this node
         """
-        return self.dag.dml.get_node_value(self.ref)
+        return self.dag._dml.get_node_value(self.ref)
+
+
+@dataclass(frozen=True)
+class Import(Node):
+    pass

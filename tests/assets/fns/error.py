@@ -13,6 +13,6 @@ with Dml(data=sys.stdin.read(), message_handler=print) as dml:
 
     if os.path.isfile(cache_file):
         with dml.new('test', 'test') as d0:
-            d0.commit(1/0)
+            d0.result = 1/0
     else:
         open(cache_file, 'w').close()

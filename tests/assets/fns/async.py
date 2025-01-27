@@ -13,6 +13,6 @@ with Dml(data=sys.stdin.read(), message_handler=print) as dml:
 
     if os.path.isfile(cache_file):
         with dml.new('test', 'test') as d0:
-            d0.commit(sum(d0.expr[1:].value()))
+            d0.result = sum(d0.argv[1:].value())
     else:
         open(cache_file, 'w').close()

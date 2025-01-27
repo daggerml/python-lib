@@ -24,26 +24,33 @@ class TestBasic(TestCase):
     def test_dag(self):
         with Dml() as dml:
             with dml.new('d0', 'd0') as d0:
-                n0 = d0.put([42])
+                n0 = d0._put([42])
                 self.assertIsInstance(n0, Node)
                 self.assertEqual(n0.value(), [42])
                 self.assertEqual(n0.len().value(), 1)
                 self.assertEqual(n0.type().value(), 'list')
+                d0['x0'] = n0
+                self.assertEqual(d0['x0'], n0)
+                self.assertEqual(d0.x0, n0)
+                d0.x1 = 42
+                self.assertEqual(d0['x1'].value(), 42)
+                self.assertEqual(d0.x1.value(), 42)
                 n1 = n0[0]
                 self.assertIsInstance(n1, Node)
                 self.assertEqual([x for x in n0], [n1])
                 self.assertEqual(n1.value(), 42)
-                n2 = d0.put({'x': n0, 'y': 'z'})
+                n2 = d0._put({'x': n0, 'y': 'z'})
                 self.assertNotEqual(n2['x'], n0)
                 self.assertEqual(n2['x'].value(), n0.value())
                 n3 = n2.items()
                 self.assertIsInstance([x for x in n3], list)
                 self.assertDictEqual({k.value(): v.value() for k, v in n2.items()}, {'x': n0.value(), 'y': 'z'})
-                n4 = d0.put([1, 2, 3, 4, 5])
+                n4 = d0._put([1, 2, 3, 4, 5])
                 n5 = n4[1:]
                 self.assertListEqual([x.value() for x in n5], [2, 3, 4, 5])
-                d0.commit(n0)
-                self.assertIsInstance(d0.dump, str)
+                # d0._commit(n0)
+                d0.result = n0
+                self.assertIsInstance(d0._dump, str)
                 dag = dml('dag', 'list')[0]
                 self.assertEqual(dag['result'], n0.ref.to.split('/', 1)[1])
 
@@ -53,9 +60,9 @@ class TestBasic(TestCase):
                 debug_file = os.path.join(fn_cache_dir, 'debug')
                 with Dml() as dml:
                     with dml.new('d0', 'd0') as d0:
-                        n0 = d0.put(ASYNC)
+                        n0 = d0._put(ASYNC)
                         n1 = n0(1, 2, 3, timeout=1000)
-                        d0.commit(n1)
+                        d0._commit(n1)
                         self.assertEqual(n1.value(), 6)
                         with open(debug_file, 'r') as f:
                             self.assertEqual(len([1 for _ in f]), 2)
@@ -66,7 +73,7 @@ class TestBasic(TestCase):
                 with Dml() as dml:
                     with self.assertRaises(Error):
                         with dml.new('d0', 'd0') as d0:
-                            n0 = d0.put(ERROR)
+                            n0 = d0._put(ERROR)
                             n0(1, 2, 3, timeout=1000)
                     info = [x for x in dml('dag', 'list') if x['name'] == 'd0']
                     self.assertEqual(len(info), 1)
@@ -75,13 +82,17 @@ class TestBasic(TestCase):
         with Dml() as dml:
             with self.assertRaises(TimeoutError):
                 with dml.new('d0', 'd0') as d0:
-                    n0 = d0.put(TIMEOUT)
+                    n0 = d0._put(TIMEOUT)
                     n0(1, 2, 3, timeout=1000)
 
     def test_load(self):
         with Dml() as dml:
             with dml.new('d0', 'd0') as d0:
-                d0.commit(42)
+                d0.n0 = 42
+                d0.result = d0.n0
             with dml.new('d1', 'd1') as d1:
-                n0 = d1.load('d0')
-                self.assertEqual(n0.value(), 42)
+                d0 = dml.load('d0')
+                self.assertEqual(d0.result.value(), 42)
+                self.assertEqual(d0.n0.value(), 42)
+                self.assertEqual(d0['n0'].value(), 42)
+                d1.result = d0.result
