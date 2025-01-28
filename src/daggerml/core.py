@@ -19,6 +19,7 @@ Error = NewType('Error', None)
 Ref = NewType('Ref', None)
 Dml = NewType('Dml', None)
 Dag = NewType('Dag', None)
+Import = NewType('Import', None)
 Scalar = str | int | float | bool | type(None) | Resource | Node
 Collection = list | tuple | set | dict
 
@@ -193,7 +194,7 @@ class Dml:  # noqa: F811
         self.message_handler = message_handler
         self.kwargs = kwargs
         self.opts = kwargs2opts(**kwargs)
-        self.token = '["l"]'
+        self.token = to_json([])
         self.tmpdirs = None
         self.cache_key = None
         self.dag_dump = None
@@ -287,9 +288,9 @@ class Dml:  # noqa: F811
         token = self('dag', 'create', *opts, name, message, as_text=True)
         return Dag(replace(self, token=token), self.dag_dump, self.message_handler)
 
-    def load(self, name: str) -> Dag:
-        ref = raise_ex(self.get_dag(name))
-        return Dag(replace(self, token='["l"]'), None, _ref=ref)
+    def load(self, name: str | Import) -> Dag:
+        ref = raise_ex(self.get_dag(name) if isinstance(name, str) else self.get_fndag(name))
+        return Dag(replace(self, token=to_json([])), None, _ref=ref)
 
 
 @dataclass
@@ -341,9 +342,7 @@ class Dag:  # noqa: F811
         assert not self._ref
         if isinstance(value, Ref):
             return self._dml.set_node(name, value)
-        elif isinstance(value, Import):
-            return self._load(value.dag, value.ref, name=name)
-        return self._dml.put_literal(value, name=name)
+        return self._put(value, name=name)
 
     def __setattr__(self, name, value):
         priv = name.startswith('_')
@@ -395,7 +394,8 @@ class Dag:  # noqa: F811
         Node
             Node representing the value
         """
-        assert not isinstance(value, Node) or value.dag == self
+        if isinstance(value, Import):
+            return self._load(value.dag, value.ref, name=name)
         return Node(self, raise_ex(self._dml.put_literal(value, name=name, doc=doc)))
 
     def _load(self, dag_name, node=None, *, name=None, doc=None) -> Node:
