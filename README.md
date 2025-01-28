@@ -2,13 +2,13 @@
 
 ## Installation
 
-First install `daggerml-cli` via
+First install [`daggerml-cli`](https://github.com/daggerml/daggerml-cli) via
 
 ```bash
 pipx install daggerml-cli
 ```
 
-Install `daggerml` in whatever [virtual environment](https://docs.python.org/3/tutorial/venv.html) you want:
+Install [`daggerml`](https://github.com/daggerml/python-lib) in whichever [virtual environment](https://docs.python.org/3/tutorial/venv.html) you prefer.
 
 ```bash
 pip install daggerml
@@ -19,7 +19,7 @@ pip install daggerml
 Now we create a repo using the commandline.
 
 ```bash
-dml config user testy@mctesterstein.org
+dml config user ${EMAIL}
 dml repo create ${REPO_NAME}
 dml config repo ${REPO_NAME}
 ```
@@ -42,7 +42,7 @@ dml dag list
 ## Clean up
 
 ```bash
-dml repo delete $repo_name
+dml repo delete ${REPO_NAME}
 ```
 
 ## Docs
