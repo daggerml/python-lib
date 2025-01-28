@@ -2,12 +2,13 @@ import json
 import logging
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field, fields
 from tempfile import TemporaryDirectory
 from traceback import format_exception
 from typing import Any, Callable, NewType
 
-from daggerml.util import current_time_millis, kwargs2opts, properties, raise_ex, replace, setter
+from daggerml.util import BackoffWithJitter, current_time_millis, kwargs2opts, properties, raise_ex, replace, setter
 
 logger = logging.getLogger(__name__)
 
@@ -518,7 +519,7 @@ class Node:  # noqa: F811
             for k in self.keys():
                 yield k
 
-    def __call__(self, *args, name=None, doc=None, timeout=30000) -> Node:
+    def __call__(self, *args, name=None, doc=None, sleep=None, timeout=0) -> Node:
         """
         Call this node as a function.
 
@@ -545,12 +546,14 @@ class Node:  # noqa: F811
         Error
             If the function returns an error
         """
+        sleep = sleep if sleep else BackoffWithJitter()
         args = [self.dag._put(x) for x in args]
         end = current_time_millis() + timeout
-        while current_time_millis() < end:
+        while timeout <= 0 or current_time_millis() < end:
             resp = raise_ex(self.dag._dml.start_fn([self, *args], name=name, doc=doc))
             if resp:
                 return Node(self.dag, resp)
+            time.sleep(sleep() / 1000)
         raise TimeoutError(f'invoking function: {self.value()}')
 
     def keys(self, *, name=None, doc=None) -> Node:

@@ -1,4 +1,6 @@
 import time
+from dataclasses import dataclass
+from random import randint
 
 
 def snake2kebab(x: str) -> str:
@@ -52,3 +54,15 @@ def setter(obj, name):
     attr = getattr(obj.__class__, name, None)
     if attr:
         return getattr(attr, 'setter', None)
+
+
+@dataclass
+class BackoffWithJitter:
+    min: int = 10
+    max: int = 10000
+    k: int = 3
+    state: int = 0
+
+    def __call__(self):
+        self.state = min(self.max, randint(self.min, max(self.min, self.state) * self.k))
+        return self.state
