@@ -19,25 +19,21 @@ pip install daggerml
 Now we create a repo using the commandline.
 
 ```bash
-dml repo create $repo_name
-```
-
-We initialize our current project (e.g. tell the project which repo and branch to use).
-
-```bash
-dml project init $repo_name
+dml config user testy@mctesterstein.org
+dml repo create ${REPO_NAME}
+dml config repo ${REPO_NAME}
 ```
 
 Now we can create dags or whatever we want using this repo.
 
 ```python
-import daggerml as dml
+from daggerml import Dml
 
-dag = dml.new("test", "this dag is a test")
-_ = dag.commit(42)
+with Dml().new("test", "this dag is a test") as dag:
+  dag.result = 42
 ```
 
-Now we can list repos, dags, 
+Now we can list repos, dags, etc.
 
 ```bash
 dml dag list
