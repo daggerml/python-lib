@@ -195,7 +195,7 @@ class Dml:  # noqa: F811
         self.message_handler = message_handler
         self.kwargs = kwargs
         self.opts = kwargs2opts(**kwargs)
-        self.token = to_json([])
+        self.token = None
         self.tmpdirs = None
         self.cache_key = None
         self.dag_dump = None
@@ -237,7 +237,7 @@ class Dml:  # noqa: F811
 
     def __getattr__(self, name: str):
         def invoke(*args, **kwargs):
-            return raise_ex(from_data(self('dag', 'invoke', self.token, to_json([name, args, kwargs]))))
+            return raise_ex(from_data(self('dag', 'invoke', self.token or to_json([]), to_json([name, args, kwargs]))))
         return invoke
 
     def __enter__(self):
@@ -291,7 +291,7 @@ class Dml:  # noqa: F811
 
     def load(self, name: str | Import) -> Dag:
         ref = self.get_dag(name) if isinstance(name, str) else self.get_fndag(name)
-        return Dag(replace(self, token=to_json([])), None, _ref=ref)
+        return Dag(replace(self, token=None), None, _ref=ref)
 
 
 @dataclass
