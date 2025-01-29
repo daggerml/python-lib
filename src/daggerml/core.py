@@ -345,6 +345,13 @@ class Dag:  # noqa: F811
             return self._dml.set_node(name, value)
         return self._put(value, name=name)
 
+    def __len__(self):
+        return len(self._dml.get_names(self._ref))
+
+    def __iter__(self):
+        for k in self.keys():
+            yield k
+
     def __setattr__(self, name, value):
         priv = name.startswith('_')
         flds = name in {x.name for x in fields(self)}
@@ -376,6 +383,14 @@ class Dag:  # noqa: F811
     @result.setter
     def result(self, value):
         return self._commit(value)
+
+    @property
+    def keys(self):
+        return lambda: self._dml.get_names(self._ref).keys()
+
+    @property
+    def values(self):
+        return lambda: self._dml.get_names(self._ref).values()
 
     def _put(self, value: Scalar | Collection, *, name=None, doc=None) -> Node:
         """

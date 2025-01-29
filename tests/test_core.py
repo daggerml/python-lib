@@ -88,10 +88,15 @@ class TestBasic(TestCase):
         with Dml() as dml:
             with dml.new('d0', 'd0') as d0:
                 d0.n0 = 42
+                d0.n1 = 420
                 d0.result = d0.n0
             with dml.new('d1', 'd1') as d1:
                 d0 = dml.load('d0')
                 self.assertEqual(d0.result.value(), 42)
                 self.assertEqual(d0.n0.value(), 42)
                 self.assertEqual(d0['n0'].value(), 42)
+
+                self.assertEqual(len(d0), 2)
+                self.assertEqual(set(d0.keys()), {'n0', 'n1'})
+
                 d1.result = d0.result
