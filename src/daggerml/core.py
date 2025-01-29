@@ -198,7 +198,7 @@ class Dml:  # noqa: F811
         self.token = None
         self.tmpdirs = None
         self.cache_key = None
-        self.dag_dump = None
+        self.dump = None
 
     def __call__(self, *args: str, as_text: bool = False) -> Any:
         """
@@ -237,7 +237,7 @@ class Dml:  # noqa: F811
 
     def __getattr__(self, name: str):
         def invoke(*args, **kwargs):
-            return raise_ex(from_data(self('dag', 'invoke', self.token or to_json([]), to_json([name, args, kwargs]))))
+            return raise_ex(from_data(self('api', 'invoke', self.token or to_json([]), to_json([name, args, kwargs]))))
         return invoke
 
     def __enter__(self):
@@ -252,7 +252,7 @@ class Dml:  # noqa: F811
             **self.kwargs,
         }
         self.opts = kwargs2opts(**self.kwargs)
-        self.cache_key, self.dag_dump = from_json(self.data or to_json([None, None]))
+        self.cache_key, self.dump = from_json(self.data or to_json([None, None]))
         if self.kwargs['repo'] not in [x['name'] for x in self('repo', 'list')]:
             self('repo', 'create', self.kwargs['repo'])
         if self.kwargs['branch'] not in self('branch', 'list'):
@@ -285,13 +285,12 @@ class Dml:  # noqa: F811
         >>> with dml.new("dag name", "message") as dag:
         ...     pass
         """
-        opts = [] if not self.dag_dump else kwargs2opts(dag_dump=self.dag_dump)
-        token = self('dag', 'create', *opts, name, message, as_text=True)
-        return Dag(replace(self, token=token), self.dag_dump, self.message_handler)
+        opts = [] if not self.dump else kwargs2opts(dump=self.dump)
+        token = self('api', 'create', *opts, name, message, as_text=True)
+        return Dag(replace(self, token=token), self.dump, self.message_handler)
 
     def load(self, name: str | Import) -> Dag:
-        ref = self.get_dag(name) if isinstance(name, str) else self.get_fndag(name)
-        return Dag(replace(self, token=None), None, _ref=ref)
+        return Dag(replace(self, token=None), None, _ref=self.get_dag(name))
 
 
 @dataclass
