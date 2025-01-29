@@ -73,8 +73,7 @@ class TestBasic(TestCase):
                 with Dml() as dml:
                     with self.assertRaises(Error):
                         with dml.new('d0', 'd0') as d0:
-                            n0 = d0._put(ERROR)
-                            n0(1, 2, 3, timeout=1000)
+                            d0._put(ERROR)(1, 2, 3, timeout=1000)
                     info = [x for x in dml('dag', 'list') if x['name'] == 'd0']
                     self.assertEqual(len(info), 1)
 

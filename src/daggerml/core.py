@@ -237,11 +237,11 @@ class Dml:  # noqa: F811
 
     def __getattr__(self, name: str):
         def invoke(*args, **kwargs):
-            return from_data(self('dag', 'invoke', self.token, to_json([name, args, kwargs])))
+            return raise_ex(from_data(self('dag', 'invoke', self.token, to_json([name, args, kwargs]))))
         return invoke
 
     def __enter__(self):
-        "Use temporary config and project directories"
+        "Use temporary config and project directories."
         self.tmpdirs = [TemporaryDirectory() for _ in range(2)]
         self.kwargs = {
             'config_dir': self.tmpdirs[0].__enter__(),
@@ -290,7 +290,7 @@ class Dml:  # noqa: F811
         return Dag(replace(self, token=token), self.dag_dump, self.message_handler)
 
     def load(self, name: str | Import) -> Dag:
-        ref = raise_ex(self.get_dag(name) if isinstance(name, str) else self.get_fndag(name))
+        ref = self.get_dag(name) if isinstance(name, str) else self.get_fndag(name)
         return Dag(replace(self, token=to_json([])), None, _ref=ref)
 
 
@@ -336,7 +336,7 @@ class Dag:  # noqa: F811
             self._message_handler(self._dump)
 
     def __getitem__(self, name):
-        node = raise_ex(self._dml.get_node(name, self._ref))
+        node = self._dml.get_node(name, self._ref)
         return (Import(self, node) if self._ref else Node(self, node))
 
     def __setitem__(self, name, value):
@@ -364,13 +364,13 @@ class Dag:  # noqa: F811
 
     @property
     def argv(self) -> Node:
-        "Access the dag's expr node"
-        ref = raise_ex(self._dml.get_expr())
+        "Access the dag's argv node"
+        ref = self._dml.get_argv()
         return (Import(self, ref) if self._ref else Node(self, ref))
 
     @property
     def result(self) -> Node:
-        ref = raise_ex(self._dml.get_result(self._ref))
+        ref = self._dml.get_result(self._ref)
         return (Import(self, ref) if self._ref else Node(self, ref))
 
     @result.setter
@@ -397,7 +397,7 @@ class Dag:  # noqa: F811
         """
         if isinstance(value, Import):
             return self._load(value.dag, value.ref, name=name)
-        return Node(self, raise_ex(self._dml.put_literal(value, name=name, doc=doc)))
+        return Node(self, self._dml.put_literal(value, name=name, doc=doc))
 
     def _load(self, dag_name, node=None, *, name=None, doc=None) -> Node:
         """
@@ -418,7 +418,7 @@ class Dag:  # noqa: F811
             Node representing the loaded DAG
         """
         dag = dag_name if isinstance(dag_name, str) else dag_name._ref
-        return Node(self, raise_ex(self._dml.put_load(dag, node, name=name, doc=doc)))
+        return Node(self, self._dml.put_load(dag, node, name=name, doc=doc))
 
     def _commit(self, value) -> Node:
         """
@@ -430,7 +430,7 @@ class Dag:  # noqa: F811
             Value to commit
         """
         value = value if isinstance(value, (Node, Error)) else self._put(value)
-        self._dump = Boxed(raise_ex(self._dml.commit(value)))
+        self._dump = Boxed(self._dml.commit(value))
 
 
 @dataclass(frozen=True)
@@ -546,11 +546,11 @@ class Node:  # noqa: F811
         Error
             If the function returns an error
         """
-        sleep = sleep if sleep else BackoffWithJitter()
+        sleep = sleep or BackoffWithJitter()
         args = [self.dag._put(x) for x in args]
         end = current_time_millis() + timeout
         while timeout <= 0 or current_time_millis() < end:
-            resp = raise_ex(self.dag._dml.start_fn([self, *args], name=name, doc=doc))
+            resp = self.dag._dml.start_fn([self, *args], name=name, doc=doc)
             if resp:
                 return Node(self.dag, resp)
             time.sleep(sleep() / 1000)
