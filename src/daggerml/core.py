@@ -365,7 +365,7 @@ class Dag:  # noqa: F811
     @property
     def argv(self) -> Node:
         "Access the dag's argv node"
-        ref = self._dml.get_argv()
+        ref = self._dml.get_argv(self._ref)
         return (Import(self, ref) if self._ref else Node(self, ref))
 
     @property
