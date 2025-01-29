@@ -13,9 +13,9 @@ if __name__ == '__main__':
     args = vars(parser.parse_args())
     fn = getattr(import_module(args['module']), args['fn_name'])
     with open(args['args_file'], 'r') as f:
-        expr = dml.from_json(f.read())
+        argv = dml.from_json(f.read())
     try:
-        result = fn(*expr)
+        result = fn(*argv)
     except KeyboardInterrupt:
         raise
     except Exception as e:
