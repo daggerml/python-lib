@@ -1,7 +1,7 @@
 name: CI
 on: push
 jobs:
-  build:
+  test:
     strategy:
       matrix:
         py: ["3.9", "3.10", "3.11", "3.12", "3.13"]
@@ -19,6 +19,14 @@ jobs:
           pip install .[test]
       - name: pytest
         run: python -m pytest -m "not slow" .
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install ruff
         run: pip install ruff
       - name: Run Ruff
