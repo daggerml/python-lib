@@ -113,7 +113,7 @@ class Ref:  # noqa: F811
 
 
 @dml_type
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Resource:  # noqa: F811
     """
     Representation of an external resource.
