@@ -2,8 +2,7 @@ import os
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
-from daggerml import Dag, Dml, Error, Node, Resource
-from daggerml.core import Import
+from daggerml.core import Dag, Dml, Error, Import, Node, Resource
 
 SUM = Resource("./tests/assets/fns/minimal_viable_fn.py", adapter="dml-python-fork-adapter")
 ASYNC = Resource("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter")
