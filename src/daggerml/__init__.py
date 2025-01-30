@@ -4,16 +4,12 @@ DaggerML - A Python library for building and managing directed acyclic graphs.
 This library provides tools for creating, manipulating, and executing DAGs
 with strong typing support and a context-manager based interface.
 """
-from importlib.metadata import PackageNotFoundError, version
-
 from daggerml.core import Dag, Dml, Error, Node, Ref, Resource, from_json, to_json
 
 try:
-    __version__ = version("daggerml")
-except PackageNotFoundError:
+    from daggerml.__about__ import __version__
+except ImportError:
     __version__ = 'local'
-
-del version, PackageNotFoundError
 
 
 def new(name, message):

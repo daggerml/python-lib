@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -57,10 +57,20 @@ markers = [
 ]
 
 [tool.hatch.version]
-path = "src/daggerml/__about__.py"
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+version_scheme = "only-version"   # Ensures `distance` is an integer
+local_scheme = "no-local-version"  # pypi does not support local-schemes
+tag_regex = "^v(?P<version>[0-9.]+)$"
+version_file = "src/daggerml/__about__.py"
+relative_to = "{root:uri}"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/daggerml"]
+artifacts = [
+  "src/daggerml/__about__.py"
+]
 
 [tool.hatch.envs.default]
 python="3.10"
@@ -106,7 +116,6 @@ source_pkgs = ["daggerml"]
 branch = true
 parallel = true
 omit = [
-  "src/daggerml/__about__.py",
   "src/daggerml/__init__.py",
 ]
 
