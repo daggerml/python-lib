@@ -121,5 +121,4 @@ class TestBasic(TestCase):
                 for x in d1.values():
                     self.assertEqual(type(x), Node)
 
-
                 d1.result = d0.result

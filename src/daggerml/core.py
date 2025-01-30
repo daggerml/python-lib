@@ -404,7 +404,7 @@ class Dag:  # noqa: F811
     def values(self):
         def result():
             nodes = self._dml.get_names(self._ref).values()
-            return [(Import if self._ref or self._dump else Node)(self, x) for x in nodes]
+            return [(Import if self._ref else Node)(self, x) for x in nodes]
         return result
 
     def _put(self, value: Union[Scalar, Collection], *, name=None, doc=None) -> Node:
@@ -461,6 +461,7 @@ class Dag:  # noqa: F811
         """
         value = value if isinstance(value, (Node, Error)) else self._put(value)
         self._dump = Boxed(self._dml.commit(value))
+        self._ref = Boxed(Ref(json.loads(self._dump)[-1][1][1]))
 
 
 @dataclass(frozen=True)
