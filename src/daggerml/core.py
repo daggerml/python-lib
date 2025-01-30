@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field, fields
 from tempfile import TemporaryDirectory
 from traceback import format_exception
-from typing import Any, Callable, NewType
+from typing import Any, Callable, NewType, Optional, Union
 
 from daggerml.util import BackoffWithJitter, current_time_millis, kwargs2opts, properties, raise_ex, replace, setter
 
@@ -21,8 +21,8 @@ Ref = NewType('Ref', None)
 Dml = NewType('Dml', None)
 Dag = NewType('Dag', None)
 Import = NewType('Import', None)
-Scalar = str | int | float | bool | type(None) | Resource | Node
-Collection = list | tuple | set | dict
+Scalar = Union[str, int, float, bool, type(None), Resource, Node]
+Collection = Union[list, tuple, set, dict]
 
 
 def dml_type(cls=None, **opts):
@@ -128,8 +128,8 @@ class Resource:  # noqa: F811
         Resource adapter name
     """
     uri: str
-    data: str | None = None
-    adapter: str | None = None
+    data: Optional[str] = None
+    adapter: Optional[str] = None
 
 
 @dml_type
@@ -147,9 +147,9 @@ class Error(Exception):  # noqa: F811
     code : str, optional
         Error code
     """
-    message: str | Exception
+    message: Union[str, Exception]
     context: dict = field(default_factory=dict)
-    code: str | None = None
+    code: Optional[str] = None
 
     def __post_init__(self):
         if isinstance(self.message, Error):
@@ -289,7 +289,7 @@ class Dml:  # noqa: F811
         token = self('api', 'create', *opts, name, message, as_text=True)
         return Dag(replace(self, token=token), self.dump, self.message_handler)
 
-    def load(self, name: str | Import) -> Dag:
+    def load(self, name: Union[str, Import]) -> Dag:
         return Dag(replace(self, token=None), None, _ref=self.get_dag(name))
 
 
@@ -315,10 +315,10 @@ class Dag:  # noqa: F811
         True when object initialization is complete.
     """
     _dml: Dml
-    _dump: str | None = None
-    _message_handler: Callable | None = None
+    _dump: Optional[str] = None
+    _message_handler: Optional[Callable] = None
     _init_complete: bool = False
-    _ref: Ref | None = None
+    _ref: Optional[Ref] = None
 
     def __post_init__(self):
         self._init_complete = True
@@ -391,7 +391,7 @@ class Dag:  # noqa: F811
     def values(self):
         return lambda: self._dml.get_names(self._ref).values()
 
-    def _put(self, value: Scalar | Collection, *, name=None, doc=None) -> Node:
+    def _put(self, value: Union[Scalar, Collection], *, name=None, doc=None) -> Node:
         """
         Add a value to the DAG.
 
@@ -469,7 +469,7 @@ class Node:  # noqa: F811
     def __hash__(self):
         return hash(self.ref)
 
-    def __getitem__(self, key: slice | str | int | Node) -> Node:
+    def __getitem__(self, key: Union[slice, str, int, Node]) -> Node:
         """
         Get the `key` item. It should be the same as if you were working on the
         actual value.
