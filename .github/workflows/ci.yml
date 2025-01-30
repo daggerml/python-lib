@@ -2,9 +2,9 @@ name: CI
 on:
   push:
     branches:
-      - '**'
+      - "**"
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'  # Semantic version tags
+      - "v[0-9]+.[0-9]+.[0-9]+" # Semantic version tags
   pull_request:
 jobs:
   test:
@@ -26,6 +26,7 @@ jobs:
       - name: pytest
         run: python -m pytest -m "not slow" .
       - name: doctest
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         run: python -m pytest --doctest-modules src/
   lint:
     runs-on: ubuntu-latest

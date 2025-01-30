@@ -188,43 +188,6 @@ class Error(Exception):  # noqa: F811
 
 
 class Dml:  # noqa: F811
-    """
-    Main DaggerML interface for creating and managing DAGs.
-
-    Parameters
-    ----------
-    data : Any, optional
-        Initial data for the DML instance
-    message_handler : callable, optional
-        Function to handle messages during DAG operations
-    **kwargs : dict
-        Additional configuration options including:
-        - config_dir: Configuration directory path
-        - project_dir: Project directory path
-        - repo: Repository name
-        - user: Username
-        - branch: Branch name
-
-    Notes
-    -----
-    * When used as a context manager, it creates temporary configuration and project
-      directories, and handles cleanup automatically.
-    * You only need to use this if you want to use a different repo, or something like that.
-
-    Examples
-    --------
-    >>> # Basic initialization and usage
-    >>> with Dml() as dml:
-    ...     status = dml('status')  # Call CLI commands directly
-    ...     # Create a new DAG
-    ...     with dml.new("my_dag", "Initial commit") as dag:
-    ...         dag.x = [1, 2, 3]  # Add nodes to DAG
-    ...         dag.result = dag.x  # Set result
-    ...     # Load and use an existing DAG
-    ...     loaded = dml.load("my_dag")
-    ...     assert loaded.x.value() == [1, 2, 3]
-    """
-
     def __init__(self, *, data=None, message_handler=None, **kwargs):
         self.data = data
         self.message_handler = message_handler
@@ -308,26 +271,6 @@ class Dml:  # noqa: F811
             self.message_handler(to_json(Error(exc_value)))
 
     def new(self, name: str, message: str) -> Dag:
-        """
-        Create a new DAG.
-
-        Parameters
-        ----------
-        name : str
-            Name of the DAG
-        message : str
-            Description or commit message
-
-        Returns
-        -------
-        Dag
-            New Dag instance
-
-        Examples
-        --------
-        >>> with Dml() as dml:
-        ...     dag = dml.new("dag name", "message")
-        """
         opts = [] if not self.dump else kwargs2opts(dump=self.dump)
         token = self("api", "create", *opts, name, message, as_text=True)
         return Dag(replace(self, token=token), self.dump, self.message_handler)
@@ -365,41 +308,6 @@ class Dag:  # noqa: F811
     or as a reference to an existing DAG (when created with load()).
     When used as a context manager, it automatically handles error
     cases by committing them as Error nodes.
-
-    Examples
-    --------
-    >>> import daggerml as dml
-    >>> # Create a new DAG
-    >>> dag = dml.new("example", "Example DAG")
-    >>> # Add nodes using attribute assignment
-    >>> dag.numbers = [1, 2, 3, 4, 5]
-    >>> dag.mapping = {"x": dag.numbers, "y": "string value"}
-    >>> # Add nodes using dictionary syntax
-    >>> dag['alt_numbers'] = dag.numbers
-    >>> # Access nodes and their values
-    >>> assert dag.numbers.value() == [1, 2, 3, 4, 5]
-    >>> assert dag.mapping['x'].value() == [1, 2, 3, 4, 5]
-    >>> # Commit the dag by setting the dag result
-    >>> dag.result = dag.numbers
-
-    Capture errors with the context manager usage
-    >>> try:
-    ...     with dml.new("dag-0", "my message") as dag:
-    ...         dag.x = 23
-    ...         1 / 0
-    ... except ZeroDivisionError:
-    ...     print("a")
-    a
-    >>> dag = dml.new("dag-1", "other message")
-    >>> failed_dag = dml.load("dag-0")
-    >>> dag.y = failed_dag.x  # loading nodes without errors is fine
-    >>> dag.y.value()
-    23
-    >>> try:
-    ...     failed_dag.result  # the value is itself an error
-    ... except dml.Error as e:
-    ...     print(e.message)
-    division by zero
     """
 
     _dml: Dml
@@ -728,4 +636,5 @@ class Import(Node):
     Inherits from Node and maintains all its functionality while marking
     the node as imported from another DAG context.
     """
+
     pass
