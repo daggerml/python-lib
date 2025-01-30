@@ -92,8 +92,11 @@ class TestBasic(TestCase):
                 # only fn dags have an argv attribute, expect AttributeError
                 with self.assertRaises(Error):
                     d0.argv  # noqa: B018
-                # d0 doesn't have a result yet, so result can't be a node
-                self.assertIsNone(d0.result)
+                # d0.result hasn't been assigned yet but it can't raise an
+                # AttributeError because we also have __getitem__ implemented
+                # which would then be called, so an AssertionError is raised.
+                with self.assertRaises(AssertionError):
+                    d0.result  # noqa: B018
                 d0.n0 = 42
                 self.assertEqual(type(d0.n0), Node)
                 d0.n1 = 420

@@ -389,6 +389,7 @@ class Dag:  # noqa: F811
     @property
     def result(self) -> Node:
         ref = self._dml.get_result(self._ref)
+        assert ref, f"'{self.__class__.__name__}' has no attribute 'result'"
         return (Import if self._ref else Node)(self, ref) if ref else ref
 
     @result.setter
