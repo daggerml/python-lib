@@ -14,22 +14,14 @@ except ImportError:
 
 
 def new(name, message):
-    """
-    Create a new DAG with the given name and message.
-
-    Parameters
-    ----------
-    name : str
-        Name of the DAG
-    message : str
-        Commit message or description
-
-    Returns
-    -------
-    Dag
-        A new DAG instance
-    """
     return Dml().new(name, message)
+
+
+new.__doc__ = Dml.new.__doc__
+
+
+def load(name) -> Dag:
+    return Dml().load(name)
 
 
 __all__ = ("Dml", "Dag", "Error", "Node", "Ref", "Resource", "from_json", "to_json")

@@ -25,6 +25,8 @@ jobs:
           pip install .[test]
       - name: pytest
         run: python -m pytest -m "not slow" .
+      - name: doctest
+        run: python -m pytest --doctest-modules src/
   lint:
     runs-on: ubuntu-latest
     steps:

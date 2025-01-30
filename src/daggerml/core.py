@@ -131,11 +131,11 @@ class Resource:  # noqa: F811
     Parameters
     ----------
     uri : str
-        Resource URI
+        Resource URI identifying the location
     data : str, optional
-        Associated data
+        Associated data or metadata for the resource
     adapter : str, optional
-        Resource adapter name
+        Resource adapter name for handling this resource type
     """
 
     uri: str
@@ -147,16 +147,22 @@ class Resource:  # noqa: F811
 @dataclass
 class Error(Exception):  # noqa: F811
     """
-    Custom error type for DaggerML.
+    Custom error type for DaggerML with enhanced context.
 
     Parameters
     ----------
     message : Union[str, Exception]
-        Error message or exception
+        Error message or exception instance
     context : dict, optional
-        Additional error context
+        Additional error context information
     code : str, optional
-        Error code
+        Error code identifier. Defaults to error class name if not provided
+
+    Notes
+    -----
+    When initialized with another Error instance, it will inherit that error's
+    message, context, and code. When initialized with a standard Exception,
+    it captures the traceback in the context and uses the exception class name as code.
     """
 
     message: Union[str, Exception]
@@ -190,16 +196,33 @@ class Dml:  # noqa: F811
     data : Any, optional
         Initial data for the DML instance
     message_handler : callable, optional
-        Function to handle messages
+        Function to handle messages during DAG operations
     **kwargs : dict
-        Additional configuration options
+        Additional configuration options including:
+        - config_dir: Configuration directory path
+        - project_dir: Project directory path
+        - repo: Repository name
+        - user: Username
+        - branch: Branch name
+
+    Notes
+    -----
+    * When used as a context manager, it creates temporary configuration and project
+      directories, and handles cleanup automatically.
+    * You only need to use this if you want to use a different repo, or something like that.
 
     Examples
     --------
-    >>> from daggerml import Dml
+    >>> # Basic initialization and usage
     >>> with Dml() as dml:
-    ...     with dml.new("d0", "message") as dag:
-    ...         pass
+    ...     status = dml('status')  # Call CLI commands directly
+    ...     # Create a new DAG
+    ...     with dml.new("my_dag", "Initial commit") as dag:
+    ...         dag.x = [1, 2, 3]  # Add nodes to DAG
+    ...         dag.result = dag.x  # Set result
+    ...     # Load and use an existing DAG
+    ...     loaded = dml.load("my_dag")
+    ...     assert loaded.x.value() == [1, 2, 3]
     """
 
     def __init__(self, *, data=None, message_handler=None, **kwargs):
@@ -214,26 +237,24 @@ class Dml:  # noqa: F811
 
     def __call__(self, *args: str, as_text: bool = False) -> Any:
         """
-        Call the dml cli with the given arguments.
+        Call the dml CLI with the given arguments.
 
         Parameters
         ----------
         *args : str
-            Arguments to pass to the dml cli
+            Arguments to pass to the dml CLI
         as_text : bool, optional
-            If True, return the result as text, otherwise json
+            If True, return the result as text, otherwise parse as JSON
 
         Returns
         -------
         Any
-            Result of the execution
+            Result of the CLI execution, either as text or parsed JSON
 
         Examples
-        -----
-        >>> dml = Dml()
-        >>> _ = dml("repo", "list")
-
-        is equivalent to `dml repo list`.
+        --------
+        >>> _ = dml("repo", "list")  # doctest: +SKIP
+        Equivalent to `dml repo list`
         """
         resp = None
         path = shutil.which("dml")
@@ -304,8 +325,8 @@ class Dml:  # noqa: F811
 
         Examples
         --------
-        >>> with dml.new("dag name", "message") as dag:
-        ...     pass
+        >>> with Dml() as dml:
+        ...     dag = dml.new("dag name", "message")
         """
         opts = [] if not self.dump else kwargs2opts(dump=self.dump)
         token = self("api", "create", *opts, name, message, as_text=True)
@@ -328,13 +349,57 @@ class Dag:  # noqa: F811
     Parameters
     ----------
     _dml : Dml
-        DaggerML instance
+        DaggerML instance managing this DAG
     _dump : str, optional
-        Serialized DAG data.
+        Serialized DAG data
     _message_handler : callable, optional
-        Function to handle messages.
+        Function to handle messages during DAG operations
     _init_complete : bool, optional
-        True when object initialization is complete.
+        Flag indicating whether object initialization is complete
+    _ref : Ref, optional
+        Reference to an existing DAG when loading
+
+    Notes
+    -----
+    The DAG can be used either as a new DAG (when created with new())
+    or as a reference to an existing DAG (when created with load()).
+    When used as a context manager, it automatically handles error
+    cases by committing them as Error nodes.
+
+    Examples
+    --------
+    >>> import daggerml as dml
+    >>> # Create a new DAG
+    >>> dag = dml.new("example", "Example DAG")
+    >>> # Add nodes using attribute assignment
+    >>> dag.numbers = [1, 2, 3, 4, 5]
+    >>> dag.mapping = {"x": dag.numbers, "y": "string value"}
+    >>> # Add nodes using dictionary syntax
+    >>> dag['alt_numbers'] = dag.numbers
+    >>> # Access nodes and their values
+    >>> assert dag.numbers.value() == [1, 2, 3, 4, 5]
+    >>> assert dag.mapping['x'].value() == [1, 2, 3, 4, 5]
+    >>> # Commit the dag by setting the dag result
+    >>> dag.result = dag.numbers
+
+    Capture errors with the context manager usage
+    >>> try:
+    ...     with dml.new("dag-0", "my message") as dag:
+    ...         dag.x = 23
+    ...         1 / 0
+    ... except ZeroDivisionError:
+    ...     print("a")
+    a
+    >>> dag = dml.new("dag-1", "other message")
+    >>> failed_dag = dml.load("dag-0")
+    >>> dag.y = failed_dag.x  # loading nodes without errors is fine
+    >>> dag.y.value()
+    23
+    >>> try:
+    ...     failed_dag.result  # the value is itself an error
+    ... except dml.Error as e:
+    ...     print(e.message)
+    division by zero
     """
 
     _dml: Dml
@@ -424,57 +489,15 @@ class Dag:  # noqa: F811
         return result
 
     def _put(self, value: Union[Scalar, Collection], *, name=None, doc=None) -> Node:
-        """
-        Add a value to the DAG.
-
-        Parameters
-        ----------
-        value : Union[Scalar, Collection]
-            Value to add
-        name : str, optional
-            Name for the node
-        doc : str, optional
-            Documentation
-
-        Returns
-        -------
-        Node
-            Node representing the value
-        """
         if isinstance(value, Import):
             return self._load(value.dag, value.ref, name=name)
         return Node(self, self._dml.put_literal(value, name=name, doc=doc))
 
     def _load(self, dag_name, node=None, *, name=None, doc=None) -> Node:
-        """
-        Load a DAG by name.
-
-        Parameters
-        ----------
-        dag_name : str
-            Name of the DAG to load
-        name : str, optional
-            Name for the node
-        doc : str, optional
-            Documentation
-
-        Returns
-        -------
-        Node
-            Node representing the loaded DAG
-        """
         dag = dag_name if isinstance(dag_name, str) else dag_name._ref
         return Node(self, self._dml.put_load(dag, node, name=name, doc=doc))
 
     def _commit(self, value) -> Node:
-        """
-        Commit a value to the DAG.
-
-        Parameters
-        ----------
-        value : Union[Node, Error, Any]
-            Value to commit
-        """
         value = value if isinstance(value, (Node, Error)) else self._put(value)
         self._dump = Boxed(self._dml.commit(value))
         self._ref = Boxed(Ref(json.loads(self._dump)[-1][1][1]))
@@ -488,9 +511,33 @@ class Node:  # noqa: F811
     Parameters
     ----------
     dag : Dag
-        Parent DAG
+        Parent DAG containing this node
     ref : Ref
-        Node reference
+        Node reference within the DAG
+
+    Notes
+    -----
+    Supports dictionary-style access with [], iteration, length queries,
+    and function calls. For dictionary nodes, provides standard dictionary
+    operations like keys() and items(). Collection nodes support standard
+    Python collection operations.
+
+    Examples
+    --------
+    >>> import daggerml as dml
+    >>> dag = dml.new("node_example", "Node operations")
+    >>> # List operations
+    >>> dag.list_node = [1, 2, 3, 4, 5]
+    >>> assert dag.list_node.len().value() == 5
+    >>> assert dag.list_node[0].value() == 1
+    >>> assert dag.list_node[1:3].value() == [2, 3]
+    >>> # Dict operations
+    >>> dag.dict_node = {"a": 1, "b": 2}
+    >>> assert dag.dict_node["a"].value() == 1
+    >>> assert {k.value(): v.value() for k, v in dag.dict_node.items()} == {"a": 1, "b": 2}
+    >>> # Type checking
+    >>> assert dag.list_node.type().value() == 'list'
+    >>> assert dag.dict_node.type().value() == 'dict'
     """
 
     dag: Dag
@@ -504,25 +551,6 @@ class Node:  # noqa: F811
         return hash(self.ref)
 
     def __getitem__(self, key: Union[slice, str, int, Node]) -> Node:
-        """
-        Get the `key` item. It should be the same as if you were working on the
-        actual value.
-
-        Returns
-        -------
-        Node
-            Node with the length of the collection
-
-        Raises
-        ------
-        Error
-            If the node isn't a collection (e.g. list, set, or dict).
-
-        Examples
-        --------
-        >>> node = dag._put({"a": 1, "b": 5})
-        >>> assert node["a"].value() == 1
-        """
         if isinstance(key, slice):
             key = [key.start, key.stop, key.step]
         return Node(self.dag, self.dag._dml.get(self, key))
@@ -579,13 +607,15 @@ class Node:  # noqa: F811
             Name for the result node
         doc : str, optional
             Documentation
+        sleep : callable, optional
+            Sleep strategy for retries. Defaults to BackoffWithJitter
         timeout : int, default=30000
             Maximum time to wait in milliseconds
 
         Returns
         -------
         Node
-            Result node
+            Result node from the function call
 
         Raises
         ------
@@ -692,4 +722,10 @@ class Node:  # noqa: F811
 
 @dataclass(frozen=True)
 class Import(Node):
+    """
+    Special node type representing an imported node from another DAG.
+
+    Inherits from Node and maintains all its functionality while marking
+    the node as imported from another DAG context.
+    """
     pass
