@@ -8,7 +8,15 @@ from tempfile import TemporaryDirectory
 from traceback import format_exception
 from typing import Any, Callable, NewType, Optional, Union
 
-from daggerml.util import BackoffWithJitter, current_time_millis, kwargs2opts, properties, raise_ex, replace, setter
+from daggerml.util import (
+    BackoffWithJitter,
+    current_time_millis,
+    kwargs2opts,
+    properties,
+    raise_ex,
+    replace,
+    setter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +331,10 @@ class Dag:  # noqa: F811
     def __post_init__(self):
         self._init_complete = True
 
+    def __hash__(self):
+        "Useful only for tests."
+        return 42
+
     def __enter__(self):
         "Catch exceptions and commit an Error"
         assert not self._ref
@@ -372,12 +384,12 @@ class Dag:  # noqa: F811
     def argv(self) -> Node:
         "Access the dag's argv node"
         ref = self._dml.get_argv(self._ref)
-        return (Import(self, ref) if self._ref else Node(self, ref))
+        return (Import if self._ref else Node)(self, ref)
 
     @property
     def result(self) -> Node:
         ref = self._dml.get_result(self._ref)
-        return (Import(self, ref) if self._ref else Node(self, ref))
+        return (Import if self._ref else Node)(self, ref) if ref else ref
 
     @result.setter
     def result(self, value):
@@ -389,7 +401,10 @@ class Dag:  # noqa: F811
 
     @property
     def values(self):
-        return lambda: self._dml.get_names(self._ref).values()
+        def result():
+            nodes = self._dml.get_names(self._ref).values()
+            return [(Import if self._ref or self._dump else Node)(self, x) for x in nodes]
+        return result
 
     def _put(self, value: Union[Scalar, Collection], *, name=None, doc=None) -> Node:
         """
