@@ -4,7 +4,7 @@ from random import randint
 
 
 def snake2kebab(x: str) -> str:
-    return x.replace('_', '-')
+    return x.replace("_", "-")
 
 
 def flatten(nested: list[list]) -> list:
@@ -12,7 +12,7 @@ def flatten(nested: list[list]) -> list:
 
 
 def kwargs2opts(*args, **kwargs) -> list[str]:
-    x = {f'--{snake2kebab(k)}': v for k, v in kwargs.items()}
+    x = {f"--{snake2kebab(k)}": v for k, v in kwargs.items()}
     return flatten([[k] if v is True else [k, v] for k, v in x.items()])
 
 
@@ -33,7 +33,8 @@ def current_time_millis():
 
 def replace(obj, **changes):
     def props(x):
-        return not (x.startswith('__') or type(getattr(obj, x)).__name__ == 'method')
+        return not (x.startswith("__") or type(getattr(obj, x)).__name__ == "method")
+
     result = type(obj)()
     [setattr(result, x, getattr(obj, x)) for x in filter(props, dir(obj))]
     for k, v in changes.items():
@@ -53,7 +54,7 @@ def properties(obj):
 def setter(obj, name):
     attr = getattr(obj.__class__, name, None)
     if attr:
-        return getattr(attr, 'setter', None)
+        return getattr(attr, "setter", None)
 
 
 @dataclass

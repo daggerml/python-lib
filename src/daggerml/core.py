@@ -22,21 +22,22 @@ logger = logging.getLogger(__name__)
 
 DATA_TYPE = {}
 
-Node = NewType('Node', None)
-Resource = NewType('Resource', None)
-Error = NewType('Error', None)
-Ref = NewType('Ref', None)
-Dml = NewType('Dml', None)
-Dag = NewType('Dag', None)
-Import = NewType('Import', None)
+Node = NewType("Node", None)
+Resource = NewType("Resource", None)
+Error = NewType("Error", None)
+Ref = NewType("Ref", None)
+Dml = NewType("Dml", None)
+Dag = NewType("Dag", None)
+Import = NewType("Import", None)
 Scalar = Union[str, int, float, bool, type(None), Resource, Node]
 Collection = Union[list, tuple, set, dict]
 
 
 def dml_type(cls=None, **opts):
     def decorator(cls):
-        DATA_TYPE[opts.get('alias', None) or cls.__name__] = cls
+        DATA_TYPE[opts.get("alias", None) or cls.__name__] = cls
         return cls
+
     return decorator(cls) if cls else decorator
 
 
@@ -44,15 +45,15 @@ def from_data(data):
     n, *args = data if isinstance(data, list) else [None, data]
     if n is None:
         return args[0]
-    if n == 'l':
+    if n == "l":
         return [from_data(x) for x in args]
-    if n == 's':
+    if n == "s":
         return {from_data(x) for x in args}
-    if n == 'd':
+    if n == "d":
         return {k: from_data(v) for (k, v) in args}
     if n in DATA_TYPE:
         return DATA_TYPE[n](*[from_data(x) for x in args])
-    raise ValueError(f'no decoder for type: {n}')
+    raise ValueError(f"no decoder for type: {n}")
 
 
 def to_data(obj):
@@ -69,7 +70,7 @@ def to_data(obj):
         return [n[0], *[[k, to_data(v)] for k, v in obj.items()]]
     if n in DATA_TYPE:
         return [n, *[to_data(getattr(obj, x.name)) for x in fields(obj)]]
-    raise ValueError(f'no encoder for type: {n}')
+    raise ValueError(f"no encoder for type: {n}")
 
 
 def from_json(text):
@@ -103,7 +104,7 @@ def to_json(obj):
     str
         JSON string representation
     """
-    return json.dumps(to_data(obj), separators=(',', ':'))
+    return json.dumps(to_data(obj), separators=(",", ":"))
 
 
 @dml_type
@@ -117,6 +118,7 @@ class Ref:  # noqa: F811
     to : str
         Reference identifier
     """
+
     to: str
 
 
@@ -135,6 +137,7 @@ class Resource:  # noqa: F811
     adapter : str, optional
         Resource adapter name
     """
+
     uri: str
     data: Optional[str] = None
     adapter: Optional[str] = None
@@ -155,6 +158,7 @@ class Error(Exception):  # noqa: F811
     code : str, optional
         Error code
     """
+
     message: Union[str, Exception]
     context: dict = field(default_factory=dict)
     code: Optional[str] = None
@@ -168,13 +172,13 @@ class Error(Exception):  # noqa: F811
         elif isinstance(self.message, Exception):
             ex = self.message
             self.message = str(ex)
-            self.context = {'trace': format_exception(type(ex), value=ex, tb=ex.__traceback__)}
+            self.context = {"trace": format_exception(type(ex), value=ex, tb=ex.__traceback__)}
             self.code = type(ex).__name__
         else:
             self.code = type(self).__name__ if self.code is None else self.code
 
     def __str__(self):
-        return ''.join(self.context.get('trace', [self.message]))
+        return "".join(self.context.get("trace", [self.message]))
 
 
 class Dml:  # noqa: F811
@@ -232,39 +236,49 @@ class Dml:  # noqa: F811
         is equivalent to `dml repo list`.
         """
         resp = None
-        path = shutil.which('dml')
+        path = shutil.which("dml")
         argv = [path, *self.opts, *args]
         resp = subprocess.run(argv, check=True, capture_output=True, text=True)
         if resp.stderr:
             logger.error(resp.stderr.rstrip())
         try:
-            resp = resp.stdout or '' if as_text else json.loads(resp.stdout or 'null')
+            resp = resp.stdout or "" if as_text else json.loads(resp.stdout or "null")
         except json.decoder.JSONDecodeError:
             pass
         return resp
 
     def __getattr__(self, name: str):
         def invoke(*args, **kwargs):
-            return raise_ex(from_data(self('api', 'invoke', self.token or to_json([]), to_json([name, args, kwargs]))))
+            return raise_ex(
+                from_data(
+                    self(
+                        "api",
+                        "invoke",
+                        self.token or to_json([]),
+                        to_json([name, args, kwargs]),
+                    )
+                )
+            )
+
         return invoke
 
     def __enter__(self):
         "Use temporary config and project directories."
         self.tmpdirs = [TemporaryDirectory() for _ in range(2)]
         self.kwargs = {
-            'config_dir': self.tmpdirs[0].__enter__(),
-            'project_dir': self.tmpdirs[1].__enter__(),
-            'repo': 'test',
-            'user': 'test',
-            'branch': 'main',
+            "config_dir": self.tmpdirs[0].__enter__(),
+            "project_dir": self.tmpdirs[1].__enter__(),
+            "repo": "test",
+            "user": "test",
+            "branch": "main",
             **self.kwargs,
         }
         self.opts = kwargs2opts(**self.kwargs)
         self.cache_key, self.dump = from_json(self.data or to_json([None, None]))
-        if self.kwargs['repo'] not in [x['name'] for x in self('repo', 'list')]:
-            self('repo', 'create', self.kwargs['repo'])
-        if self.kwargs['branch'] not in self('branch', 'list'):
-            self('branch', 'create', self.kwargs['branch'])
+        if self.kwargs["repo"] not in [x["name"] for x in self("repo", "list")]:
+            self("repo", "create", self.kwargs["repo"])
+        if self.kwargs["branch"] not in self("branch", "list"):
+            self("branch", "create", self.kwargs["branch"])
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -294,7 +308,7 @@ class Dml:  # noqa: F811
         ...     pass
         """
         opts = [] if not self.dump else kwargs2opts(dump=self.dump)
-        token = self('api', 'create', *opts, name, message, as_text=True)
+        token = self("api", "create", *opts, name, message, as_text=True)
         return Dag(replace(self, token=token), self.dump, self.message_handler)
 
     def load(self, name: Union[str, Import]) -> Dag:
@@ -322,6 +336,7 @@ class Dag:  # noqa: F811
     _init_complete : bool, optional
         True when object initialization is complete.
     """
+
     _dml: Dml
     _dump: Optional[str] = None
     _message_handler: Optional[Callable] = None
@@ -348,7 +363,7 @@ class Dag:  # noqa: F811
 
     def __getitem__(self, name):
         node = self._dml.get_node(name, self._ref)
-        return (Import(self, node) if self._ref else Node(self, node))
+        return Import(self, node) if self._ref else Node(self, node)
 
     def __setitem__(self, name, value):
         assert not self._ref
@@ -364,7 +379,7 @@ class Dag:  # noqa: F811
             yield k
 
     def __setattr__(self, name, value):
-        priv = name.startswith('_')
+        priv = name.startswith("_")
         flds = name in {x.name for x in fields(self)}
         prps = name in properties(self)
         init = not self._init_complete
@@ -405,6 +420,7 @@ class Dag:  # noqa: F811
         def result():
             nodes = self._dml.get_names(self._ref).values()
             return [(Import if self._ref else Node)(self, x) for x in nodes]
+
         return result
 
     def _put(self, value: Union[Scalar, Collection], *, name=None, doc=None) -> Node:
@@ -476,12 +492,13 @@ class Node:  # noqa: F811
     ref : Ref
         Node reference
     """
+
     dag: Dag
     ref: Ref
 
     def __repr__(self):
         ref_id = self.ref if isinstance(self.ref, Error) else self.ref.to
-        return f'{self.__class__.__name__}({ref_id})'
+        return f"{self.__class__.__name__}({ref_id})"
 
     def __hash__(self):
         return hash(self.ref)
@@ -543,10 +560,10 @@ class Node:  # noqa: F811
         Error
             If the node isn't a collection (e.g. list, set, or dict).
         """
-        if self.type().value() == 'list':
+        if self.type().value() == "list":
             for i in range(len(self)):
                 yield self[i]
-        elif self.type().value() == 'dict':
+        elif self.type().value() == "dict":
             for k in self.keys():
                 yield k
 
@@ -585,7 +602,7 @@ class Node:  # noqa: F811
             if resp:
                 return Node(self.dag, resp)
             time.sleep(sleep() / 1000)
-        raise TimeoutError(f'invoking function: {self.value()}')
+        raise TimeoutError(f"invoking function: {self.value()}")
 
     def keys(self, *, name=None, doc=None) -> Node:
         """
