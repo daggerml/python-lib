@@ -24,6 +24,16 @@ class TestBasic(TestCase):
                 },
             )
             self.assertEqual(dml.envvars["DML_CONFIG_DIR"], dml.kwargs.get("config_dir"))
+            self.assertEqual(
+                dml.envvars,
+                {
+                    "DML_REPO": dml.kwargs.get("repo"),
+                    "DML_BRANCH": dml.kwargs.get("branch"),
+                    "DML_USER": dml.kwargs.get("user"),
+                    "DML_CONFIG_DIR": dml.kwargs.get("config_dir"),
+                    "DML_PROJECT_DIR": dml.kwargs.get("project_dir"),
+                },
+            )
 
     def test_dag(self):
         with Dml() as dml:
