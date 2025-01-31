@@ -33,7 +33,10 @@ def current_time_millis():
 
 def replace(obj, **changes):
     def props(x):
-        return not (x.startswith("__") or type(getattr(obj, x)).__name__ == "method")
+        dunder = x.startswith("__")
+        method = type(getattr(obj, x)).__name__ == "method"
+        property = x in properties(obj)
+        return not (dunder or method or property)
 
     result = type(obj)()
     [setattr(result, x, getattr(obj, x)) for x in filter(props, dir(obj))]
