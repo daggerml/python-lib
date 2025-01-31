@@ -18,7 +18,7 @@ from daggerml.util import (
     setter,
 )
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 DATA_TYPE = {}
 
@@ -240,7 +240,7 @@ class Dml:  # noqa: F811
         argv = [path, *self.opts, *args]
         resp = subprocess.run(argv, check=True, capture_output=True, text=True)
         if resp.stderr:
-            logger.error(resp.stderr.rstrip())
+            log.error(resp.stderr.rstrip())
         try:
             resp = resp.stdout or "" if as_text else json.loads(resp.stdout or "null")
         except json.decoder.JSONDecodeError:
@@ -249,16 +249,9 @@ class Dml:  # noqa: F811
 
     def __getattr__(self, name: str):
         def invoke(*args, **kwargs):
-            return raise_ex(
-                from_data(
-                    self(
-                        "api",
-                        "invoke",
-                        self.token or to_json([]),
-                        to_json([name, args, kwargs]),
-                    )
-                )
-            )
+            opargs = to_json([name, args, kwargs])
+            token = self.token or to_json([])
+            return raise_ex(from_data(self("api", "invoke", token, opargs)))
 
         return invoke
 
