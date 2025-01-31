@@ -286,6 +286,10 @@ class Dml:  # noqa: F811
         if exc_value and self.message_handler:
             self.message_handler(to_json(Error(exc_value)))
 
+    @property
+    def envvars(self):
+        return {f"DML_{k.upper()}": str(v) for k, v in self.kwargs.items()}
+
     def new(self, name: str, message: str) -> Dag:
         """
         Create a new DAG.
