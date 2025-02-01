@@ -12,6 +12,7 @@ from daggerml.util import (
     BackoffWithJitter,
     current_time_millis,
     kwargs2opts,
+    postwalk,
     properties,
     raise_ex,
     replace,
@@ -406,11 +407,11 @@ class Dag:  # noqa: F811
         return self._commit(value)
 
     @property
-    def keys(self):
+    def keys(self) -> list[str]:
         return lambda: self._dml.get_names(self._ref).keys()
 
     @property
-    def values(self):
+    def values(self) -> list[Node]:
         def result():
             nodes = self._dml.get_names(self._ref).values()
             return [Node(self, x) for x in nodes]
@@ -435,8 +436,11 @@ class Dag:  # noqa: F811
         Node
             Node representing the value
         """
-        if isinstance(value, Node) and value.dag._ref:
-            return self._load(value.dag, value.ref, name=name)
+        value = postwalk(
+            value,
+            lambda x: isinstance(x, Node) and x.dag._ref,
+            lambda x: self._load(x.dag, x.ref, name=name),
+        )
         return Node(self, self._dml.put_literal(value, name=name, doc=doc))
 
     def _load(self, dag_name, node=None, *, name=None, doc=None) -> Node:

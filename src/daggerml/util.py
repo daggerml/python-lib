@@ -31,6 +31,16 @@ def current_time_millis():
     return round(time.time() * 1000)
 
 
+def postwalk(obj, match, update):
+    if isinstance(obj, dict):
+        return {k: postwalk(v, match, update) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [postwalk(v, match, update) for v in obj]
+    if isinstance(obj, set):
+        return {postwalk(v, match, update) for v in obj}
+    return update(obj) if match(obj) else obj
+
+
 def replace(obj, **changes):
     def props(x):
         dunder = x.startswith("__")
