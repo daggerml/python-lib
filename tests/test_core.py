@@ -2,7 +2,7 @@ import os
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
-from daggerml.core import Dag, Dml, Error, Import, Node, Resource
+from daggerml.core import Dag, Dml, Error, Node, Resource
 
 SUM = Resource("./tests/assets/fns/minimal_viable_fn.py", adapter="dml-python-fork-adapter")
 ASYNC = Resource("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter")
@@ -118,15 +118,15 @@ class TestBasic(TestCase):
                 d0.result = d0.n0
             dl = dml.load("d0")
             self.assertEqual(type(dl), Dag)
-            self.assertEqual(type(dl.n0), Import)
+            self.assertEqual(type(dl.n0), Node)
             self.assertEqual(dl.n0.value(), 42)
-            self.assertEqual(type(dl.result), Import)
+            self.assertEqual(type(dl.result), Node)
             self.assertEqual(dl.result.value(), 42)
             self.assertEqual(len(dl), 2)
             self.assertEqual(set(dl.keys()), {"n0", "n1"})
             self.assertEqual(set(dl.values()), {dl.n0, dl.n1})
             for x in dl.values():
-                self.assertIsInstance(x, Import)
+                self.assertIsInstance(x, Node)
             with dml.new("d1", "d1") as d1:
                 d0 = dml.load("d0")
                 self.assertEqual(d0.result.value(), 42)
@@ -136,9 +136,9 @@ class TestBasic(TestCase):
                 self.assertEqual(len(d0), 2)
                 self.assertEqual(set(d0.keys()), {"n0", "n1"})
                 self.assertEqual(set(d0.values()), {d0.n0, d0.n1})
-                # d0 has been committed: its nodes are now of type Import
+                # d0 has been committed: its nodes are now imports
                 for x in d0.values():
-                    self.assertIsInstance(x, Import)
+                    self.assertIsInstance(x, Node)
 
                 d1.n0 = 42
                 d1.n1 = 420

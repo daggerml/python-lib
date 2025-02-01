@@ -28,7 +28,6 @@ Error = NewType("Error", None)
 Ref = NewType("Ref", None)
 Dml = NewType("Dml", None)
 Dag = NewType("Dag", None)
-Import = NewType("Import", None)
 Scalar = Union[str, int, float, bool, type(None), Resource, Node]
 Collection = Union[list, tuple, set, dict]
 
@@ -308,7 +307,7 @@ class Dml:  # noqa: F811
         token = self("api", "create", *opts, name, message, as_text=True)
         return Dag(replace(self, token=token), self.dump, self.message_handler)
 
-    def load(self, name: Union[str, Import]) -> Dag:
+    def load(self, name: Union[str, Node]) -> Dag:
         return Dag(replace(self, token=None), None, _ref=self.get_dag(name))
 
 
@@ -359,8 +358,7 @@ class Dag:  # noqa: F811
             self._message_handler(self._dump)
 
     def __getitem__(self, name):
-        node = self._dml.get_node(name, self._ref)
-        return Import(self, node) if self._ref else Node(self, node)
+        return Node(self, self._dml.get_node(name, self._ref))
 
     def __setitem__(self, name, value):
         assert not self._ref
@@ -395,14 +393,13 @@ class Dag:  # noqa: F811
     @property
     def argv(self) -> Node:
         "Access the dag's argv node"
-        ref = self._dml.get_argv(self._ref)
-        return (Import if self._ref else Node)(self, ref)
+        return Node(self, self._dml.get_argv(self._ref))
 
     @property
     def result(self) -> Node:
         ref = self._dml.get_result(self._ref)
         assert ref, f"'{self.__class__.__name__}' has no attribute 'result'"
-        return (Import if self._ref else Node)(self, ref) if ref else ref
+        return Node(self, ref) if ref else ref
 
     @result.setter
     def result(self, value):
@@ -416,7 +413,7 @@ class Dag:  # noqa: F811
     def values(self):
         def result():
             nodes = self._dml.get_names(self._ref).values()
-            return [(Import if self._ref else Node)(self, x) for x in nodes]
+            return [Node(self, x) for x in nodes]
 
         return result
 
@@ -438,7 +435,7 @@ class Dag:  # noqa: F811
         Node
             Node representing the value
         """
-        if isinstance(value, Import):
+        if isinstance(value, Node) and value.dag._ref:
             return self._load(value.dag, value.ref, name=name)
         return Node(self, self._dml.put_literal(value, name=name, doc=doc))
 
@@ -685,8 +682,3 @@ class Node:  # noqa: F811
             The actual value represented by this node
         """
         return self.dag._dml.get_node_value(self.ref)
-
-
-@dataclass(frozen=True)
-class Import(Node):
-    pass
