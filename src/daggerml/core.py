@@ -439,7 +439,7 @@ class Dag:  # noqa: F811
         value = postwalk(
             value,
             lambda x: isinstance(x, Node) and x.dag._ref,
-            lambda x: self._load(x.dag, x.ref, name=name),
+            lambda x: self._load(x.dag, x.ref),
         )
         return Node(self, self._dml.put_literal(value, name=name, doc=doc))
 
