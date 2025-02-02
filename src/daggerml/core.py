@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field, fields
+from os import getenv
 from tempfile import TemporaryDirectory
 from traceback import format_exception
 from typing import Any, Callable, NewType, Optional, Union
@@ -259,11 +260,11 @@ class Dml:  # noqa: F811
         "Use temporary config and project directories."
         self.tmpdirs = [TemporaryDirectory() for _ in range(2)]
         self.kwargs = {
-            "config_dir": self.tmpdirs[0].__enter__(),
-            "project_dir": self.tmpdirs[1].__enter__(),
-            "repo": "test",
-            "user": "test",
-            "branch": "main",
+            "config_dir": getenv("DML_CONFIG_DIR") or self.tmpdirs[0].__enter__(),
+            "project_dir": getenv("DML_PROJECT_DIR") or self.tmpdirs[1].__enter__(),
+            "repo": getenv("DML_REPO") or "test",
+            "user": getenv("DML_USER") or "test",
+            "branch": getenv("DML_BRANCH") or "main",
             **self.kwargs,
         }
         self.opts = kwargs2opts(**self.kwargs)
