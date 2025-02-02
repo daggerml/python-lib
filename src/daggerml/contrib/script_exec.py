@@ -127,5 +127,5 @@ def cli():
                         raise RuntimeError(f"{pid = } does not exist and neither does result file")
                     with open(run.exec_log, "w") as f:
                         f.write(str(n + 1))
-        except Exception as e:
+        except Exception:
             logger.exception("could not acquire lock and update... try again?")
