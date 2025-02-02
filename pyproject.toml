@@ -38,6 +38,9 @@ test = [
   "pytest-cov",
 ]
 
+[project.scripts]
+dml-script-exec = "daggerml.contrib.script_exec:cli"
+
 [project.urls]
 Homepage = "https://daggerml.com"
 Documentation = "https://daggerml.com"
@@ -60,16 +63,16 @@ markers = [
 source = "vcs"
 
 [tool.hatch.version.raw-options]
-version_scheme = "only-version"   # Ensures `distance` is an integer
+version_scheme = "only-version"   # use tag as version
 local_scheme = "no-local-version"  # pypi does not support local-schemes
 tag_regex = "^v(?P<version>[0-9.]+)$"
-version_file = "src/daggerml/__about__.py"
+version_file = "src/daggerml/__about__.py"  # write version info to this file
 relative_to = "{root:uri}"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/daggerml"]
 artifacts = [
-  "src/daggerml/__about__.py"
+  "src/daggerml/__about__.py"  # add to hatch build because it's git ignored
 ]
 
 [tool.hatch.envs.default]
