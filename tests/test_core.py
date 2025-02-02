@@ -109,8 +109,6 @@ class TestBasic(TestCase):
         with TemporaryDirectory() as fn_cache_dir:
             with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=fn_cache_dir):
                 with Dml() as dml:
-                    with open("tmp.out", "w") as f:
-                        f.write(str(dml("status")))
                     d0 = dml.new("d0", "d0")
                     d0.n0 = SCRIPT_EXEC
                     d0.n1 = d0.n0(script, *vals)
