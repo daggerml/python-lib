@@ -14,5 +14,5 @@ if __name__ == "__main__":
     print("testing stderr...", file=sys.stderr)
     with Dml(data=sys.stdin.read().strip(), message_handler=handler) as dml:
         with dml.new("test", "test") as d0:
-            d0.n0 = sum(d0.argv[2:].value())  # 2 because the script is 1
+            d0.n0 = sum(d0.argv[1:].value())
             d0.result = d0.n0

@@ -1,6 +1,7 @@
 import os
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from daggerml.core import Dag, Dml, Error, Node, Resource
 
@@ -9,6 +10,16 @@ ASYNC = Resource("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter
 ERROR = Resource("./tests/assets/fns/error.py", adapter="dml-python-fork-adapter")
 TIMEOUT = Resource("./tests/assets/fns/timeout.py", adapter="dml-python-fork-adapter")
 SCRIPT_EXEC = Resource("dml-script-exec", adapter="dml-local-adapter")
+
+
+def update_uri_query(resource, new_params):
+    parsed = urlparse(resource.uri)
+    params = parse_qs(parsed.query)
+    params.update(new_params)
+    query = urlencode(params)
+    new_uri = urlunparse(parsed._replace(query=query))
+    out = Resource(new_uri, data=resource.data, adapter=resource.adapter)
+    return out
 
 
 class TestBasic(TestCase):
@@ -105,13 +116,13 @@ class TestBasic(TestCase):
     def test_script_exec_fn(self):
         vals = [1, 2, 3]
         with open("./tests/assets/fns/script_exec_fn.py", "r") as f:
-            script = f.read()
+            script_exec = update_uri_query(SCRIPT_EXEC, {"script": f.read()})
         with TemporaryDirectory() as fn_cache_dir:
             with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=fn_cache_dir):
                 with Dml() as dml:
                     d0 = dml.new("d0", "d0")
-                    d0.n0 = SCRIPT_EXEC
-                    d0.n1 = d0.n0(script, *vals)
+                    d0.n0 = script_exec
+                    d0.n1 = d0.n0(*vals)
                     assert d0.n1.value() == sum(vals)
             cache_dir = f"{fn_cache_dir}/cache/daggerml.contrib/"
             assert len(os.listdir(cache_dir)) == 1
