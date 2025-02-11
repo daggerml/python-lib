@@ -36,6 +36,7 @@ cli = ["daggerml-cli"]
 test = [
   "pytest",
   "pytest-cov",
+  "moto[all,server]",
 ]
 
 [project.scripts]

@@ -2,7 +2,6 @@ import fcntl
 import json
 import logging
 import os
-import re
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -134,15 +133,11 @@ def cli():
                 with open(run.result_loc, "r") as f:
                     print(f.read())
             else:
-                wait_msg = "result file does not exist."
-                run.log(wait_msg)
-                with open(run.exec_log) as f:
-                    n = len([line for line in f if re.match(f"^{wait_msg}$", line.strip())])
-                if n > 20:
-                    run.log(f"Raising error after {n} attempts to get result file.")
-                    raise RuntimeError(f"{pid = } does not exist and neither does result file")
-                with open(run.exec_log, "w") as f:
-                    f.write(str(n + 1))
-                run.log(f"Exiting after {n} attempts to get result file.")
+                msg = f"{pid = } does not exist and neither does result file"
+                if os.path.exists(run.stderr_loc):
+                    with open(run.stderr_loc, "r") as f:
+                        msg = f"{msg}\nSTDERR:\n-------\n{f.read()}"
+                raise RuntimeError(msg)
     except Exception:
         logger.exception("could not acquire lock and update... try again?")
+        raise
