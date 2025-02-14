@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import hashlib
+import os
 from tempfile import NamedTemporaryFile
 
 import boto3
 
 from daggerml import Resource
+
+BUCKET = os.getenv("DML_S3_BUCKET")
+PREFIX = os.getenv("DML_S3_PREFIX")
 
 
 def compute_file_hash(path, chunk_size=8192, hash_algorithm="sha256"):
@@ -15,7 +19,7 @@ def compute_file_hash(path, chunk_size=8192, hash_algorithm="sha256"):
     return hash_fn.hexdigest()
 
 
-def tar(dml, path, bucket, prefix, excludes=(), boto_session=None):
+def tar(dml, path, bucket=BUCKET, prefix=PREFIX, excludes=(), boto_session=None):
     exclude_flags = [["--exclude", x] for x in excludes]
     exclude_flags = [y for x in exclude_flags for y in x]
     with NamedTemporaryFile(suffix=".tar") as tmpf:

@@ -67,10 +67,16 @@ class TestAws(TestCase):
 
     @skipIf(not which("docker"), "docker not available")
     def test_docker_build(self):
+        from daggerml.contrib import DOCKER_EXEC, dag_query_update, funkify
         from daggerml.contrib.dkr import build_dag
 
         context = _root_ / "tests/assets/dkr-context"
         resp = boto3.client("ecr").create_repository(repositoryName="test")
+
+        def fn(dag):
+            dag.result = sum(dag.argv[1:].value())
+
+        vals = [1, 2, 3]
         with Dml() as dml:
             with dml.new("test", "asdf") as dag:
                 dag.tar = tar(dml, context, BUCKET, PREFIX)
@@ -80,6 +86,11 @@ class TestAws(TestCase):
                     Resource(resp["repository"]["repositoryUri"]),
                     ["--platform", "linux/amd64"],
                 )
+                dag.chg = dag_query_update
+                dag.foo = dag.chg(DOCKER_EXEC, {"image": dag.img})
+                dag.bar = funkify(fn, dag.foo.value(), params={"flags": ["--platform", "linux/amd64"]})
+                dag.baz = dag.bar(*vals)
+                assert dag.baz.value() == sum(vals)
 
     def tearDown(self):
         self.server.stop()
@@ -114,7 +125,7 @@ class TestBasic(TestCase):
             (fnid,) = os.listdir(cache_dir)
             self.assertCountEqual(
                 os.listdir(f"{cache_dir}/{fnid}/"),
-                ["stdout", "stderr", "pid", "result", "script.py", "exec.log"],
+                ["stdout", "stderr", "input.dump", "output.dump", "script"],
             )
 
     def test_funkify_errors(self):

@@ -1,143 +1,189 @@
-import fcntl
+import argparse
 import json
 import logging
 import os
 import subprocess
 import sys
-from contextlib import contextmanager
-from dataclasses import dataclass, field
+import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def get_exec_logger(cache_dir):
-    def writer(x):
-        with open(f"{cache_dir}/exec-log", "a") as f:
-            f.write(str(x) + "\n")
+class Runner:
+    name = "?"
 
-
-@contextmanager
-def file_lock(file_path, mode="r+"):
-    try:
-        # create the file if it doesn't exist
-        fd = os.open(file_path, os.O_RDWR | os.O_CREAT)
-        with open(fd, mode) as file:
-            fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            try:
-                file.seek(0)
-                yield file
-                file.flush()
-            finally:
-                fcntl.flock(file, fcntl.LOCK_UN)  # Unlock
-    except Exception as e:
-        logger.exception("could not acquire lock (%r)...", e)
-        raise
-
-
-def proc_exists(pid):
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-@dataclass
-class RunInfo:
-    cache_key: str
-    cache_dir: str = field(init=False)
-
-    def __post_init__(self):
-        status = subprocess.run(["dml", "status"], check=True, capture_output=True)
-        config_dir = json.loads(status.stdout.decode())["config_dir"]
-        config_dir = os.getenv("DML_FN_CACHE_DIR", config_dir)
-        self.cache_dir = f"{config_dir}/cache/daggerml.contrib/{self.cache_key}"
+    def __init__(self, data):
+        self.cache_key = data["cache_key"]
+        self.kwargs = data["kwargs"]
+        self.dump = data["dump"]
+        if "DML_FN_CACHE_LOC" in os.environ:
+            self.cache_dir = os.environ["DML_FN_CACHE_LOC"]
+        elif "DML_FN_CACHE_DIR" in os.environ:
+            config_dir = os.environ["DML_FN_CACHE_DIR"]
+            self.cache_dir = f"{config_dir}/cache/daggerml.contrib/{self.cache_key}"
+        else:
+            status = subprocess.run(["dml", "status"], check=True, capture_output=True)
+            config_dir = json.loads(status.stdout.decode())["config_dir"]
+            self.cache_dir = f"{config_dir}/cache/daggerml.contrib/{self.cache_key}"
         os.makedirs(self.cache_dir, exist_ok=True)
+        self.state_file = Path(self.cache_dir) / "status"
 
-    @property
-    def pid_file(self):
-        return f"{self.cache_dir}/pid"
+    def put_state(self, state):
+        status_data = {
+            "state": state,
+            "timestamp": time.time(),
+        }
+        with open(self.state_file, "w") as f:
+            json.dump(status_data, f)
 
-    @property
-    def script_loc(self):
-        return f"{self.cache_dir}/script.py"
+    def get_state(self):
+        if not self.state_file.exists():
+            return None
+        with open(self.state_file, "r") as f:
+            return json.load(f)["state"]
 
-    @property
-    def stdout_loc(self):
-        return f"{self.cache_dir}/stdout"
+    def del_state(self):
+        if os.path.exists(self.state_file):
+            os.unlink(self.state_file)
 
-    @property
-    def stderr_loc(self):
-        return f"{self.cache_dir}/stderr"
+    def run(self):
+        state = self.get_state()
+        state, msg, dump = self.update(state)
+        self.del_state() if state is None else self.put_state(state)
+        return msg, dump
 
-    @property
-    def result_loc(self):
-        return f"{self.cache_dir}/result"
+    @classmethod
+    def cli(cls):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-d", "--data", default="-", type=argparse.FileType("r"))
+        args = parser.parse_args()
+        data = json.loads(args.data.read())
+        self = cls(data)
+        msg, dump = self.run()
+        msg = f"{self.name} [{self.cache_key}] :: {msg}"
+        print(msg, file=sys.stderr)
+        if dump is not None:
+            print(dump)
 
-    @property
-    def exec_log(self):
-        return f"{self.cache_dir}/exec.log"
 
-    def submit(self, script, dump):
-        with open(self.script_loc, "w") as f:
-            f.write(script)
-        subprocess.run(["chmod", "+x", self.script_loc], check=True)
+class ScriptRunner(Runner):
+    name = "script"
+
+    def submit(self):
+        with open(f"{self.cache_dir}/script", "w") as f:
+            f.write(self.kwargs["script"][-1])
+        subprocess.run(["chmod", "+x", f"{self.cache_dir}/script"], check=True)
+        with open(f"{self.cache_dir}/input.dump", "w") as f:
+            f.write(self.dump)
+        env = dict(os.environ).copy()
+        env.update(
+            {
+                "DML_INPUT_LOC": f"{self.cache_dir}/input.dump",
+                "DML_OUTPUT_LOC": f"{self.cache_dir}/output.dump",
+            }
+        )
         proc = subprocess.Popen(
-            [self.script_loc, self.result_loc],
-            stdout=open(self.stdout_loc, "w"),
-            stderr=open(self.stderr_loc, "w"),
-            stdin=subprocess.PIPE,
+            [f"{self.cache_dir}/script"],
+            stdout=open(f"{self.cache_dir}/stdout", "w"),
+            stderr=open(f"{self.cache_dir}/stderr", "w"),
             start_new_session=True,
             text=True,
+            env=env,
         )
-        proc.stdin.write(dump)
-        proc.stdin.close()
-        with open(self.exec_log, "w") as f:
-            f.write("starting")
         return proc.pid
 
-    def log(self, msg):
-        with open(self.exec_log, "a") as f:
-            f.write(f"{msg}\n")
+    def update(self, pid):
+        if pid is None:
+            pid = self.submit()
+            return pid, f"{pid = } started", None
+
+        def proc_exists(pid):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                return True
+            return True
+
+        if proc_exists(pid):
+            return pid, f"{pid = } running", None
+        elif os.path.isfile(f"{self.cache_dir}/output.dump"):
+            with open(f"{self.cache_dir}/output.dump") as f:
+                return None, f"{pid = } finished", f.read()
+        msg = f"{pid = } finished without writing output"
+        if os.path.exists(f"{self.cache_dir}/stderr"):
+            with open(f"{self.cache_dir}/stderr", "r") as f:
+                msg = f"{msg}\nSTDERR:\n-------\n{f.read()}"
+        raise RuntimeError(msg)
 
 
-def cli():
-    data = json.loads(sys.stdin.read())
-    run = RunInfo(data["cache_key"])
-    try:
-        run.log("getting lock")
-        with file_lock(run.pid_file) as lockf:
-            run.log("lock acquired")
-            pid = lockf.read()
-            if pid == "":  # need start
-                run.log("pidfile was empty... submitting job")
-                try:
-                    pid = run.submit(data["kwargs"]["script"][-1], data["dump"])
-                except Exception as e:
-                    run.log(f"job submission failed with error: {e}")
-                lockf.seek(0)
-                lockf.truncate()
-                lockf.write(f"{pid}")
-                logger.info("started %r with pid: %r", data["cache_key"], pid)
-                run.log(f"job submitted with {pid = }. Exiting...")
-                return
-            pid = int(pid)
-            run.log(f"PID file nonempty ({pid = })")
-            if proc_exists(pid):
-                run.log(f"{pid = } is still running... exiting...")
-                logger.info("job %r with pid: %r still running", data["cache_key"], pid)
-            elif os.path.isfile(run.result_loc):
-                run.log("result file exists. Reading and exiting...")
-                with open(run.result_loc, "r") as f:
-                    print(f.read())
-            else:
-                msg = f"{pid = } does not exist and neither does result file"
-                if os.path.exists(run.stderr_loc):
-                    with open(run.stderr_loc, "r") as f:
-                        msg = f"{msg}\nSTDERR:\n-------\n{f.read()}"
-                raise RuntimeError(msg)
-    except Exception:
-        logger.exception("could not acquire lock and update... try again?")
-        raise
+class DockerRunner(Runner):
+    name = "dkr"
+
+    def _run_command(self, command):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            return result.returncode, (result.stdout + result.stderr).strip()
+        except subprocess.SubprocessError as e:
+            return 1, str(e)
+
+    def submit(self):
+        with open(f"{self.cache_dir}/script", "w") as f:
+            f.write(self.kwargs["script"][-1])
+        subprocess.run(["chmod", "+x", f"{self.cache_dir}/script"], check=True)
+        with open(f"{self.cache_dir}/input.dump", "w") as f:
+            f.write(self.dump)
+        print(f"{self.kwargs = }", file=sys.stderr)
+        exit_code, container_id = self._run_command(
+            [
+                "docker",
+                "run",
+                "-v",
+                f"{self.cache_dir}:/opt/dml",
+                "-e",
+                "DML_INPUT_LOC=/opt/dml/input.dump",
+                "-e",
+                "DML_OUTPUT_LOC=/opt/dml/output.dump",
+                "-d",  # detached
+                *self.kwargs.get("flags", []),
+                self.kwargs["image"][-1],
+                "/opt/dml/script",
+            ],
+        )
+        if exit_code != 0:
+            msg = f"container {container_id} failed to start"
+            raise RuntimeError(msg)
+        return container_id
+
+    def maybe_complete(self, container_id, container_status="???"):
+        try:
+            if os.path.exists(f"{self.cache_dir}/output.dump"):
+                with open(f"{self.cache_dir}/output.dump") as f:
+                    return f.read()
+            _, exit_code_str = self._run_command(["docker", "inspect", "-f", "{{.State.ExitCode}}", container_id])
+            exit_code = int(exit_code_str)
+            msg = f"""
+            job {self.cache_key}
+              finished with status {container_status}
+              exit code {exit_code}
+              No output written
+            """.strip()
+            raise RuntimeError(msg)
+        finally:
+            if os.getenv("DML_DOCKER_CLEANUP") == "1":
+                self._run_command(["docker", "rm", container_id])
+
+    def update(self, container_id):
+        if container_id is None:
+            container_id = self.submit()
+            return container_id, f"container {container_id} started", None
+        # Check if container exists and get its status
+        exit_code, container_status = self._run_command(["docker", "inspect", "-f", "{{.State.Status}}", container_id])
+        container_status = container_status if exit_code == 0 else "no-longer-exists"
+        if container_status in ["created", "running", "restarting"]:
+            return container_id, f"container {container_id} running", None
+        elif container_status in ["exited", "paused", "dead", "no-longer-exists"]:
+            msg = f"container {container_id} finished with status {container_status!r}"
+            return None, msg, self.maybe_complete(container_id, container_status)
