@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
-from daggerml.contrib import funkify
+import base64
+import re
+import subprocess
+from shutil import which
+from tempfile import NamedTemporaryFile, TemporaryDirectory
+from urllib.parse import urlparse
+from uuid import uuid4
+
+import boto3
+
+from daggerml import Resource
 
 
-def dkr_build(tarball_uri, repo_uri, build_flags=(), session=None):
-    import subprocess
-    from shutil import which
-    from tempfile import NamedTemporaryFile, TemporaryDirectory
-    from urllib.parse import urlparse
-    from uuid import uuid4
+def _run_cmd(cmd, input=None):
+    resp = subprocess.run(cmd, check=False, text=True, stderr=subprocess.PIPE, input=input)
+    if resp.returncode != 0:
+        msg = f"command: {cmd} failed\nSTDERR:\n-------\n{resp.stderr}"
+        raise RuntimeError(msg)
 
-    import boto3
 
+def dkr_build(tarball_uri, build_flags=(), session=None):
     session = session or boto3
     p = urlparse(tarball_uri)
     docker = which("docker")
@@ -20,7 +29,7 @@ def dkr_build(tarball_uri, repo_uri, build_flags=(), session=None):
             session.client("s3").download_file(p.netloc, p.path[1:], tmpf.name)
             subprocess.run(["tar", "-xvf", tmpf.name, "-C", tmpd], check=True)
         _tag = uuid4().hex
-        image_tag = f"{repo_uri}:{_tag}"
+        image_tag = f"dml:{_tag}"
         resp = subprocess.run(
             [docker, "build", *build_flags, "-t", image_tag, tmpd],
             check=False,
@@ -28,55 +37,32 @@ def dkr_build(tarball_uri, repo_uri, build_flags=(), session=None):
         )
         if resp.returncode != 0:
             raise RuntimeError(f"docker build failed:\n{resp.stderr.decode()}")
-    return _tag
+    return {"image": Resource(image_tag), "tag": _tag}
 
 
-def dkr_push(image_tag, repo_uri, session=None):
-    import re
-    import subprocess
-    from shutil import which
-
-    import boto3
-
-    docker = which("docker")
-    client = (session or boto3).client("ecr")
-    auth_token = client.get_authorization_token()["authorizationData"][0]["authorizationToken"]
-    resp = subprocess.run(
-        [docker, "login", "--username", "AWS", "--password-stdin", repo_uri],
-        input=auth_token,
-        check=False,
-        text=True,
-        stderr=subprocess.PIPE,
-    )
-    if resp.returncode != 0:
-        raise RuntimeError(f"docker login failed:\n{resp.stderr}")
-    subprocess.run([docker, "push", f"{repo_uri}:{image_tag}"], check=True)
-    repo_name = re.match(r".*\.dkr\.ecr\.[^.]+\.amazonaws\.com/(.*)$", repo_uri).group()
-    response = client.describe_images(repositoryName=repo_name, imageIds=[{"imageTag": image_tag}])
-    image_digest = response["imageDetails"][0]["imageDigest"]
-    return image_digest
+def dkr_login(client):
+    auth_response = client.get_authorization_token()
+    auth_data = auth_response["authorizationData"][0]
+    auth_token = auth_data["authorizationToken"]
+    proxy_endpoint = auth_data["proxyEndpoint"]
+    decoded_token = base64.b64decode(auth_token).decode("utf-8")
+    username, password = decoded_token.split(":")
+    login_cmd = ["docker", "login", "-u", username, "--password-stdin", proxy_endpoint]
+    _run_cmd(login_cmd, input=password)
 
 
-@funkify(extra_fns=[dkr_build])
-def build_dag(dag):
-    from daggerml import Resource
-
-    tarball = dag.argv[1].value()
-    repo = dag.argv[2].value()
-    flags = dag.argv[3].value() if len(dag.argv) > 3 else []
-    dag.tag = dkr_build(tarball.uri, repo.uri, flags)
-    dag.uri = f"{repo.uri}:{dag.tag.value()}"
-    dag.result = Resource(dag.uri.value())
-
-
-@funkify(extra_fns=[dkr_build, dkr_push])
-def build_n_push_dag(dag):
-    from daggerml import Resource
-
-    tarball = dag.argv[1].value()
-    repo = dag.argv[2].value()
-    flags = dag.argv[3].value() if len(dag.argv) > 3 else []
-    dag.tag = dkr_build(tarball.uri, repo.uri, flags)
-    dag.digest = dkr_push(dag.tag, repo.uri)
-    dag.uri = f"{repo.uri}:{dag.tag.value()}@{dag.digest.value()}"
-    dag.result = Resource(dag.uri.value())
+def dkr_push(local_image, repo_uri):
+    client = boto3.client("ecr")
+    dkr_login(client)
+    tag = local_image.uri.split(":")[-1]
+    remote_image = f"{repo_uri}:{tag}"
+    _run_cmd(["docker", "tag", local_image.uri, remote_image])
+    _run_cmd(["docker", "push", remote_image])
+    (repo_name,) = re.match(r"^[^/]+/([^:]+)$", repo_uri).groups()
+    response = client.describe_images(repositoryName=repo_name, imageIds=[{"imageTag": tag}])
+    digest = response["imageDetails"][0]["imageDigest"]
+    return {
+        "image": Resource(f"{repo_uri}:{tag}@{digest}"),
+        "tag": tag,
+        "digest": digest,
+    }

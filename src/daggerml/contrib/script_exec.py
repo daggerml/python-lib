@@ -135,7 +135,6 @@ class DockerRunner(Runner):
         subprocess.run(["chmod", "+x", f"{self.cache_dir}/script"], check=True)
         with open(f"{self.cache_dir}/input.dump", "w") as f:
             f.write(self.dump)
-        print(f"{self.kwargs = }", file=sys.stderr)
         exit_code, container_id = self._run_command(
             [
                 "docker",

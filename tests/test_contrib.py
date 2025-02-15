@@ -4,14 +4,14 @@ from glob import glob
 from pathlib import Path
 from shutil import which
 from tempfile import NamedTemporaryFile, TemporaryDirectory
-from unittest import TestCase, mock, skipIf
+from unittest import TestCase, mock, skipUnless
 from urllib.parse import urlparse
 
 import boto3
 
 from daggerml.contrib import funkify
 from daggerml.contrib.ingest import tar
-from daggerml.core import Dml, Error, Resource
+from daggerml.core import Dml, Error
 
 BUCKET = "dml-test-doesnotexist"
 PREFIX = "testico"
@@ -65,13 +65,11 @@ class TestAws(TestCase):
             s3_tar2 = tar(dml, context, BUCKET, PREFIX)
             assert s3_tar.uri == s3_tar2.uri
 
-    @skipIf(not which("docker"), "docker not available")
+    @skipUnless(which("docker"), "docker not available")
     def test_docker_build(self):
-        from daggerml.contrib import DOCKER_EXEC, dag_query_update, funkify
-        from daggerml.contrib.dkr import build_dag
+        from daggerml.contrib import DOCKER_EXEC, dag_query_update, dkr_build, funkify
 
         context = _root_ / "tests/assets/dkr-context"
-        resp = boto3.client("ecr").create_repository(repositoryName="test")
 
         def fn(dag):
             dag.result = sum(dag.argv[1:].value())
@@ -80,10 +78,9 @@ class TestAws(TestCase):
         with Dml() as dml:
             with dml.new("test", "asdf") as dag:
                 dag.tar = tar(dml, context, BUCKET, PREFIX)
-                dag.dkr = build_dag
+                dag.dkr = dkr_build
                 dag.img = dag.dkr(
                     dag.tar,
-                    Resource(resp["repository"]["repositoryUri"]),
                     ["--platform", "linux/amd64"],
                 )
                 dag.chg = dag_query_update
