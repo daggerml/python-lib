@@ -39,10 +39,6 @@ test = [
   "moto[all,server]",
 ]
 
-[project.scripts]
-dml-script-exec = "daggerml.contrib.script_exec:ScriptRunner.cli"
-dml-docker-exec = "daggerml.contrib.script_exec:DockerRunner.cli"
-
 [project.urls]
 Homepage = "https://daggerml.com"
 Documentation = "https://daggerml.com"
