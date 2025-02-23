@@ -4,7 +4,7 @@ import sys
 
 from daggerml import Dml
 
-with Dml(data=json.loads(sys.stdin.read())[1], message_handler=print) as dml:
+with Dml(data=json.loads(sys.stdin.read())["dump"], message_handler=print) as dml:
     cache_dir = os.getenv("DML_FN_CACHE_DIR", "")
     cache_file = os.path.join(cache_dir, dml.cache_key)
     debug_file = os.path.join(cache_dir, "debug")
