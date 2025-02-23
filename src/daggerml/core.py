@@ -213,7 +213,7 @@ class Dml:  # noqa: F811
         self.cache_key = None
         self.dump = None
 
-    def __call__(self, *args: str, as_text: bool = False) -> Any:
+    def __call__(self, *args: str, input=None, as_text: bool = False) -> Any:
         """
         Call the dml cli with the given arguments.
 
@@ -239,7 +239,7 @@ class Dml:  # noqa: F811
         resp = None
         path = shutil.which("dml")
         argv = [path, *self.opts, *args]
-        resp = subprocess.run(argv, check=True, capture_output=True, text=True)
+        resp = subprocess.run(argv, check=True, capture_output=True, text=True, input=input)
         if resp.stderr:
             log.error(resp.stderr.rstrip())
         try:
@@ -252,7 +252,7 @@ class Dml:  # noqa: F811
         def invoke(*args, **kwargs):
             opargs = to_json([name, args, kwargs])
             token = self.token or to_json([])
-            return raise_ex(from_data(self("api", "invoke", token, opargs)))
+            return raise_ex(from_data(self("api", "invoke", token, "-", input=opargs)))
 
         return invoke
 
@@ -305,8 +305,8 @@ class Dml:  # noqa: F811
         >>> with dml.new("dag name", "message") as dag:
         ...     pass
         """
-        opts = [] if not self.dump else kwargs2opts(dump=self.dump)
-        token = self("api", "create", *opts, name, message, as_text=True)
+        opts = kwargs2opts(dump="-") if self.dump else []
+        token = self("api", "create", *opts, name, message, input=self.dump, as_text=True)
         return Dag(replace(self, token=token), self.dump, self.message_handler)
 
     def load(self, name: Union[str, Node]) -> Dag:
