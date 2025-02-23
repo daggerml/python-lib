@@ -252,7 +252,7 @@ class Dml:  # noqa: F811
         def invoke(*args, **kwargs):
             opargs = to_json([name, args, kwargs])
             token = self.token or to_json([])
-            return raise_ex(from_data(self("api", "invoke", token, "-", input=opargs)))
+            return raise_ex(from_data(self("api", "invoke", token, input=opargs)))
 
         return invoke
 

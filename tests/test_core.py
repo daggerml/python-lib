@@ -69,6 +69,8 @@ class TestBasic(TestCase):
                 self.assertIsInstance(d0._dump, str)
             dag = dml("dag", "list")[0]
             self.assertEqual(dag["result"], result.ref.to.split("/", 1)[1])
+            dml("dag", "delete", dag["name"], "Deleting dag")
+            dml("repo", "gc", as_text=True)
 
     def test_async_fn_ok(self):
         with TemporaryDirectory() as fn_cache_dir:
