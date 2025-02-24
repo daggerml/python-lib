@@ -566,7 +566,7 @@ class Node:  # noqa: F811
             for k in self.keys():
                 yield k
 
-    def __call__(self, *args, name=None, doc=None, sleep=None, timeout=0) -> Node:
+    def __call__(self, *args, name=None, doc=None, retry=False, sleep=None, timeout=0) -> Node:
         """
         Call this node as a function.
 
@@ -578,6 +578,10 @@ class Node:  # noqa: F811
             Name for the result node
         doc : str, optional
             Documentation
+        retry : bool, default=False
+            Retry a failed run?
+        sleep : callable, optional
+            A nullary function that returns sleep time in milliseconds
         timeout : int, default=30000
             Maximum time to wait in milliseconds
 
@@ -596,10 +600,12 @@ class Node:  # noqa: F811
         sleep = sleep or BackoffWithJitter()
         args = [self.dag._put(x) for x in args]
         end = current_time_millis() + timeout
+        kw = {"retry": retry}
         while timeout <= 0 or current_time_millis() < end:
-            resp = self.dag._dml.start_fn([self, *args], name=name, doc=doc)
+            resp = self.dag._dml.start_fn([self, *args], name=name, doc=doc, **kw)
             if resp:
                 return Node(self.dag, resp)
+            kw["retry"] = False
             time.sleep(sleep() / 1000)
         raise TimeoutError(f"invoking function: {self.value()}")
 
