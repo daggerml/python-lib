@@ -526,6 +526,20 @@ class Node:  # noqa: F811
             key = [key.start, key.stop, key.step]
         return Node(self.dag, self.dag._dml.get(self, key))
 
+    def contains(self, item, *, name=None, doc=None):
+        """
+        For collection nodes, checks to see if `item` is in `self`
+
+        Returns
+        -------
+        Node
+            Node with the boolean of is `item` in `self`
+        """
+        return Node(self.dag, self.dag._dml.contains(self, item, name=name, doc=doc))
+
+    def __contains__(self, item):
+        return self.contains(item).value()  # has to return boolean
+
     def __len__(self):  # python requires this to be an int
         """
         Get the node's length
@@ -693,3 +707,65 @@ class Node:  # noqa: F811
             The actual value represented by this node
         """
         return self.dag._dml.get_node_value(self.ref)
+
+    def assoc(self, key, value, *, name=None, doc=None):
+        """
+        For a dict node, associate a new value into the map
+
+        Returns
+        -------
+        Node
+            Node containing the new dict
+        """
+        return Node(self.dag, self.dag._dml.assoc(self, key, value, name=name, doc=doc))
+
+    def conj(self, item, *, name=None, doc=None):
+        """
+        For a list or set node, append an item
+
+        Returns
+        -------
+        Node
+            Node containing the new collection
+
+        Notes
+        -----
+        `append` is an alias `conj`
+        """
+        return Node(self.dag, self.dag._dml.conj(self, item, name=name, doc=doc))
+
+    def append(self, item, *, name=None, doc=None):
+        """
+        For a list or set node, append an item
+
+        Returns
+        -------
+        Node
+            Node containing the new collection
+
+        See Also
+        --------
+        conj : The main implementation
+        """
+        return self.conj(item, name=name, doc=doc)
+
+    def update(self, update):
+        """
+        For a dict node, update like python dicts
+
+        Returns
+        -------
+        Node
+            Node containing the new collection
+
+        Notes
+        -----
+        calls `assoc` iteratively for k, v pairs in update.
+
+        See Also
+        --------
+        assoc : The main implementation
+        """
+        for k, v in update.items():
+            self = self.assoc(k, v)
+        return self

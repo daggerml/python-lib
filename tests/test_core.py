@@ -72,6 +72,39 @@ class TestBasic(TestCase):
             dml("dag", "delete", dag["name"], "Deleting dag")
             dml("repo", "gc", as_text=True)
 
+    def test_list_attrs(self):
+        with Dml() as dml:
+            with dml.new("d0", "d0") as d0:
+                d0.n0 = [0]
+                assert d0.n0.contains(1).value() is False
+                assert d0.n0.contains(0).value() is True
+                assert 0 in d0.n0
+                d0.n1 = d0.n0.append(1)
+                assert d0.n1.value() == [0, 1]
+
+    def test_set_attrs(self):
+        with Dml() as dml:
+            with dml.new("d0", "d0") as d0:
+                d0.n0 = {0}
+                assert d0.n0.contains(1).value() is False
+                assert d0.n0.contains(0).value() is True
+                assert 0 in d0.n0
+                d0.n1 = d0.n0.append(1)
+                assert d0.n1.value() == {0, 1}
+
+    def test_dict_attrs(self):
+        with Dml() as dml:
+            with dml.new("d0", "d0") as d0:
+                d0.n0 = {"x": 42}
+                assert d0.n0.contains("y").value() is False
+                assert d0.n0.contains("x").value() is True
+                assert "y" not in d0.n0
+                assert "x" in d0.n0
+                d0.n1 = d0.n0.assoc("y", 3)
+                assert d0.n1.value() == {"x": 42, "y": 3}
+                d0.n2 = d0.n1.update({"z": 1, "a": 2})
+                assert d0.n2.value() == {"a": 2, "x": 42, "y": 3, "z": 1}
+
     def test_async_fn_ok(self):
         with TemporaryDirectory() as fn_cache_dir:
             with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=fn_cache_dir):
