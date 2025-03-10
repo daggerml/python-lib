@@ -190,8 +190,6 @@ class Dml:  # noqa: F811
     ----------
     data : Any, optional
         Initial data for the DML instance
-    message_handler : callable, optional
-        Function to handle messages
     **kwargs : dict
         Additional configuration options
 
@@ -203,15 +201,11 @@ class Dml:  # noqa: F811
     ...         pass
     """
 
-    def __init__(self, *, data=None, message_handler=None, **kwargs):
-        self.data = data
-        self.message_handler = message_handler
+    def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.opts = kwargs2opts(**kwargs)
         self.token = None
         self.tmpdirs = None
-        self.cache_key = None
-        self.dump = None
 
     def __call__(self, *args: str, input=None, as_text: bool = False) -> Any:
         """
@@ -268,7 +262,6 @@ class Dml:  # noqa: F811
             **self.kwargs,
         }
         self.opts = kwargs2opts(**self.kwargs)
-        self.cache_key, self.dump = from_json(self.data or to_json([None, None]))
         if self.kwargs["repo"] not in [x["name"] for x in self("repo", "list")]:
             self("repo", "create", self.kwargs["repo"])
         if self.kwargs["branch"] not in self("branch", "list"):
@@ -277,40 +270,18 @@ class Dml:  # noqa: F811
 
     def __exit__(self, exc_type, exc_value, traceback):
         [x.__exit__(exc_type, exc_value, traceback) for x in self.tmpdirs]
-        if exc_value and self.message_handler:
-            self.message_handler(to_json(Error(exc_value)))
 
     @property
     def envvars(self):
         return {f"DML_{k.upper()}": str(v) for k, v in self.kwargs.items()}
 
-    def new(self, name: str, message: str) -> Dag:
-        """
-        Create a new DAG.
+    def new(self, name="", message="", data=None, message_handler=None):
+        opts = kwargs2opts(dump="-") if data else []
+        token = self("api", "create", *opts, name, message, input=data, as_text=True)
+        return Dag(replace(self, token=token), message_handler)
 
-        Parameters
-        ----------
-        name : str
-            Name of the DAG
-        message : str
-            Description or commit message
-
-        Returns
-        -------
-        Dag
-            New Dag instance
-
-        Examples
-        --------
-        >>> with dml.new("dag name", "message") as dag:
-        ...     pass
-        """
-        opts = kwargs2opts(dump="-") if self.dump else []
-        token = self("api", "create", *opts, name, message, input=self.dump, as_text=True)
-        return Dag(replace(self, token=token), self.dump, self.message_handler)
-
-    def load(self, name: Union[str, Node]) -> Dag:
-        return Dag(replace(self, token=None), None, _ref=self.get_dag(name))
+    def load(self, name: Union[str, Node], recurse=False) -> Dag:
+        return Dag(replace(self, token=None), _ref=self.get_dag(name, recurse=recurse))
 
 
 @dataclass
@@ -320,26 +291,10 @@ class Boxed:
 
 @dataclass
 class Dag:  # noqa: F811
-    """
-    Representation of a DaggerML DAG.
-
-    Parameters
-    ----------
-    _dml : Dml
-        DaggerML instance
-    _dump : str, optional
-        Serialized DAG data.
-    _message_handler : callable, optional
-        Function to handle messages.
-    _init_complete : bool, optional
-        True when object initialization is complete.
-    """
-
     _dml: Dml
-    _dump: Optional[str] = None
     _message_handler: Optional[Callable] = None
-    _init_complete: bool = False
     _ref: Optional[Ref] = None
+    _init_complete: bool = False
 
     def __post_init__(self):
         self._init_complete = True
@@ -356,8 +311,6 @@ class Dag:  # noqa: F811
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_value is not None:
             self._commit(Error(exc_value))
-        if self._dump and self._message_handler:
-            self._message_handler(self._dump)
 
     def __getitem__(self, name):
         return Node(self, self._dml.get_node(name, self._ref))
@@ -475,8 +428,10 @@ class Dag:  # noqa: F811
             Value to commit
         """
         value = value if isinstance(value, (Node, Error)) else self._put(value)
-        self._dump = Boxed(self._dml.commit(value))
-        self._ref = Boxed(Ref(json.loads(self._dump)[-1][1][1]))
+        dump = self._dml.commit(value)
+        if self._message_handler:
+            self._message_handler(dump)
+        self._ref = Boxed(Ref(json.loads(dump)[-1][1][1]))
 
 
 @dataclass(frozen=True)

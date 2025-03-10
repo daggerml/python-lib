@@ -4,7 +4,7 @@ from unittest import TestCase, mock
 
 from daggerml.core import Dag, Dml, Error, Node, Resource
 
-SUM = Resource("./tests/assets/fns/minimal_viable_fn.py", adapter="dml-python-fork-adapter")
+SUM = Resource("./tests/assets/fns/sum.py", adapter="dml-python-fork-adapter")
 ASYNC = Resource("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter")
 ERROR = Resource("./tests/assets/fns/error.py", adapter="dml-python-fork-adapter")
 TIMEOUT = Resource("./tests/assets/fns/timeout.py", adapter="dml-python-fork-adapter")
@@ -36,37 +36,43 @@ class TestBasic(TestCase):
             )
 
     def test_dag(self):
+        local_value = None
+
+        def message_handler(dump):
+            nonlocal local_value
+            local_value = dump
+
         with Dml() as dml:
-            with dml.new("d0", "d0") as d0:
-                d0.n0 = [42]
-                self.assertIsInstance(d0.n0, Node)
-                self.assertEqual(d0.n0.value(), [42])
-                self.assertEqual(d0.n0.len().value(), 1)
-                self.assertEqual(d0.n0.type().value(), "list")
-                d0["x0"] = d0.n0
-                self.assertEqual(d0["x0"], d0.n0)
-                self.assertEqual(d0.x0, d0.n0)
-                d0.x1 = 42
-                self.assertEqual(d0["x1"].value(), 42)
-                self.assertEqual(d0.x1.value(), 42)
-                d0.n1 = d0.n0[0]
-                self.assertIsInstance(d0.n1, Node)
-                self.assertEqual([x for x in d0.n0], [d0.n1])
-                self.assertEqual(d0.n1.value(), 42)
-                d0.n2 = {"x": d0.n0, "y": "z"}
-                self.assertNotEqual(d0.n2["x"], d0.n0)
-                self.assertEqual(d0.n2["x"].value(), d0.n0.value())
-                d0.n3 = list(d0.n2.items())
-                self.assertIsInstance([x for x in d0.n3], list)
-                self.assertDictEqual(
-                    {k.value(): v.value() for k, v in d0.n2.items()},
-                    {"x": d0.n0.value(), "y": "z"},
-                )
-                d0.n4 = [1, 2, 3, 4, 5]
-                d0.n5 = d0.n4[1:]
-                self.assertListEqual([x.value() for x in d0.n5], [2, 3, 4, 5])
-                d0.result = result = d0.n0
-                self.assertIsInstance(d0._dump, str)
+            d0 = dml.new("d0", "d0", message_handler=message_handler)
+            d0.n0 = [42]
+            self.assertIsInstance(d0.n0, Node)
+            self.assertEqual(d0.n0.value(), [42])
+            self.assertEqual(d0.n0.len().value(), 1)
+            self.assertEqual(d0.n0.type().value(), "list")
+            d0["x0"] = d0.n0
+            self.assertEqual(d0["x0"], d0.n0)
+            self.assertEqual(d0.x0, d0.n0)
+            d0.x1 = 42
+            self.assertEqual(d0["x1"].value(), 42)
+            self.assertEqual(d0.x1.value(), 42)
+            d0.n1 = d0.n0[0]
+            self.assertIsInstance(d0.n1, Node)
+            self.assertEqual([x for x in d0.n0], [d0.n1])
+            self.assertEqual(d0.n1.value(), 42)
+            d0.n2 = {"x": d0.n0, "y": "z"}
+            self.assertNotEqual(d0.n2["x"], d0.n0)
+            self.assertEqual(d0.n2["x"].value(), d0.n0.value())
+            d0.n3 = list(d0.n2.items())
+            self.assertIsInstance([x for x in d0.n3], list)
+            self.assertDictEqual(
+                {k.value(): v.value() for k, v in d0.n2.items()},
+                {"x": d0.n0.value(), "y": "z"},
+            )
+            d0.n4 = [1, 2, 3, 4, 5]
+            d0.n5 = d0.n4[1:]
+            self.assertListEqual([x.value() for x in d0.n5], [2, 3, 4, 5])
+            d0.result = result = d0.n0
+            self.assertIsInstance(local_value, str)
             dag = dml("dag", "list")[0]
             self.assertEqual(dag["result"], result.ref.to.split("/", 1)[1])
             dml("dag", "delete", dag["name"], "Deleting dag")
@@ -183,3 +189,19 @@ class TestBasic(TestCase):
                     self.assertEqual(type(x), Node)
 
                 d1.result = d0.result
+
+    def test_load_recursing(self):
+        nums = [1, 2, 3]
+        with Dml() as dml:
+            with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=dml.kwargs["config_dir"]):
+                with dml.new("d0", "d0") as d0:
+                    d0.n0 = SUM
+                    d0.n1 = d0.n0(*nums)
+                    assert d0.n1.dag == d0
+                    d0.result = d0.n1
+            d1 = dml.new("d1", "d1")
+            d1.n1 = dml.load("d0").n1
+            assert d1.n1.dag == d1
+            d1.n2 = dml.load(d1.n1, recurse=True).num_args
+            assert d1.n2.value() == len(nums)
+            assert d1.n1.value() == sum(nums)
