@@ -4,7 +4,7 @@ from unittest import TestCase, mock
 
 from daggerml.core import Dag, Dml, Error, Node, Resource
 
-SUM = Resource("./tests/assets/fns/minimal_viable_fn.py", adapter="dml-python-fork-adapter")
+SUM = Resource("./tests/assets/fns/sum.py", adapter="dml-python-fork-adapter")
 ASYNC = Resource("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter")
 ERROR = Resource("./tests/assets/fns/error.py", adapter="dml-python-fork-adapter")
 TIMEOUT = Resource("./tests/assets/fns/timeout.py", adapter="dml-python-fork-adapter")
@@ -183,3 +183,19 @@ class TestBasic(TestCase):
                     self.assertEqual(type(x), Node)
 
                 d1.result = d0.result
+
+    def test_load_recursing(self):
+        nums = [1, 2, 3]
+        with Dml() as dml:
+            with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=dml.kwargs["config_dir"]):
+                with dml.new("d0", "d0") as d0:
+                    d0.n0 = SUM
+                    d0.n1 = d0.n0(*nums)
+                    assert d0.n1.dag == d0
+                    d0.result = d0.n1
+            d1 = dml.new("d1", "d1")
+            d1.n1 = dml.load("d0").n1
+            assert d1.n1.dag == d1
+            d1.n2 = dml.load(d1.n1, recurse=True).num_args
+            assert d1.n2.value() == len(nums)
+            assert d1.n1.value() == sum(nums)

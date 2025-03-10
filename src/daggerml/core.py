@@ -309,8 +309,8 @@ class Dml:  # noqa: F811
         token = self("api", "create", *opts, name, message, input=self.dump, as_text=True)
         return Dag(replace(self, token=token), self.dump, self.message_handler)
 
-    def load(self, name: Union[str, Node]) -> Dag:
-        return Dag(replace(self, token=None), None, _ref=self.get_dag(name))
+    def load(self, name: Union[str, Node], recurse=False) -> Dag:
+        return Dag(replace(self, token=None), _ref=self.get_dag(name, recurse=recurse))
 
 
 @dataclass
