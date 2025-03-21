@@ -215,6 +215,8 @@ class Dml:  # noqa: F811
         ----------
         *args : str
             Arguments to pass to the dml cli
+        input : str, optional
+            data to pipe to `dml`.
         as_text : bool, optional
             If True, return the result as text, otherwise json
 
