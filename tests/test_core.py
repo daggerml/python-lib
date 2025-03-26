@@ -6,7 +6,6 @@ from daggerml.core import Dag, Dml, Error, Node, Resource
 
 SUM = Resource("./tests/assets/fns/sum.py", adapter="dml-python-fork-adapter")
 ASYNC = Resource("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter")
-ERROR = Resource("./tests/assets/fns/error.py", adapter="dml-python-fork-adapter")
 TIMEOUT = Resource("./tests/assets/fns/timeout.py", adapter="dml-python-fork-adapter")
 
 
@@ -128,10 +127,10 @@ class TestBasic(TestCase):
         with TemporaryDirectory() as fn_cache_dir:
             with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=fn_cache_dir):
                 with Dml() as dml:
-                    with self.assertRaises(Error):
+                    with self.assertRaisesRegex(Error, r".*unsupported operand type.*"):
                         with dml.new("d0", "d0") as d0:
-                            d0.n0 = ERROR
-                            d0.n1 = d0.n0(1, 2, 3)
+                            d0.n0 = SUM
+                            d0.n1 = d0.n0(1, 2, "asdf")
                     info = [x for x in dml("dag", "list") if x["name"] == "d0"]
                     self.assertEqual(len(info), 1)
 

@@ -4,7 +4,11 @@ import sys
 
 from daggerml import Dml
 
-# print(sys.stdin.read(), file=sys.stderr)
+
+def pr(dump):
+    print(json.dumps({"dump": dump}))
+
+
 with Dml() as dml:
     stdin = json.loads(sys.stdin.read())
     cache_dir = os.getenv("DML_FN_CACHE_DIR", "")
@@ -15,7 +19,7 @@ with Dml() as dml:
         f.write("ASYNC EXECUTING\n")
 
     if os.path.isfile(cache_file):
-        with dml.new("test", "test", stdin["dump"], print) as d0:
+        with dml.new("test", "test", stdin["dump"], pr) as d0:
             d0.result = sum(d0.argv[1:].value())
     else:
         open(cache_file, "w").close()
