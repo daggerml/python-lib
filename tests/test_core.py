@@ -6,6 +6,7 @@ from daggerml.core import Dag, Dml, Error, Node, Resource
 
 SUM = Resource("./tests/assets/fns/sum.py", adapter="dml-python-fork-adapter")
 ASYNC = Resource("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter")
+ENVVARS = Resource("./tests/assets/fns/envvars.py", adapter="dml-python-fork-adapter")
 TIMEOUT = Resource("./tests/assets/fns/timeout.py", adapter="dml-python-fork-adapter")
 
 
@@ -28,6 +29,30 @@ class TestBasic(TestCase):
                 {
                     "DML_REPO": dml.kwargs.get("repo"),
                     "DML_BRANCH": dml.kwargs.get("branch"),
+                    "DML_USER": dml.kwargs.get("user"),
+                    "DML_CONFIG_DIR": dml.kwargs.get("config_dir"),
+                    "DML_PROJECT_DIR": dml.kwargs.get("project_dir"),
+                },
+            )
+
+    def test_init_kwargs(self):
+        with Dml(repo="does-not-exist", branch="unique-name") as dml:
+            self.assertDictEqual(
+                dml("status"),
+                {
+                    "repo": "does-not-exist",
+                    "branch": "unique-name",
+                    "user": dml.kwargs.get("user"),
+                    "config_dir": dml.kwargs.get("config_dir"),
+                    "project_dir": dml.kwargs.get("project_dir"),
+                },
+            )
+            self.assertEqual(dml.envvars["DML_CONFIG_DIR"], dml.kwargs.get("config_dir"))
+            self.assertEqual(
+                dml.envvars,
+                {
+                    "DML_REPO": "does-not-exist",
+                    "DML_BRANCH": "unique-name",
                     "DML_USER": dml.kwargs.get("user"),
                     "DML_CONFIG_DIR": dml.kwargs.get("config_dir"),
                     "DML_PROJECT_DIR": dml.kwargs.get("project_dir"),
@@ -73,7 +98,8 @@ class TestBasic(TestCase):
             d0.result = result = d0.n0
             self.assertIsInstance(local_value, str)
             dag = dml("dag", "list")[0]
-            self.assertEqual(dag["result"], result.ref.to.split("/", 1)[1])
+            self.assertEqual(dag["result"], result.ref.to)
+            assert len(dml("dag", "list", "--all")) > 1
             dml("dag", "delete", dag["name"], "Deleting dag")
             dml("repo", "gc", as_text=True)
 

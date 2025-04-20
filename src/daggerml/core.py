@@ -75,36 +75,10 @@ def to_data(obj):
 
 
 def from_json(text):
-    """
-    Parse JSON string into Python objects.
-
-    Parameters
-    ----------
-    text : str
-        JSON string to parse
-
-    Returns
-    -------
-    Any
-        Deserialized Python object
-    """
     return from_data(json.loads(text))
 
 
 def to_json(obj):
-    """
-    Convert Python object to JSON string.
-
-    Parameters
-    ----------
-    obj : Any
-        Object to serialize
-
-    Returns
-    -------
-    str
-        JSON string representation
-    """
     return json.dumps(to_data(obj), separators=(",", ":"))
 
 
@@ -112,7 +86,7 @@ def to_json(obj):
 @dataclass(frozen=True)
 class Ref:  # noqa: F811
     """
-    Reference to a DaggerML node.
+    Reference to a DaggerML object.
 
     Parameters
     ----------
@@ -127,7 +101,7 @@ class Ref:  # noqa: F811
 @dataclass(frozen=True)
 class Resource:  # noqa: F811
     """
-    Representation of an external resource.
+    Representation of an externally managed object with an identifier.
 
     Parameters
     ----------
@@ -183,24 +157,6 @@ class Error(Exception):  # noqa: F811
 
 
 class Dml:  # noqa: F811
-    """
-    Main DaggerML interface for creating and managing DAGs.
-
-    Parameters
-    ----------
-    data : Any, optional
-        Initial data for the DML instance
-    **kwargs : dict
-        Additional configuration options
-
-    Examples
-    --------
-    >>> from daggerml import Dml
-    >>> with Dml() as dml:
-    ...     with dml.new("d0", "message") as dag:
-    ...         pass
-    """
-
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.opts = kwargs2opts(**kwargs)
@@ -208,30 +164,6 @@ class Dml:  # noqa: F811
         self.tmpdirs = None
 
     def __call__(self, *args: str, input=None, as_text: bool = False) -> Any:
-        """
-        Call the dml cli with the given arguments.
-
-        Parameters
-        ----------
-        *args : str
-            Arguments to pass to the dml cli
-        input : str, optional
-            data to pipe to `dml`.
-        as_text : bool, optional
-            If True, return the result as text, otherwise json
-
-        Returns
-        -------
-        Any
-            Result of the execution
-
-        Examples
-        -----
-        >>> dml = Dml()
-        >>> _ = dml("repo", "list")
-
-        is equivalent to `dml repo list`.
-        """
         resp = None
         path = shutil.which("dml")
         argv = [path, *self.opts, *args]
@@ -256,8 +188,8 @@ class Dml:  # noqa: F811
         "Use temporary config and project directories."
         self.tmpdirs = [TemporaryDirectory() for _ in range(2)]
         self.kwargs = {
-            "config_dir": getenv("DML_CONFIG_DIR") or self.tmpdirs[0].__enter__(),
-            "project_dir": getenv("DML_PROJECT_DIR") or self.tmpdirs[1].__enter__(),
+            "config_dir": getenv("DML_CONFIG_DIR") or self.tmpdirs[0].name,
+            "project_dir": getenv("DML_PROJECT_DIR") or self.tmpdirs[1].name,
             "repo": getenv("DML_REPO") or "test",
             "user": getenv("DML_USER") or "test",
             "branch": getenv("DML_BRANCH") or "main",
@@ -266,12 +198,10 @@ class Dml:  # noqa: F811
         self.opts = kwargs2opts(**self.kwargs)
         if self.kwargs["repo"] not in [x["name"] for x in self("repo", "list")]:
             self("repo", "create", self.kwargs["repo"])
-        if self.kwargs["branch"] not in self("branch", "list"):
-            self("branch", "create", self.kwargs["branch"])
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        [x.__exit__(exc_type, exc_value, traceback) for x in self.tmpdirs]
+        [x.cleanup() for x in self.tmpdirs]
 
     @property
     def envvars(self):
