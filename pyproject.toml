@@ -51,6 +51,7 @@ minversion = "6.0"
 addopts = "-ra --ignore=submodules/"
 testpaths = [
   "tests",
+  "src/daggerml",
 ]
 markers = [
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -75,10 +76,10 @@ artifacts = [
 
 [tool.hatch.envs.default]
 python="3.10"
-dependencies = [
-  "twine",
-  "daggerml_cli @ {root:uri}/submodules/daggerml_cli",
-  "daggerml[test]",
+features = ["test"]
+dependencies = ["twine"]
+pre-install-commands = [
+  "pip install -e {root:uri}/submodules/daggerml_cli",
 ]
 
 [tool.hatch.envs.default.scripts]
