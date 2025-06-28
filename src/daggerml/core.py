@@ -424,7 +424,7 @@ class Node:  # noqa: F811
         "Access the node's argv list"
         return [Node(self.dag, x) for x in self.dag._dml.get_argv(self)]
 
-    def load(self, *keys: Union[str, int], recurse: bool = False) -> Dag:
+    def load(self, *keys: Union[str, int]) -> Dag:
         """
         Convenience wrapper around `dml.load(node)`
 
@@ -433,19 +433,13 @@ class Node:  # noqa: F811
 
         Parameters
         ----------
-        key : str, optional
+        *keys : str, optional
             Key to load from the DAG. If not provided, the entire DAG is loaded.
 
         Returns
         -------
         Dag
             The dag that this node was imported from (or in the case of a function call, this returns the fndag)
-                d0 = dml.new("d0", "d0")
-                l0 = d0._put(42)
-                c0 = d0._put({"a": 1, "b": [l0, "23"]})
-                assert c0.load("b", 0) == l0
-                assert c0.load("b").load(0) == l0
-                assert c0["b"][0] != l0
 
         Examples
         --------
@@ -459,21 +453,9 @@ class Node:  # noqa: F811
         >>> dml.cleanup()
         """
         if len(keys) == 0:
-            return self.dag._dml.load(self, recurse=recurse)
-        keys = list(keys)
-        while len(keys) > 0:
-            key = keys.pop(0)
-            fn, *args = (x.value() for x in self.argv)
-            if fn.uri == "daggerml:list":
-                assert isinstance(key, int), "list keys must be integers"
-            elif fn.uri == "daggerml:dict":
-                assert isinstance(key, str), "dict keys must be strings"
-                i = args.index(key)
-                key = i + 1
-            else:
-                raise Error(f"{fn.uri} is not a collection constructor")
-            self = self.argv[key + 1]
-        return self
+            return self.dag._dml.load(self)
+        data = self.dag._dml("node", "backtrack", self.ref.to, *map(str, keys))
+        return Node(self.dag, from_data(data))
 
     def __getitem__(self, key: Union[slice, str, int, "Node"]) -> "Node":
         """

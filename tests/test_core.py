@@ -152,6 +152,7 @@ class TestBasic(TestCase):
                 l0 = d0._put(42)
                 c0 = d0._put({"a": 1, "b": [l0, "23"]})
                 assert c0.load("b", 0) == l0
+                assert c0.load("b", 1).value() == "23"
                 assert c0.load("b").load(0) == l0
                 assert c0["b"][0] != l0
 
