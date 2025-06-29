@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cli = ["daggerml-cli"]
+cli = ["daggerml-cli>=0.0.29"]
 test = [
   "pytest",
   "pytest-cov",
