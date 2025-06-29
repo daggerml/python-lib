@@ -210,7 +210,10 @@ class Dml:
     def __call__(self, *args: str, input=None, as_text: bool = False) -> Any:
         path = shutil.which("dml")
         argv = [path, *kwargs2opts(**self.kwargs), *args]
-        resp = subprocess.run(argv, check=True, capture_output=True, text=True, input=input)
+        resp = subprocess.run(argv, check=False, capture_output=True, text=True, input=input)
+        if resp.returncode != 0:
+            raise_ex(Error(resp.stderr or "DML command failed", code="DmlError"))
+        log.debug("dml command stderr: %s", resp.stderr)
         if resp.stderr:
             log.error(resp.stderr.rstrip())
         try:
