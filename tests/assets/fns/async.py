@@ -4,18 +4,18 @@ import sys
 
 from daggerml import Dml
 
-# print(sys.stdin.read(), file=sys.stderr)
-with Dml() as dml:
+if __name__ == "__main__":
     stdin = json.loads(sys.stdin.read())
-    cache_dir = os.getenv("DML_FN_CACHE_DIR", "")
-    cache_file = os.path.join(cache_dir, stdin["cache_key"])
-    debug_file = os.path.join(cache_dir, "debug")
+    with Dml.temporary(cache_path=stdin["cache_path"]) as dml:
+        cache_dir = os.getenv("DML_FN_CACHE_DIR", "")
+        cache_file = os.path.join(cache_dir, stdin["cache_key"])
+        debug_file = os.path.join(cache_dir, "debug")
 
-    with open(debug_file, "a") as f:
-        f.write("ASYNC EXECUTING\n")
+        with open(debug_file, "a") as f:
+            f.write("ASYNC EXECUTING\n")
 
-    if os.path.isfile(cache_file):
-        with dml.new("test", "test", stdin["dump"], print) as d0:
-            d0.result = sum(d0.argv[1:].value())
-    else:
-        open(cache_file, "w").close()
+        if os.path.isfile(cache_file):
+            with dml.new("test", "test", stdin["dump"], print) as d0:
+                d0.result = sum(d0.argv[1:].value())
+        else:
+            open(cache_file, "w").close()

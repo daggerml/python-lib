@@ -4,10 +4,9 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field, fields
-from os import getenv
 from tempfile import TemporaryDirectory
 from traceback import format_exception
-from typing import Any, Callable, NewType, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from daggerml.util import (
     BackoffWithJitter,
@@ -24,13 +23,7 @@ log = logging.getLogger(__name__)
 
 DATA_TYPE = {}
 
-Node = NewType("Node", None)
-Resource = NewType("Resource", None)
-Error = NewType("Error", None)
-Ref = NewType("Ref", None)
-Dml = NewType("Dml", None)
-Dag = NewType("Dag", None)
-Scalar = Union[str, int, float, bool, type(None), Resource, Node]
+Scalar = Union[str, int, float, bool, type(None), "Resource", "Node"]
 Collection = Union[list, tuple, set, dict]
 
 
@@ -75,36 +68,10 @@ def to_data(obj):
 
 
 def from_json(text):
-    """
-    Parse JSON string into Python objects.
-
-    Parameters
-    ----------
-    text : str
-        JSON string to parse
-
-    Returns
-    -------
-    Any
-        Deserialized Python object
-    """
     return from_data(json.loads(text))
 
 
 def to_json(obj):
-    """
-    Convert Python object to JSON string.
-
-    Parameters
-    ----------
-    obj : Any
-        Object to serialize
-
-    Returns
-    -------
-    str
-        JSON string representation
-    """
     return json.dumps(to_data(obj), separators=(",", ":"))
 
 
@@ -112,7 +79,7 @@ def to_json(obj):
 @dataclass(frozen=True)
 class Ref:  # noqa: F811
     """
-    Reference to a DaggerML node.
+    Reference to a DaggerML object.
 
     Parameters
     ----------
@@ -127,7 +94,7 @@ class Ref:  # noqa: F811
 @dataclass(frozen=True)
 class Resource:  # noqa: F811
     """
-    Representation of an external resource.
+    Representation of an externally managed object with an identifier.
 
     Parameters
     ----------
@@ -182,60 +149,71 @@ class Error(Exception):  # noqa: F811
         return "".join(self.context.get("trace", [self.message]))
 
 
-class Dml:  # noqa: F811
+@dataclass
+class Dml:
     """
-    Main DaggerML interface for creating and managing DAGs.
-
-    Parameters
-    ----------
-    data : Any, optional
-        Initial data for the DML instance
-    **kwargs : dict
-        Additional configuration options
-
-    Examples
-    --------
-    >>> from daggerml import Dml
-    >>> with Dml() as dml:
-    ...     with dml.new("d0", "message") as dag:
-    ...         pass
+    DaggerML cli client wrapper
     """
 
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-        self.opts = kwargs2opts(**kwargs)
-        self.token = None
-        self.tmpdirs = None
+    config_dir: Union[str, None] = None
+    project_dir: Union[str, None] = None
+    cache_path: Union[str, None] = None
+    repo: Union[str, None] = None
+    user: Union[str, None] = None
+    branch: Union[str, None] = None
+    token: Union[str, None] = None
+    tmpdirs: dict[str, TemporaryDirectory] = field(default_factory=dict)
 
-    def __call__(self, *args: str, input=None, as_text: bool = False) -> Any:
+    @property
+    def kwargs(self) -> dict:
+        out = {
+            "config_dir": self.config_dir,
+            "project_dir": self.project_dir,
+            "cache_path": self.cache_path,
+            "repo": self.repo,
+            "user": self.user,
+            "branch": self.branch,
+        }
+        return {k: v for k, v in out.items() if v is not None}
+
+    @classmethod
+    def temporary(cls, repo="test", user="user", branch="main", cache_path=None, **kwargs) -> "Dml":
         """
-        Call the dml cli with the given arguments.
+        Create a temporary Dml instance with specified parameters.
 
         Parameters
         ----------
-        *args : str
-            Arguments to pass to the dml cli
-        input : str, optional
-            data to pipe to `dml`.
-        as_text : bool, optional
-            If True, return the result as text, otherwise json
-
-        Returns
-        -------
-        Any
-            Result of the execution
-
-        Examples
-        -----
-        >>> dml = Dml()
-        >>> _ = dml("repo", "list")
-
-        is equivalent to `dml repo list`.
+        repo : str, default="test"
+        user : str, default="user"
+        branch : str, default="main"
+        **kwargs : dict
+            Additional keyword arguments for configuration include `config_dir`, `project_dir`, and `cache_path`.
+            If any of those is provided, it will not create a temporary directory for that parameter. If provided and
+            set to None, the dml default will be used.
         """
-        resp = None
+        tmpdirs = {k: TemporaryDirectory(prefix="dml-") for k in ["config_dir", "project_dir"] if k not in kwargs}
+        self = cls(
+            repo=repo,
+            user=user,
+            branch=branch,
+            cache_path=cache_path,
+            **{k: v.name for k, v in tmpdirs.items()},
+            tmpdirs=tmpdirs,
+        )
+        if self.kwargs["repo"] not in [x["name"] for x in self("repo", "list")]:
+            self("repo", "create", self.kwargs["repo"])
+        return self
+
+    def cleanup(self):
+        [x.cleanup() for x in self.tmpdirs.values()]
+
+    def __call__(self, *args: str, input=None, as_text: bool = False) -> Any:
         path = shutil.which("dml")
-        argv = [path, *self.opts, *args]
-        resp = subprocess.run(argv, check=True, capture_output=True, text=True, input=input)
+        argv = [path, *kwargs2opts(**self.kwargs), *args]
+        resp = subprocess.run(argv, check=False, capture_output=True, text=True, input=input)
+        if resp.returncode != 0:
+            raise_ex(Error(resp.stderr or "DML command failed", code="DmlError"))
+        log.debug("dml command stderr: %s", resp.stderr)
         if resp.stderr:
             log.error(resp.stderr.rstrip())
         try:
@@ -253,36 +231,21 @@ class Dml:  # noqa: F811
         return invoke
 
     def __enter__(self):
-        "Use temporary config and project directories."
-        self.tmpdirs = [TemporaryDirectory() for _ in range(2)]
-        self.kwargs = {
-            "config_dir": getenv("DML_CONFIG_DIR") or self.tmpdirs[0].__enter__(),
-            "project_dir": getenv("DML_PROJECT_DIR") or self.tmpdirs[1].__enter__(),
-            "repo": getenv("DML_REPO") or "test",
-            "user": getenv("DML_USER") or "test",
-            "branch": getenv("DML_BRANCH") or "main",
-            **self.kwargs,
-        }
-        self.opts = kwargs2opts(**self.kwargs)
-        if self.kwargs["repo"] not in [x["name"] for x in self("repo", "list")]:
-            self("repo", "create", self.kwargs["repo"])
-        if self.kwargs["branch"] not in self("branch", "list"):
-            self("branch", "create", self.kwargs["branch"])
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        [x.__exit__(exc_type, exc_value, traceback) for x in self.tmpdirs]
+        self.cleanup()
 
     @property
     def envvars(self):
         return {f"DML_{k.upper()}": str(v) for k, v in self.kwargs.items()}
 
-    def new(self, name="", message="", data=None, message_handler=None):
+    def new(self, name="", message="", data=None, message_handler=None) -> "Dag":
         opts = kwargs2opts(dump="-") if data else []
         token = self("api", "create", *opts, name, message, input=data, as_text=True)
         return Dag(replace(self, token=token), message_handler)
 
-    def load(self, name: Union[str, Node], recurse=False) -> Dag:
+    def load(self, name: Union[str, "Node"], recurse=False) -> "Dag":
         return Dag(replace(self, token=None), _ref=self.get_dag(name, recurse=recurse))
 
 
@@ -292,7 +255,7 @@ class Boxed:
 
 
 @dataclass
-class Dag:  # noqa: F811
+class Dag:
     _dml: Dml
     _message_handler: Optional[Callable] = None
     _ref: Optional[Ref] = None
@@ -314,16 +277,16 @@ class Dag:  # noqa: F811
         if exc_value is not None:
             self._commit(Error(exc_value))
 
-    def __getitem__(self, name):
+    def __getitem__(self, name) -> "Node":
         return Node(self, self._dml.get_node(name, self._ref))
 
-    def __setitem__(self, name, value):
+    def __setitem__(self, name, value) -> "Node":
         assert not self._ref
         if isinstance(value, Ref):
             return self._dml.set_node(name, value)
         return self._put(value, name=name)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._dml.get_names(self._ref))
 
     def __iter__(self):
@@ -348,12 +311,12 @@ class Dag:  # noqa: F811
         return self.__getitem__(name)
 
     @property
-    def argv(self) -> Node:
+    def argv(self) -> "Node":
         "Access the dag's argv node"
         return Node(self, self._dml.get_argv(self._ref))
 
     @property
-    def result(self) -> Node:
+    def result(self) -> "Node":
         ref = self._dml.get_result(self._ref)
         assert ref, f"'{self.__class__.__name__}' has no attribute 'result'"
         return Node(self, ref) if ref else ref
@@ -367,14 +330,14 @@ class Dag:  # noqa: F811
         return lambda: self._dml.get_names(self._ref).keys()
 
     @property
-    def values(self) -> list[Node]:
+    def values(self) -> list["Node"]:
         def result():
             nodes = self._dml.get_names(self._ref).values()
             return [Node(self, x) for x in nodes]
 
         return result
 
-    def _put(self, value: Union[Scalar, Collection], *, name=None, doc=None) -> Node:
+    def _put(self, value: Union[Scalar, Collection], *, name=None, doc=None) -> "Node":
         """
         Add a value to the DAG.
 
@@ -399,7 +362,7 @@ class Dag:  # noqa: F811
         )
         return Node(self, self._dml.put_literal(value, name=name, doc=doc))
 
-    def _load(self, dag_name, node=None, *, name=None, doc=None) -> Node:
+    def _load(self, dag_name, node=None, *, name=None, doc=None) -> "Node":
         """
         Load a DAG by name.
 
@@ -420,7 +383,7 @@ class Dag:  # noqa: F811
         dag = dag_name if isinstance(dag_name, str) else dag_name._ref
         return Node(self, self._dml.put_load(dag, node, name=name, doc=doc))
 
-    def _commit(self, value) -> Node:
+    def _commit(self, value) -> "Node":
         """
         Commit a value to the DAG.
 
@@ -459,7 +422,45 @@ class Node:  # noqa: F811
     def __hash__(self):
         return hash(self.ref)
 
-    def __getitem__(self, key: Union[slice, str, int, Node]) -> Node:
+    @property
+    def argv(self) -> "Node":
+        "Access the node's argv list"
+        return [Node(self.dag, x) for x in self.dag._dml.get_argv(self)]
+
+    def load(self, *keys: Union[str, int]) -> Dag:
+        """
+        Convenience wrapper around `dml.load(node)`
+
+        If `key` is provided, it considers this node to be a collection created
+        by the appropriate method and loads the dag that corresponds to this key
+
+        Parameters
+        ----------
+        *keys : str, optional
+            Key to load from the DAG. If not provided, the entire DAG is loaded.
+
+        Returns
+        -------
+        Dag
+            The dag that this node was imported from (or in the case of a function call, this returns the fndag)
+
+        Examples
+        --------
+        >>> dml = Dml.temporary()
+        >>> dag = dml.new("test", "test")
+        >>> l0 = dag._put(42)
+        >>> c0 = dag._put({"a": 1, "b": [l0, "23"]})
+        >>> assert c0.load("b", 0) == l0
+        >>> assert c0.load("b").load(0) == l0
+        >>> assert c0["b"][0] != l0  # this is a different node, not the same as l0
+        >>> dml.cleanup()
+        """
+        if len(keys) == 0:
+            return self.dag._dml.load(self)
+        data = self.dag._dml("node", "backtrack", self.ref.to, *map(str, keys))
+        return Node(self.dag, from_data(data))
+
+    def __getitem__(self, key: Union[slice, str, int, "Node"]) -> "Node":
         """
         Get the `key` item. It should be the same as if you were working on the
         actual value.
@@ -476,8 +477,16 @@ class Node:  # noqa: F811
 
         Examples
         --------
-        >>> node = dag._put({"a": 1, "b": 5})
-        >>> assert node["a"].value() == 1
+        >>> dml = Dml.temporary()
+        >>> dag = dml.new("test", "test")
+        >>> node = dag._put({"a": 1, "b": [5, 6]})
+        >>> nested = node["a"]
+        >>> isinstance(nested, Node)
+        True
+        >>> nested.value()
+        1
+        >>> node["b"][0].value()  # lists too
+        5
         """
         if isinstance(key, slice):
             key = [key.start, key.stop, key.step]
@@ -537,7 +546,7 @@ class Node:  # noqa: F811
             for k in self.keys():
                 yield k
 
-    def __call__(self, *args, name=None, doc=None, retry=False, sleep=None, timeout=0) -> Node:
+    def __call__(self, *args, name=None, doc=None, sleep=None, timeout=0) -> "Node":
         """
         Call this node as a function.
 
@@ -549,8 +558,6 @@ class Node:  # noqa: F811
             Name for the result node
         doc : str, optional
             Documentation
-        retry : bool, default=False
-            Retry a failed run?
         sleep : callable, optional
             A nullary function that returns sleep time in milliseconds
         timeout : int, default=30000
@@ -571,16 +578,14 @@ class Node:  # noqa: F811
         sleep = sleep or BackoffWithJitter()
         args = [self.dag._put(x) for x in args]
         end = current_time_millis() + timeout
-        kw = {"retry": retry}
         while timeout <= 0 or current_time_millis() < end:
-            resp = self.dag._dml.start_fn([self, *args], name=name, doc=doc, **kw)
+            resp = self.dag._dml.start_fn([self, *args], name=name, doc=doc)
             if resp:
                 return Node(self.dag, resp)
-            kw["retry"] = False
             time.sleep(sleep() / 1000)
         raise TimeoutError(f"invoking function: {self.value()}")
 
-    def keys(self, *, name=None, doc=None) -> Node:
+    def keys(self, *, name=None, doc=None) -> "Node":
         """
         Get the keys of a dictionary node.
 
@@ -598,7 +603,7 @@ class Node:  # noqa: F811
         """
         return Node(self.dag, self.dag._dml.keys(self, name=name, doc=doc))
 
-    def len(self, *, name=None, doc=None) -> Node:
+    def len(self, *, name=None, doc=None) -> "Node":
         """
         Get the length of a collection node.
 
@@ -616,7 +621,7 @@ class Node:  # noqa: F811
         """
         return Node(self.dag, self.dag._dml.len(self, name=name, doc=doc))
 
-    def type(self, *, name=None, doc=None) -> Node:
+    def type(self, *, name=None, doc=None) -> "Node":
         """
         Get the type of this node.
 
