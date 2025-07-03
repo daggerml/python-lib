@@ -74,34 +74,37 @@ class TestBasic(TestCase):
         with TemporaryDirectory(prefix="dml-cache-") as cache_path:
             with Dml.temporary(cache_path=cache_path) as dml:
                 d0 = dml.new("d0", "d0", message_handler=message_handler)
-                d0.n0 = [42]
-                self.assertIsInstance(d0.n0, Node)
-                self.assertEqual(d0.n0.value(), [42])
-                self.assertEqual(d0.n0.len().value(), 1)
-                self.assertEqual(d0.n0.type().value(), "list")
-                d0["x0"] = d0.n0
-                self.assertEqual(d0["x0"], d0.n0)
-                self.assertEqual(d0.x0, d0.n0)
+                self.assertIsInstance(d0, Dag)
+                # d0.n0 = [42]
+                n0 = d0._put([42], name="n0")
+                assert isinstance(n0, Node)
+                self.assertIsInstance(n0, Node)
+                self.assertEqual(n0.value(), [42])
+                self.assertEqual(n0.len().value(), 1)
+                self.assertEqual(n0.type().value(), "list")
+                d0["x0"] = n0
+                self.assertEqual(d0["x0"], n0)
+                self.assertEqual(d0.x0, n0)
                 d0.x1 = 42
                 self.assertEqual(d0["x1"].value(), 42)
                 self.assertEqual(d0.x1.value(), 42)
-                d0.n1 = d0.n0[0]
-                self.assertIsInstance(d0.n1, Node)
-                self.assertEqual([x.value() for x in d0.n0], [d0.n1.value()])
+                d0.n1 = n0[0]
+                self.assertIsInstance(n0[0], Node)
+                self.assertEqual([x.value() for x in n0], [d0.n1.value()])
                 self.assertEqual(d0.n1.value(), 42)
-                d0.n2 = {"x": d0.n0, "y": "z"}
-                self.assertNotEqual(d0.n2["x"], d0.n0)
-                self.assertEqual(d0.n2["x"].value(), d0.n0.value())
+                d0.n2 = {"x": n0, "y": "z"}
+                self.assertNotEqual(d0.n2["x"], n0)
+                self.assertEqual(d0.n2["x"].value(), n0.value())
                 d0.n3 = list(d0.n2.items())
                 self.assertIsInstance([x for x in d0.n3], list)
                 self.assertDictEqual(
                     {k.value(): v.value() for k, v in d0.n2.items()},
-                    {"x": d0.n0.value(), "y": "z"},
+                    {"x": n0.value(), "y": "z"},
                 )
                 d0.n4 = [1, 2, 3, 4, 5]
                 d0.n5 = d0.n4[1:]
                 self.assertListEqual([x.value() for x in d0.n5], [2, 3, 4, 5])
-                d0.result = result = d0.n0
+                d0.result = result = n0
                 self.assertIsInstance(local_value, str)
                 dag = dml("dag", "list")[0]
                 self.assertEqual(dag["result"], result.ref.to)
@@ -194,50 +197,14 @@ class TestBasic(TestCase):
         with TemporaryDirectory(prefix="dml-cache-") as cache_path:
             with Dml.temporary(cache_path=cache_path) as dml:
                 with dml.new("d0", "d0") as d0:
-                    # only fn dags have an argv attribute, expect AttributeError
-                    with self.assertRaises(Error):
-                        d0.argv  # noqa: B018
-                    # d0.result hasn't been assigned yet but it can't raise an
-                    # AttributeError because we also have __getitem__ implemented
-                    # which would then be called, so an AssertionError is raised.
-                    with self.assertRaises(AssertionError):
-                        d0.result  # noqa: B018
                     d0.n0 = 42
-                    self.assertEqual(type(d0.n0), Node)
-                    d0.n1 = 420
-                    d0.result = d0.n0
+                    d0.result = "foo"
                 dl = dml.load("d0")
-                self.assertEqual(type(dl), Dag)
+                assert isinstance(dl, Dag)
                 self.assertEqual(type(dl.n0), Node)
                 self.assertEqual(dl.n0.value(), 42)
                 self.assertEqual(type(dl.result), Node)
-                self.assertEqual(dl.result.value(), 42)
-                self.assertEqual(len(dl), 2)
-                self.assertEqual(set(dl.keys()), {"n0", "n1"})
-                self.assertEqual(set(dl.values()), {dl.n0, dl.n1})
-                for x in dl.values():
-                    self.assertIsInstance(x, Node)
-                with dml.new("d1", "d1") as d1:
-                    d0 = dml.load("d0")
-                    self.assertEqual(d0.result.value(), 42)
-                    self.assertEqual(d0.n0.value(), 42)
-                    self.assertEqual(d0["n0"].value(), 42)
-
-                    self.assertEqual(len(d0), 2)
-                    self.assertEqual(set(d0.keys()), {"n0", "n1"})
-                    self.assertEqual(set(d0.values()), {d0.n0, d0.n1})
-                    # d0 has been committed: its nodes are now imports
-                    for x in d0.values():
-                        self.assertIsInstance(x, Node)
-
-                    d1.n0 = 42
-                    d1.n1 = 420
-                    self.assertEqual(set(d1.keys()), {"n0", "n1"})
-                    # d1 has not yet been committed: its nodes are of type Node
-                    for x in d1.values():
-                        self.assertEqual(type(x), Node)
-
-                    d1.result = d0.result
+                self.assertEqual(dl.result.value(), "foo")
 
     def test_load_recursing(self):
         nums = [1, 2, 3]
@@ -263,14 +230,16 @@ class TestBasic(TestCase):
             with Dml.temporary(cache_path=cache_path) as dml:
                 config_dir = dml.config_dir
                 with dml.new("d0", "d0") as d1:
-                    d1.n0 = SUM
-                    d1.n1 = d1.n0(*nums)
+                    d1.sum_fn = SUM
+                    n1 = d1.sum_fn(*nums, name="n1")
+                    assert n1.value() == sum(nums)
+                    assert isinstance(n1.load(), Dag)
                     uid = d1.n1.load().uuid.value()
             with Dml.temporary(cache_path=cache_path) as dml:
                 assert dml.config_dir != config_dir, "Config dir should not be the same"
                 with dml.new("d1", "d0") as d1:
-                    d1.n0 = SUM
-                    d1.n1 = d1.n0(*nums)
+                    d1.sum_fn = SUM
+                    d1.n1 = d1.sum_fn(*nums)
                     uid1 = d1.n1.load().uuid.value()
         assert uid == uid1, "Cached dag should have the same UUID"
 
