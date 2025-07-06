@@ -254,6 +254,34 @@ class Boxed:
     value: Any
 
 
+def make_node(dag: "Dag", ref: Ref) -> "Node":
+    """
+    Create a Node from a Dag and Ref.
+
+    Parameters
+    ----------
+    dag : Dag
+        The parent DAG.
+    ref : Ref
+        The reference to the node.
+
+    Returns
+    -------
+    Node
+        A Node instance representing the reference in the DAG.
+    """
+    info = dag._dml("node", "describe", ref.to)
+    if info["data_type"] == "list":
+        return ListNode(dag, ref, _info=info)
+    if info["data_type"] == "dict":
+        return DictNode(dag, ref, _info=info)
+    if info["data_type"] == "set":
+        return ListNode(dag, ref, _info=info)
+    if info["data_type"] == "resource":
+        return ResourceNode(dag, ref, _info=info)
+    return Node(dag, ref, _info=info)
+
+
 @dataclass
 class Dag:
     _dml: Dml
@@ -278,7 +306,8 @@ class Dag:
             self._commit(Error(exc_value))
 
     def __getitem__(self, name) -> "Node":
-        return Node(self, self._dml.get_node(name, self._ref))
+        return make_node(self, self._dml.get_node(name, self._ref))
+        # return Node(self, self._dml.get_node(name, self._ref))
 
     def __setitem__(self, name, value) -> "Node":
         assert not self._ref
@@ -313,13 +342,15 @@ class Dag:
     @property
     def argv(self) -> "Node":
         "Access the dag's argv node"
-        return Node(self, self._dml.get_argv(self._ref))
+        return make_node(self, self._dml.get_argv(self._ref))
+        # return Node(self, self._dml.get_argv(self._ref))
 
     @property
     def result(self) -> "Node":
         ref = self._dml.get_result(self._ref)
         assert ref, f"'{self.__class__.__name__}' has no attribute 'result'"
-        return Node(self, ref) if ref else ref
+        return make_node(self, ref)
+        # return Node(self, ref) if ref else ref
 
     @result.setter
     def result(self, value):
@@ -333,7 +364,7 @@ class Dag:
     def values(self) -> list["Node"]:
         def result():
             nodes = self._dml.get_names(self._ref).values()
-            return [Node(self, x) for x in nodes]
+            return [make_node(self, x) for x in nodes]
 
         return result
 
@@ -360,7 +391,7 @@ class Dag:
             lambda x: isinstance(x, Node) and x.dag._ref,
             lambda x: self._load(x.dag, x.ref),
         )
-        return Node(self, self._dml.put_literal(value, name=name, doc=doc))
+        return make_node(self, self._dml.put_literal(value, name=name, doc=doc))
 
     def _load(self, dag_name, node=None, *, name=None, doc=None) -> "Node":
         """
@@ -381,7 +412,7 @@ class Dag:
             Node representing the loaded DAG
         """
         dag = dag_name if isinstance(dag_name, str) else dag_name._ref
-        return Node(self, self._dml.put_load(dag, node, name=name, doc=doc))
+        return make_node(self, self._dml.put_load(dag, node, name=name, doc=doc))
 
     def _commit(self, value) -> "Node":
         """
@@ -414,6 +445,7 @@ class Node:  # noqa: F811
 
     dag: Dag
     ref: Ref
+    _info: dict = field(default_factory=dict)
 
     def __repr__(self):
         ref_id = self.ref if isinstance(self.ref, Error) else self.ref.to
@@ -425,7 +457,7 @@ class Node:  # noqa: F811
     @property
     def argv(self) -> "Node":
         "Access the node's argv list"
-        return [Node(self.dag, x) for x in self.dag._dml.get_argv(self)]
+        return [make_node(self.dag, x) for x in self.dag._dml.get_argv(self)]
 
     def load(self, *keys: Union[str, int]) -> Dag:
         """
@@ -458,94 +490,26 @@ class Node:  # noqa: F811
         if len(keys) == 0:
             return self.dag._dml.load(self)
         data = self.dag._dml("node", "backtrack", self.ref.to, *map(str, keys))
-        return Node(self.dag, from_data(data))
+        return make_node(self.dag, from_data(data))
 
-    def __getitem__(self, key: Union[slice, str, int, "Node"]) -> "Node":
+    @property
+    def type(self):
+        """ Get the data type of the node."""
+        return self._info["data_type"]
+
+    def value(self):
         """
-        Get the `key` item. It should be the same as if you were working on the
-        actual value.
+        Get the concrete value of this node.
 
         Returns
         -------
-        Node
-            Node with the length of the collection
-
-        Raises
-        ------
-        Error
-            If the node isn't a collection (e.g. list, set, or dict).
-
-        Examples
-        --------
-        >>> dml = Dml.temporary()
-        >>> dag = dml.new("test", "test")
-        >>> node = dag._put({"a": 1, "b": [5, 6]})
-        >>> nested = node["a"]
-        >>> isinstance(nested, Node)
-        True
-        >>> nested.value()
-        1
-        >>> node["b"][0].value()  # lists too
-        5
+        Any
+            The actual value represented by this node
         """
-        if isinstance(key, slice):
-            key = [key.start, key.stop, key.step]
-        return Node(self.dag, self.dag._dml.get(self, key))
+        return self.dag._dml.get_node_value(self.ref)
 
-    def contains(self, item, *, name=None, doc=None):
-        """
-        For collection nodes, checks to see if `item` is in `self`
 
-        Returns
-        -------
-        Node
-            Node with the boolean of is `item` in `self`
-        """
-        return Node(self.dag, self.dag._dml.contains(self, item, name=name, doc=doc))
-
-    def __contains__(self, item):
-        return self.contains(item).value()  # has to return boolean
-
-    def __len__(self):  # python requires this to be an int
-        """
-        Get the node's length
-
-        Returns
-        -------
-        Node
-            Node with the length of the collection
-
-        Raises
-        ------
-        Error
-            If the node isn't a collection (e.g. list, set, or dict).
-        """
-        result = self.len().value()
-        assert isinstance(result, int)
-        return result
-
-    def __iter__(self):
-        """
-        Iterate over the node's values (items if it's a list, and keys if it's a
-        dict)
-
-        Returns
-        -------
-        Node
-            Result node
-
-        Raises
-        ------
-        Error
-            If the node isn't a collection (e.g. list, set, or dict).
-        """
-        if self.type().value() == "list":
-            for i in range(len(self)):
-                yield self[i]
-        elif self.type().value() == "dict":
-            for k in self.keys():
-                yield k
-
+class ResourceNode(Node):
     def __call__(self, *args, name=None, doc=None, sleep=None, timeout=0) -> "Node":
         """
         Call this node as a function.
@@ -581,63 +545,86 @@ class Node:  # noqa: F811
         while timeout <= 0 or current_time_millis() < end:
             resp = self.dag._dml.start_fn([self, *args], name=name, doc=doc)
             if resp:
-                return Node(self.dag, resp)
+                return make_node(self.dag, resp)
             time.sleep(sleep() / 1000)
         raise TimeoutError(f"invoking function: {self.value()}")
 
-    def keys(self, *, name=None, doc=None) -> "Node":
-        """
-        Get the keys of a dictionary node.
 
-        Parameters
-        ----------
-        name : str, optional
-            Name for the result node
-        doc : str, optional
-            Documentation
+class CollectionNode(Node):  # noqa: F811
+    """
+    Representation of a collection node in a DaggerML DAG.
+
+    Parameters
+    ----------
+    dag : Dag
+        Parent DAG
+    ref : Ref
+        Node reference
+    """
+
+    def __getitem__(self, key: Union[slice, str, int, "Node"]) -> "Node":
+        """
+        Get the `key` item. It should be the same as if you were working on the
+        actual value.
 
         Returns
         -------
         Node
-            Node containing the dictionary keys
-        """
-        return Node(self.dag, self.dag._dml.keys(self, name=name, doc=doc))
+            Node with the length of the collection
 
-    def len(self, *, name=None, doc=None) -> "Node":
-        """
-        Get the length of a collection node.
+        Raises
+        ------
+        Error
+            If the node isn't a collection (e.g. list, set, or dict).
 
-        Parameters
-        ----------
-        name : str, optional
-            Name for the result node
-        doc : str, optional
-            Documentation
+        Examples
+        --------
+        >>> dml = Dml.temporary()
+        >>> dag = dml.new("test", "test")
+        >>> node = dag._put({"a": 1, "b": [5, 6]})
+        >>> nested = node["a"]
+        >>> isinstance(nested, Node)
+        True
+        >>> nested.value()
+        1
+        >>> node["b"][0].value()  # lists too
+        5
+        """
+        if isinstance(key, slice):
+            key = [key.start, key.stop, key.step]
+        return make_node(self.dag, self.dag._dml.get(self, key))
+
+    def contains(self, item, *, name=None, doc=None):
+        """
+        For collection nodes, checks to see if `item` is in `self`
 
         Returns
         -------
         Node
-            Node containing the length
+            Node with the boolean of is `item` in `self`
         """
-        return Node(self.dag, self.dag._dml.len(self, name=name, doc=doc))
+        return make_node(self.dag, self.dag._dml.contains(self, item, name=name, doc=doc))
 
-    def type(self, *, name=None, doc=None) -> "Node":
+    def __contains__(self, item):
+        return self.contains(item).value()  # has to return boolean
+
+    def __len__(self):  # python requires this to be an int
         """
-        Get the type of this node.
-
-        Parameters
-        ----------
-        name : str, optional
-            Name for the result node
-        doc : str, optional
-            Documentation
+        Get the node's length
 
         Returns
         -------
         Node
-            Node containing the type information
+            Node with the length of the collection
+
+        Raises
+        ------
+        Error
+            If the node isn't a collection (e.g. list, set, or dict).
         """
-        return Node(self.dag, self.dag._dml.type(self, name=name, doc=doc))
+        if self._info["length"]:
+            return self._info["length"]
+        raise Error(f"Cannot get length of type: {self._info['data_type']}")
 
     def get(self, key, default=None, *, name=None, doc=None):
         """
@@ -645,41 +632,38 @@ class Node:  # noqa: F811
 
         If default is not given, it defaults to None, so that this method never raises a KeyError.
         """
-        return Node(self.dag, self.dag._dml.get(self, key, default, name=name, doc=doc))
+        return make_node(self.dag, self.dag._dml.get(self, key, default, name=name, doc=doc))
 
-    def items(self):
-        """
-        Iterate over key-value pairs of a dictionary node.
 
-        Returns
-        -------
-        Iterator[tuple[Node, Node]]
-            Iterator over (key, value) pairs
-        """
-        for k in self:
-            yield k, self[k]
+class ListNode(CollectionNode):  # noqa: F811
+    """
+    Representation of a collection node in a DaggerML DAG.
 
-    def value(self):
-        """
-        Get the concrete value of this node.
+    Parameters
+    ----------
+    dag : Dag
+        Parent DAG
+    ref : Ref
+        Node reference
+    """
 
-        Returns
-        -------
-        Any
-            The actual value represented by this node
+    def __iter__(self):
         """
-        return self.dag._dml.get_node_value(self.ref)
-
-    def assoc(self, key, value, *, name=None, doc=None):
-        """
-        For a dict node, associate a new value into the map
+        Iterate over the node's values (items if it's a list, and keys if it's a
+        dict)
 
         Returns
         -------
         Node
-            Node containing the new dict
+            Result node
+
+        Raises
+        ------
+        Error
+            If the node isn't a collection (e.g. list, set, or dict).
         """
-        return Node(self.dag, self.dag._dml.assoc(self, key, value, name=name, doc=doc))
+        for i in range(len(self)):
+            yield self[i]
 
     def conj(self, item, *, name=None, doc=None):
         """
@@ -694,7 +678,7 @@ class Node:  # noqa: F811
         -----
         `append` is an alias `conj`
         """
-        return Node(self.dag, self.dag._dml.conj(self, item, name=name, doc=doc))
+        return make_node(self.dag, self.dag._dml.conj(self, item, name=name, doc=doc))
 
     def append(self, item, *, name=None, doc=None):
         """
@@ -710,6 +694,88 @@ class Node:  # noqa: F811
         conj : The main implementation
         """
         return self.conj(item, name=name, doc=doc)
+
+
+class DictNode(CollectionNode):  # noqa: F811
+
+    def keys(self) -> list[str]:
+        """
+        Get the keys of a dictionary node.
+
+        Parameters
+        ----------
+        name : str, optional
+            Name for the result node
+        doc : str, optional
+            Documentation
+
+        Returns
+        -------
+        list[str]
+            List of keys in the dictionary node
+        """
+        return self._info["keys"].copy()
+
+    def __iter__(self):
+        """
+        Iterate over the node's values (items if it's a list, and keys if it's a
+        dict)
+
+        Returns
+        -------
+        Node
+            Result node
+
+        Raises
+        ------
+        Error
+            If the node isn't a collection (e.g. list, set, or dict).
+        """
+        for k in self.keys():
+            yield k
+
+    def items(self):
+        """
+        Iterate over key-value pairs of a dictionary node.
+
+        Returns
+        -------
+        Iterator[tuple[Node, Node]]
+            Iterator over (key, value) pairs
+        """
+        if self.type != "dict":
+            raise Error(f"Cannot iterate items of type: {self.type}")
+        for k in self:
+            yield k, self[k]
+
+    def values(self) -> list["Node"]:
+        """
+        Get the values of a dictionary node.
+
+        Parameters
+        ----------
+        name : str, optional
+            Name for the result node
+        doc : str, optional
+            Documentation
+
+        Returns
+        -------
+        list[Node]
+            List of values in the dictionary node
+        """
+        return [self[k] for k in self]
+
+    def assoc(self, key, value, *, name=None, doc=None):
+        """
+        For a dict node, associate a new value into the map
+
+        Returns
+        -------
+        Node
+            Node containing the new dict
+        """
+        return make_node(self.dag, self.dag._dml.assoc(self, key, value, name=name, doc=doc))
 
     def update(self, update):
         """

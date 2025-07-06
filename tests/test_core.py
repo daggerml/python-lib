@@ -80,8 +80,8 @@ class TestBasic(TestCase):
                 assert isinstance(n0, Node)
                 self.assertIsInstance(n0, Node)
                 self.assertEqual(n0.value(), [42])
-                self.assertEqual(n0.len().value(), 1)
-                self.assertEqual(n0.type().value(), "list")
+                self.assertEqual(len(n0), 1)
+                self.assertEqual(n0.type, "list")
                 d0["x0"] = n0
                 self.assertEqual(d0["x0"], n0)
                 self.assertEqual(d0.x0, n0)
@@ -98,7 +98,7 @@ class TestBasic(TestCase):
                 d0.n3 = list(d0.n2.items())
                 self.assertIsInstance([x for x in d0.n3], list)
                 self.assertDictEqual(
-                    {k.value(): v.value() for k, v in d0.n2.items()},
+                    {k: v.value() for k, v in d0.n2.items()},
                     {"x": n0.value(), "y": "z"},
                 )
                 d0.n4 = [1, 2, 3, 4, 5]
