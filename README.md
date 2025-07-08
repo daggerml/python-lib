@@ -1,17 +1,27 @@
-# Getting started
+# daggerml [![PyPI - Version](https://img.shields.io/pypi/v/daggerml.svg)](https://pypi.org/project/daggerml) [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/daggerml.svg)](https://pypi.org/project/daggerml)
+
+DaggerML Python library for creating and managing DAGs (Directed Acyclic Graphs) for machine learning workflows.
+
+## Getting started
 
 ## Installation
-
-First install [`daggerml-cli`](https://github.com/daggerml/daggerml-cli) via
-
-```bash
-pipx install daggerml-cli
-```
 
 Install [`daggerml`](https://github.com/daggerml/python-lib) in whichever [virtual environment](https://docs.python.org/3/tutorial/venv.html) you prefer.
 
 ```bash
 pip install daggerml
+```
+
+For the CLI functionality, you have two options:
+
+**Option 1: Install CLI with daggerml (recommended for most users)**
+```bash
+pip install daggerml[cli]
+```
+
+**Option 2: Install CLI separately with pipx (keeps dependencies isolated)**
+```bash
+pipx install daggerml-cli
 ```
 
 ## Setting up a repo
@@ -48,3 +58,11 @@ dml repo delete ${REPO_NAME}
 ## Docs
 
 For more info, check out the docs at [daggerml.com](https://daggerml.com).
+
+## Contributing
+
+If you want to contribute, please check out the [contributing guide](CONTRIBUTING.md).
+
+## License
+
+`daggerml` is distributed under the terms of the [MIT](LICENSE) license.

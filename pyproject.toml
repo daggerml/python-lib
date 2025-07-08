@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cli = ["daggerml-cli>=0.0.29"]
+cli = ["daggerml-cli>=0.0.33"]
 test = [
   "pytest",
   "pytest-cov",
@@ -44,6 +44,7 @@ Homepage = "https://daggerml.com"
 Documentation = "https://daggerml.com"
 Issues = "https://github.com/daggerml/python-lib/issues"
 Source = "https://github.com/daggerml/python-lib"
+License = "https://github.com/daggerml/python-lib/blob/master/LICENSE"
 
 [tool.pytest.ini_options]
 pythonpath = "tests/"
