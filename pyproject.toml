@@ -26,10 +26,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = [
-  "dataclasses; python_version < '3.7'",
-  "importlib_metadata; python_version < '3.8'",
-]
+dependencies = []
 
 [project.optional-dependencies]
 cli = ["daggerml-cli>=0.0.33"]
