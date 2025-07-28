@@ -3,9 +3,9 @@ import logging
 import shutil
 import subprocess
 import time
+import traceback as tb
 from dataclasses import dataclass, field, fields
 from tempfile import TemporaryDirectory
-from traceback import format_exception
 from typing import Any, Callable, Optional, Union
 
 from daggerml.util import (
@@ -113,40 +113,39 @@ class Resource:  # noqa: F811
 
 @dml_type
 @dataclass
-class Error(Exception):  # noqa: F811
-    """
-    Custom error type for DaggerML.
+class Error(Exception):
+    message: str
+    origin: str
+    type: str
+    stack: list[dict] = field(default_factory=list)
 
-    Parameters
-    ----------
-    message : Union[str, Exception]
-        Error message or exception
-    context : dict, optional
-        Additional error context
-    code : str, optional
-        Error code
-    """
-
-    message: Union[str, Exception]
-    context: dict = field(default_factory=dict)
-    code: Optional[str] = None
-
-    def __post_init__(self):
-        if isinstance(self.message, Error):
-            ex = self.message
-            self.message = ex.message
-            self.context = ex.context
-            self.code = ex.code
-        elif isinstance(self.message, Exception):
-            ex = self.message
-            self.message = str(ex)
-            self.context = {"trace": format_exception(type(ex), value=ex, tb=ex.__traceback__)}
-            self.code = type(ex).__name__
-        else:
-            self.code = type(self).__name__ if self.code is None else self.code
+    @classmethod
+    def from_ex(cls, ex: BaseException) -> "Error":
+        if isinstance(ex, Error):
+            return ex
+        return cls(
+            message=str(ex),
+            origin="python",
+            type=ex.__class__.__name__,
+            stack=[
+                {
+                    "filename": frame.filename,
+                    "function": frame.name,
+                    "lineno": frame.lineno,
+                    "line": (frame.line or "").strip(),
+                }
+                for frame in tb.extract_tb(ex.__traceback__)
+            ],
+        )
 
     def __str__(self):
-        return "".join(self.context.get("trace", [self.message]))
+        lines = [f"Traceback (most recent call last) from {self.origin}:\n"]
+        for frame in self.stack:
+            lines.append(f'  File "{frame["filename"]}", line {frame["lineno"]}, in {frame["function"]}\n')
+            if "line" in frame and frame["line"]:
+                lines.append(f"    {frame['line']}\n")
+        lines.append(f"{self.type}: {self.message}")
+        return "".join(lines)
 
 
 @dataclass
@@ -212,7 +211,7 @@ class Dml:
         argv = [path, *kwargs2opts(**self.kwargs), *args]
         resp = subprocess.run(argv, check=False, capture_output=True, text=True, input=input)
         if resp.returncode != 0:
-            raise_ex(Error(resp.stderr or "DML command failed", code="DmlError"))
+            raise_ex(Error(resp.stderr or "DML command failed", origin="dml", type="CliError"))
         log.debug("dml command stderr: %s", resp.stderr)
         if resp.stderr:
             log.error(resp.stderr.rstrip())
@@ -303,7 +302,7 @@ class Dag:
 
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_value is not None:
-            self._commit(Error(exc_value))
+            self._commit(Error.from_ex(exc_value))
 
     def __getitem__(self, name) -> "Node":
         return make_node(self, self._dml.get_node(name, self._ref))
@@ -494,7 +493,7 @@ class Node:  # noqa: F811
 
     @property
     def type(self):
-        """ Get the data type of the node."""
+        """Get the data type of the node."""
         return self._info["data_type"]
 
     def value(self):
@@ -624,7 +623,7 @@ class CollectionNode(Node):  # noqa: F811
         """
         if self._info["length"]:
             return self._info["length"]
-        raise Error(f"Cannot get length of type: {self._info['data_type']}")
+        raise Error(f"Cannot get length of type: {self._info['data_type']}", origin="dml", type="TypeError")
 
     def get(self, key, default=None, *, name=None, doc=None):
         """
@@ -697,7 +696,6 @@ class ListNode(CollectionNode):  # noqa: F811
 
 
 class DictNode(CollectionNode):  # noqa: F811
-
     def keys(self) -> list[str]:
         """
         Get the keys of a dictionary node.
@@ -744,7 +742,7 @@ class DictNode(CollectionNode):  # noqa: F811
             Iterator over (key, value) pairs
         """
         if self.type != "dict":
-            raise Error(f"Cannot iterate items of type: {self.type}")
+            raise Error(f"Cannot iterate items of type: {self.type}", origin="dml", type="TypeError")
         for k in self:
             yield k, self[k]
 
