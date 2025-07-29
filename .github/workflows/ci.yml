@@ -4,7 +4,7 @@ on:
     branches:
       - "**"
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+" # Semantic version tags
+      - "v*" # Semantic version tags
   pull_request:
 jobs:
   test:
