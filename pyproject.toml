@@ -30,7 +30,7 @@ dependencies = []
 
 [project.optional-dependencies]
 cli = ["daggerml-cli>=0.0.33"]
-test = [
+dev = [
   "pytest",
   "pytest-cov",
   "moto[all,server]",
@@ -60,9 +60,9 @@ markers = [
 source = "vcs"
 
 [tool.hatch.version.raw-options]
-version_scheme = "only-version"   # use tag as version
+version_scheme = "no-guess-dev"   # use tag as version if exists
 local_scheme = "no-local-version"  # pypi does not support local-schemes
-tag_regex = "^v(?P<version>[0-9.]+)$"
+tag_regex = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:[-\\.][a-zA-Z0-9]+)*)$"
 version_file = "src/daggerml/__about__.py"  # write version info to this file
 relative_to = "{root:uri}"
 
@@ -74,7 +74,7 @@ artifacts = [
 
 [tool.hatch.envs.default]
 python="3.10"
-features = ["test"]
+features = ["dev"]
 dependencies = ["twine"]
 pre-install-commands = [
   "pip install -e {root:uri}/submodules/daggerml_cli",
