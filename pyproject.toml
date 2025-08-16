@@ -29,7 +29,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-cli = ["daggerml-cli>=0.0.33"]
+cli = ["daggerml-cli>=0.0.37"]
 dev = [
   "pytest",
   "pytest-cov",
