@@ -285,7 +285,7 @@ def make_node(dag: "Dag", ref: Ref) -> "Node":
 class Dag:
     _dml: Dml
     _message_handler: Optional[Callable] = None
-    _ref: Optional[Union[Ref, Boxed]] = None
+    _ref: Optional[Ref] = None
     _init_complete: bool = False
 
     def __post_init__(self):
