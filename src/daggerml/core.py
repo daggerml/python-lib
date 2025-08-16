@@ -6,7 +6,7 @@ import time
 import traceback as tb
 from dataclasses import dataclass, field, fields
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, cast
 
 from daggerml.util import (
     BackoffWithJitter,
@@ -306,7 +306,6 @@ class Dag:
 
     def __getitem__(self, name) -> "Node":
         return make_node(self, self._dml.get_node(name, self._ref))
-        # return Node(self, self._dml.get_node(name, self._ref))
 
     def __setitem__(self, name, value) -> "Node":
         assert not self._ref
@@ -342,14 +341,12 @@ class Dag:
     def argv(self) -> "Node":
         "Access the dag's argv node"
         return make_node(self, self._dml.get_argv(self._ref))
-        # return Node(self, self._dml.get_argv(self._ref))
 
     @property
     def result(self) -> "Node":
         ref = self._dml.get_result(self._ref)
         assert ref, f"'{self.__class__.__name__}' has no attribute 'result'"
         return make_node(self, ref)
-        # return Node(self, ref) if ref else ref
 
     @result.setter
     def result(self, value):
@@ -423,10 +420,10 @@ class Dag:
             Value to commit
         """
         value = value if isinstance(value, (Node, Error)) else self._put(value)
-        dump = self._dml.commit(value)
+        ref = cast(Ref, self._dml.commit(value))
         if self._message_handler:
-            self._message_handler(dump)
-        self._ref = Boxed(Ref(json.loads(dump)[-1][1][1]))
+            self._message_handler(self._dml("ref", "dump", to_json(ref), as_text=True))
+        self._ref = Boxed(ref)
 
 
 @dataclass(frozen=True)

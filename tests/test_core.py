@@ -159,6 +159,20 @@ class TestBasic(TestCase):
                 assert c0.load("b").load(0) == l0
                 assert c0["b"][0] != l0
 
+    def test_fn_ok_cache(self):
+        with TemporaryDirectory(prefix="dml-test-") as fn_cache_dir:
+            with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=fn_cache_dir):
+                with TemporaryDirectory(prefix="dml-cache-") as cache_path:
+                    with Dml.temporary(cache_path=cache_path) as dml:
+                        with dml.new("d0", "d0") as d0:
+                            d0.n0 = SUM
+                            nodes = [d0.n0(i, 1, 2) for i in range(2)]  # unique function applications
+                            d0.n0(0, 1, 2)  # add a repeat outside so `nodes` is still unique
+                            d0.result = nodes[0]
+                        self.assertEqual(d0.result.value(), 3)
+                        cache_list = dml("cache", "list", as_text=True)  # response is jsonlines format
+                        assert len([x for x in cache_list if x.rstrip() == "{"]) == 2  # this gets us unique maps
+
     def test_async_fn_ok(self):
         with TemporaryDirectory(prefix="dml-test-") as fn_cache_dir:
             with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=fn_cache_dir):
