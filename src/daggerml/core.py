@@ -6,7 +6,7 @@ import time
 import traceback as tb
 from dataclasses import dataclass, field, fields
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Optional, Union, cast, overload
+from typing import Any, Callable, Iterator, Optional, Union, cast, overload
 
 from daggerml.util import BackoffWithJitter, current_time_millis, kwargs2opts, raise_ex, replace
 
@@ -798,7 +798,7 @@ class DictNode(CollectionNode):  # noqa: F811
         for k in self.keys():
             yield k
 
-    def items(self) -> "Iterator[tuple[str, Node]]":
+    def items(self) -> Iterator[tuple[str, "Node"]]:
         """
         Iterate over key-value pairs of a dictionary node.
 
