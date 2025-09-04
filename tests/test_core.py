@@ -235,6 +235,18 @@ class TestBasic(TestCase):
                 self.assertEqual(dl.n.n0.value(), 42)
                 self.assertEqual(dl.result.value(), "foo")
 
+    def test_load_reboot(self):
+        with TemporaryDirectory(prefix="dml-cache-") as cache_path:
+            with Dml.temporary(cache_path=cache_path) as dml:
+                with dml.new("d0", "d0") as dag:
+                    dag.put(42, name="n0")
+                    dag.commit("foo")
+                with dml.new("d1", "d1") as dag:
+                    node = dag.load("d0", name="n1")
+                    assert node.dag == dag
+                    assert node.value() == "foo"
+                    assert node.load().n.n0.value() == 42
+
     def test_node_call(self):
         nums = [1, 2, 3]
         with TemporaryDirectory(prefix="dml-cache-") as cache_path:
@@ -255,7 +267,7 @@ class TestBasic(TestCase):
                 d1 = dml.new("d1", "d1")
                 n1 = d1.put(dml.load("d0").n.n1, name="n1_1")
                 assert n1.dag == d1
-                n2 = n1.load().n.num_args
+                n2 = n1.load().n.n1.load().n.num_args
                 assert n2.value() == len(nums)
                 assert n1.value() == sum(nums)
 

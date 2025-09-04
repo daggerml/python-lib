@@ -341,16 +341,47 @@ class Dag:
 
     @property
     def result(self) -> "Node":
+        """Get the result node of the dag"""
         ref = self.dml.get_result(self.ref)
         assert isinstance(ref, Ref), f"'{self.__class__.__name__}' has no attribute 'result'"
         return make_node(self, ref)
 
     def keys(self) -> list[str]:
+        """Get the list of all node names in the dag"""
         return self.dml.get_names(self.ref).keys()
 
     def values(self) -> list["Node"]:
+        """Get the list of all nodes in the dag"""
         nodes = self.dml.get_names(self.ref).values()
         return [make_node(self, x) for x in nodes]
+
+    def load(self, dag_name: str, *, name=None, doc=None) -> "Node":
+        """Load (import) a dag result into this one
+
+        Parameters
+        ----------
+        dag_name : str
+            Name of the dag to load
+        name : str, optional
+            Name for the node
+        doc : str, optional
+            Documentation for the node
+
+        Returns
+        -------
+        Node
+            Import Node representing the result of the loaded dag
+
+        Examples
+        --------
+        >>> dml = Dml.temporary()
+        >>> dml.new("my-dag-0", "going to import this").commit(42)
+        >>> dag = dml.new("my-dag-1", "importing my-dag-0")
+        >>> node = dag.load("my-dag-0")
+        >>> node.value()
+        42
+        """
+        return self.put(self.dml.load(dag_name).result, name=name, doc=doc)
 
     @overload
     def put(self, value: Union[list, set, "ListNode"], *, name=None, doc=None) -> "ListNode": ...
@@ -379,7 +410,24 @@ class Dag:
         -------
         Node
             Node representing the value
+
+        Examples
+        --------
+        >>> dml = Dml.temporary()
+        >>> dag = dml.new("test", "test")
+        >>> n1 = dag.put(42, name="answer", doc="the answer to life, the universe, and everything")
+        >>> n1.value()
+        42
+        >>> n2 = dag.put({"a": 1, "b": [n1, "23"]})
+        >>> n2.value()
+        {'a': 1, 'b': [42, '23']}
+        >>> dml.new("other-dag", "we'll import from here").commit(308)  # create and commit another dag to import
+        >>> n3 = dag.load("other-dag")
+        >>> n3.value()
+        308
         """
+        if isinstance(value, Node) and value.dag != self:
+            return make_node(self, self.dml.put_load(value.dag.ref, value.ref, name=name, doc=doc))
         return make_node(self, self.dml.put_literal(value, name=name, doc=doc))
 
     def get(self, name: str) -> "Node":
