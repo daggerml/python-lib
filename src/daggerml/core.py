@@ -343,7 +343,7 @@ class Dag:
     def result(self) -> "Node":
         """Get the result node of the dag"""
         ref = self.dml.get_result(self.ref)
-        assert isinstance(ref, Ref), f"'{self.__class__.__name__}' has no attribute 'result'"
+        assert isinstance(ref, Ref), f"'{self.__class__.__name__}' result is not a Ref: {ref}"
         return make_node(self, ref)
 
     def keys(self) -> list[str]:
