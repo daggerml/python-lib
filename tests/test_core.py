@@ -242,7 +242,7 @@ class TestBasic(TestCase):
                     dag.put(42, name="n0")
                     dag.commit("foo")
                 with dml.new("d1", "d1") as dag:
-                    node = dag.load("d0", name="n1")
+                    node = dag.import_("d0", name="n1")
                     assert node.dag == dag
                     assert node.value() == "foo"
                     assert node.load().n.n0.value() == 42

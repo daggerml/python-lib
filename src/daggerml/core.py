@@ -355,8 +355,8 @@ class Dag:
         nodes = self.dml.get_names(self.ref).values()
         return [make_node(self, x) for x in nodes]
 
-    def load(self, dag_name: str, *, name=None, doc=None) -> "Node":
-        """Load (import) a dag result into this one
+    def import_(self, dag_name: str, *, name=None, doc=None) -> "Node":
+        """Import a dag result into this dag
 
         Parameters
         ----------
