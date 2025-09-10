@@ -335,13 +335,13 @@ class TestBasic(TestCase):
         assert uid != uid1, "Cached dag should have the same UUID"
 
 
-def test_nodemap():
-    with TemporaryDirectory(prefix="dml-cache-") as cache_path:
-        with Dml.temporary(cache_path=cache_path) as dml:
-            with dml.new("d0", "d0") as d0:
-                d0.a = 23
-                node = d0.put(42, name="b")
-                other = d0.put(420)
-                assert d0.a.value() == 23
-                assert list(d0) == ["a", "b"]
-                d0.commit([node, other])
+    def test_nodemap(self):
+        with TemporaryDirectory(prefix="dml-cache-") as cache_path:
+            with Dml.temporary(cache_path=cache_path) as dml:
+                with dml.new("d0", "d0") as d0:
+                    d0.a = 23
+                    node = d0.put(42, name="b")
+                    other = d0.put(420)
+                    assert d0.a.value() == 23
+                    assert list(d0) == ["a", "b"]
+                    d0.commit([node, other])
