@@ -6,7 +6,7 @@ import time
 import traceback as tb
 from dataclasses import dataclass, field, fields
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Iterator, Optional, Union, cast, overload
+from typing import Any, Callable, Dict, Iterator, Optional, Union, cast, overload
 
 from daggerml.util import BackoffWithJitter, current_time_millis, kwargs2opts, raise_ex, replace
 
@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 
 DATA_TYPE = {}
 
-Scalar = Union[str, int, float, bool, type(None), "Resource"]
+Scalar = Union[str, int, float, bool, type(None), "Resource", "Executable"]
 Collection = Union[list, tuple, set, dict]
 
 
@@ -82,7 +82,7 @@ class Ref:  # noqa: F811
 
 
 @dml_type
-@dataclass(frozen=True)
+@dataclass
 class Resource:  # noqa: F811
     """
     Representation of an externally managed object with an identifier.
@@ -91,15 +91,30 @@ class Resource:  # noqa: F811
     ----------
     uri : str
         Resource URI
-    data : str, optional
-        Associated data
-    adapter : str, optional
-        Resource adapter name
     """
 
     uri: str
-    data: Optional[str] = None
+
+
+@dml_type
+@dataclass
+class Executable(Resource):  # noqa: F811
+    """
+    Representation of an executable externally managed object with an identifier.
+
+    Parameters
+    ----------
+    uri : str
+        Resource URI
+    data : str, optional
+        Associated data
+    adapter : str, optional
+        Adapter cli script
+    """
+
+    data: dict = field(default_factory=dict)
     adapter: Optional[str] = None
+    prepop: Dict[str, Union["Node", Scalar, Collection]] = field(default_factory=dict)
 
 
 @dml_type
@@ -267,39 +282,11 @@ def make_node(dag: "Dag", ref: Ref) -> "Node":
         return DictNode(dag, ref, _info=info)
     if info["data_type"] == "set":
         return ListNode(dag, ref, _info=info)
+    if info["data_type"] == "executable":
+        return ExecutableNode(dag, ref, _info=info)
     if info["data_type"] == "resource":
-        return ResourceNode(dag, ref, _info=info)
+        return ExecutableNode(dag, ref, _info=info)
     return ScalarNode(dag, ref, _info=info)
-
-
-@dataclass
-class NodeMap:
-    _dag: "Dag"
-
-    def __getitem__(self, name) -> "Node":
-        return make_node(self._dag, self._dag.dml.get_node(name, self._dag.ref))
-
-    def __setitem__(self, name, value) -> "Node":
-        assert not self._dag.ref
-        if isinstance(value, Ref):
-            return self._dag.dml.set_node(name, value)
-        return self._dag.put(value, name=name)
-
-    def __setattr__(self, name, value):
-        if name == "_dag":
-            return super().__setattr__(name, value)
-        return self.__setitem__(name, value)
-
-    def __getattr__(self, name) -> "Node":
-        if name == "_dag":
-            return super().__getattr__(name)
-        return self.__getitem__(name)
-
-    def __len__(self) -> int:
-        return len(self._dag.dml.get_names(self._dag.ref))
-
-    def __iter__(self):
-        yield from self._dag.keys()
 
 
 @dataclass
@@ -307,14 +294,10 @@ class Dag:
     dml: Dml
     message_handler: Optional[Callable] = None
     ref: Optional[Ref] = None
-    nodes: NodeMap = field(init=False)
 
     def __repr__(self):
         to = self.ref.to if self.ref else self.dml.index or "NA"
         return f"Dag({to})"
-
-    def __post_init__(self):
-        self.nodes = NodeMap(self)
 
     def __hash__(self):
         "Useful only for tests."
@@ -329,10 +312,39 @@ class Dag:
         if exc_value is not None:
             self.commit(Error.from_ex(exc_value))
 
-    @property
-    def n(self) -> NodeMap:
-        "Access the dag's named nodes"
-        return self.nodes
+    def __getitem__(self, name):
+        return make_node(self, self.dml.get_node(name, self.ref))
+
+    def __setitem__(self, name, value):
+        assert not self.ref
+        if isinstance(value, Ref):
+            return self.dml.set_node(name, value)
+        return self.put(value, name=name)
+
+    def __setattr__(self, name, value):
+        if name in [x.name for x in fields(self.__class__)]:
+            return super().__setattr__(name, value)
+        return self.__setitem__(name, value)
+
+    def __getattr__(self, name):
+        if name in [x.name for x in fields(self.__class__)]:
+            return super().__getattribute__(name)
+        return self.__getitem__(name)
+
+    def __len__(self) -> int:
+        return len(self.dml.get_names(self.ref))
+
+    def __iter__(self):
+        yield from self.keys()
+
+    def keys(self) -> list[str]:
+        """Get the list of all node names in the dag"""
+        return self.dml.get_names(self.ref).keys()
+
+    def values(self) -> list["Node"]:
+        """Get the list of all nodes in the dag"""
+        nodes = self.dml.get_names(self.ref).values()
+        return [make_node(self, x) for x in nodes]
 
     @property
     def argv(self) -> "ListNode":
@@ -343,17 +355,8 @@ class Dag:
     def result(self) -> "Node":
         """Get the result node of the dag"""
         ref = self.dml.get_result(self.ref)
-        assert isinstance(ref, Ref), f"'{self.__class__.__name__}' result is not a Ref: {ref}"
+        assert isinstance(ref, Ref), f"'{self.__class__.__name__}' dag has not been committed yet"
         return make_node(self, ref)
-
-    def keys(self) -> list[str]:
-        """Get the list of all node names in the dag"""
-        return self.dml.get_names(self.ref).keys()
-
-    def values(self) -> list["Node"]:
-        """Get the list of all nodes in the dag"""
-        nodes = self.dml.get_names(self.ref).values()
-        return [make_node(self, x) for x in nodes]
 
     def import_(self, dag_name: str, *, name=None, doc=None) -> "Node":
         """Import a dag result into this dag
@@ -377,7 +380,7 @@ class Dag:
         >>> dml = Dml.temporary()
         >>> dml.new("my-dag-0", "going to import this").commit(42)
         >>> dag = dml.new("my-dag-1", "importing my-dag-0")
-        >>> node = dag.load("my-dag-0")
+        >>> node = dag.import_("my-dag-0")
         >>> node.value()
         42
         """
@@ -388,7 +391,7 @@ class Dag:
     @overload
     def put(self, value: Union[dict, "DictNode"], *, name=None, doc=None) -> "DictNode": ...
     @overload
-    def put(self, value: Union[Resource, "ResourceNode"], *, name=None, doc=None) -> "ResourceNode": ...
+    def put(self, value: Union[Executable, "ExecutableNode"], *, name=None, doc=None) -> "ExecutableNode": ...
     @overload
     def put(self, value: Union[Scalar, "ScalarNode"], *, name=None, doc=None) -> "ScalarNode": ...
     @overload
@@ -455,7 +458,7 @@ class Dag:
 
     def call(
         self,
-        fn: Union[Resource, "ResourceNode"],
+        fn: Union[Executable, "ExecutableNode"],
         *args: Union["Node", Scalar, Collection],
         name: Optional[str] = None,
         doc: Optional[str] = None,
@@ -467,7 +470,7 @@ class Dag:
 
         Parameters
         ----------
-        fn : Union[Resource, ResourceNode]
+        fn : Union[Executable, ExecutableNode]
             Function to call
         *args : Union[Node, Scalar, Collection]
             Arguments to pass to the function
@@ -599,7 +602,7 @@ class Node:  # noqa: F811
     @overload
     def value(self: "DictNode") -> dict: ...
     @overload
-    def value(self: "ResourceNode") -> Resource: ...
+    def value(self: "ExecutableNode") -> Executable: ...
     @overload
     def value(self: "Node") -> Any: ...
     def value(self):
@@ -618,7 +621,7 @@ class ScalarNode(Node):
     pass
 
 
-class ResourceNode(Node):
+class ExecutableNode(Node):
     def __call__(self, *args, name=None, doc=None, sleep=None, timeout=0) -> "Node":
         """
         Call this node as a function.

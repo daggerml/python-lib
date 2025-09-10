@@ -2,12 +2,12 @@ import os
 from tempfile import TemporaryDirectory
 from unittest import TestCase, mock
 
-from daggerml.core import Dag, Dml, Error, Node, Resource
+from daggerml.core import Dag, Dml, Error, Executable, Node, from_data
 
-SUM = Resource("./tests/assets/fns/sum.py", adapter="dml-python-fork-adapter")
-ASYNC = Resource("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter")
-ENVVARS = Resource("./tests/assets/fns/envvars.py", adapter="dml-python-fork-adapter")
-TIMEOUT = Resource("./tests/assets/fns/timeout.py", adapter="dml-python-fork-adapter")
+SUM = Executable("./tests/assets/fns/sum.py", adapter="dml-python-fork-adapter")
+ASYNC = Executable("./tests/assets/fns/async.py", adapter="dml-python-fork-adapter")
+ENVVARS = Executable("./tests/assets/fns/envvars.py", adapter="dml-python-fork-adapter")
+TIMEOUT = Executable("./tests/assets/fns/timeout.py", adapter="dml-python-fork-adapter")
 
 
 class TestBasic(TestCase):
@@ -80,8 +80,6 @@ class TestBasic(TestCase):
         assert isinstance(local_value, str)
         with TemporaryDirectory(prefix="dml-cache-") as cache_path:
             with Dml.temporary(cache_path=cache_path) as dml:
-                from daggerml.core import from_data
-
                 ref = from_data(dml("ref", "load", local_value))
                 assert len(dml("dag", "describe", ref.to)["nodes"]) == 1
 
@@ -100,31 +98,31 @@ class TestBasic(TestCase):
                 assert isinstance(n0, Node)
                 self.assertIsInstance(n0, Node)
                 self.assertEqual(n0.value(), [42])
-                assert len(d0.nodes) == 1
+                assert len(d0) == 1
                 self.assertEqual(len(n0), 1)
                 self.assertEqual(n0.type, "list")
-                d0.n["x0"] = n0
-                self.assertEqual(d0.n["x0"], n0)
-                self.assertEqual(d0.n.x0, n0)
-                d0.n.x1 = 42
-                self.assertEqual(d0.n["x1"].value(), 42)
-                self.assertEqual(d0.n.x1.value(), 42)
-                d0.n.n1 = n0[0]
+                d0["x0"] = n0
+                self.assertEqual(d0["x0"], n0)
+                self.assertEqual(d0.x0, n0)
+                d0.x1 = 42
+                self.assertEqual(d0["x1"].value(), 42)
+                self.assertEqual(d0.x1.value(), 42)
+                d0.n1 = n0[0]
                 self.assertIsInstance(n0[0], Node)
-                self.assertEqual([x.value() for x in n0], [d0.n.n1.value()])
-                self.assertEqual(d0.n.n1.value(), 42)
-                d0.n.n2 = {"x": n0, "y": "z"}
-                self.assertNotEqual(d0.n.n2["x"], n0)
-                self.assertEqual(d0.n.n2["x"].value(), n0.value())
-                d0.n.n3 = list(d0.n.n2.items())
-                self.assertIsInstance([x for x in d0.n.n3], list)
+                self.assertEqual([x.value() for x in n0], [d0.n1.value()])
+                self.assertEqual(d0.n1.value(), 42)
+                d0.n2 = {"x": n0, "y": "z"}
+                self.assertNotEqual(d0.n2["x"], n0)
+                self.assertEqual(d0.n2["x"].value(), n0.value())
+                d0.n3 = list(d0.n2.items())
+                self.assertIsInstance([x for x in d0.n3], list)
                 self.assertDictEqual(
-                    {k: v.value() for k, v in d0.n.n2.items()},
+                    {k: v.value() for k, v in d0.n2.items()},
                     {"x": n0.value(), "y": "z"},
                 )
-                d0.n.n4 = [1, 2, 3, 4, 5]
-                d0.n.n5 = d0.n.n4[1:]
-                self.assertListEqual([x.value() for x in d0.n.n5], [2, 3, 4, 5])
+                d0.n4 = [1, 2, 3, 4, 5]
+                d0.n5 = d0.n4[1:]
+                self.assertListEqual([x.value() for x in d0.n5], [2, 3, 4, 5])
                 d0.commit(n0)
                 self.assertIsInstance(local_value, str)
                 dag = dml("dag", "list")[0]
@@ -232,7 +230,7 @@ class TestBasic(TestCase):
                     dag.commit("foo")
                 dl = dml.load("d0")
                 assert isinstance(dl, Dag)
-                self.assertEqual(dl.n.n0.value(), 42)
+                self.assertEqual(dl.n0.value(), 42)
                 self.assertEqual(dl.result.value(), "foo")
 
     def test_load_reboot(self):
@@ -245,7 +243,39 @@ class TestBasic(TestCase):
                     node = dag.import_("d0", name="n1")
                     assert node.dag == dag
                     assert node.value() == "foo"
-                    assert node.load().n.n0.value() == 42
+                    assert node.load().n0.value() == 42
+
+    def test_node_call_w_literal_deps(self):
+        nums = [1, 2, 3]
+        with TemporaryDirectory(prefix="dml-cache-") as cache_path:
+            with Dml.temporary(cache_path=cache_path) as dml:
+                with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=dml.kwargs["config_dir"]):
+                    with dml.new("d0", "d0") as dag:
+                        fn = Executable(
+                            "./tests/assets/fns/sum.py",
+                            adapter="dml-python-fork-adapter",
+                            prepop={"x": 10},
+                        )
+                        result = dag.call(fn, *nums)
+                        assert result.value() == sum(nums)
+                        assert "x" in result.load().keys()
+                        assert result.load().x.value() == 10
+
+    def test_node_call_w_node_deps(self):
+        nums = [1, 2, 3]
+        with TemporaryDirectory(prefix="dml-cache-") as cache_path:
+            with Dml.temporary(cache_path=cache_path) as dml:
+                with mock.patch.dict(os.environ, DML_FN_CACHE_DIR=dml.kwargs["config_dir"]):
+                    with dml.new("d0", "d0") as dag:
+                        fn = Executable(
+                            "./tests/assets/fns/sum.py",
+                            adapter="dml-python-fork-adapter",
+                            prepop={"x": dag.put(10)},
+                        )
+                        result = dag.call(fn, *nums)
+                        assert result.value() == sum(nums)
+                        assert "x" in result.load().keys()
+                        assert result.load().x.value() == 10
 
     def test_node_call(self):
         nums = [1, 2, 3]
@@ -265,9 +295,9 @@ class TestBasic(TestCase):
                     with dml.new("d0", "d0") as dag:
                         dag.commit(dag.call(SUM, *nums, name="n1"))
                 d1 = dml.new("d1", "d1")
-                n1 = d1.put(dml.load("d0").n.n1, name="n1_1")
+                n1 = d1.put(dml.load("d0").n1, name="n1_1")
                 assert n1.dag == d1
-                n2 = n1.load().n.n1.load().n.num_args
+                n2 = n1.load().n1.load().num_args
                 assert n2.value() == len(nums)
                 assert n1.value() == sum(nums)
 
@@ -280,12 +310,12 @@ class TestBasic(TestCase):
                     n1 = d1.call(SUM, *nums)
                     assert n1.value() == sum(nums)
                     assert isinstance(n1.load(), Dag)
-                    uid = n1.load().n.uuid.value()
+                    uid = n1.load().uuid.value()
             with Dml.temporary(cache_path=cache_path) as dml:
                 assert dml.config_dir != config_dir, "Config dir should not be the same"
                 with dml.new("d1", "d0") as d1:
                     n1 = d1.call(SUM, *nums)
-                    uid1 = n1.load().n.uuid.value()
+                    uid1 = n1.load().uuid.value()
         assert uid == uid1, "Cached dag should have the same UUID"
 
     def test_no_caching(self):
@@ -295,13 +325,13 @@ class TestBasic(TestCase):
                 config_dir = dml.config_dir
                 with dml.new("d0", "d0") as d1:
                     n1 = d1.call(SUM, *nums)
-                    uid = n1.load().n.uuid.value()
+                    uid = n1.load().uuid.value()
         with TemporaryDirectory(prefix="dml-cache-") as cache_path:
             with Dml.temporary(cache_path=cache_path) as dml:
                 assert dml.config_dir != config_dir, "Config dir should not be the same"
                 with dml.new("d1", "d0") as d1:
                     n1 = d1.call(SUM, *nums)
-                    uid1 = n1.load().n.uuid.value()
+                    uid1 = n1.load().uuid.value()
         assert uid != uid1, "Cached dag should have the same UUID"
 
 
@@ -309,9 +339,9 @@ def test_nodemap():
     with TemporaryDirectory(prefix="dml-cache-") as cache_path:
         with Dml.temporary(cache_path=cache_path) as dml:
             with dml.new("d0", "d0") as d0:
-                d0.n.a = 23
+                d0.a = 23
                 node = d0.put(42, name="b")
                 other = d0.put(420)
-                assert d0.n.a.value() == 23
-                assert list(d0.nodes) == ["a", "b"]
+                assert d0.a.value() == 23
+                assert list(d0) == ["a", "b"]
                 d0.commit([node, other])

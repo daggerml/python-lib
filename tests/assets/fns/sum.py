@@ -11,4 +11,4 @@ if __name__ == "__main__":
             dag.put(len(dag.argv[1:]), name="num_args")
             dag.put(sum(dag.argv[1:].value()), name="n0")
             dag.put(str(uuid4()), name="uuid")
-            dag.commit(dag.n.n0)
+            dag.commit(dag.n0)
