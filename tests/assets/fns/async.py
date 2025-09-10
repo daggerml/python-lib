@@ -16,6 +16,6 @@ if __name__ == "__main__":
 
         if os.path.isfile(cache_file):
             with dml.new("test", "test", stdin["dump"], print) as d0:
-                d0.result = sum(d0.argv[1:].value())
+                d0.commit(sum(d0.argv[1:].value()))
         else:
             open(cache_file, "w").close()
