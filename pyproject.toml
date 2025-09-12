@@ -60,7 +60,7 @@ markers = [
 source = "vcs"
 
 [tool.hatch.version.raw-options]
-version_scheme = "no-guess-dev"   # use tag as version if exists
+version_scheme = "only-version"   # use tag as version
 local_scheme = "no-local-version"  # pypi does not support local-schemes
 tag_regex = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:[-\\.][a-zA-Z0-9]+)*)$"
 version_file = "src/daggerml/__about__.py"  # write version info to this file
