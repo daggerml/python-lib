@@ -177,6 +177,9 @@ class TestBasic(TestCase):
                 assert c0.backtrack("b", 1).value() == "23"
                 assert c0.backtrack("b").backtrack(0) == l0
                 assert c0["b"][0] != l0
+                c1 = c0["b"]
+                assert c1.backtrack() == c0
+                assert c1.backtrack().backtrack("b", 0) == l0
 
     def test_fn_ok_cache(self):
         with TemporaryDirectory(prefix="dml-test-") as fn_cache_dir:
@@ -333,7 +336,6 @@ class TestBasic(TestCase):
                     n1 = d1.call(SUM, *nums)
                     uid1 = n1.load().uuid.value()
         assert uid != uid1, "Cached dag should have the same UUID"
-
 
     def test_nodemap(self):
         with TemporaryDirectory(prefix="dml-cache-") as cache_path:

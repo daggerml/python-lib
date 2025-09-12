@@ -433,29 +433,6 @@ class Dag:
             return make_node(self, self.dml.put_load(value.dag.ref, value.ref, name=name, doc=doc))
         return make_node(self, self.dml.put_literal(value, name=name, doc=doc))
 
-    def get(self, name: str) -> "Node":
-        """
-        Get a node reference by name.
-
-        Parameters
-        ----------
-        name : str
-            Name of the node
-
-        Returns
-        -------
-        Node
-            Node representing the named node
-
-        Raises
-        ------
-        KeyError
-            If the node is not found
-        """
-        if name in self.nodes:
-            return self.nodes[name]
-        raise KeyError(f"Node '{name}' not found in DAG")
-
     def call(
         self,
         fn: Union[Executable, "ExecutableNode"],
@@ -463,7 +440,7 @@ class Dag:
         name: Optional[str] = None,
         doc: Optional[str] = None,
         sleep: Optional[callable] = None,
-        timeout: int = 30000,
+        timeout: int = -1,
     ) -> "Node":
         """
         Call a function node with arguments.
@@ -480,8 +457,8 @@ class Dag:
             Documentation
         sleep : callable, optional
             A nullary function that returns sleep time in milliseconds
-        timeout : int, default=30000
-            Maximum time to wait in milliseconds
+        timeout : int, default=-1
+            Maximum time to wait in milliseconds. If <= 0, wait indefinitely.
 
         Returns
         -------
@@ -622,7 +599,7 @@ class ScalarNode(Node):
 
 
 class ExecutableNode(Node):
-    def __call__(self, *args, name=None, doc=None, sleep=None, timeout=0) -> "Node":
+    def __call__(self, *args, name=None, doc=None, sleep=None, timeout=-1) -> "Node":
         """
         Call this node as a function.
 
@@ -636,8 +613,8 @@ class ExecutableNode(Node):
             Documentation
         sleep : callable, optional
             A nullary function that returns sleep time in milliseconds
-        timeout : int, default=30000
-            Maximum time to wait in milliseconds
+        timeout : int, default=-1
+            Maximum time to wait in milliseconds. -1 means wait forever.
 
         Returns
         -------
@@ -651,15 +628,7 @@ class ExecutableNode(Node):
         Error
             If the function returns an error
         """
-        sleep = sleep or BackoffWithJitter()
-        args = [self.dag.put(x) for x in args]
-        end = current_time_millis() + timeout
-        while timeout <= 0 or current_time_millis() < end:
-            resp = self.dag.dml.start_fn([self, *args], name=name, doc=doc)
-            if resp:
-                return make_node(self.dag, resp)
-            time.sleep(sleep() / 1000)
-        raise TimeoutError(f"invoking function: {self.value()}")
+        return self.dag.call(self, *args, name=name, doc=doc, sleep=sleep, timeout=timeout)
 
 
 class CollectionNode(Node):  # noqa: F811
