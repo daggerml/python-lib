@@ -284,8 +284,6 @@ def make_node(dag: "Dag", ref: Ref) -> "Node":
         return ListNode(dag, ref, _info=info)
     if info["data_type"] == "executable":
         return ExecutableNode(dag, ref, _info=info)
-    if info["data_type"] == "resource":
-        return ExecutableNode(dag, ref, _info=info)
     return ScalarNode(dag, ref, _info=info)
 
 
