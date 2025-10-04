@@ -356,15 +356,17 @@ class Dag:
         assert isinstance(ref, Ref), f"'{self.__class__.__name__}' dag has not been committed yet"
         return make_node(self, ref)
 
-    def import_(self, dag_name: str, *, name=None, doc=None) -> "Node":
-        """Import a dag result into this dag
+    def load(self, dag_name: str, key: str = "result", *, name=None, doc=None) -> "Node":
+        """Load a node from a different dag into this one
 
         Parameters
         ----------
         dag_name : str
             Name of the dag to load
+        key : str, default="result"
+            The name of the node (or "result") to import from the loaded dag. By default, it imports the result node.
         name : str, optional
-            Name for the node
+            Name to assign the resulting node in this dag
         doc : str, optional
             Documentation for the node
 
@@ -378,11 +380,14 @@ class Dag:
         >>> dml = Dml.temporary()
         >>> dml.new("my-dag-0", "going to import this").commit(42)
         >>> dag = dml.new("my-dag-1", "importing my-dag-0")
-        >>> node = dag.import_("my-dag-0")
+        >>> node = dag.load("my-dag-0")
         >>> node.value()
         42
         """
-        return self.put(self.dml.load(dag_name).result, name=name, doc=doc)
+        resp = getattr(self.dml.load(dag_name), key, None)
+        if resp is None:
+            raise_ex(Error(f"dag '{dag_name}' has no '{key}'", origin="dml", type="KeyError"))
+        return self.put(resp, name=name, doc=doc)
 
     @overload
     def put(self, value: Union[list, set, "ListNode"], *, name=None, doc=None) -> "ListNode": ...
@@ -705,17 +710,7 @@ class CollectionNode(Node):  # noqa: F811
         Error
             If the node isn't a collection (e.g. list, set, or dict).
         """
-        if self._info["length"]:
-            return self._info["length"]
-        raise Error(f"Cannot get length of type: {self._info['data_type']}", origin="dml", type="TypeError")
-
-    def get(self, key, default=None, *, name=None, doc=None) -> "Node":
-        """
-        For a dict node, return the value for key if key exists, else default.
-
-        If default is not given, it defaults to None, so that this method never raises a KeyError.
-        """
-        return make_node(self.dag, self.dag.dml.get(self, key, default, name=name, doc=doc))
+        return self._info["length"]
 
 
 class ListNode(CollectionNode):  # noqa: F811
@@ -815,6 +810,14 @@ class DictNode(CollectionNode):  # noqa: F811
         """
         for k in self.keys():
             yield k
+
+    def get(self, key, default=None, *, name=None, doc=None) -> "Node":
+        """
+        For a dict node, return the value for key if key exists, else default.
+
+        If default is not given, it defaults to None, so that this method never raises a KeyError.
+        """
+        return make_node(self.dag, self.dag.dml.get(self, key, default, name=name, doc=doc))
 
     def items(self) -> Iterator[tuple[str, "Node"]]:
         """
