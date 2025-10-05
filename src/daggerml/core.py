@@ -277,14 +277,18 @@ def make_node(dag: "Dag", ref: Ref) -> "Node":
     """
     info = dag.dml("node", "describe", ref.to)
     if info["data_type"] == "list":
-        return ListNode(dag, ref, _info=info)
-    if info["data_type"] == "dict":
-        return DictNode(dag, ref, _info=info)
-    if info["data_type"] == "set":
-        return ListNode(dag, ref, _info=info)
-    if info["data_type"] == "executable":
-        return ExecutableNode(dag, ref, _info=info)
-    return ScalarNode(dag, ref, _info=info)
+        node = ListNode(dag, ref, _info=info)
+    elif info["data_type"] == "dict":
+        node = DictNode(dag, ref, _info=info)
+    elif info["data_type"] == "set":
+        node = ListNode(dag, ref, _info=info)
+    elif info["data_type"] == "executable":
+        node = ExecutableNode(dag, ref, _info=info)
+    else:
+        node = ScalarNode(dag, ref, _info=info)
+    if info["doc"]:
+        object.__setattr__(node, "__doc__", info["doc"])
+    return node
 
 
 @dataclass
@@ -444,6 +448,7 @@ class Dag:
         doc: Optional[str] = None,
         sleep: Optional[callable] = None,
         timeout: int = -1,
+        **kw,
     ) -> "Node":
         """
         Call a function node with arguments.
@@ -462,6 +467,8 @@ class Dag:
             A nullary function that returns sleep time in milliseconds
         timeout : int, default=-1
             Maximum time to wait in milliseconds. If <= 0, wait indefinitely.
+        **kw : dict
+            Keyword arguments override any prepop values in the Executable (fn).
 
         Returns
         -------
@@ -475,6 +482,16 @@ class Dag:
         Error
             If the function returns an error
         """
+        if len(kw) > 0:
+            if isinstance(fn, Node):
+                fn = fn.value()
+            if set(kw) - set(fn.prepop):
+                extras = sorted(set(kw) - set(fn.prepop))
+                msg = f"Function called with extraneous kwargs (not in `ex.prepop`): {extras}"
+                raise Error(msg, origin="dml", type="KeyError")
+            fn = Executable(uri=fn.uri, data=fn.data, adapter=fn.adapter, prepop={**fn.prepop, **kw})
+            # FIXME: replace fails: `TypeError: Executable.__init__() missing 1 required positional argument: 'uri'`
+            # fn = replace(fn, prepop={**fn.prepop, **kw})
         sleep = sleep or BackoffWithJitter()
         expr = [self.put(x) for x in [fn, *args]]
         end = current_time_millis() + timeout
@@ -602,7 +619,7 @@ class ScalarNode(Node):
 
 
 class ExecutableNode(Node):
-    def __call__(self, *args, name=None, doc=None, sleep=None, timeout=-1) -> "Node":
+    def __call__(self, *args, name=None, doc=None, sleep=None, timeout=-1, **kw) -> "Node":
         """
         Call this node as a function.
 
@@ -618,6 +635,8 @@ class ExecutableNode(Node):
             A nullary function that returns sleep time in milliseconds
         timeout : int, default=-1
             Maximum time to wait in milliseconds. -1 means wait forever.
+        **kw : dict
+            Keyword arguments override any prepop values in the Executable (fn).
 
         Returns
         -------
@@ -631,7 +650,7 @@ class ExecutableNode(Node):
         Error
             If the function returns an error
         """
-        return self.dag.call(self, *args, name=name, doc=doc, sleep=sleep, timeout=timeout)
+        return self.dag.call(self, *args, name=name, doc=doc, sleep=sleep, timeout=timeout, **kw)
 
 
 class CollectionNode(Node):  # noqa: F811

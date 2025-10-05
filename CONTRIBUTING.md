@@ -38,7 +38,7 @@ requests and appreciate your help in improving this project.
 - Add or update unit tests for any new features or bug fixes.
 - Use [pytest](https://pytest.org/) for running tests.
 - The testing requirements are included in the `test` feature for the library.
-  - You can run tests using [hatch](https://hatch.pypa.io/):  
+  - You can run tests using [hatch](https://hatch.pypa.io/):
     ```
     hatch run pytest .
     ```
@@ -46,7 +46,7 @@ requests and appreciate your help in improving this project.
     ```
     Python: Run Tests
     ```
-  - Or install the `test` feature with pip and run tests:  
+  - Or install the `test` feature with pip and run tests:
     ```
     pip install -e </path/to/library>[test]
     pytest .
@@ -54,6 +54,10 @@ requests and appreciate your help in improving this project.
 - We mark tests with `@pytest.mark.slow` for those that take longer to run. You can run only the fast tests with:
   ```
   pytest -m "not slow" .
+  ```
+- We mark tests that require `daggerml-cli` to be installed with `@pytest.mark.needs_dml`. You can exclude those tests with:
+  ```
+  pytest -m "not needs_dml" .
   ```
 - Run all tests locally before submitting a pull request:
 - Ensure your code passes all tests and does not decrease code coverage.
