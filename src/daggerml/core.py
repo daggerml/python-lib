@@ -487,7 +487,7 @@ class Dag:
                 fn = fn.value()
             if set(kw) - set(fn.prepop):
                 extras = sorted(set(kw) - set(fn.prepop))
-                msg = f"Function called with extraneous kwargs (not in `ex.prepop`): {extras}"
+                msg = f"Function called with extraneous kwargs (not in `fn.prepop`): {extras}"
                 raise Error(msg, origin="dml", type="KeyError")
             fn = Executable(uri=fn.uri, data=fn.data, adapter=fn.adapter, prepop={**fn.prepop, **kw})
             # FIXME: replace fails: `TypeError: Executable.__init__() missing 1 required positional argument: 'uri'`
