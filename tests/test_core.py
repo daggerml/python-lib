@@ -108,7 +108,7 @@ class TestSetAttrs:
             adapter="dml-python-fork-adapter",
             prepop={"x": 10},
         )
-        msg = re.escape(r"Function called with extraneous kwargs (not in `ex.prepop`): ['y']")
+        msg = re.escape(r"Function called with extraneous kwargs (not in `fn.prepop`): ['y']")
         with pytest.raises(Error, match=msg):
             dag.call(fn, *nums, y=100)
 
