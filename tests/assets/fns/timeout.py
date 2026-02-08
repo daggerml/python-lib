@@ -1,2 +1,4 @@
+import json
+
 if __name__ == "__main__":
-    exit()
+    print(json.dumps({"status": "running", "error": None}, separators=(",", ":")))

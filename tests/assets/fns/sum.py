@@ -1,14 +1,37 @@
 import json
 import sys
+import tempfile
 from uuid import uuid4
 
-from daggerml import Dml
+from daggerml._internal._db import DmlDbEnv
+from daggerml._internal.ops.cache import CacheOps
+from daggerml._internal.ops.commit import CommitOps
+from daggerml._internal.ops.index import IndexOps
+from daggerml._internal.ops.node import NodeOps
+from daggerml._internal.types import NAMESPACES
 
 if __name__ == "__main__":
-    stdin = json.loads(sys.stdin.read())
-    with Dml.temporary(cache_path=stdin["cache_path"]) as dml:
-        with dml.new("test", "test", stdin["dump"], print) as dag:
-            dag.put(len(dag.argv[1:]), name="num_args")
-            dag.put(sum(dag.argv[1:].value()), name="n0")
-            dag.put(str(uuid4()), name="uuid")
-            dag.commit(dag.n0)
+    envelope = json.loads(sys.stdin.read())
+    remote = envelope["remote"]
+    argv_ptr = envelope["argv_ptr"]
+    remote_root = remote["root"]
+    remote_cache = remote["cache"]
+    runnable_kwargs = envelope.get("runnable", {}).get("kwargs", {})
+    with tempfile.TemporaryDirectory(prefix="dml-fn-") as tmpdir:
+        db = DmlDbEnv.create(tmpdir, namespaces=sorted(NAMESPACES))
+        try:
+            ops = IndexOps(db, remote_root=remote_root, remote_cache=remote_cache)
+            index_ref = ops.create(argv_ptr=argv_ptr)
+            node_ops = NodeOps(db)
+            argv = node_ops.unroll(ops.get_argv(index_ref))
+            for key, value in runnable_kwargs.items():
+                ops.put_literal(index_ref, value, name=key)
+            ops.put_literal(index_ref, len(argv[1:]), name="num_args")
+            result = ops.put_literal(index_ref, sum(argv[1:]), name="n0")
+            ops.put_literal(index_ref, str(uuid4()), name="uuid")
+            commit_ref = ops.commit(index_ref, result, message="sum")
+            dag_ref = CommitOps(_db=db).describe(commit_ref)["dag"]
+            CacheOps(_db=db, remote_root=remote_root, remote_cache=remote_cache).put(dag_ref)
+            print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
+        finally:
+            db.close()

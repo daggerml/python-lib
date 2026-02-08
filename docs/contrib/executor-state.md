@@ -1,0 +1,129 @@
+# Executor State
+
+## Status
+
+specified
+
+## Authority
+
+This document is authoritative for contrib executor-state record shape and backend reference conventions.
+
+Normative lifecycle ownership and parent-comms behavior are authoritative in [runtime-contract.md](runtime-contract.md); this document is authoritative for the shared State record/reference shape used by those contracts.
+
+
+## Purpose
+
+Provide a focused state-reference profile for contrib runtime planning and implementation.
+
+
+## Scope
+
+This document defines:
+
+- shared execution-state record fields,
+- backend profiles (`LocalState`, `DynamoState`),
+- ownership and metadata conventions for executor-managed state,
+- how parent comms reuses State backends without redefining a second mutable record format.
+
+This document does not define kickoff/poll dispatch rules.
+
+
+## Reference State Record
+
+Common fields used by contrib execution state:
+
+- `version`
+- `cache_key`
+- `status`
+- `error` (nullable)
+- `owner_executor` (nullable executor id, for example `script`)
+- `owner_instance` (nullable executor-instance debugging tag)
+- `heartbeat_ts` (nullable)
+- `lease_expires_ts` (nullable)
+- `updated_ts`
+- `metadata` (`dict[str, dict[str, Any]]`), namespaced by executor id
+
+Reference record example:
+
+```json
+{
+  "version": 1,
+  "cache_key": "cache:abc123",
+  "status": "pending",
+  "error": null,
+  "owner_executor": null,
+  "owner_instance": null,
+  "heartbeat_ts": null,
+  "lease_expires_ts": null,
+  "updated_ts": 1710370000.123,
+  "metadata": {}
+}
+```
+
+State ownership and metadata conventions:
+
+- `owner_executor` is claimed by the executor currently responsible for heartbeat updates.
+- executors that initialize shared state are not required to know final ownership in advance.
+- executors/wrappers MUST write custom state only under `metadata[<executor_id>]`.
+- example metadata values: `metadata["batch"] = {"batch_job_id": "..."}`.
+- `status`/`error` are canonical run result fields and MUST remain normalized across wrappers.
+- Parent Comms reuses these same State backends and record fields for observational reporting.
+- Parent Comms is immutable invocation input naming where the current invocation reports outward; it is not a second mutable record schema.
+- when adapters report to Parent Comms, they mirror normalized status/heartbeat/error information into another State record keyed for the parent observer.
+- Parent Comms is one-hop only; it applies to the current adapter invocation and is not forwarded to grandchildren.
+- executor-specific external handles used for debugging/polling (for example docker container ids or batch job ids) belong under `metadata[<executor_id>]` in the relevant State record.
+
+Typed state API surface:
+
+```python
+Status = Literal["pending", "running", "succeeded", "failed", "canceled"]
+
+def init_record(
+    *,
+    status: Status = "pending",
+    error: str | None = None,
+    owner_executor: str | None = None,
+    owner_instance: str | None = None,
+    heartbeat_ts: float | None = None,
+    lease_expires_ts: float | None = None,
+    metadata: dict[str, dict[str, Any]] | None = None,
+) -> StateRecord: ...
+
+def update_status(
+    *,
+    status: Status,
+    error: str | None = None,
+    owner_executor: str | None = None,
+    owner_instance: str | None = None,
+    heartbeat_ts: float | None = None,
+    lease_expires_ts: float | None = None,
+) -> StateRecord: ...
+
+def set_executor_metadata(*, executor_id: str, data: dict[str, Any]) -> StateRecord: ...
+```
+
+State backends (`LocalState`, `DynamoState`) are generic storage/locking interfaces.
+Runtime interpretation of these fields is owned by runtime orchestration, adapters, and executors rather than by backend-specific serialization code.
+
+Lock contract:
+
+- state backends expose lock acquisition as a contextmanager (`State.lock(cache_key)`), yielding locked state instance or `None` when lock acquisition fails.
+- lock release is automatic on context exit.
+
+
+## Backend Profiles
+
+- `LocalState`: process-local backend profile for local adapter/executor flows.
+- `DynamoState`: cross-invocation backend profile for lambda-style polling flows.
+
+## Parent Comms Reuse
+
+- Parent Comms MAY point at any supported State backend profile.
+- A local Parent Comms descriptor identifies a local state location such as `cache_dir`.
+- A Dynamo Parent Comms descriptor identifies backend coordinates such as `table_name`.
+- The parent observer reads an ordinary State record from that backend; there is no separate comms-specific mutable file/document schema.
+
+
+## References
+
+- [runtime-contract.md](runtime-contract.md)

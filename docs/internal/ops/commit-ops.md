@@ -1,0 +1,52 @@
+# CommitOps (`daggerml._internal.ops.commit`)
+
+## Status
+
+specified
+
+## Authority
+
+This document is authoritative for the architecture contract for this internal ops subsystem (responsibilities, invariants, and non-goals).
+If related docs conflict on this scope, this document is the source of truth.
+
+
+## Purpose
+
+`CommitOps` manages commit-history topology and tree-state evolution.
+
+## Responsibilities
+
+- Traverse commit history from a commit ref.
+- Compute merge base and diffs between trees.
+- Merge commits with DAG-name conflict detection.
+- Rebase commit ancestry onto a target.
+- Describe, dump, and load commits.
+
+## Core Contracts
+
+- Commit objects are immutable snapshots; tree references define DAG namespace state.
+- Merge/rebase operations produce new commit objects (no in-place history mutation).
+- Tree patching applies explicit add/remove DAG-name deltas.
+
+## Invariants
+
+- Parent links define commit DAG topology.
+- Merge detects conflicting DAG-name edits and raises `DmlRepoError`.
+- Rebase preserves source changes while changing ancestry root.
+
+## Non-goals
+
+- Branch head updates (`HeadOps` owns pointer movement).
+- Working-index mutation (`IndexOps` owns mutable staging).
+
+## Scope
+
+This document defines the scope described by its authority and purpose sections.
+
+## Content
+
+See the sections in this document for normative content.
+
+## References
+
+None.

@@ -86,6 +86,8 @@ instance/
 # Sphinx documentation
 docs/_build/
 docs/_autosummary/
+docs/contrib/plans/
+docs/contrib/*-plan.local.md
 
 # PyBuilder
 .pybuilder/
