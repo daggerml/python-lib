@@ -27,15 +27,13 @@ classifiers = [
 ]
 dependencies = [
   "typing-extensions>=4.0.0; python_version < '3.11'",
+  "boto3",
 ]
 
 [project.optional-dependencies]
 table = [
   "tabulate",
   "asciidag",
-]
-s3 = [
-  "boto3",
 ]
 [project.scripts]
 dml = "daggerml._cli:cli"
