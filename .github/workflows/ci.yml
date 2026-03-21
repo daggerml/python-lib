@@ -6,13 +6,16 @@ on:
     tags:
       - "v*" # Semantic version tags
   pull_request:
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
       matrix:
         # py: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         py: ["3.11", "3.12", "3.13", "3.14"]
-    runs-on: ubuntu-latest
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +30,41 @@ jobs:
       - name: Sync dependencies
         run: uv sync --group dev
       - name: pytest
+        run: uv run pytest -m "not slow" .
+  sanitize:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: pip install uv
+      - name: Build with ASAN + UBSAN
+        env:
+          CMAKE_ARGS: "-DDML_ENABLE_ASAN=ON -DDML_ENABLE_UBSAN=ON"
+        run: uv sync --group dev
+      - name: Run tests with sanitizers (Linux)
+        if: runner.os == 'Linux'
+        env:
+          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: |
+          LIBASAN=$(gcc -print-file-name=libasan.so)
+          LD_PRELOAD="$LIBASAN" uv run pytest -m "not slow" .
+      - name: Run tests with sanitizers (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MallocNanoZone: "0"
+          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: uv run pytest -m "not slow" .
   lint:
     runs-on: ubuntu-latest
