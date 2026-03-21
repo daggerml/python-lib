@@ -8,12 +8,17 @@ from functools import wraps
 from pathlib import Path
 from textwrap import dedent
 from threading import Lock
-from typing import Any, Callable, TypeAlias, TypeVar, cast, dataclass_transform, overload
+from typing import Any, Callable, TypeAlias, TypeVar, cast, overload
 
 from daggerml import api as core_api
 from daggerml._internal import CodecContext, register_codec
 from daggerml._internal.types import DmlRepoError, Runnable
 from daggerml.contrib.adapter_registry import get_adapter
+
+try:
+    from typing import dataclass_transform
+except ImportError:
+    from typing_extensions import dataclass_transform
 
 _CONTRIB_CODECS_REGISTERED = False
 _LOCK = Lock()
