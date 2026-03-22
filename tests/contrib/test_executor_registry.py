@@ -30,10 +30,6 @@ class ExecutorSpec:
         return {"status": "running", "error": None}
 
     @staticmethod
-    def kill(*, state=None):
-        return {"status": "running", "error": None}
-
-    @staticmethod
     def gc(*, state=None):
         return None
 
@@ -50,7 +46,7 @@ def test_register_get_and_list_executor():
     loaded = reg.get_executor("local", "custom")
     assert loaded.name == "custom"
     assert loaded.adapter == "local"
-    assert reg.list_executors("local") == ["custom", "docker", "script"]
+    assert reg.list_executors("local") == ["custom", "docker", "script", "ssh"]
 
 
 def test_register_executor_accepts_class_object():
@@ -69,10 +65,6 @@ def test_register_executor_accepts_class_object():
 
         @staticmethod
         def poll(*, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def kill(*, state=None):
             return {"status": "running", "error": None}
 
         @staticmethod
@@ -106,11 +98,7 @@ def test_register_executor_missing_required_lifecycle_callable_fails():
         def start(*, runnable, argv_ptr, cache_key, remote, state=None):
             return {"status": "running", "error": None}
 
-        @staticmethod
-        def kill(*, state=None):
-            return {"status": "running", "error": None}
-
-    with pytest.raises(DmlRepoError, match="missing required callables: start, poll, kill, gc"):
+    with pytest.raises(DmlRepoError, match="missing required callables: start, poll, gc"):
         reg.register_executor(MissingPollExecutor)
 
 
@@ -129,10 +117,6 @@ def test_executor_registration_requires_state_class_lock():
 
         @staticmethod
         def poll(*, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def kill(*, state=None):
             return {"status": "running", "error": None}
 
         @staticmethod
@@ -157,7 +141,7 @@ def test_executor_registration_rejects_run_only_executor():
         def run(*, runnable, argv_ptr, cache_key, remote):
             return {"status": "succeeded", "error": None}
 
-    with pytest.raises(DmlRepoError, match="missing required callables: start, poll, kill, gc"):
+    with pytest.raises(DmlRepoError, match="missing required callables: start, poll, gc"):
         reg.register_executor(RunOnlyExecutor)
 
 
@@ -205,4 +189,5 @@ def test_pyproject_declares_builtin_executor_entry_points():
     pyproject = (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text()
 
     assert '[project.entry-points."daggerml.contrib.executors"]' in pyproject
+    assert 'batch = "daggerml.contrib.executors:BatchExecutor"' in pyproject
     assert 'script = "daggerml.contrib.executors:ScriptExecutor"' in pyproject

@@ -48,22 +48,22 @@ Define the first contrib-owned prebuilt funk surface without overloading `dagger
 
 ### Interfaces
 
-- Location:
-  - `daggerml.contrib.funks`
-- Current Contrib Funk catalog:
-  - `docker_build`
-- `docker_build` MUST be exported as a contrib delayed-runnable value produced through `api.funkify(...)`.
-- `docker_build` MUST remain defunkifiable through `daggerml.contrib.testing.defunkify(...)` to recover the underlying script callable for author-code unit tests.
-- The effective invocation shape of `docker_build` is:
-  - `docker_build(context_tarball, build_flags=(), repo=None)`
-- The underlying Python callable signature MAY remain `def _docker_build(dag): ...`; argument binding is owned by the script-executor calling convention rather than by a richer Python signature.
-- Accepted inputs:
+For each interface, specify (as applicable):
+
+- location/name: `daggerml.contrib.funks` / `docker_build`
+- signature/schema: The effective invocation shape of `docker_build` is `docker_build(context_tarball, build_flags=(), repo=None)`. The underlying Python callable signature MAY remain `def _docker_build(dag): ...`; argument binding is owned by the script-executor calling convention rather than by a richer Python signature.
+- accepted inputs and output shape:
   - `context_tarball`: REQUIRED; MUST identify a Build Context Tarball.
   - `build_flags`: OPTIONAL; MUST be an ordered sequence of raw Docker build flags; default is the empty sequence.
   - `repo`: OPTIONAL; MAY identify a repository destination for push-oriented build flows; default is `None`.
-- `docker_build` MUST treat `build_flags` as ordered pass-through Docker build CLI flags rather than a structured contrib-owned flag schema.
-- `docker_build` MUST return a `Uri` when execution succeeds.
-- Successful `docker_build` execution MUST externalize the produced build artifact bytes and MUST NOT store those bytes in repository storage.
+  - Output: `docker_build` MUST return a `Uri` when execution succeeds.
+- behavior/semantics: `docker_build` MUST be exported as a contrib delayed-runnable value produced through `api.funkify(...)`. `docker_build` MUST remain defunkifiable through `daggerml.contrib.testing.defunkify(...)` to recover the underlying script callable for author-code unit tests. `docker_build` MUST treat `build_flags` as ordered pass-through Docker build CLI flags rather than a structured contrib-owned flag schema.
+- errors and failure modes: See Error Semantics.
+- side effects: Successful `docker_build` execution MUST externalize the produced build artifact bytes and MUST NOT store those bytes in repository storage.
+- constraints: `docker_build` MUST preserve Build Flags order exactly as supplied by the caller. Contrib funks MUST be pure with respect to their data arguments.
+- invocation surfaces: Callable from Python code executing a DAG or interacting with the executor.
+
+For each interface, specify how unspecified fields are handled:
 - Unknown invocation fields beyond `context_tarball`, `build_flags`, and `repo` MUST be rejected.
 
 ### Invariants
@@ -77,25 +77,33 @@ Define the first contrib-owned prebuilt funk surface without overloading `dagger
 ### Error Semantics
 
 - Invalid `context_tarball` input:
-  - non-retryable until the input is corrected,
-  - terminal for that invocation,
-  - caller behavior: construct a valid Build Context Tarball and retry,
-  - operator action: repair the producer of the build context artifact.
+  - retryable: non-retryable until the input is corrected
+  - transient vs terminal: terminal for that invocation
+  - required caller behavior: construct a valid Build Context Tarball and retry
+  - required operator action: repair the producer of the build context artifact
 - Invalid `build_flags` input:
-  - non-retryable until the input is corrected,
-  - terminal for that invocation,
-  - caller behavior: correct the supplied Build Flags sequence,
-  - operator action: repair the caller generating Docker flags.
+  - retryable: non-retryable until the input is corrected
+  - transient vs terminal: terminal for that invocation
+  - required caller behavior: correct the supplied Build Flags sequence
+  - required operator action: repair the caller generating Docker flags
 - Docker build failure:
-  - retryability depends on the underlying Docker/environment failure,
-  - terminal for that invocation,
-  - caller behavior: surface the execution failure,
-  - operator action: inspect Docker/tooling/environment state and supplied build inputs.
+  - retryable: depends on the underlying Docker/environment failure
+  - transient vs terminal: terminal for that invocation
+  - required caller behavior: surface the execution failure
+  - required operator action: inspect Docker/tooling/environment state and supplied build inputs
 - Artifact publication failure:
-  - retryability depends on the external storage failure,
-  - terminal for that invocation,
-  - caller behavior: surface the storage failure,
-  - operator action: restore storage availability or configuration.
+  - retryable: depends on the external storage failure
+  - transient vs terminal: terminal for that invocation
+  - required caller behavior: surface the storage failure
+  - required operator action: restore storage availability or configuration
+
+### Security Boundaries
+
+None.
+
+### Observability
+
+None.
 
 ### Authority Handoffs
 

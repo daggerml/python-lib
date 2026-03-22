@@ -26,7 +26,7 @@ def _cmd_payload(cmd: Any) -> dict[str, Any]:
         "cache_key": f"cache:key:{uuid4()}",
         "cmd": cmd,
         "remote": {"root": "s3://bucket/root", "cache": "cache-ns"},
-        "comms": {"kind": "local", "spec": {"root_dir": "/tmp/dml-comms"}},
+        "comms": {"kind": "local", "spec": {"cache_dir": "/tmp/dml-comms"}},
     }
 
 
@@ -59,13 +59,10 @@ def test_supervisor_run_updates_state_heartbeat_and_terminal(tmp_path):
             'import pathlib; pathlib.Path(\'result.json\').write_text(\'{"status":"succeeded","error":null}\')',
         ],
         "remote": {"root": "s3://bucket/root", "cache": "cache-ns"},
-        "comms": {"kind": "local", "spec": {"root_dir": str(tmp_path)}},
+        "comms": {"kind": "local", "spec": {"cache_dir": str(tmp_path)}},
     }
     result = run(payload, heartbeat_s=0.01)
     assert result == {"status": "succeeded", "error": None}
     record = LocalState(cache_key, cache_dir=str(tmp_path)).get()
     assert isinstance(record, dict)
     assert record["status"] == "succeeded"
-    assert isinstance(record.get("owner_instance"), str)
-    assert isinstance(record.get("updated_ts"), float)
-    assert record.get("lease_expires_ts") is None

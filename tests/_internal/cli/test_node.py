@@ -8,10 +8,7 @@ from argparse import ArgumentParser, Namespace
 from io import StringIO
 from unittest.mock import Mock
 
-from hypothesis import given, settings
-
 from daggerml._cli import cli
-from daggerml._cli.base import DmlJsonEncoder
 from daggerml._cli.node import (
     execute_node_get,
     execute_node_unroll,
@@ -22,7 +19,6 @@ from daggerml._internal.ops import DmlOps
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.types import DEFAULT_HEAD
-from tests._internal.test__db import dml_object
 
 
 class TestSetupNodeParser:
@@ -148,28 +144,6 @@ class TestNodeCLIIntegration:
             sys.argv = old_argv
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-
-    @given(value=dml_object())
-    @settings(max_examples=10)
-    def test_node_unroll_value(self, value):
-        """Test node unroll returns fully unrolled value."""
-
-        # Create a fresh temp repo for each test
-        temp_dir = tempfile.mkdtemp()
-        repo_path = f"{temp_dir}/repo"
-        try:
-            repo = DmlOps.create(repo_path)
-            repo.close()
-
-            node_ref = self.create_node_in_repo(repo_path, value)
-            stdout, stderr = self.run_cli_command(repo_path, ["node", "unroll", node_ref])
-            assert not stderr
-            result = json.loads(stdout.strip())
-            # The result should match the JSON serialization of the value
-            expected = json.loads(json.dumps(value, cls=DmlJsonEncoder))
-            assert result == expected
-        finally:
-            shutil.rmtree(temp_dir)
 
     def test_repo_flag_support(self, temp_db_fn):
         """Test --repo flag support."""

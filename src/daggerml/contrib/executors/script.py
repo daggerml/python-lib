@@ -11,7 +11,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 from contextlib import chdir
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,9 +19,9 @@ from typing import Any, cast
 
 import daggerml as dml
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
-from daggerml.contrib.executor_state import LocalState
+from daggerml.contrib.executor_state import LocalState, is_stale
 from daggerml.contrib.executors._base import ExecutorBase
-from daggerml.contrib.s3 import S3Store, is_s3_uri
+from daggerml.contrib.s3 import S3Store
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,6 @@ class ScriptExecutor(ExecutorBase):
     name = "script"
     adapter = "local"
     state_class = LocalState
-    LEASE_SECONDS = 30.0
 
     def __init__(self, runnable: Runnable | None = None, argv_ptr: str | None = None):
         self.runnable = runnable
@@ -47,35 +45,27 @@ class ScriptExecutor(ExecutorBase):
         if unknown:
             bad = ", ".join(unknown)
             raise DmlRepoError(f"Unknown script executor kwargs: {bad}")
-
         fn = kwargs.get("fn")
         if not callable(fn):
             raise DmlRepoError("script resolve_runnable requires callable fn")
-
         prepop = kwargs.get("prepop", {})
         if not isinstance(prepop, dict):
             raise DmlRepoError("script prepop must be a dict")
-
         extra_objs = list(kwargs.get("extra_objs", []))
         if not isinstance(extra_objs, list):
             raise DmlRepoError(f"script extra_objs must be a list, not {type(extra_objs).__name__}")
-
         extra_lines = list(kwargs.get("extra_lines", []))
         if not isinstance(extra_lines, list) or not all(isinstance(x, str) for x in extra_lines):
             raise DmlRepoError("script extra_lines must be a list[str]")
-
         call_kwargs = {}
         params = list(inspect.signature(fn).parameters.values())
         if not params or params[0].name != "dag":
             raise DmlRepoError("script fn must include first 'dag' parameter")
-
         for p in params[1:]:
             has_default = p.default is not inspect._empty
             if has_default:
                 call_kwargs[p.name] = p.default
-
         script = ScriptExecutor._render_script(fn, extra_objs=extra_objs, extra_lines=extra_lines)
-
         return {
             META_KEY: {
                 "prepop": prepop,
@@ -141,50 +131,17 @@ class ScriptExecutor(ExecutorBase):
             adapter="dml-local-adapter",
         )
 
-    @staticmethod
-    def _runtime_inputs(*, runnable, argv_ptr) -> tuple[str, str, dict[str, Any]]:
-        meta = runnable.kwargs.get(META_KEY)
-        if not isinstance(meta, dict):
-            raise DmlRepoError("script runnable missing script metadata")
-        script_uri = meta.get("script_uri")
-        if not isinstance(script_uri, str) or not is_s3_uri(script_uri):
-            raise DmlRepoError("script runnable script_uri must be an s3:// URI")
-
-        fn_name = meta.get("fn_name")
-        if not isinstance(fn_name, str) or not fn_name:
-            raise DmlRepoError("script runnable missing fn_name")
-
-        call_kwargs = {k: v for k, v in runnable.kwargs.items() if k != META_KEY}
-
-        if not isinstance(argv_ptr, str):
-            raise DmlRepoError("script run requires argv_ptr string")
-        return script_uri, fn_name, call_kwargs
-
     @classmethod
-    def start(cls, *, runnable, argv_ptr, cache_key, remote, state=None):
-        return cls(runnable=runnable, argv_ptr=argv_ptr)._start(cache_key=cache_key, remote=remote, state=state)
-
-    def _start(self, *, cache_key, remote, state=None):
-        if state is None:
-            raise DmlRepoError("script start requires locked state")
-        if self.runnable is None or self.argv_ptr is None:
-            raise DmlRepoError("script start requires runnable and argv_ptr")
-        _script_uri, _fn_name, _call_kwargs = self._runtime_inputs(runnable=self.runnable, argv_ptr=self.argv_ptr)
-        record = state.get()
-        if record is not None:
-            status = record.get("status")
-            if status in {"succeeded", "failed", "pending", "running", "canceled"}:
-                return {"status": status, "error": record.get("error")}
-
-        workdir = tempfile.mkdtemp(prefix=f"dml-script-{cache_key[:8]}-")
-        payload_path = Path(workdir) / "supervisor-input.json"
-        result_path = Path(workdir) / "result.json"
-        stdout_path = Path(workdir) / "stdout.log"
-        stderr_path = Path(workdir) / "stderr.log"
+    def start(cls, runnable, argv_ptr, cache_key, remote, state=None):
+        workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{cache_key[:8]}-"))
+        payload_path = workdir / "supervisor-input.json"
+        result_path = workdir / "result.json"
+        stdout_path = workdir / "stdout.log"
+        stderr_path = workdir / "stderr.log"
         payload = {
             "version": 1,
             "cache_key": cache_key,
-            "cmd": ["python", "-m", "daggerml.contrib.executors.script", self.argv_ptr],
+            "cmd": ["python", "-m", "daggerml.contrib.executors.script", argv_ptr],
             "remote": remote,
             "comms": {"kind": "local", "spec": {}},
             "env": {
@@ -209,133 +166,51 @@ class ScriptExecutor(ExecutorBase):
                 stderr=stderr_f,
                 start_new_session=True,
                 close_fds=True,
+                env={**os.environ, "PYTHONUNBUFFERED": "1", **payload["env"]},
             )
-        now = time.time()
         initial = state.init_record(
             status="running",
-            owner_executor=self.name,
-            owner_instance=f"supervisor:{proc.pid}",
-            heartbeat_ts=now,
-            lease_expires_ts=now + self.LEASE_SECONDS,
         )
-        created = state.put_if_absent(initial)
-        if created:
-            with_meta = state.set_executor_metadata(
-                executor_id=self.name,
-                data={
-                    "pid": proc.pid,
-                    "workdir": workdir,
-                    "result_path": str(result_path),
-                    "stdout_path": str(stdout_path),
-                    "stderr_path": str(stderr_path),
-                },
-            )
-            state.update(with_meta)
-        if not created:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                pass
+        state.put_if_absent(initial)
+        with_meta = state.set_executor_metadata(
+            executor_id=cls.name,
+            data={
+                "pid": proc.pid,
+                "workdir": str(workdir),
+                "result_path": str(result_path),
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
+            },
+        )
+        state.update(with_meta)
         return {"status": "running", "error": None}
 
     @classmethod
-    def poll(cls, *, state=None):
-        return cls()._poll(state=state)
-
-    def _poll(self, *, state=None):
-        if state is None:
-            raise DmlRepoError("script poll requires locked state")
+    def poll(cls, state):
         record = state.get()
-        if record is None:
-            return {"status": "pending", "error": None}
-
         status = record.get("status")
         if status in {"succeeded", "failed", "canceled"}:
             return {"status": status, "error": record.get("error")}
-        metadata = record.get("metadata")
-        script_meta = metadata.get(self.name) if isinstance(metadata, dict) else None
-        pid = script_meta.get("pid") if isinstance(script_meta, dict) else None
-        stale_at = record.get("lease_expires_ts")
-        if isinstance(stale_at, (int, float)) and stale_at < time.time() and isinstance(pid, int):
-            if self._proc_exists(pid):
-                try:
-                    os.killpg(pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    pass
-                return {"status": "failed", "error": "Script supervisor heartbeat stale"}
-        result_path = script_meta.get("result_path") if isinstance(script_meta, dict) else None
-        if isinstance(pid, int) and not self._proc_exists(pid):
-            if isinstance(result_path, str) and Path(result_path).exists():
-                result = json.loads(Path(result_path).read_text())
-                if isinstance(result, dict):
-                    return {"status": result.get("status"), "error": result.get("error")}
-            return {"status": "failed", "error": "Script supervisor exited without result"}
+        if is_stale(record):
+            return {"status": "failed", "error": "Script supervisor heartbeat stale"}
         return {"status": "running", "error": None}
 
     @classmethod
-    def kill(cls, *, state=None):
-        return cls()._kill(state=state)
-
-    def _kill(self, *, state=None):
-        if state is None:
-            raise DmlRepoError("script kill requires locked state")
-        record = state.get()
-        if record is None:
-            return {"status": "canceled", "error": None}
-
-        status = record.get("status")
-        if status in {"succeeded", "failed", "canceled"}:
-            return {"status": status, "error": record.get("error")}
-
-        metadata = record.get("metadata")
-        script_meta = metadata.get(self.name) if isinstance(metadata, dict) else None
-        pid = script_meta.get("pid") if isinstance(script_meta, dict) else None
-        if isinstance(pid, int):
+    def gc(cls, state):
+        script_meta = state.get_executor_metadata(cls.name)
+        if "pid" in script_meta:
             try:
-                os.killpg(pid, signal.SIGTERM)
-            except ProcessLookupError:
+                os.killpg(script_meta["pid"], signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
                 pass
-            except PermissionError:
-                pass
-
-        canceled = state.update_status(
-            status="canceled",
-            error=None,
-            owner_executor=cast(str | None, record.get("owner_executor")),
-            owner_instance=cast(str | None, record.get("owner_instance")),
-            heartbeat_ts=cast(float | None, record.get("heartbeat_ts")),
-            lease_expires_ts=None,
-        )
-        state.update(canceled)
-        return {"status": "canceled", "error": None}
-
-    @classmethod
-    def gc(cls, *, state=None):
-        return cls()._gc(state=state)
-
-    def _gc(self, *, state=None):
-        if state is None:
-            raise DmlRepoError("script gc requires locked state")
-        record = state.get()
-        if record is None:
-            return None
-        metadata = record.get("metadata")
-        script_meta = metadata.get(self.name) if isinstance(metadata, dict) else None
-        workdir = script_meta.get("workdir") if isinstance(script_meta, dict) else None
-        if isinstance(workdir, str):
-            shutil.rmtree(workdir, ignore_errors=True)
-        return None
+        if "workdir" in script_meta:
+            shutil.rmtree(script_meta["workdir"], ignore_errors=True)
+        state.delete()
 
 
 def _terminal_runnable(root: Runnable) -> Runnable:
     current = root
     while current.sub is not None:
-        if not isinstance(current.sub, Runnable):
-            raise DmlRepoError(f"script worker runnable.sub must be Runnable, got: {type(current.sub).__name__}")
         current = current.sub
     return current
 
@@ -359,7 +234,7 @@ def run_payload(argv_ptr: str) -> dict[str, Any]:
         runnable = _terminal_runnable(cast(Runnable, runnable_node.value()))
         metadata = cast(dict[str, Any], runnable.kwargs.pop(META_KEY))
         script_uri = cast(str, metadata["script_uri"])
-        script = store.get(script_uri).decode("utf-8")
+        script = S3Store().get(script_uri).decode("utf-8")
         fn_name = cast(str, metadata["fn_name"])
         call_kwargs = {k: dag.put(v, name=f"dml.kw:{k}") for k, v in runnable.kwargs.items()}
         prepop = cast(dict[str, Any], metadata.get("prepop", {}))
@@ -373,19 +248,20 @@ def run_payload(argv_ptr: str) -> dict[str, Any]:
 
     with dml.temporary() as dml_instance:
         try:
-            store = S3Store()
             dag = dml_instance.new(argv_ptr=argv_ptr)
         except Exception as e:
             return {"status": "failed", "error": str(e)}
-        with TemporaryDirectory(prefix="dml-script-worker-") as tmpd:
-            with chdir(tmpd):
-                try:
-                    with dag:
-                        runit(dag)
+        with TemporaryDirectory(prefix="dml-script-worker-") as tmpd, chdir(tmpd):
+            try:
+                with dag:
+                    runit(dag)
+                return {"status": "succeeded", "error": None}
+            except Exception as e:
+                if dag.ref is not None:
                     return {"status": "succeeded", "error": None}
-                except Exception as e:
-                    return {"status": "failed", "error": str(e)}
-                finally:
+                return {"status": "failed", "error": str(e)}
+            finally:
+                if dag.ref is not None:
                     dag.cache()
 
 

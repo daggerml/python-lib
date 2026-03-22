@@ -5,31 +5,36 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
 from daggerml import Uri
 from daggerml._internal.types import DmlRepoError, Runnable
-from daggerml.contrib.executor_state import LocalState
+from daggerml.contrib.executor_state import LocalState, is_stale
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 
 
 @dataclass
 class DockerExecutor(ExecutorBase):
+    workdir: Path
+    state: LocalState
     runnable: Runnable | None = None
-    workdir: Path | None = None
     name = "docker"
     adapter = "local"
     state_class = LocalState
-    OWNER = "docker"
     docker_bin: str | None = field(default_factory=lambda: shutil.which("docker"))
 
     def __post_init__(self):
+        if isinstance(self.workdir, str):
+            self.workdir = Path(self.workdir)
         if self.docker_bin is None:
             raise DmlRepoError("docker executable not found in PATH")
+
+    @property
+    def cache_key(self) -> str:
+        return self.state.cache_key
 
     @classmethod
     def resolve_runnable(cls, uri, kwargs, sub):
@@ -116,9 +121,7 @@ class DockerExecutor(ExecutorBase):
         self._run_docker("load", "-i", str(tar_path))
         return image_ref, image_ref
 
-    def _worker_payload(self, *, argv_ptr: str, cache_key: str, remote: dict[str, Any]) -> Path:
-        if self.workdir is None:
-            raise DmlRepoError("docker executor worker payload requires workdir")
+    def _worker_payload(self, *, argv_ptr: str, remote: dict[str, Any]) -> Path:
         if self.runnable.sub is None:
             raise DmlRepoError("docker executor requires sub runnable")
         state_dir = self.workdir / "state"
@@ -126,113 +129,29 @@ class DockerExecutor(ExecutorBase):
         payload = {
             "runnable": self._encode_runnable(self.runnable.sub),
             "argv_ptr": argv_ptr,
-            "cache_key": cache_key,
+            "cache_key": self.cache_key,
             "remote": remote,
-            "comms": {"kind": "local", "owner": self.OWNER, "spec": {"cache_dir": str(state_dir)}},
+            "comms": {"kind": "local", "spec": {"cache_dir": str(state_dir)}},
         }
         input_path = self.workdir / "input.json"
         input_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         return input_path
 
     def _nested_state(self, metadata: dict[str, Any]) -> Any:
-        state_dir = metadata.get("state_dir")
-        nested_cache_key = metadata.get("nested_cache_key")
-        if not isinstance(state_dir, str) or not isinstance(nested_cache_key, str):
-            return None
-        return LocalState(nested_cache_key, cache_dir=state_dir).get()
-
-    def _metadata(self, record: dict[str, Any]) -> dict[str, Any]:
-        return cast(dict[str, Any], cast(dict[str, Any], record.get("metadata", {})).get(self.OWNER, {}))
-
-    def _read_output(self, metadata: dict[str, Any]) -> dict[str, Any] | None:
-        output_path = metadata.get("output_path")
-        if not isinstance(output_path, str) or not Path(output_path).exists():
-            return None
-        result = json.loads(Path(output_path).read_text())
-        if not isinstance(result, dict):
-            raise DmlRepoError("docker adapter output must be a dict")
-        return result
-
-    def _record_result(self, state: Any, record: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
-        next_record = state.update_status(
-            status=cast(str, result.get("status")),
-            error=cast(str | None, result.get("error")),
-            owner_executor=cast(str | None, record.get("owner_executor")),
-            owner_instance=cast(str | None, record.get("owner_instance")),
-            heartbeat_ts=cast(float | None, record.get("heartbeat_ts")),
-            lease_expires_ts=None,
-        )
-        state.update(next_record)
-        return {"status": result.get("status"), "error": result.get("error")}
-
-    def _finish(
-        self, *, state: Any, record: dict[str, Any], metadata: dict[str, Any], result: dict[str, Any]
-    ) -> dict[str, Any]:
-        response = self._record_result(state, record, result)
-        self._cleanup(metadata=metadata)
-        return response
-
-    def _fail(self, *, state: Any, record: dict[str, Any], metadata: dict[str, Any], error: str) -> dict[str, Any]:
-        response = self._record_result(state, record, {"status": "failed", "error": error})
-        self._cleanup(metadata=metadata)
-        return response
-
-    def _is_terminal(self, nested: Any) -> bool:
-        return isinstance(nested, dict) and nested.get("status") in {"succeeded", "failed", "canceled"}
-
-    def _is_stale(self, nested: Any) -> bool:
-        if not isinstance(nested, dict):
-            return False
-        lease_expires_ts = nested.get("lease_expires_ts")
-        return isinstance(lease_expires_ts, (int, float)) and lease_expires_ts < time.time()
-
-    def _container_status(self, container_id: str) -> str:
-        return self._run_docker("inspect", "-f", "{{.State.Status}}", container_id, check=False) or "missing"
-
-    def _container_exit_code(self, container_id: str) -> int:
-        raw = self._run_docker("inspect", "-f", "{{.State.ExitCode}}", container_id)
-        try:
-            return int(raw)
-        except ValueError as e:
-            raise DmlRepoError(f"docker inspect returned invalid exit code: {raw}") from e
-
-    def _container_logs(self, container_id: str) -> str:
-        return self._run_docker("logs", container_id, check=False)
-
-    def _cleanup(self, *, metadata: dict[str, Any]) -> None:
-        container_id = metadata.get("container_id")
-        if isinstance(container_id, str) and container_id:
-            self._run_docker("rm", "-f", container_id, check=False)
-        cleanup_image = metadata.get("cleanup_image")
-        if isinstance(cleanup_image, str) and cleanup_image:
-            self._run_docker("image", "rm", "-f", cleanup_image, check=False)
-        workdir = metadata.get("workdir")
-        if isinstance(workdir, str) and workdir:
-            shutil.rmtree(workdir, ignore_errors=True)
+        nested_state = LocalState(self.cache_key, cache_dir=metadata["state_dir"])
+        return nested_state.get()
 
     @classmethod
-    def start(cls, *, runnable, argv_ptr, cache_key, remote, state=None):
-        safe_cache_key = "".join(ch if ch.isalnum() else "-" for ch in cache_key[:32])
-        workdir = Path(tempfile.mkdtemp(prefix=f"dml-docker-{safe_cache_key}-"))
-        return cls(runnable=runnable, workdir=workdir)._start(
-            argv_ptr=argv_ptr, cache_key=cache_key, remote=remote, state=state
+    def start(cls, *, runnable, argv_ptr, cache_key, remote, state):
+        workdir = Path(tempfile.mkdtemp(prefix=f"dml-docker-{cache_key}-"))
+        return cls(workdir=workdir, state=state, runnable=runnable)._start(
+            argv_ptr=argv_ptr, remote=remote, state=state
         )
 
-    def _start(self, *, argv_ptr, cache_key, remote, state=None):
-        if state is None:
-            raise DmlRepoError("docker start requires locked state")
-        record = state.get()
-        if record is not None:
-            status = record.get("status")
-            if status in {"succeeded", "failed", "pending", "running", "canceled"}:
-                return {"status": status, "error": record.get("error")}
-        if self.runnable is None or self.workdir is None:
-            raise DmlRepoError("docker executor start requires runnable and workdir")
-        if self.runnable.sub is None:
-            raise DmlRepoError("docker executor requires sub runnable")
+    def _start(self, *, argv_ptr, remote, state=None):
         output_path = self.workdir / "output.json"
         image_ref, cleanup_image = self._prepare_image(remote=remote)
-        input_path = self._worker_payload(argv_ptr=argv_ptr, cache_key=cache_key, remote=remote)
+        input_path = self._worker_payload(argv_ptr=argv_ptr, remote=remote)
         container_id = self._run_docker(
             "run",
             "-d",
@@ -251,121 +170,47 @@ class DockerExecutor(ExecutorBase):
             "-o",
             str(output_path),
         )
-        now = time.time()
-        created = state.put_if_absent(
-            state.init_record(
-                status="running",
-                error=None,
-                owner_executor=self.OWNER,
-                owner_instance=f"container:{container_id}",
-                heartbeat_ts=now,
-                lease_expires_ts=None,
-            )
-        )
+        assert state.put_if_absent(state.init_record(status="running", error=None))
         metadata = {
             "container_id": container_id,
             "workdir": str(self.workdir),
             "output_path": str(output_path),
             "state_dir": str(self.workdir / "state"),
-            "nested_cache_key": cache_key,
             "cleanup_image": cleanup_image,
         }
-        if created:
-            state.update(state.set_executor_metadata(executor_id=self.OWNER, data=metadata))
-        else:
-            self._cleanup(metadata=metadata)
+        state.update(state.set_executor_metadata(self.name, data=metadata))
         return {"status": "running", "error": None}
 
     @classmethod
-    def poll(cls, *, state=None):
-        return cls()._poll(state=state)
+    def poll(cls, state):
+        metadata = state.get_executor_metadata(cls.name)
+        return cls(workdir=Path(metadata["workdir"]), state=state)._poll(state=state)
 
-    def _poll(self, *, state=None):
-        if state is None:
-            raise DmlRepoError("docker poll requires locked state")
-        record = state.get()
-        if record is None:
-            return {"status": "pending", "error": None}
-        status = record.get("status")
-        if status in {"succeeded", "failed", "canceled"}:
-            return {"status": status, "error": record.get("error")}
-        metadata = self._metadata(cast(dict[str, Any], record))
-        container_id = metadata.get("container_id")
-        if not isinstance(container_id, str) or not container_id:
-            return {"status": "pending", "error": None}
+    def _poll(self, state):
+        metadata = state.get_executor_metadata(self.name)
         nested = self._nested_state(metadata)
-        if self._is_terminal(nested):
-            output = self._read_output(metadata)
-            if output is None:
-                return self._fail(
-                    state=state,
-                    record=cast(dict[str, Any], record),
-                    metadata=metadata,
-                    error="docker nested execution reached terminal state without output",
+        if nested["status"] in {"succeeded", "failed", "canceled"}:
+            return {"status": nested["status"], "error": nested.get("error")}
+        if is_stale(nested):
+            msg = f"stale docker heartbeat (container ID: {metadata.get('container_id')})"
+            return {"status": "failed", "error": msg}
+        return {"status": "running", "error": None}
+
+    @classmethod
+    def gc(cls, state):
+        metadata = state.get_executor_metadata(cls.name)
+        docker_bin = shutil.which("docker")
+        if docker_bin is not None:
+            container_id = metadata.get("container_id")
+            if isinstance(container_id, str) and container_id:
+                subprocess.run([docker_bin, "rm", "-f", container_id], check=False, capture_output=True, text=True)
+            cleanup_image = metadata.get("cleanup_image")
+            if isinstance(cleanup_image, str) and cleanup_image:
+                subprocess.run(
+                    [docker_bin, "image", "rm", "-f", cleanup_image], check=False, capture_output=True, text=True
                 )
-            return self._finish(state=state, record=cast(dict[str, Any], record), metadata=metadata, result=output)
-
-        if self._is_stale(nested):
-            return self._fail(
-                state=state,
-                record=cast(dict[str, Any], record),
-                metadata=metadata,
-                error="Docker nested execution heartbeat stale",
-            )
-
-        container_status = self._container_status(container_id)
-        if container_status in {"created", "running", "restarting"}:
-            return {"status": "running", "error": None}
-
-        output = self._read_output(metadata)
-        if output is not None:
-            return self._finish(state=state, record=cast(dict[str, Any], record), metadata=metadata, result=output)
-
-        exit_code = self._container_exit_code(container_id)
-        logs = self._container_logs(container_id)
-        return self._fail(
-            state=state,
-            record=cast(dict[str, Any], record),
-            metadata=metadata,
-            error=f"Docker container exited with code {exit_code}: {logs}".strip(),
-        )
-
-    @classmethod
-    def kill(cls, *, state=None):
-        return cls()._kill(state=state)
-
-    def _kill(self, *, state=None):
-        if state is None:
-            raise DmlRepoError("docker kill requires locked state")
-        record = state.get()
-        if record is None:
-            return {"status": "canceled", "error": None}
-        status = record.get("status")
-        if status in {"succeeded", "failed", "canceled"}:
-            return {"status": status, "error": record.get("error")}
-        metadata = cast(dict[str, Any], cast(dict[str, Any], record.get("metadata", {})).get(self.OWNER, {}))
-        self._cleanup(metadata=metadata)
-        canceled = state.update_status(
-            status="canceled",
-            error=None,
-            owner_executor=cast(str | None, record.get("owner_executor")),
-            owner_instance=cast(str | None, record.get("owner_instance")),
-            heartbeat_ts=cast(float | None, record.get("heartbeat_ts")),
-            lease_expires_ts=None,
-        )
-        state.update(canceled)
-        return {"status": "canceled", "error": None}
-
-    @classmethod
-    def gc(cls, *, state=None):
-        return cls()._gc(state=state)
-
-    def _gc(self, *, state=None):
-        if state is None:
-            raise DmlRepoError("docker gc requires locked state")
-        record = state.get()
-        if record is None:
-            return None
-        metadata = cast(dict[str, Any], cast(dict[str, Any], record.get("metadata", {})).get(self.OWNER, {}))
-        self._cleanup(metadata=metadata)
+        workdir = metadata.get("workdir")
+        if isinstance(workdir, str) and workdir:
+            shutil.rmtree(workdir, ignore_errors=True)
+        state.delete()
         return None

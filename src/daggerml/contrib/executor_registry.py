@@ -39,14 +39,13 @@ def _validate_executor_spec(spec: Any) -> tuple[str, str, Any]:
     if not callable(resolve_runnable):
         raise DmlRepoError("Executor spec missing required callable: resolve_runnable")
 
-    if not hasattr(spec, "start") or not hasattr(spec, "poll") or not hasattr(spec, "kill") or not hasattr(spec, "gc"):
-        raise DmlRepoError("Executor spec missing required callables: start, poll, kill, gc")
+    if not hasattr(spec, "start") or not hasattr(spec, "poll") or not hasattr(spec, "gc"):
+        raise DmlRepoError("Executor spec missing required callables: start, poll, gc")
     start = spec.start
     poll = spec.poll
-    kill = spec.kill
     gc = spec.gc
-    if not callable(start) or not callable(poll) or not callable(kill) or not callable(gc):
-        raise DmlRepoError("Executor spec missing required callables: start, poll, kill, gc")
+    if not callable(start) or not callable(poll) or not callable(gc):
+        raise DmlRepoError("Executor spec missing required callables: start, poll, gc")
 
     if not hasattr(spec, "state_class"):
         raise DmlRepoError("Executor spec missing required state_class lock contextmanager")

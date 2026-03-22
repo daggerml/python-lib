@@ -36,11 +36,7 @@ Common fields used by contrib execution state:
 - `cache_key`
 - `status`
 - `error` (nullable)
-- `owner_executor` (nullable executor id, for example `script`)
-- `owner_instance` (nullable executor-instance debugging tag)
-- `heartbeat_ts` (nullable)
-- `lease_expires_ts` (nullable)
-- `updated_ts`
+- `heartbeat_ts`
 - `metadata` (`dict[str, dict[str, Any]]`), namespaced by executor id
 
 Reference record example:
@@ -51,27 +47,22 @@ Reference record example:
   "cache_key": "cache:abc123",
   "status": "pending",
   "error": null,
-  "owner_executor": null,
-  "owner_instance": null,
-  "heartbeat_ts": null,
-  "lease_expires_ts": null,
-  "updated_ts": 1710370000.123,
+  "heartbeat_ts": 1710370000.123,
   "metadata": {}
 }
 ```
 
 State ownership and metadata conventions:
 
-- `owner_executor` is claimed by the executor currently responsible for heartbeat updates.
-- executors that initialize shared state are not required to know final ownership in advance.
 - executors/wrappers MUST write custom state only under `metadata[<executor_id>]`.
 - example metadata values: `metadata["batch"] = {"batch_job_id": "..."}`.
 - `status`/`error` are canonical run result fields and MUST remain normalized across wrappers.
 - Parent Comms reuses these same State backends and record fields for observational reporting.
 - Parent Comms is immutable invocation input naming where the current invocation reports outward; it is not a second mutable record schema.
-- when adapters report to Parent Comms, they mirror normalized status/heartbeat/error information into another State record keyed for the parent observer.
+- when adapters report to Parent Comms, they mirror normalized status/heartbeat information into another State record keyed for the parent observer.
 - Parent Comms is one-hop only; it applies to the current adapter invocation and is not forwarded to grandchildren.
 - executor-specific external handles used for debugging/polling (for example docker container ids or batch job ids) belong under `metadata[<executor_id>]` in the relevant State record.
+- `heartbeat_ts` is updated on every state mutation; stale detection uses `heartbeat_ts + HEARTBEAT_STALENESS < time.time()`.
 
 Typed state API surface:
 
@@ -82,10 +73,6 @@ def init_record(
     *,
     status: Status = "pending",
     error: str | None = None,
-    owner_executor: str | None = None,
-    owner_instance: str | None = None,
-    heartbeat_ts: float | None = None,
-    lease_expires_ts: float | None = None,
     metadata: dict[str, dict[str, Any]] | None = None,
 ) -> StateRecord: ...
 
@@ -93,10 +80,6 @@ def update_status(
     *,
     status: Status,
     error: str | None = None,
-    owner_executor: str | None = None,
-    owner_instance: str | None = None,
-    heartbeat_ts: float | None = None,
-    lease_expires_ts: float | None = None,
 ) -> StateRecord: ...
 
 def set_executor_metadata(*, executor_id: str, data: dict[str, Any]) -> StateRecord: ...

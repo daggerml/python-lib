@@ -45,8 +45,10 @@ local = "daggerml.contrib.adapters:LocalAdapter"
 lambda = "daggerml.contrib.adapters:LambdaAdapter"
 
 [project.entry-points."daggerml.contrib.executors"]
+batch = "daggerml.contrib.executors:BatchExecutor"
 script = "daggerml.contrib.executors:ScriptExecutor"
 docker = "daggerml.contrib.executors:DockerExecutor"
+ssh = "daggerml.contrib.executors:SshExecutor"
 
 [project.entry-points."daggerml.codecs"]
 dataframe = "daggerml.contrib.codecs:literal_codecs"

@@ -17,7 +17,7 @@ This document defines:
 
 - the runtime role split between contrib adapters and contrib executors,
 - the rule that the contrib adapter/executor pair, not the contrib adapter class alone, satisfies the core adapter contract for a contrib execution surface,
-- contrib executor lifecycle contracts for `start`, `poll`, `kill`, and `gc`,
+- contrib executor lifecycle contracts for `start`, `poll`, and `gc`,
 - shared rules for executor state and adapter-owned parent comms,
 - contrib supervisor payload and behavior.
 
@@ -74,17 +74,20 @@ Define the normative runtime contract for contrib execution while keeping author
   - `resolve_runnable(uri, kwargs, sub)`: executor runnable lowering/validation entrypoint,
   - `start(*, runnable, argv_ptr, cache_key, remote, state=None)`,
   - `poll(*, state=None)`,
-  - `kill(*, state=None)`,
   - `gc(*, state=None)`.
 - Shared contrib executor lifecycle interface:
-  - runtime coordination MUST read current state and dispatch to `start`, `poll`, or `kill`,
-  - repeated invocations for the same `cache_key` MUST resume existing execution state and MUST NOT relaunch duplicate jobs,
-  - terminal states MUST be returned without relaunch,
+  - runtime coordination MUST read current state and dispatch to `start` or `poll`,
+  - stateful executors MUST resume existing execution state for the same `cache_key` and MUST NOT relaunch duplicate jobs,
+  - stateless executors MAY perform execution entirely inside `start(...)` and MAY ignore `cache_key` for local executor-owned deduplication,
+  - when an executor is stateless, repeated invocations MAY re-run the executor transport step and any deduplication semantics are owned by the nested adapter or remote runtime rather than by executor-local state,
+  - terminal states from stateful executors MUST be returned without relaunch,
   - kickoff/poll invocations MUST be bounded,
-  - long-running work MUST be backgrounded and resumed by polling,
-  - polling MUST be idempotent across repeated invocations,
+  - stateful long-running work MUST be backgrounded and resumed by polling,
+  - polling MUST be idempotent across repeated invocations for stateful executors,
+  - stateless executors MAY define `poll` and `gc` as no-op lifecycle hooks when they retain no executor-owned handle or state,
   - state locking MUST be backend-owned via `state_class.lock(cache_key)`,
-  - `gc(*, state)` MUST be idempotent and MUST clean up executor-owned residue that may remain after terminal execution or cancellation.
+  - `gc(*, state)` MUST be idempotent and MUST clean up executor-owned residue that may remain after terminal execution or cancellation, including deleting the state record,
+  - executors that are stateless in normal operation MUST NOT invent synthetic executor-owned state solely to emulate resumability.
 - Shared state/comms handling interface:
   - executors MUST own runtime state ownership decisions for their execution surface,
   - executors that create new state records MUST initialize canonical state records via executor-state APIs,
@@ -154,10 +157,15 @@ Define the normative runtime contract for contrib execution while keeping author
   - caller behavior: correct the payload and retry with a new invocation,
   - operator action: treat as an implementation defect in the caller constructing supervisor payloads.
 
+### Security Boundaries
+
+None identified in this spec. Handled by generic execution environment assumptions.
+
 ### Observability
 
 - While `Supervisor.run(payload)` is active, the supervisor MUST update running heartbeat/lease ownership state through executor-state APIs.
-- Contrib runtime implementations SHOULD preserve enough executor-owned metadata to identify execution ownership and runtime handles needed for polling, cancellation, and debugging.
+- Stateful contrib runtime implementations SHOULD preserve enough executor-owned metadata to identify execution ownership and runtime handles needed for polling, cancellation, and debugging.
+- Stateless contrib runtime implementations MAY leave executor-owned metadata empty when no runtime handle or resumable state exists.
 - Parent Comms updates are observational only; canonical mutable execution data remains the current invocation's own State record.
 - Parent Comms handling is a CLI/transport concern layered around `send(...)`, not an executor lifecycle concern.
 - Runtime status/introspection surfaces for contrib plugin discovery and effective registrations are authoritative in [status.md](status.md).

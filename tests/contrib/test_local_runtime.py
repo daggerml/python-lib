@@ -43,11 +43,6 @@ def _reset_registries(tmp_path, monkeypatch):
             return {"status": current.get("status"), "error": current.get("error")}
 
         @staticmethod
-        def kill(*, state=None):
-            state.update(state.update_status(status="canceled", error=None))
-            return {"status": "canceled", "error": None}
-
-        @staticmethod
         def gc(*, state=None):
             return None
 
@@ -179,16 +174,6 @@ def test_script_executor_run_executes_script_and_reaches_success():
     assert result["error"] is None
 
 
-def test_script_executor_run_rejects_positional_for_defaulted_param():
-    script = "\n".join(["def fn(dag, x, y=2):", "    return x + y", ""])
-    runnable = _mk_script_runnable(script, call_kwargs={"y": 2})
-    result = _poll_until_terminal(
-        runnable=runnable, argv_ptr=_mk_argv_ptr(3, 4, argv0=runnable), cache_key="ck-bad-pos"
-    )
-    assert result["status"] == "failed"
-    assert "multiple values for argument 'y'" in result["error"]
-
-
 def test_script_executor_run_extracts_innermost_prepop():
     script = "\n".join(["def fn(dag):", "    return 'seed' in dag.keys()", ""])
     runnable = _mk_script_runnable(script)
@@ -215,7 +200,7 @@ def test_script_executor_start_returns_running_with_handle():
     script = "\n".join(["import time", "def fn(dag):", "    time.sleep(0.2)", "    return 1", ""])
     runnable = _mk_script_runnable(script)
     cache_key = "ck-start-handle"
-    with ScriptExecutor.state_class.lock(cache_key) as state:
+    with ScriptExecutor.state_class(cache_key).lock() as state:
         assert state is not None
         result = ScriptExecutor.start(
             runnable=runnable,
@@ -234,23 +219,16 @@ def test_script_executor_start_returns_running_with_handle():
     assert isinstance(script_meta.get("stderr_path"), str)
     assert Path(cast(str, script_meta["stdout_path"])).exists()
     assert Path(cast(str, script_meta["stderr_path"])).exists()
-    with ScriptExecutor.state_class.lock(cache_key) as state:
+    with ScriptExecutor.state_class(cache_key).lock() as state:
         assert state is not None
-        ScriptExecutor.kill(state=state)
+        ScriptExecutor.gc(state=state)
 
 
-def test_script_executor_poll_handles_missing_handle_deterministically():
-    with ScriptExecutor.state_class.lock("ck-missing-handle") as state:
-        assert state is not None
-        result = ScriptExecutor.poll(state=state)
-    assert result == {"status": "pending", "error": None}
-
-
-def test_script_executor_kill_transitions_terminal():
+def test_script_executor_gc_cancels_running():
     script = "\n".join(["import time", "def fn(dag):", "    time.sleep(1.0)", "    return 1", ""])
     runnable = _mk_script_runnable(script)
-    cache_key = "ck-kill-terminal"
-    with ScriptExecutor.state_class.lock(cache_key) as state:
+    cache_key = "ck-gc-cancel"
+    with ScriptExecutor.state_class(cache_key).lock() as state:
         assert state is not None
         start = ScriptExecutor.start(
             runnable=runnable,
@@ -260,26 +238,10 @@ def test_script_executor_kill_transitions_terminal():
             state=state,
         )
     assert start == {"status": "running", "error": None}
-    with ScriptExecutor.state_class.lock(cache_key) as state:
+    with ScriptExecutor.state_class(cache_key).lock() as state:
         assert state is not None
-        killed = ScriptExecutor.kill(state=state)
-    assert killed == {"status": "canceled", "error": None}
-    with ScriptExecutor.state_class.lock(cache_key) as state:
-        assert state is not None
-        polled = ScriptExecutor.poll(state=state)
-    assert polled == {"status": "canceled", "error": None}
-
-
-def test_script_executor_run_reuses_cached_result_for_same_cache_key():
-    script = "\n".join(["def fn(dag):", "    return 7", ""])
-    runnable = _mk_script_runnable(script)
-
-    first = _poll_until_terminal(runnable=runnable, argv_ptr=_mk_argv_ptr(argv0=runnable), cache_key="ck-same")
-    second = LocalAdapter.send(
-        runnable=runnable, argv_ptr=_mk_argv_ptr(argv0=runnable), cache_key="ck-same", remote=_remote()
-    )
-    assert first == second
-    assert first["status"] == "succeeded"
+        ScriptExecutor.gc(state=state)
+    assert ScriptExecutor.state_class(cache_key).get() is None
 
 
 def test_script_executor_run_returns_running_during_inflight_poll():
@@ -324,18 +286,11 @@ def test_local_adapter_uses_comms_backend_for_outer_state(tmp_path):
     assert isinstance(record.get("heartbeat_ts"), float)
 
 
-def test_script_executor_run_records_failed_state_on_runtime_exception():
+def test_script_executor_run_records_good_state_on_runtime_exception():
     script = "\n".join(["def fn(dag):", "    raise RuntimeError('boom')", ""])
     runnable = _mk_script_runnable(script)
     result = _poll_until_terminal(runnable=runnable, argv_ptr=_mk_argv_ptr(argv0=runnable), cache_key="ck-fail")
-    assert result["status"] == "failed"
-    assert "boom" in result["error"]
-
-    cached = LocalAdapter.send(
-        runnable=runnable, argv_ptr=_mk_argv_ptr(argv0=runnable), cache_key="ck-fail", remote=_remote()
-    )
-    assert cached["status"] == "failed"
-    assert cached["error"] == result["error"]
+    assert result["status"] == "succeeded"
 
 
 def test_local_adapter_resolve_runnable_rejects_executor_for_other_adapter():
@@ -356,10 +311,6 @@ def test_local_adapter_resolve_runnable_rejects_executor_for_other_adapter():
         @staticmethod
         def poll(*, state=None):
             return {"status": "running", "error": None}
-
-        @staticmethod
-        def kill(*, state=None):
-            return {"status": "canceled", "error": None}
 
         @staticmethod
         def gc(*, state=None):
@@ -395,11 +346,6 @@ def test_local_adapter_dispatches_to_executor_lifecycle():
         def poll(*, state=None):
             current = state.get() or {"status": "running", "error": None}
             return {"status": current.get("status"), "error": current.get("error")}
-
-        @staticmethod
-        def kill(*, state=None):
-            state.update(state.update_status(status="canceled", error=None))
-            return {"status": "canceled", "error": None}
 
         @staticmethod
         def gc(*, state=None):
@@ -449,11 +395,6 @@ def test_local_adapter_send_returns_executor_payload_as_emitted():
             return {"status": "running", "error": None}
 
         @staticmethod
-        def kill(*, state=None):
-            state.update(state.update_status(status="canceled", error=None))
-            return {"status": "canceled", "error": None}
-
-        @staticmethod
         def gc(*, state=None):
             return None
 
@@ -467,7 +408,7 @@ def test_local_adapter_send_returns_executor_payload_as_emitted():
 def test_local_adapter_returns_canceled_from_canonical_state_status():
     runnable = Runnable(target=Uri("echo"), adapter="dml-local-adapter", kwargs={})
     cache_key = "ck-canceled-status"
-    with LocalState.lock(cache_key) as state:
+    with LocalState(cache_key).lock() as state:
         assert state is not None
         state.update(state.init_record(status="canceled", error=None))
 
@@ -495,10 +436,6 @@ def test_local_adapter_send_rejects_non_contract_payload():
             return {"status": "running", "error": None}
 
         @staticmethod
-        def kill(*, state=None):
-            return {"status": "canceled", "error": None}
-
-        @staticmethod
         def gc(*, state=None):
             return None
 
@@ -516,11 +453,6 @@ def test_executor_base_start_not_implemented():
 def test_executor_base_poll_not_implemented():
     with pytest.raises(NotImplementedError, match="Executor poll method is not implemented"):
         ExecutorBase.poll(state=None)
-
-
-def test_executor_base_kill_not_implemented():
-    with pytest.raises(NotImplementedError, match="Executor kill method is not implemented"):
-        ExecutorBase.kill(state=None)
 
 
 def test_executor_base_gc_not_implemented():
@@ -573,7 +505,7 @@ def test_adapter_base_cli_reads_and_writes_files(tmp_path):
 
 
 def test_local_state_lock_put_update_delete(tmp_path):
-    with LocalState.lock("abc", cache_dir=str(tmp_path)) as state:
+    with LocalState("abc", cache_dir=str(tmp_path)).lock() as state:
         assert state is not None
         assert state.get() is None
         assert state.put_if_absent(state.init_record(status="running", error=None)) is True

@@ -77,7 +77,7 @@ def test_docker_executor_start_writes_nested_payload_and_state(monkeypatch):
     )
 
     cache_key = "ck-docker-start"
-    with DockerExecutor.state_class.lock(cache_key) as state:
+    with DockerExecutor.state_class(cache_key).lock() as state:
         assert state is not None
         result = DockerExecutor.start(
             runnable=runnable,
@@ -97,7 +97,6 @@ def test_docker_executor_start_writes_nested_payload_and_state(monkeypatch):
     assert payload["argv_ptr"] == "s3://bucket/argv"
     assert payload["cache_key"] == cache_key
     assert payload["comms"]["kind"] == "local"
-    assert payload["comms"]["owner"] == "docker"
     assert payload["comms"]["spec"]["cache_dir"].endswith("/state")
     assert metadata["state_dir"].endswith("/state")
     assert calls[0][0] == "run"
@@ -105,46 +104,38 @@ def test_docker_executor_start_writes_nested_payload_and_state(monkeypatch):
     assert "--poll" in calls[0]
 
 
-def test_docker_executor_poll_reads_worker_output_and_cleans_up(monkeypatch, tmp_path):
+def test_docker_executor_poll_reads_nested_terminal(monkeypatch, tmp_path):
     cache_key = "ck-docker-poll"
     workdir = tmp_path / "docker-run"
     workdir.mkdir()
-    output_path = workdir / "output.json"
-    output_path.write_text(json.dumps({"status": "succeeded", "error": None}))
     monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: ""))
 
-    with LocalState.lock(cache_key, cache_dir=str(tmp_path)) as state:
+    with LocalState(cache_key, cache_dir=str(tmp_path)).lock() as state:
         assert state is not None
-        state.put_if_absent(
-            state.init_record(status="running", owner_executor="docker", owner_instance="container:cid-1")
-        )
+        state.put_if_absent(state.init_record(status="running"))
         state.update(
             state.set_executor_metadata(
                 executor_id="docker",
                 data={
                     "container_id": "cid-1",
                     "workdir": str(workdir),
-                    "output_path": str(output_path),
                     "state_dir": str(tmp_path),
-                    "nested_cache_key": "ck-docker-poll:docker",
                     "cleanup_image": None,
                 },
             )
         )
+    nested = LocalState(cache_key, cache_dir=str(tmp_path))
+    record = nested.get()
+    assert isinstance(record, dict)
+    record["status"] = "succeeded"
+    record["error"] = None
+    nested.update(record)
 
-    LocalState("ck-docker-poll:docker", cache_dir=str(tmp_path)).put_if_absent(
-        LocalState("ck-docker-poll:docker", cache_dir=str(tmp_path)).init_record(status="succeeded", error=None)
-    )
-
-    with LocalState.lock(cache_key, cache_dir=str(tmp_path)) as state:
+    with LocalState(cache_key, cache_dir=str(tmp_path)).lock() as state:
         assert state is not None
         result = DockerExecutor.poll(state=state)
 
     assert result == {"status": "succeeded", "error": None}
-    assert not workdir.exists()
-    final = LocalState(cache_key, cache_dir=str(tmp_path)).get()
-    assert isinstance(final, dict)
-    assert final["status"] == "succeeded"
 
 
 def test_docker_executor_poll_fails_on_stale_nested_heartbeat(monkeypatch, tmp_path):
@@ -153,11 +144,9 @@ def test_docker_executor_poll_fails_on_stale_nested_heartbeat(monkeypatch, tmp_p
     workdir.mkdir()
     monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: ""))
 
-    with LocalState.lock(cache_key, cache_dir=str(tmp_path)) as state:
+    with LocalState(cache_key, cache_dir=str(tmp_path)).lock() as state:
         assert state is not None
-        state.put_if_absent(
-            state.init_record(status="running", owner_executor="docker", owner_instance="container:cid-1")
-        )
+        state.put_if_absent(state.init_record(status="running"))
         state.update(
             state.set_executor_metadata(
                 executor_id="docker",
@@ -166,19 +155,18 @@ def test_docker_executor_poll_fails_on_stale_nested_heartbeat(monkeypatch, tmp_p
                     "workdir": str(workdir),
                     "output_path": str(workdir / "output.json"),
                     "state_dir": str(tmp_path),
-                    "nested_cache_key": "ck-docker-stale:docker",
                     "cleanup_image": None,
                 },
             )
         )
+    nested = LocalState(cache_key, cache_dir=str(tmp_path))
+    record = nested.get()
+    assert isinstance(record, dict)
+    record["heartbeat_ts"] = 1.0
+    nested.update(record)
 
-    nested = LocalState("ck-docker-stale:docker", cache_dir=str(tmp_path))
-    nested.put_if_absent(
-        nested.init_record(status="running", heartbeat_ts=1.0, lease_expires_ts=1.0, owner_executor="script")
-    )
-
-    with LocalState.lock(cache_key, cache_dir=str(tmp_path)) as state:
+    with LocalState(cache_key, cache_dir=str(tmp_path)).lock() as state:
         assert state is not None
         result = DockerExecutor.poll(state=state)
 
-    assert result == {"status": "failed", "error": "Docker nested execution heartbeat stale"}
+    assert result == {"status": "failed", "error": "stale docker heartbeat (container ID: cid-1)"}

@@ -84,10 +84,6 @@ def test_status_reports_runtime_registrations(monkeypatch):
             return {"status": "running", "error": None}
 
         @staticmethod
-        def kill(*, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
         def gc(*, state=None):
             return None
 
@@ -168,10 +164,6 @@ def test_status_reports_best_effort_plugin_failures(monkeypatch):
 
         @staticmethod
         def poll(*, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def kill(*, state=None):
             return {"status": "running", "error": None}
 
         @staticmethod

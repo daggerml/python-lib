@@ -83,7 +83,6 @@ def _implements(kind: str, obj: Any):
             "resolve_runnable": callable(getattr(obj, "resolve_runnable", None)),
             "start": callable(getattr(obj, "start", None)),
             "poll": callable(getattr(obj, "poll", None)),
-            "kill": callable(getattr(obj, "kill", None)),
             "state_class": state_class is not None,
             "state_class_lock": callable(getattr(state_class, "lock", None)) if state_class is not None else False,
         }

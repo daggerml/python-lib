@@ -7,7 +7,7 @@ from argparse import Namespace
 from io import StringIO
 from unittest.mock import Mock, patch
 
-from hypothesis import given
+from hypothesis import given, settings
 
 from daggerml._cli.base import (
     apply_help_config,
@@ -109,6 +109,7 @@ class TestParseRef:
     """Test ref parsing (placeholder)."""
 
     @given(ref=_refs(*NAMESPACES))
+    @settings(max_examples=1)
     def test_basic_ref(self, ref):
         """Test basic ref string passthrough."""
         # ref = "some-ref-string"

@@ -10,8 +10,10 @@ from typing import Any, Literal, TypedDict, cast
 from uuid import uuid4
 
 from daggerml._internal.types import DmlRepoError
+from daggerml.util import get_client
 
 Status = Literal["pending", "running", "succeeded", "failed", "canceled"]
+HEARTBEAT_STALENESS = 60.0
 
 
 class StateRecord(TypedDict):
@@ -19,24 +21,21 @@ class StateRecord(TypedDict):
     cache_key: str
     status: Status
     error: str | None
-    owner_executor: str | None
-    owner_instance: str | None
-    heartbeat_ts: float | None
-    lease_expires_ts: float | None
-    updated_ts: float
+    heartbeat_ts: float
     metadata: dict[str, dict[str, Any]]
 
 
-def _boto3_client(service: str) -> Any:
-    try:
-        import boto3
-    except Exception as e:
-        raise DmlRepoError(f"Executor state backend requires boto3: {e}") from e
-    return boto3.client(service)
+def is_stale(record: StateRecord) -> bool:
+    return record["heartbeat_ts"] + HEARTBEAT_STALENESS < time.time()
 
 
 class StateBase:
-    state_backend = "local"
+    def __init__(self, cache_key: str, **kwargs):
+        if not isinstance(cache_key, str) or not cache_key:
+            raise DmlRepoError("State cache_key must be a non-empty string")
+        self.cache_key = cache_key
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
     def _acquire_lock(self) -> bool:
         raise NotImplementedError
@@ -56,25 +55,14 @@ class StateBase:
     def delete(self) -> None:
         raise NotImplementedError
 
-    @classmethod
     @contextmanager
-    def lock(cls, cache_key: str, **kwargs):
-        if cls is StateBase:
-            state = cls.new(cache_key)
-        else:
-            state = cast(Any, cls)(cache_key, **kwargs)
-        locked = state._acquire_lock()
+    def lock(self):
+        locked = self._acquire_lock()
         try:
-            yield state if locked else None
+            yield self if locked else None
         finally:
             if locked:
-                state._release_lock()
-
-    @classmethod
-    def new(cls, cache_key: str) -> "StateBase":
-        if cls.state_backend == "dynamo":
-            return DynamoState(cache_key)
-        return LocalState(cache_key)
+                self._release_lock()
 
     @staticmethod
     def _validate_record(state: dict[str, Any]) -> StateRecord:
@@ -83,11 +71,7 @@ class StateBase:
             "cache_key",
             "status",
             "error",
-            "owner_executor",
-            "owner_instance",
             "heartbeat_ts",
-            "lease_expires_ts",
-            "updated_ts",
             "metadata",
         }
         missing = sorted(required - set(state.keys()))
@@ -96,6 +80,8 @@ class StateBase:
         unknown = sorted(set(state.keys()) - required)
         if unknown:
             raise DmlRepoError(f"State record has unknown fields: {', '.join(unknown)}")
+        if not isinstance(state["heartbeat_ts"], (int, float)):
+            raise DmlRepoError("State record heartbeat_ts must be a number")
         if state["status"] not in {"pending", "running", "succeeded", "failed", "canceled"}:
             raise DmlRepoError("State record status must be one of pending|running|succeeded|failed|canceled")
         if not isinstance(state["metadata"], dict):
@@ -112,25 +98,15 @@ class StateBase:
         *,
         status: Status = "pending",
         error: str | None = None,
-        owner_executor: str | None = None,
-        owner_instance: str | None = None,
-        heartbeat_ts: float | None = None,
-        lease_expires_ts: float | None = None,
         metadata: dict[str, dict[str, Any]] | None = None,
     ) -> StateRecord:
-        now = time.time()
-        cache_key = cast(str, cast(Any, self).cache_key)
-        return StateBase._validate_record(
+        return self._validate_record(
             {
                 "version": 1,
-                "cache_key": cache_key,
+                "cache_key": self.cache_key,
                 "status": status,
                 "error": error,
-                "owner_executor": owner_executor,
-                "owner_instance": owner_instance,
-                "heartbeat_ts": heartbeat_ts,
-                "lease_expires_ts": lease_expires_ts,
-                "updated_ts": now,
+                "heartbeat_ts": time.time(),
                 "metadata": metadata or {},
             }
         )
@@ -140,10 +116,6 @@ class StateBase:
         *,
         status: Status,
         error: str | None = None,
-        owner_executor: str | None = None,
-        owner_instance: str | None = None,
-        heartbeat_ts: float | None = None,
-        lease_expires_ts: float | None = None,
     ) -> StateRecord:
         record = self.get()
         if record is None:
@@ -153,20 +125,12 @@ class StateBase:
             {
                 "status": status,
                 "error": error,
-                "owner_executor": owner_executor,
-                "owner_instance": owner_instance,
-                "heartbeat_ts": heartbeat_ts,
-                "lease_expires_ts": lease_expires_ts,
-                "updated_ts": time.time(),
+                "heartbeat_ts": time.time(),
             }
         )
-        return StateBase._validate_record(next_record)
+        return self._validate_record(next_record)
 
-    def set_executor_metadata(self, *, executor_id: str, data: dict[str, Any]) -> StateRecord:
-        if not isinstance(executor_id, str) or not executor_id:
-            raise DmlRepoError("executor_id must be a non-empty string")
-        if not isinstance(data, dict):
-            raise DmlRepoError("executor metadata must be a dict")
+    def set_executor_metadata(self, executor_id: str, data: dict[str, Any]) -> StateRecord:
         record = self.get()
         if record is None:
             record = self.init_record()
@@ -174,8 +138,11 @@ class StateBase:
         metadata = dict(cast(dict[str, dict[str, Any]], next_record.get("metadata", {})))
         metadata[executor_id] = data
         next_record["metadata"] = metadata
-        next_record["updated_ts"] = time.time()
-        return StateBase._validate_record(next_record)
+        next_record["heartbeat_ts"] = time.time()
+        return self._validate_record(next_record)
+
+    def get_executor_metadata(self, executor_id: str) -> dict[str, Any]:
+        return (self.get() or {}).get("metadata", {}).get(executor_id, {})
 
 
 @dataclass
@@ -187,6 +154,8 @@ class LocalState(StateBase):
     _has_lock: bool = field(default=False, init=False)
 
     def __post_init__(self):
+        # TODO: We should use the standard config dir: `<config_dir>/exec-state/<cache-namespace>/daggerml/`
+        # but not yet
         base = self.cache_dir or os.getenv("DML_FN_CACHE_DIR") or str(Path.home() / ".daggerml" / "contrib-state")
         root = Path(base)
         root.mkdir(parents=True, exist_ok=True)
@@ -221,17 +190,17 @@ class LocalState(StateBase):
     def get(self) -> StateRecord | None:
         if not self._state_path.exists():
             return None
-        return StateBase._validate_record(json.loads(self._state_path.read_text()))
+        return self._validate_record(json.loads(self._state_path.read_text()))
 
     def put_if_absent(self, state: StateRecord) -> bool:
         if self._state_path.exists():
             return False
-        state = StateBase._validate_record(dict(state))
+        state = self._validate_record(dict(state))
         self._state_path.write_text(json.dumps(state, separators=(",", ":"), sort_keys=True))
         return True
 
     def update(self, state: StateRecord) -> None:
-        state = StateBase._validate_record(dict(state))
+        state = self._validate_record(dict(state))
         self._state_path.write_text(json.dumps(state, separators=(",", ":"), sort_keys=True))
 
     def delete(self) -> None:
@@ -241,21 +210,19 @@ class LocalState(StateBase):
 @dataclass
 class DynamoState(StateBase):
     cache_key: str
-    table_name: str | None = None
+    table_name: str = field(default_factory=lambda: os.getenv("DML_DYNAMODB_TABLE"))  # pyright: ignore[reportAssignmentType]
     lock_timeout: float = 5.0
     owner_id: str = field(default_factory=lambda: str(uuid4()))
-    client: Any = None
+    client: Any = field(default_factory=lambda: get_client("dynamodb"))
 
     def __post_init__(self):
-        self.table_name = self.table_name or os.getenv("DML_DYNAMODB_TABLE", "dml-contrib-state")
-        self.client = self.client or _boto3_client("dynamodb")
+        if not self.table_name:
+            raise DmlRepoError("DynamoState requires table_name parameter or DML_DYNAMODB_TABLE env var")
 
     def _item_key(self):
         return {"cache_key": {"S": self.cache_key}}
 
     def _acquire_lock(self) -> bool:
-        now = str(time.time())
-        stale_before = str(time.time() - self.lock_timeout)
         try:
             self.client.update_item(
                 TableName=self.table_name,
@@ -265,8 +232,8 @@ class DynamoState(StateBase):
                 ExpressionAttributeNames={"#lk": "lock_owner", "#ts": "updated_ts"},
                 ExpressionAttributeValues={
                     ":lk": {"S": self.owner_id},
-                    ":ts": {"N": now},
-                    ":stale": {"N": stale_before},
+                    ":ts": {"N": str(time.time())},
+                    ":stale": {"N": str(time.time() - self.lock_timeout)},
                 },
             )
             return True
@@ -297,10 +264,10 @@ class DynamoState(StateBase):
         raw = item.get("state", {}).get("S")
         if not raw:
             return None
-        return StateBase._validate_record(json.loads(raw))
+        return self._validate_record(json.loads(raw))
 
     def put_if_absent(self, state: StateRecord) -> bool:
-        state = StateBase._validate_record(dict(state))
+        state = self._validate_record(dict(state))
         try:
             self.client.put_item(
                 TableName=self.table_name,
@@ -320,7 +287,7 @@ class DynamoState(StateBase):
             raise
 
     def update(self, state: StateRecord) -> None:
-        state = StateBase._validate_record(dict(state))
+        state = self._validate_record(dict(state))
         self.client.update_item(
             TableName=self.table_name,
             Key=self._item_key(),
@@ -352,43 +319,14 @@ def state_from_comms(cache_key: str, comms: dict[str, Any]) -> StateBase:
     spec = comms.get("spec")
     if not isinstance(kind, str) or not isinstance(spec, dict):
         raise DmlRepoError("State comms requires kind/spec")
-    if kind == "local":
-        cache_dir = spec.get("cache_dir", spec.get("root_dir"))
-        if cache_dir is not None and (not isinstance(cache_dir, str) or not cache_dir):
-            raise DmlRepoError("Local comms cache_dir must be non-empty string when provided")
-        return LocalState(cache_key, cache_dir=cache_dir)
-    if kind == "dynamo":
-        table_name = spec.get("table_name")
-        if table_name is not None and (not isinstance(table_name, str) or not table_name):
-            raise DmlRepoError("Dynamo comms table_name must be non-empty string when provided")
-        return DynamoState(cache_key, table_name=table_name)
-    raise DmlRepoError(f"Unsupported comms kind: {kind}")
+    cls = LocalState if kind == "local" else DynamoState if kind == "dynamo" else None
+    if cls is None:
+        raise DmlRepoError(f"Unsupported comms kind: {kind}")
+    return cls(cache_key, **spec)
 
 
 @contextmanager
 def lock_from_comms(cache_key: str, comms: dict[str, Any]):
-    kind = comms.get("kind")
-    spec = comms.get("spec")
-    if not isinstance(kind, str) or not isinstance(spec, dict):
-        raise DmlRepoError("State comms requires kind/spec")
-    if kind == "local":
-        cache_dir = spec.get("cache_dir", spec.get("root_dir"))
-        kwargs = {}
-        if cache_dir is not None:
-            if not isinstance(cache_dir, str) or not cache_dir:
-                raise DmlRepoError("Local comms cache_dir must be non-empty string when provided")
-            kwargs = {"cache_dir": cache_dir}
-        with LocalState.lock(cache_key, **kwargs) as state:
-            yield state
-        return
-    if kind == "dynamo":
-        table_name = spec.get("table_name")
-        kwargs = {}
-        if table_name is not None:
-            if not isinstance(table_name, str) or not table_name:
-                raise DmlRepoError("Dynamo comms table_name must be non-empty string when provided")
-            kwargs = {"table_name": table_name}
-        with DynamoState.lock(cache_key, **kwargs) as state:
-            yield state
-        return
-    raise DmlRepoError(f"Unsupported comms kind: {kind}")
+    state = state_from_comms(cache_key, comms)
+    with state.lock() as state:
+        yield state

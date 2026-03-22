@@ -19,9 +19,5 @@ class ExecutorBase:
         raise NotImplementedError("Executor poll method is not implemented")
 
     @classmethod
-    def kill(cls, *, state=None):
-        raise NotImplementedError("Executor kill method is not implemented")
-
-    @classmethod
     def gc(cls, *, state=None):
         raise NotImplementedError("Executor gc method is not implemented")

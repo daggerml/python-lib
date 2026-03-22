@@ -14,8 +14,6 @@ from daggerml._internal import DmlOps
 from daggerml._internal.types import DmlRepoError
 from daggerml.contrib.executor_state import Status, lock_from_comms
 
-LEASE_SECONDS = 30.0
-
 
 def _parse_cmd_payload(
     payload: dict[str, Any],
@@ -122,7 +120,6 @@ def run(payload: dict[str, Any], *, heartbeat_s: float = 0.25) -> dict[str, Any]
     launched = _launch(payload)
     cache_key = payload["cache_key"]
     comms = payload["comms"]
-    owner_instance = f"supervisor:{os.getpid()}"
     pid = launched["pid"]
     result_path = Path(launched["result_path"])
     while True:
@@ -131,18 +128,11 @@ def run(payload: dict[str, Any], *, heartbeat_s: float = 0.25) -> dict[str, Any]
         except ChildProcessError:
             done_pid, status = pid, 0
         if done_pid == 0:
-            now = time.time()
             with lock_from_comms(cache_key, comms) as state:
                 if state is not None:
-                    existing = state.get()
-                    owner_executor = existing.get("owner_executor") if isinstance(existing, dict) else None
                     running = state.update_status(
                         status="running",
                         error=None,
-                        owner_executor=owner_executor,
-                        owner_instance=owner_instance,
-                        heartbeat_ts=now,
-                        lease_expires_ts=now + LEASE_SECONDS,
                     )
                     state.update(running)
             time.sleep(heartbeat_s)
@@ -161,15 +151,9 @@ def run(payload: dict[str, Any], *, heartbeat_s: float = 0.25) -> dict[str, Any]
 
         with lock_from_comms(cache_key, comms) as state:
             if state is not None:
-                existing = state.get()
-                owner_executor = existing.get("owner_executor") if isinstance(existing, dict) else None
                 finished = state.update_status(
                     status=cast(Status, terminal["status"]),
                     error=terminal["error"],
-                    owner_executor=owner_executor,
-                    owner_instance=owner_instance,
-                    heartbeat_ts=time.time(),
-                    lease_expires_ts=None,
                 )
                 state.update(finished)
         return terminal

@@ -72,7 +72,9 @@ Provide one deterministic, JSON-safe status report that answers what contrib plu
 Top-level field handling:
 
 - `status()` has no user inputs.
-- Consumers MUST treat the top-level Status Report shape for `schema_version == 1` as closed except where this document explicitly marks a nested mapping as open.
+- Constraints: Consumers MUST treat the top-level Status Report shape for `schema_version == 1` as closed except where this document explicitly marks a nested mapping as open.
+- Errors and failure modes: internal status assembly failure is raised.
+- Invocation surfaces: python API call.
 
 `summary` MUST be a dictionary with exactly these Reserved Fields:
 
@@ -116,7 +118,6 @@ Registration Record rules:
   - `resolve_runnable`: `bool`,
   - `start`: `bool`,
   - `poll`: `bool`,
-  - `kill`: `bool`,
   - `state_class`: `bool`,
   - `state_class_lock`: `bool`.
 - For records in `codecs`, `implements` MUST contain exactly:
@@ -184,21 +185,35 @@ Best-effort behavior:
 
 ### Error Semantics
 
+For each error class, specify:
+
+- retryable or non-retryable,
+- transient vs terminal,
+- required caller behavior,
+- required operator action (if any).
+
 - Entry-point load failure:
   - terminal for that entry point,
   - non-terminal for the Status Report,
-  - caller behavior: inspect `diagnostics` and continue,
-  - operator action: fix or remove the broken plugin package or entry point.
+  - retryability: non-retryable,
+  - required caller behavior: inspect `diagnostics` and continue,
+  - required operator action (if any): fix or remove the broken plugin package or entry point.
 - Invalid registration or codec object:
   - terminal for that object as a valid registration,
   - non-terminal for the Status Report,
-  - caller behavior: treat the record as informational only unless it is marked effective,
-  - operator action: correct the plugin object to satisfy its authoritative contract.
+  - retryability: non-retryable,
+  - required caller behavior: treat the record as informational only unless it is marked effective,
+  - required operator action (if any): correct the plugin object to satisfy its authoritative contract.
 - Internal status assembly failure:
   - terminal for the `status()` call,
-  - retryability unspecified,
-  - caller behavior: surface the exception,
-  - operator action: treat as an implementation defect in `daggerml.contrib.status`.
+  - retryability: non-retryable,
+  - transient vs terminal: terminal,
+  - required caller behavior: surface the exception,
+  - required operator action (if any): treat as an implementation defect in `daggerml.contrib.status`.
+
+### Security Boundaries
+
+None identified in this spec.
 
 ### Observability
 

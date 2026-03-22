@@ -41,11 +41,6 @@ def _reset_registry(monkeypatch, tmp_path):
             return {"status": current.get("status"), "error": current.get("error")}
 
         @staticmethod
-        def kill(*, state=None):
-            state.update(state.update_status(status="canceled", error=None))
-            return {"status": "canceled", "error": None}
-
-        @staticmethod
         def gc(*, state=None):
             return None
 
@@ -111,13 +106,9 @@ def test_script_executor_state_owner_and_wrapper_fields_preserved():
     assert isinstance(record, dict)
     assert record.get("version") == 1
     assert record.get("cache_key") == cache_key
-    assert record.get("owner_executor") == "script"
-    assert isinstance(record.get("owner_instance"), str)
     assert isinstance(record.get("heartbeat_ts"), float)
-    assert isinstance(record.get("lease_expires_ts"), float)
-    assert isinstance(record.get("updated_ts"), float)
 
-    with ScriptExecutor.state_class.lock(cache_key) as state:
+    with ScriptExecutor.state_class(cache_key).lock() as state:
         assert state is not None
         updated = state.set_executor_metadata(executor_id="wrapper", data={"tag": "x"})
         state.update(updated)
@@ -130,8 +121,5 @@ def test_script_executor_state_owner_and_wrapper_fields_preserved():
     else:
         pytest.fail("script executor did not reach terminal state")
 
-    final = cast(dict[str, Any], LocalState(cache_key).get())
-    assert final.get("owner_executor") == "script"
-    assert isinstance(final.get("updated_ts"), float)
-    assert final.get("lease_expires_ts") is None
-    assert cast(dict[str, Any], cast(dict[str, Any], final.get("metadata")).get("wrapper")).get("tag") == "x"
+    final = LocalState(cache_key).get()
+    assert final is None

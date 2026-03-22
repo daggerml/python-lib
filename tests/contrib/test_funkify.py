@@ -44,10 +44,6 @@ def _reset_registry(tmp_path, monkeypatch):
             return {"status": "running", "error": None}
 
         @staticmethod
-        def kill(*, state=None):
-            return {"status": "canceled", "error": None}
-
-        @staticmethod
         def gc(*, state=None):
             return None
 
@@ -67,10 +63,6 @@ def _reset_registry(tmp_path, monkeypatch):
         @staticmethod
         def poll(*, state=None):
             return {"status": "running", "error": None}
-
-        @staticmethod
-        def kill(*, state=None):
-            return {"status": "canceled", "error": None}
 
         @staticmethod
         def gc(*, state=None):

@@ -9,36 +9,75 @@ doc_type: spec
 
 This document is authoritative for `IndexOps` responsibilities and internal operation contracts for mutable staging, function execution orchestration, literal staging, import staging, and commit finalization.
 
-## Purpose
-
-Define `IndexOps` behavior boundaries and invariants for staging-time execution paths.
-
 ## Scope
 
 This doc covers index creation, literal/import staging, function-execution orchestration, codec call sites, and index commit finalization behavior.
 
-## Content
+## Purpose
 
-- `create(head=...)` starts from commit/tree lineage.
-- `create(argv_ptr=...)` resolves remote argv payload and stages `ArgvNode` + derived `KwargvNode`.
-- `put_literal(...)` owns literal normalization + storage staging.
-- `IndexOps` MUST call `daggerml._internal.codec.apply_codec(...)` on:
-  - `put_literal(...)` values,
-  - `start_fn(...)` `argv` values,
-  - `start_fn(...)` `kwargv` values.
-- Function execution:
-  - first call arg resolves to runnable,
-  - kwargs resolve inner-most to outer-most by key,
-  - unknown key raises `DmlRepoError("Unknown kwarg: <key>")`.
-  - non-builtin execution always performs remote cache lookup by argv identity before adapter invocation.
-  - adapter `succeeded` status requires cache-backed result resolution; missing cache entry is a deterministic failure.
-- `put_import(...)` stages `ImportNode` refs from committed DAG nodes.
-- `commit(...)` writes new commit and deletes index ref.
-- If `head=` is provided, `commit(...)` updates that head; if omitted, commit is detached and returned.
-- Invariants:
-  - index methods validate index ownership and DAG membership,
-  - function result DAG contains `result` or `error`,
-  - commit finalization writes commit state and removes index ref.
+Define `IndexOps` behavior boundaries and invariants for staging-time execution paths.
+
+## Glossary
+
+- IndexOps: The orchestrator for staging changes to the DAG. Defined normatively in this document.
+- ArgvNode: Remote DAG node representing positional arguments. Out of authority, see remote data model.
+- KwargvNode: Remote DAG node representing keyword arguments. Out of authority, see remote data model.
+- ImportNode: Remote DAG node representing imported references. Out of authority, see remote data model.
+- DmlRepoError: Base exception type for repository-level errors. Defined normatively in this document's error semantics.
+- DAG: Directed Acyclic Graph representing the data model. Out of authority, see remote data model.
+
+## Contract
+
+### Interfaces
+
+- `create(head=...)`
+  - Starts from commit/tree lineage.
+- `create(argv_ptr=...)`
+  - Resolves remote argv payload and stages `ArgvNode` + derived `KwargvNode`.
+- `put_literal(...)`
+  - Owns literal normalization and storage staging.
+  - Must call `daggerml._internal.codec.apply_codec(...)` on its values.
+- `start_fn(...)`
+  - Orchestrates function execution.
+  - Must call `daggerml._internal.codec.apply_codec(...)` on `argv` and `kwargv` values.
+  - First call arg resolves to runnable.
+  - Kwargs resolve inner-most to outer-most by key.
+  - Unknown key raises `DmlRepoError("Unknown kwarg: <key>")`.
+  - Non-builtin execution always performs remote cache lookup by argv identity before adapter invocation.
+  - Adapter `succeeded` status requires cache-backed result resolution.
+- `put_import(...)`
+  - Stages `ImportNode` refs from committed DAG nodes.
+- `commit(head=...)`
+  - Writes new commit and deletes index ref.
+  - If `head=` is provided, updates that head.
+  - If `head=` is omitted, commit is detached and returned.
+
+Unspecified interface fields are rejected.
+
+### Invariants
+
+- Index methods validate index ownership and DAG membership.
+- Function result DAG contains `result` or `error`.
+- Commit finalization writes commit state and removes index ref.
+
+### Error Semantics
+
+- `DmlRepoError("Unknown kwarg: <key>")`
+  - Terminal, non-retryable.
+  - Caller must provide valid keyword arguments matching the function signature.
+- Missing cache entry on adapter `succeeded` status
+  - Terminal, non-retryable, deterministic failure.
+  - Requires inspection of the adapter execution output and caching mechanism.
+
+### Authority Handoffs
+
+- `daggerml._internal.codec.apply_codec(...)` behavior is out of scope; hands off to the Codec System spec.
+- Adapter execution details and `succeeded` status cache-backed result resolution are out of scope; hands off to the Adapter Execution Contract spec.
+- DAG node structures (`ArgvNode`, `KwargvNode`, `ImportNode`) are out of scope; hands off to the Remote Data Model spec.
+
+## Compatibility
+
+- These internal contracts dictate staging DAG structural integrity and must guarantee backward compatibility for repository reads across minor versions. Version migrations, if required, must ensure existing staged indexes remain valid or are deterministically invalidated.
 
 ## References
 

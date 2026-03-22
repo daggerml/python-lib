@@ -110,15 +110,29 @@ def test_plugin_loading_invalid_return_fails(monkeypatch):
         reg.load_adapter_plugins()
 
 
-def test_lambda_adapter_requires_configured_function(monkeypatch):
-    monkeypatch.delenv("DML_LAMBDA_FUNCTION", raising=False)
-    with pytest.raises(DmlRepoError, match="requires DML_LAMBDA_FUNCTION"):
-        LambdaAdapter.send(
-            runnable=Runnable(target=Uri("x"), adapter="dml-lambda-adapter", kwargs={}),
-            argv_ptr="ptr",
-            cache_key="ck",
-            remote={},
-        )
+def test_lambda_adapter_invokes_runnable_target(monkeypatch):
+    seen = {}
+
+    class _Payload:
+        def read(self):
+            return b'{"status":"succeeded","error":null}'
+
+    class _Client:
+        def invoke(self, **kwargs):
+            seen.update(kwargs)
+            return {"Payload": _Payload()}
+
+    monkeypatch.setattr("daggerml.contrib.adapters.get_client", lambda name: _Client())
+
+    result = LambdaAdapter.send(
+        runnable=Runnable(target=Uri("lambda-fn"), adapter="dml-lambda-adapter", kwargs={}),
+        argv_ptr="ptr",
+        cache_key="ck",
+        remote={},
+    )
+
+    assert result == {"status": "succeeded", "error": None}
+    assert seen["FunctionName"] == "lambda-fn"
 
 
 def test_pyproject_declares_builtin_adapter_entry_points():

@@ -47,30 +47,44 @@ Define the contrib-specific codec catalog and the serialization contract for the
 
 ### Interfaces
 
-- Location:
-  - `daggerml.contrib.codecs`
-- Required interface:
-  - `literal_codecs() -> list[object]`
-- `literal_codecs()` MUST return only Contrib Codecs whose optional backend dependency is installed in the current Python process.
-- `literal_codecs()` MUST return codecs in this order when available:
-  - Pandas DataFrame Codec,
-  - Polars DataFrame Codec.
-- Current Contrib Codec catalog:
-  - Pandas DataFrame Codec for `pandas.DataFrame`,
-  - Polars DataFrame Codec for `polars.DataFrame`.
-- Pandas DataFrame Codec behavior:
-  - `can_encode(value)` MUST return true only for `pandas.DataFrame` instances,
-  - `encode(value, ctx)` MUST serialize the dataframe as parquet bytes,
-  - parquet serialization MAY require an additional parquet engine provided by the pandas runtime environment,
-  - `encode(value, ctx)` MUST store those bytes through `S3Store.put(..., suffix=".parquet")`,
-  - `encode(value, ctx)` MUST return the resulting `Uri`.
-- Polars DataFrame Codec behavior:
-  - `can_encode(value)` MUST return true only for `polars.DataFrame` instances,
-  - `encode(value, ctx)` MUST serialize the dataframe as parquet bytes,
-  - `encode(value, ctx)` MUST store those bytes through `S3Store.put(..., suffix=".parquet")`,
-  - `encode(value, ctx)` MUST return the resulting `Uri`.
-- When a backend dependency is not installed, the corresponding Contrib Codec MUST be absent from `literal_codecs()` output.
-- `ctx` is accepted for codec interface compatibility and MUST NOT change dataframe artifact format or storage addressing behavior.
+- Location/Name: `daggerml.contrib.codecs`
+- Signature/Schema: `literal_codecs() -> list[object]`
+- Accepted inputs and output shape: Returns a list of available Contrib Codecs.
+- Behavior/semantics:
+  - `literal_codecs()` MUST return only Contrib Codecs whose optional backend dependency is installed in the current Python process.
+  - `literal_codecs()` MUST return codecs in this order when available: Pandas DataFrame Codec, Polars DataFrame Codec.
+  - Current Contrib Codec catalog: Pandas DataFrame Codec for `pandas.DataFrame`, Polars DataFrame Codec for `polars.DataFrame`.
+  - When a backend dependency is not installed, the corresponding Contrib Codec MUST be absent from `literal_codecs()` output.
+- Errors and failure modes: Described in Error Semantics.
+- Side effects: None.
+- Constraints: `ctx` is accepted for codec interface compatibility and MUST NOT change dataframe artifact format or storage addressing behavior.
+- Invocation surfaces: Process Python execution.
+- Unspecified fields: Ignored.
+
+- Location/Name: Pandas DataFrame Codec
+- Signature/Schema: `can_encode(value) -> bool`, `encode(value, ctx) -> Uri`
+- Accepted inputs and output shape: Accepts `pandas.DataFrame` instances, outputs S3 `Uri`.
+- Behavior/semantics:
+  - `can_encode(value)` MUST return true only for `pandas.DataFrame` instances.
+  - `encode(value, ctx)` MUST serialize the dataframe as parquet bytes.
+  - Parquet serialization MAY require an additional parquet engine provided by the pandas runtime environment.
+- Errors and failure modes: Described in Error Semantics.
+- Side effects: `encode(value, ctx)` MUST store parquet bytes through `S3Store.put(..., suffix=".parquet")`.
+- Constraints: None.
+- Invocation surfaces: Codec system serialization.
+- Unspecified fields: Rejected.
+
+- Location/Name: Polars DataFrame Codec
+- Signature/Schema: `can_encode(value) -> bool`, `encode(value, ctx) -> Uri`
+- Accepted inputs and output shape: Accepts `polars.DataFrame` instances, outputs S3 `Uri`.
+- Behavior/semantics:
+  - `can_encode(value)` MUST return true only for `polars.DataFrame` instances.
+  - `encode(value, ctx)` MUST serialize the dataframe as parquet bytes.
+- Errors and failure modes: Described in Error Semantics.
+- Side effects: `encode(value, ctx)` MUST store parquet bytes through `S3Store.put(..., suffix=".parquet")`.
+- Constraints: None.
+- Invocation surfaces: Codec system serialization.
+- Unspecified fields: Rejected.
 
 ### Invariants
 
@@ -82,25 +96,25 @@ Define the contrib-specific codec catalog and the serialization contract for the
 ### Error Semantics
 
 - Missing optional backend dependency:
-  - non-retryable until the dependency is installed,
-  - non-terminal for `literal_codecs()` overall,
-  - caller behavior: treat the corresponding codec as unavailable,
-  - operator action: install the missing backend package if that codec is required.
+  - Retryable: No (until dependency is installed).
+  - Transient vs Terminal: Non-terminal for `literal_codecs()` overall.
+  - Required caller behavior: Treat the corresponding codec as unavailable.
+  - Required operator action: Install the missing backend package if that codec is required.
 - Missing pandas parquet engine:
-  - non-retryable until a supported parquet engine is installed,
-  - terminal for that `encode(...)` call,
-  - caller behavior: surface the pandas serialization exception,
-  - operator action: install a pandas-supported parquet engine.
+  - Retryable: No (until supported engine is installed).
+  - Transient vs Terminal: Terminal for that `encode(...)` call.
+  - Required caller behavior: Surface the pandas serialization exception.
+  - Required operator action: Install a pandas-supported parquet engine.
 - Dataframe serialization failure:
-  - retryability unspecified,
-  - terminal for that `encode(...)` call,
-  - caller behavior: surface the exception from the dataframe backend or storage layer,
-  - operator action: correct the dataframe value, backend installation, or storage configuration.
+  - Retryable: Unspecified (depends on backend error).
+  - Transient vs Terminal: Terminal for that `encode(...)` call.
+  - Required caller behavior: Surface the exception from the dataframe backend or storage layer.
+  - Required operator action: Correct the dataframe value, backend installation, or storage configuration.
 - Artifact write failure through `S3Store`:
-  - retryability is determined by the storage failure,
-  - terminal for that `encode(...)` call,
-  - caller behavior: surface the storage exception,
-  - operator action: restore valid S3 configuration or availability.
+  - Retryable: Determined by the storage failure (transient network vs auth).
+  - Transient vs Terminal: Terminal for that `encode(...)` call.
+  - Required caller behavior: Surface the storage exception.
+  - Required operator action: Restore valid S3 configuration or availability.
 
 ### Observability
 
@@ -109,10 +123,10 @@ Define the contrib-specific codec catalog and the serialization contract for the
 
 ### Authority Handoffs
 
-- Generic codec interface, plugin loading, and codec ordering are authoritative in [../codec-system.md](../codec-system.md).
-- `S3Store` API and content-addressed write semantics are authoritative in [s3-store.md](s3-store.md).
-- External `Uri` storage semantics are authoritative in [../storing-and-retrieving-external-data.md](../storing-and-retrieving-external-data.md).
-- Contrib status/introspection output is authoritative in [status.md](status.md).
+- Generic codec interface, plugin loading, and codec ordering are authoritative in `../codec-system.md`.
+- `S3Store` API and content-addressed write semantics are authoritative in `s3-store.md`.
+- External `Uri` storage semantics are authoritative in `../storing-and-retrieving-external-data.md`.
+- Contrib status/introspection output is authoritative in `status.md`.
 
 ## Compatibility
 
@@ -123,7 +137,7 @@ Define the contrib-specific codec catalog and the serialization contract for the
 
 ## References
 
-- [../codec-system.md](../codec-system.md)
-- [s3-store.md](s3-store.md)
-- [../storing-and-retrieving-external-data.md](../storing-and-retrieving-external-data.md)
-- [status.md](status.md)
+- ../codec-system.md
+- s3-store.md
+- ../storing-and-retrieving-external-data.md
+- status.md
