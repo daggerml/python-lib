@@ -63,6 +63,7 @@ jobs:
         if: runner.os == 'macOS'
         env:
           MallocNanoZone: "0"
+          PYTHONMALLOC: "malloc"
           ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: uv run pytest -m "not slow" .

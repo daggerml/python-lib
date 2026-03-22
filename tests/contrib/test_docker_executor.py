@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,9 @@ def _reset_registries(tmp_path, monkeypatch):
     areg._reset_for_tests()
     ereg._reset_for_tests()
     monkeypatch.setenv("DML_FN_CACHE_DIR", str(tmp_path / "state"))
+    # Ensure docker_bin resolves on platforms without docker (tests mock all docker calls)
+    _orig_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda n: "/usr/bin/docker" if n == "docker" else _orig_which(n))
     areg.register_adapter(LocalAdapter)
     ereg.register_executor(ScriptExecutor)
     ereg.register_executor(DockerExecutor)
