@@ -55,7 +55,6 @@ Reference record example:
 State ownership and metadata conventions:
 
 - executors/wrappers MUST write custom state only under `metadata[<executor_id>]`.
-- example metadata values: `metadata["batch"] = {"batch_job_id": "..."}`.
 - `status`/`error` are canonical run result fields and MUST remain normalized across wrappers.
 - Parent Comms reuses these same State backends and record fields for observational reporting.
 - Parent Comms is immutable invocation input naming where the current invocation reports outward; it is not a second mutable record schema.
@@ -82,7 +81,7 @@ def update_status(
     error: str | None = None,
 ) -> StateRecord: ...
 
-def set_executor_metadata(*, executor_id: str, data: dict[str, Any]) -> StateRecord: ...
+def set_executor_metadata(self, executor_id: str, data: dict[str, Any]) -> StateRecord: ...
 ```
 
 State backends (`LocalState`, `DynamoState`) are generic storage/locking interfaces.

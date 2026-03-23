@@ -163,7 +163,7 @@ None identified in this spec. Handled by generic execution environment assumptio
 
 ### Observability
 
-- While `Supervisor.run(payload)` is active, the supervisor MUST update running heartbeat/lease ownership state through executor-state APIs.
+- While `Supervisor.run(payload)` is active, the supervisor MUST update running heartbeat state through executor-state APIs.
 - Stateful contrib runtime implementations SHOULD preserve enough executor-owned metadata to identify execution ownership and runtime handles needed for polling, cancellation, and debugging.
 - Stateless contrib runtime implementations MAY leave executor-owned metadata empty when no runtime handle or resumable state exists.
 - Parent Comms updates are observational only; canonical mutable execution data remains the current invocation's own State record.

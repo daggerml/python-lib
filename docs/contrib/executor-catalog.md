@@ -93,7 +93,6 @@ Define concise runtime contracts for each contrib executor.
 - Docker executor state MUST store enough metadata to reopen that nested adapter's reported State record in later poll invocations.
 - `poll` MUST reopen that nested adapter-reported State record from stored metadata and read nested state to determine whether the nested execution is running or terminal.
 - `poll` MUST report `running` while nested state is non-terminal and heartbeat is fresh.
-- `poll` MUST return the nested adapter's terminal result after terminal state is reached and output is available.
 - `poll` operates from executor-owned state metadata only; it does not require `argv_ptr`, `remote`, or `runnable` inputs.
 - `gc` MUST be idempotent.
 - `gc` MUST remove the container and temporary directory.
@@ -212,9 +211,7 @@ Define concise runtime contracts for each contrib executor.
 - Deterministic failure on invalid image/sub kwargs shape.
 - Deterministic failure when nested sub-runnable adapter is not `dml-local-adapter`.
 - Deterministic failure when Docker is unavailable or container startup fails.
-- Deterministic failure when the container exits without writing output.
 - `poll` MUST fail deterministically when nested heartbeat becomes stale.
-- `poll` MUST fail deterministically when the container exits without a valid terminal output file.
 
 #### `cloudformation` executor
 
