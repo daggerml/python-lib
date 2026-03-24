@@ -35,7 +35,6 @@ class CfnExecutor(ExecutorBase):
             with Dml.temporary() as dml:
                 with dml.new(argv_ptr=argv_ptr) as dag:
                     yield dag
-                dag.cache()
         except Exception:
             pass
 

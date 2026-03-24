@@ -260,9 +260,6 @@ def run_payload(argv_ptr: str) -> dict[str, Any]:
                 if dag.ref is not None:
                     return {"status": "succeeded", "error": None}
                 return {"status": "failed", "error": str(e)}
-            finally:
-                if dag.ref is not None:
-                    dag.cache()
 
 
 def main(argv: list[str] | None = None) -> int:

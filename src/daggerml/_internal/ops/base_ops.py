@@ -330,40 +330,31 @@ class TxnContext:
     def _dump_to_list(self, ref: Ref) -> List[dict]:
         """Internal method to dump object graph to list of dicts."""
         # Collect all unique refs in the object graph
-        visited = []
-        to_visit = [ref]
-        while to_visit:
-            current_ref = to_visit.pop()
-            if current_ref in visited:
-                continue
-            visited.append(current_ref)
-            # Get the object dict to find referenced objects
-            try:
-                obj_dict = self.txn.get(current_ref)
-            except DmlRepoError:
-                # If we can't get the object, skip it
-                continue
-            # Recursively find all Ref instances in the object
-            self._collect_refs(obj_dict, to_visit, visited)
-        # Now dump each ref to raw data
+        visited = set()
+        to_visit = set([ref])
         result = []
-        for r in visited:
-            raw_data = self.txn.get(r, raw=True)
-            result.append({"id": r.id(), "ns": r.ns(), "dump": raw_data})
+        while to_visit:
+            ref = to_visit.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            obj_dict = self.txn.get(ref)
+            self._collect_refs(obj_dict, to_visit, visited)
+            result.append({"id": ref.id(), "ns": ref.ns(), "dump": self.txn.get(ref, raw=True)})
         return result
 
-    def _collect_refs(self, obj: Any, to_visit: list, visited: list) -> None:
-        """Recursively collect all Ref instances from an object."""
+    def _collect_refs(self, obj: Any, to_visit: set, visited: set) -> None:
+        """Recursively collect Refs from the db dict object representation."""
+        # Note: this runs on the raw dict -- before it is converted to a dml type
         if isinstance(obj, Ref):
             if obj not in visited:
-                to_visit.append(obj)
+                to_visit.add(obj)
         elif isinstance(obj, dict):
-            for value in obj.values():
-                self._collect_refs(value, to_visit, visited)
+            for v in obj.values():
+                self._collect_refs(v, to_visit, visited)
         elif isinstance(obj, list):
-            for item in obj:
-                self._collect_refs(item, to_visit, visited)
-        # Other types don't contain refs
+            for v in obj:
+                self._collect_refs(v, to_visit, visited)
 
     def load(self, payload: str) -> Ref:
         """Load an object from a commit-manifest JSON payload.
