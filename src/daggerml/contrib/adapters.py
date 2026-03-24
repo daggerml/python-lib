@@ -192,12 +192,7 @@ class LocalAdapter(AdapterBase):
         record = state.get()
         if record is None:
             return
-        state.update(
-            state.update_status(
-                status=record["status"],
-                error=record["error"],
-            )
-        )
+        state.update(state.update_status(status=record["status"], error=record["error"]))
 
     @classmethod
     def send(cls, *, runnable: Runnable, argv_ptr: str, cache_key: str, remote: dict[str, str]):
@@ -220,7 +215,9 @@ class LocalAdapter(AdapterBase):
                 else:
                     result = spec.poll(state=state)
                 if result["status"] in {"succeeded", "failed", "canceled"}:
-                    spec.gc(state=state)
+                    if hasattr(spec, "gc"):
+                        spec.gc(state=state)
+                    state.delete()
                 return cls._validate_output(result)
             finally:
                 cls._release_lease(state)

@@ -13,7 +13,7 @@ from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib.adapters import AdapterBase, LocalAdapter
 from daggerml.contrib.executor_state import LocalState
-from daggerml.contrib.executors import ExecutorBase, ScriptExecutor
+from daggerml.contrib.executors import ScriptExecutor
 from daggerml.contrib.s3 import S3Store
 
 
@@ -443,21 +443,6 @@ def test_local_adapter_send_rejects_non_contract_payload():
     runnable = Runnable(target=Uri("bad"), adapter="dml-local-adapter", kwargs={})
     with pytest.raises(DmlRepoError, match="Adapter output keys must be exactly"):
         LocalAdapter.send(runnable=runnable, argv_ptr=_mk_argv_ptr(), cache_key="ck", remote=_remote())
-
-
-def test_executor_base_start_not_implemented():
-    with pytest.raises(NotImplementedError, match="Executor start method is not implemented"):
-        ExecutorBase.start(runnable=None, argv_ptr=_mk_argv_ptr(), cache_key="ck", remote=_remote(), state=None)
-
-
-def test_executor_base_poll_not_implemented():
-    with pytest.raises(NotImplementedError, match="Executor poll method is not implemented"):
-        ExecutorBase.poll(state=None)
-
-
-def test_executor_base_gc_not_implemented():
-    with pytest.raises(NotImplementedError, match="Executor gc method is not implemented"):
-        ExecutorBase.gc(state=None)
 
 
 def test_adapter_base_cli_reads_stdin_and_writes_stdout(capsys):

@@ -175,12 +175,3 @@ def test_ssh_executor_start_returns_non_terminal_nested_result(monkeypatch):
         )
 
     assert result == {"status": "running", "error": None}
-
-
-def test_ssh_executor_poll_reads_cached_state(tmp_path):
-    cache_key = "ck-ssh-poll"
-    with LocalState(cache_key, cache_dir=str(tmp_path)).lock() as state:
-        assert state is not None
-        result = SshExecutor.poll(state=state)
-
-    assert result == {"status": "pending", "error": None}

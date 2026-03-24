@@ -15,6 +15,18 @@ class LambdaExecutorBase(ExecutorBase):
     adapter = "lambda"
     state_class = DynamoState
 
+    @classmethod
+    def start(cls, runnable, argv_ptr, cache_key, remote, state):
+        raise NotImplementedError("LambdaExecutorBase does not implement start, it must be implemented by subclasses")
+
+    @classmethod
+    def poll(cls, state):
+        raise NotImplementedError("LambdaExecutorBase does not implement poll, it must be implemented by subclasses")
+
+    @classmethod
+    def gc(cls, state):
+        raise NotImplementedError("LambdaExecutorBase does not implement gc, it must be implemented by subclasses")
+
     @staticmethod
     def _child_comms(state) -> dict[str, Any]:
         if isinstance(state, DynamoState):
@@ -26,12 +38,7 @@ class LambdaExecutorBase(ExecutorBase):
         record = state.get()
         if record is None:
             return
-        state.update(
-            state.update_status(
-                status=record["status"],
-                error=record["error"],
-            )
-        )
+        state.update(state.update_status(status=record["status"], error=record["error"]))
 
     @classmethod
     def _handle_once(cls, *, runnable, argv_ptr, cache_key, remote):

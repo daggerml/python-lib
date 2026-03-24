@@ -49,6 +49,7 @@ batch = "daggerml.contrib.executors:BatchExecutor"
 script = "daggerml.contrib.executors:ScriptExecutor"
 docker = "daggerml.contrib.executors:DockerExecutor"
 ssh = "daggerml.contrib.executors:SshExecutor"
+cfn = "daggerml.contrib.executors:CfnExecutor"
 
 [project.entry-points."daggerml.codecs"]
 dataframe = "daggerml.contrib.codecs:literal_codecs"

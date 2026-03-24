@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from daggerml import Dag, Node, Runnable, Uri, new
 from daggerml.contrib import api
 
 
@@ -39,6 +40,15 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
     image_tar = "./image.tar"
     _run("docker", "save", "-o", str(image_tar), local_image)
     return store.put(filepath=str(image_tar), suffix=".tar")
+
+
+def cfn(template: dict, params: dict, name: str, dag: Dag | None = None) -> Node:
+    if dag is None:
+        with new(f"cfn:{name}") as dag:
+            return cfn(template=template, params=params, name=name, dag=dag)
+    dag.cfn_fn = Runnable(target=Uri("cfn"), adapter="dml-local-adapter", kwargs={}, sub=None)
+    stack = dag.cfn_fn(name, template, params, name=f"cfn:{name}")
+    return stack
 
 
 __all__ = ["docker_build"]

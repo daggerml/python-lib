@@ -92,11 +92,3 @@ class SshExecutor(ExecutorBase):
             return AdapterBase._validate_output(result)
         except DmlRepoError as e:
             return {"status": "failed", "error": str(e)}
-
-    @classmethod
-    def poll(cls, *, state):
-        return {"status": "pending", "error": None}
-
-    @classmethod
-    def gc(cls, *, state):
-        return None

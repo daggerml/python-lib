@@ -46,7 +46,7 @@ def test_register_get_and_list_executor():
     loaded = reg.get_executor("local", "custom")
     assert loaded.name == "custom"
     assert loaded.adapter == "local"
-    assert reg.list_executors("local") == ["custom", "docker", "script", "ssh"]
+    assert reg.list_executors("local") == ["cfn", "custom", "docker", "script", "ssh"]
 
 
 def test_register_executor_accepts_class_object():
@@ -91,14 +91,10 @@ def test_register_executor_missing_required_lifecycle_callable_fails():
         state_class = LocalState
 
         @staticmethod
-        def resolve_runnable(uri, kwargs, sub):
-            return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
-
-        @staticmethod
-        def start(*, runnable, argv_ptr, cache_key, remote, state=None):
+        def poll(*, state):
             return {"status": "running", "error": None}
 
-    with pytest.raises(DmlRepoError, match="missing required callables: start, poll, gc"):
+    with pytest.raises(DmlRepoError, match="missing required callables: start, gc"):
         reg.register_executor(MissingPollExecutor)
 
 
@@ -106,10 +102,6 @@ def test_executor_registration_requires_state_class_lock():
     class MissingStateClassExecutor:
         name = "no-state"
         adapter = "local"
-
-        @staticmethod
-        def resolve_runnable(uri, kwargs, sub):
-            return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @staticmethod
         def start(*, runnable, argv_ptr, cache_key, remote, state=None):
@@ -125,24 +117,6 @@ def test_executor_registration_requires_state_class_lock():
 
     with pytest.raises(DmlRepoError, match="missing required state_class"):
         reg.register_executor(MissingStateClassExecutor)
-
-
-def test_executor_registration_rejects_run_only_executor():
-    class RunOnlyExecutor:
-        name = "run-only"
-        adapter = "local"
-        state_class = LocalState
-
-        @staticmethod
-        def resolve_runnable(uri, kwargs, sub):
-            return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
-
-        @staticmethod
-        def run(*, runnable, argv_ptr, cache_key, remote):
-            return {"status": "succeeded", "error": None}
-
-    with pytest.raises(DmlRepoError, match="missing required callables: start, poll, gc"):
-        reg.register_executor(RunOnlyExecutor)
 
 
 def test_get_unknown_executor_fails():
