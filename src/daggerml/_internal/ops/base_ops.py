@@ -338,9 +338,9 @@ class TxnContext:
             if ref in visited:
                 continue
             visited.add(ref)
+            result.append({"id": ref.id(), "ns": ref.ns(), "dump": self.txn.get(ref, raw=True)})
             obj_dict = self.txn.get(ref)
             self._collect_refs(obj_dict, to_visit, visited)
-            result.append({"id": ref.id(), "ns": ref.ns(), "dump": self.txn.get(ref, raw=True)})
         return result
 
     def _collect_refs(self, obj: Any, to_visit: set, visited: set) -> None:

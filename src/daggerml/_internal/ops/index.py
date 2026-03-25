@@ -630,22 +630,16 @@ class IndexOps(BaseOps):
         name: Optional[str] = None,
     ) -> Optional[Ref]:
         self._validate_index_ref(index_ref)
-        if not isinstance(argv, list):
-            raise DmlRepoError("argv must be a list of node references.")
         kwargv = kwargv or {}
         argv_ref = self._prepare_fn(index_ref, argv, kwargv, txn)
         dag_ref = self._run_builtin(argv_ref, txn)
         if dag_ref is None:
-            has_remote_cache = self.remote_root is not None and self.remote_cache is not None
             cops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
-            if has_remote_cache:
-                dag_ref = cops._get(argv_ref, txn)
+            dag_ref = cops._get(argv_ref, txn)
             if dag_ref is None:
                 status = self._call_adapter(argv_ref, index_ref, txn)
                 if status in {"pending", "running"}:
                     return None
-                if not has_remote_cache:
-                    raise DmlRepoError("Remote context required for cached execution")
                 dag_ref = cops._get(argv_ref, txn)
                 if dag_ref is None:
                     raise DmlRepoError("Adapter reported success but no cached DAG was published")
@@ -654,12 +648,7 @@ class IndexOps(BaseOps):
         dag_obj: Dag = txn.get(dag_ref)
         if dag_obj.result is None and dag_obj.error is None:
             raise DmlRepoError("Function DAG has no result node.")
-        out = self._put_node(
-            FnNode(argv, dag_ref),
-            name=name,
-            txn=txn,
-            index_ref=index_ref,
-        )
+        out = self._put_node(FnNode(argv, dag_ref), name=name, txn=txn, index_ref=index_ref)
         if dag_obj.error is not None:
             err = txn.get(dag_obj.error)
             raise err
