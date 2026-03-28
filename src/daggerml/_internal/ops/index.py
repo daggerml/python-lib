@@ -283,10 +283,10 @@ class IndexOps(BaseOps):
                 head_ctx.head.commit = commit_ref
                 txn.put(head_ctx.head, to=head)
             txn.delete(index_ref)
+        if ctx.dag.argv is not None:
+            # automatically cache the DAG if it has an argv (i.e. is runnable)
             cops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
-            if ctx.dag.argv is not None:
-                # automatically cache the DAG if it has an argv (i.e. is runnable)
-                cops._put(ctx.commit.dag, txn)
+            cops.put(ctx.commit.dag)
         return commit_ref
 
     def _validate_index_ref(self, index_ref: Ref) -> Ref:

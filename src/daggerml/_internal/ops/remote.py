@@ -111,6 +111,10 @@ class RemoteOps(BaseOps):
         self._ensure_remote_descriptor()
         super().__post_init__()
 
+    def __put(self, key, value, **kwargs):
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=value, **kwargs)
+        self.client.get_waiter("object_exists").wait(Bucket=self.bucket, Key=key)
+
     def _prefixed_key(self, relative_key: str) -> str:
         """Join configured prefix and relative key without leading slash when prefix is empty."""
         return f"{self.prefix}/{relative_key}" if self.prefix else relative_key
@@ -140,12 +144,7 @@ class RemoteOps(BaseOps):
         except self.client.exceptions.NoSuchKey:
             # Descriptor doesn't exist, create it
             descriptor_json = json.dumps(expected_descriptor, separators=(",", ":"), sort_keys=True)
-            self.client.put_object(
-                Bucket=self.bucket,
-                Key=descriptor_key,
-                Body=descriptor_json.encode("utf-8"),
-                ContentType="application/json",
-            )
+            self.__put(descriptor_key, descriptor_json.encode("utf-8"), ContentType="application/json")
 
     @staticmethod
     def _validate_cache_name(cache: str) -> str:
@@ -320,11 +319,7 @@ class RemoteOps(BaseOps):
         data : bytes
             The object data to store
         """
-        self.client.put_object(
-            Bucket=self.bucket,
-            Key=self._cas_key(oid),
-            Body=data,
-        )
+        self.__put(self._cas_key(oid), data)
 
     def _remote_get_ref(self, ref_path: str) -> bytes:
         """Get ref data from remote storage.
@@ -389,12 +384,7 @@ class RemoteOps(BaseOps):
             if error_code not in ("NoSuchKey", "404"):
                 raise
 
-        # Put the ref
-        self.client.put_object(
-            Bucket=self.bucket,
-            Key=self._ref_key(ref_path),
-            Body=data,
-        )
+        self.__put(self._ref_key(ref_path), data, ContentType="application/json")
 
     def _remote_put_dag_ref(self, dag_id: str, data: bytes) -> None:
         dag_id = self._validate_dag_id(dag_id)
@@ -407,11 +397,7 @@ class RemoteOps(BaseOps):
             if error_code not in ("NoSuchKey", "404"):
                 raise
 
-        self.client.put_object(
-            Bucket=self.bucket,
-            Key=self._dag_ref_key(dag_id),
-            Body=data,
-        )
+        self.__put(self._dag_ref_key(dag_id), data, ContentType="application/json")
 
     def _remote_delete_ref(self, ref_path: str) -> None:
         """Delete ref from remote storage.
