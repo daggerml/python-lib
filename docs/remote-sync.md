@@ -39,11 +39,13 @@ Conceptually:
 
 - content is synchronized by object identity,
 - references control what remote state is visible/discoverable,
+- DAG publication/discovery uses per-DAG refs under `refs/dags/**`,
 - pull materializes referenced state locally.
 
 ## Operations
 
 - Push publishes local state to remote and updates discoverable refs.
+- Push publishes direct DAG dependencies layer-by-layer rather than flattening all transitive DAGs into one top-level publication step.
 - Pull resolves remote refs and materializes required state locally.
 
 ## Integrity

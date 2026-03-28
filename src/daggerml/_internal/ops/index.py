@@ -133,7 +133,7 @@ class IndexOps(BaseOps):
         head : Ref, optional
             Reference to the head to base the index on. If None, uses the active head.
         argv_ptr : str, optional
-            Optional remote manifest pointer to initialize argv from.
+            Optional remote manifest OID to initialize argv from.
 
         Returns
         -------
@@ -585,8 +585,9 @@ class IndexOps(BaseOps):
         node_ops = NodeOps(_db=self._db)
         remote_ops = self._remote_ops()
         cache_ops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
+        argv_manifest = txn.dump_dict(argv_ref)
         envelope = {
-            "argv_ptr": remote_ops.put_local_manifest(txn.dump_dict(argv_ref)),
+            "argv_ptr": remote_ops._put_ref_manifest_from_local_manifest(argv_manifest, argv_ref, txn),
             "cache_key": cache_ops._cache_ref(argv_ref, txn).to,
             "parent_id": parent_index_ref.id(),
             "remote": {

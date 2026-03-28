@@ -50,6 +50,9 @@ def test_put_get_delete_roundtrip_remote(temp_bo, s3):
 
     assert ops.get(argv_ref) is None
     assert ops.put(dag_ref) == cache_ref
+    remote_ops, cache_name = ops._require_remote_context()
+    cache_ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref(f"cache/{cache_name}/{cache_ref.to}.json"))
+    assert cache_ref_obj["targets"] == {"dag": []}
     assert ops.get(argv_ref) == dag_ref
     assert ops.delete(argv_ref) is True
     assert ops.get(argv_ref) is None

@@ -12,12 +12,13 @@ from daggerml._internal.ops.remote import (
     InvalidManifest,
     InvalidOid,
     InvalidRef,
+    MissingCasObject,
     RefAlreadyExists,
     RemoteError,
     RemoteOps,
     ShaMismatch,
 )
-from daggerml._internal.types import DmlRepoError, Head
+from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 from tests._internal.conftest import FakeDb, FakeTxn, remote_bucket_and_prefix_from_env
 
 
@@ -214,6 +215,25 @@ class TestRemoteKeyMapping:
         with pytest.raises(ValueError, match="Invalid ref path"):
             remote_ops._ref_key("tags/main/../abc123.json")
 
+    def test_dag_ref_path_and_key(self, remote_ops):
+        """Test DAG ref path/key helpers."""
+        dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        assert remote_ops._dag_ref_path(dag_id) == f"dags/{dag_id}.json"
+        assert remote_ops._dag_ref_key(dag_id) == f"test-prefix/refs/dags/{dag_id}.json"
+
+    def test_dag_ref_helpers_reject_invalid_dag_id(self, remote_ops):
+        """Test DAG ref helpers reject invalid DAG ids."""
+        with pytest.raises(ValueError, match="Invalid DAG id"):
+            remote_ops._dag_ref_path("abc")
+        with pytest.raises(ValueError, match="Invalid DAG id"):
+            remote_ops._dag_ref_key("ABC" * 21 + "A")
+
+    def test_ref_key_still_rejects_dag_paths(self, remote_ops):
+        """Test that _ref_key still rejects dags/* paths."""
+        dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        with pytest.raises(ValueError, match="expected 'tags' or 'cache'"):
+            remote_ops._ref_key(f"dags/{dag_id}.json")
+
 
 class TestRemoteWrappers:
     """Tests for remote S3 thin wrappers."""
@@ -316,6 +336,34 @@ class TestDecoding:
             "schema": 0,
             "target": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "created_at": 1234567890,
+        }
+        ref_bytes = json.dumps(ref_data, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        decoded = remote_ops._decode_ref(ref_bytes)
+        assert decoded == ref_data
+
+    def test_decode_ref_valid_targets(self, remote_ops):
+        """Test decoding a ref with valid dag targets."""
+        dag1 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        dag2 = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ref_data = {
+            "kind": "ref",
+            "schema": 0,
+            "target": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "created_at": 1234567890,
+            "targets": {"dag": [dag1, dag2]},
+        }
+        ref_bytes = json.dumps(ref_data, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        decoded = remote_ops._decode_ref(ref_bytes)
+        assert decoded == ref_data
+
+    def test_decode_ref_valid_empty_targets(self, remote_ops):
+        """Test decoding a ref with empty dag targets."""
+        ref_data = {
+            "kind": "ref",
+            "schema": 0,
+            "target": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_data, separators=(",", ":"), sort_keys=True).encode("utf-8")
         decoded = remote_ops._decode_ref(ref_bytes)
@@ -614,6 +662,31 @@ class TestLocalHelpers:
 class TestBuildRemoteManifest:
     """Tests for remote manifest building from local manifest."""
 
+    def test_build_remote_manifest_overrides_dag_closure_with_direct_ids(self, remote_ops):
+        """Test direct_dag_ids override replaces transitive dag closure."""
+        local_manifest = {
+            "kind": "local-manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": "root1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+            "closure": {
+                "commit": {
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": "data1",
+                },
+                "dag": {
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": "dag-a",
+                    "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": "dag-b",
+                },
+            },
+        }
+
+        manifest_dict, _ = remote_ops._build_remote_manifest(
+            local_manifest,
+            direct_dag_ids=["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],
+        )
+
+        assert manifest_dict["closure"]["dag"] == ["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]
+
     def test_build_remote_manifest_sorts_each_namespace(self, remote_ops):
         """Test that _build_remote_manifest sorts OIDs within each namespace."""
         local_manifest = {
@@ -686,6 +759,20 @@ class TestBuildRemoteManifest:
         assert manifest_dict["closure"]["commit"] == [
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ]
+
+    def test_direct_dag_ids_for_commit_uses_tree_dags_only(self, remote_ops):
+        """Test direct dag discovery for commits uses only Tree.dags."""
+        dag_a = Ref("dag:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        dag_b = Ref("dag:1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        stray_dag = Ref("dag:2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        tree_ref = Ref("tree:3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        commit_ref = Ref("commit:4123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        txn = Mock()
+        txn.get.side_effect = [
+            Commit(parents=[], tree=tree_ref, author="test", message="msg", dag=stray_dag),
+            Tree(dags={"a": dag_a, "b": dag_b}),
+        ]
+        assert remote_ops._direct_dag_ids(txn, commit_ref) == sorted([dag_a.id(), dag_b.id()])
 
     def test_build_remote_manifest_rejects_non_commit_root(self, remote_ops):
         """Test that _build_remote_manifest rejects non-commit root namespaces."""
@@ -857,8 +944,9 @@ class TestPush:
 
         # Mock _local_dump_dict to return our local manifest
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest) as mock_dump:
-            # Push the head ref
-            ref_path = remote_ops.push(Ref("head:main"))
+            with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
+                # Push the head ref
+                ref_path = remote_ops.push(Ref("head:main"))
 
             # Verify _local_dump_dict was called
             mock_dump.assert_called_once()
@@ -891,6 +979,7 @@ class TestPush:
         assert ref_obj["kind"] == "ref"
         assert ref_obj["target"] == manifest_id
         assert isinstance(ref_obj["created_at"], int)
+        assert ref_obj["targets"] == {"dag": []}
 
     def test_push_head_publishes_tag_ref(self, integration_remote_ops_fn):
         """Test that pushing a head publishes a tag ref scoped by head name and commit id."""
@@ -909,7 +998,8 @@ class TestPush:
         with remote_ops._tx(readonly=False) as txn:
             txn.put(Head(commit=Ref(f"commit:{commit_oid}")), to=Ref("head:main"))
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest) as mock_dump:
-            ref_path = remote_ops.push(Ref("head:main"))
+            with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
+                ref_path = remote_ops.push(Ref("head:main"))
 
         assert ref_path == f"tags/main/{commit_oid}.json"
         assert mock_dump.call_args.args[1] == Ref(f"commit:{commit_oid}")
@@ -917,6 +1007,89 @@ class TestPush:
         ref_obj = remote_ops._decode_ref(ref_bytes)
         assert ref_obj["kind"] == "ref"
         assert ref_obj["target"]
+        assert ref_obj["targets"] == {"dag": []}
+
+    def test_push_with_dag_targets_ensures_dag_refs_before_tag_ref(self, remote_ops):
+        """Test push computes targets and ensures DAG refs before writing tag ref."""
+        commit_oid = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        dag_a = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        dag_b = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        local_manifest = {
+            "kind": "local-manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {
+                "commit": {commit_oid: base64.b64encode(b"commit").decode("ascii")},
+                "dag": {
+                    dag_b: base64.b64encode(b"dag-b").decode("ascii"),
+                    dag_a: base64.b64encode(b"dag-a").decode("ascii"),
+                },
+            },
+        }
+        manifest_bytes = json.dumps(
+            {
+                "kind": "manifest",
+                "schema": 0,
+                "root-ns": "commit",
+                "root-id": commit_oid,
+                "closure": {"commit": [commit_oid], "dag": [dag_a, dag_b]},
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        events = []
+        with patch.object(
+            remote_ops,
+            "_resolve_push_target",
+            return_value=(Ref(f"commit:{commit_oid}"), f"tags/main/{commit_oid}.json"),
+        ):
+            with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest):
+                with patch.object(
+                    remote_ops,
+                    "_direct_dag_ids",
+                    return_value=[dag_a],
+                ):
+                    with patch.object(
+                        remote_ops,
+                        "_ensure_dag_ref_in_txn",
+                        side_effect=lambda dag_ref, _txn, _stack: events.append(("ensure", dag_ref.id())) or True,
+                    ):
+                        with patch.object(
+                            remote_ops, "_push_upload_objects", side_effect=lambda _lm: events.append(("upload-raw",))
+                        ):
+                            with patch.object(
+                                remote_ops,
+                                "_build_remote_manifest",
+                                side_effect=lambda _lm, require_commit_root=True, direct_dag_ids=None: (  # noqa: ARG005
+                                    {
+                                        "kind": "manifest",
+                                        "schema": 0,
+                                        "root-ns": "commit",
+                                        "root-id": commit_oid,
+                                        "closure": {"commit": [commit_oid], "dag": direct_dag_ids or []},
+                                    },
+                                    manifest_bytes,
+                                ),
+                            ):
+                                with patch.object(remote_ops, "_remote_has_cas", return_value=False):
+                                    with patch.object(
+                                        remote_ops,
+                                        "_remote_put_cas",
+                                        side_effect=lambda oid, _data: events.append(("put-cas", oid)),
+                                    ):
+                                        with patch.object(
+                                            remote_ops,
+                                            "_remote_put_ref",
+                                            side_effect=lambda _path, data: events.append(
+                                                ("put-ref", json.loads(data))
+                                            ),
+                                        ):
+                                            remote_ops.push(Ref("head:main"))
+
+        assert events[0:1] == [("ensure", dag_a)]
+        assert events[-1][0] == "put-ref"
+        assert events[-1][1]["targets"] == {"dag": [dag_a]}
 
     def test_push_ref_is_immutable(self, integration_remote_ops_fn):
         """Test that pushing the same ref twice fails."""
@@ -939,13 +1112,14 @@ class TestPush:
 
         # Mock _local_dump_dict
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest):
-            # First push should succeed
-            ref_path = remote_ops.push(Ref("head:main"))
-            assert ref_path == f"tags/main/{commit_oid}.json"
+            with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
+                # First push should succeed
+                ref_path = remote_ops.push(Ref("head:main"))
+                assert ref_path == f"tags/main/{commit_oid}.json"
 
-            # Public API wraps remote errors at subsystem boundary
-            with pytest.raises(DmlRepoError, match="already exists"):
-                remote_ops.push(Ref("head:main"))
+                # Public API wraps remote errors at subsystem boundary
+                with pytest.raises(DmlRepoError, match="already exists"):
+                    remote_ops.push(Ref("head:main"))
 
     def test_push_manifest_uploaded_and_addressable(self, integration_remote_ops_fn):
         """Test that the manifest is uploaded and can be retrieved via its hash."""
@@ -972,8 +1146,9 @@ class TestPush:
 
         # Mock _local_dump_dict
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest):
-            # Push
-            remote_ops.push(Ref("head:main"))
+            with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
+                # Push
+                remote_ops.push(Ref("head:main"))
 
         # Build expected remote manifest to get its hash
         remote_manifest_dict, remote_manifest_bytes = remote_ops._build_remote_manifest(local_manifest)
@@ -988,6 +1163,244 @@ class TestPush:
 
 class TestPull:
     """Tests for the pull functionality."""
+
+    def test_load_ptr_in_txn_resolves_dag_refs_recursively(self, remote_ops):
+        """Test load_ptr_in_txn resolves closure['dag'] through refs/dags."""
+        commit_data = b'{"kind":"commit"}'
+        commit_oid = hashlib.sha256(commit_data).hexdigest()
+        dag_data = b'{"kind":"dag-root"}'
+        dag_oid = hashlib.sha256(dag_data).hexdigest()
+        blob_oid = hashlib.sha256(b"blob-data").hexdigest()
+        blob_data = b"blob-data"
+
+        top_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {"commit": [commit_oid], "dag": [dag_oid]},
+        }
+        dag_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "dag",
+            "root-id": dag_oid,
+            "closure": {"blob": [blob_oid]},
+        }
+        top_manifest_bytes = json.dumps(top_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        dag_manifest_bytes = json.dumps(dag_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        top_manifest_oid = hashlib.sha256(top_manifest_bytes).hexdigest()
+        dag_manifest_oid = hashlib.sha256(dag_manifest_bytes).hexdigest()
+        dag_ref = {
+            "kind": "ref",
+            "schema": 0,
+            "target": dag_manifest_oid,
+            "created_at": 1234567890,
+            "meta": {"dag": {"id": dag_oid}},
+        }
+
+        remote_ops._remote_put_cas(top_manifest_oid, top_manifest_bytes)
+        remote_ops._remote_put_cas(dag_manifest_oid, dag_manifest_bytes)
+        remote_ops._remote_put_cas(commit_oid, commit_data)
+        remote_ops._remote_put_cas(dag_oid, dag_data)
+        remote_ops._remote_put_cas(blob_oid, blob_data)
+        remote_ops._remote_put_dag_ref(
+            dag_oid,
+            json.dumps(dag_ref, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        )
+
+        with remote_ops._tx(readonly=False) as txn:
+            with patch.object(remote_ops, "_local_has", return_value=False):
+                with patch.object(txn, "load_dict", return_value=Ref(f"commit:{commit_oid}")) as mock_load_dict:
+                    root_ref = remote_ops.load_ptr_in_txn(top_manifest_oid, txn, expected_root_ns="commit")
+                    assert root_ref == Ref(f"commit:{commit_oid}")
+                    loaded_manifest = mock_load_dict.call_args[0][0]
+                    assert loaded_manifest["closure"]["commit"][commit_oid] == base64.b64encode(commit_data).decode(
+                        "ascii"
+                    )
+                    assert loaded_manifest["closure"]["blob"][blob_oid] == base64.b64encode(blob_data).decode("ascii")
+                    assert loaded_manifest["closure"]["dag"][dag_oid] == base64.b64encode(dag_data).decode("ascii")
+
+    def test_load_ptr_in_txn_fails_when_dag_ref_missing(self, remote_ops):
+        """Test strict failure when a referenced DAG ref is missing."""
+        commit_data = b'{"kind":"commit-missing-dag-ref"}'
+        commit_oid = hashlib.sha256(commit_data).hexdigest()
+        dag_oid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeb"
+        top_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {"commit": [commit_oid], "dag": [dag_oid]},
+        }
+        top_manifest_bytes = json.dumps(top_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        top_manifest_oid = hashlib.sha256(top_manifest_bytes).hexdigest()
+        remote_ops._remote_put_cas(top_manifest_oid, top_manifest_bytes)
+        remote_ops._remote_put_cas(commit_oid, commit_data)
+
+        with pytest.raises(DmlRepoError, match=rf"Ref dags/{dag_oid}\.json not found"):
+            with remote_ops._tx(readonly=False) as txn:
+                with patch.object(remote_ops, "_local_has", return_value=False):
+                    remote_ops.load_ptr_in_txn(top_manifest_oid, txn, expected_root_ns="commit")
+
+    def test_load_ptr_in_txn_fails_when_dag_manifest_missing(self, remote_ops):
+        """Test strict failure when DAG ref target CAS is missing."""
+        commit_data = b'{"kind":"commit-missing-dag-manifest"}'
+        commit_oid = hashlib.sha256(commit_data).hexdigest()
+        dag_oid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdec"
+        missing_manifest_oid = "3123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        top_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {"commit": [commit_oid], "dag": [dag_oid]},
+        }
+        top_manifest_bytes = json.dumps(top_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        top_manifest_oid = hashlib.sha256(top_manifest_bytes).hexdigest()
+        dag_ref = {
+            "kind": "ref",
+            "schema": 0,
+            "target": missing_manifest_oid,
+            "created_at": 1234567890,
+            "meta": {"dag": {"id": dag_oid}},
+        }
+        remote_ops._remote_put_cas(top_manifest_oid, top_manifest_bytes)
+        remote_ops._remote_put_cas(commit_oid, commit_data)
+        remote_ops._remote_put_dag_ref(
+            dag_oid,
+            json.dumps(dag_ref, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        )
+
+        with remote_ops._tx(readonly=False) as txn:
+            with pytest.raises(MissingCasObject, match=f"CAS object {missing_manifest_oid} not found"):
+                remote_ops.load_ptr_in_txn(top_manifest_oid, txn, expected_root_ns="commit")
+
+    def test_pull_resolves_dag_refs(self, integration_remote_ops_fn):
+        """Test pull materializes child DAG manifests through refs/dags."""
+        remote_ops = integration_remote_ops_fn
+        commit_data = b'{"kind":"commit","tree":"tree123"}'
+        blob_data = b"blob-data"
+        commit_oid = hashlib.sha256(commit_data).hexdigest()
+        blob_oid = hashlib.sha256(blob_data).hexdigest()
+        dag_data = b'{"kind":"dag-root-pull"}'
+        dag_oid = hashlib.sha256(dag_data).hexdigest()
+
+        top_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {"commit": [commit_oid], "dag": [dag_oid]},
+        }
+        dag_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "dag",
+            "root-id": dag_oid,
+            "closure": {"blob": [blob_oid]},
+        }
+        top_manifest_bytes = json.dumps(top_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        dag_manifest_bytes = json.dumps(dag_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        top_manifest_oid = hashlib.sha256(top_manifest_bytes).hexdigest()
+        dag_manifest_oid = hashlib.sha256(dag_manifest_bytes).hexdigest()
+        top_ref = {
+            "kind": "ref",
+            "schema": 0,
+            "target": top_manifest_oid,
+            "created_at": 1234567890,
+            "targets": {"dag": [dag_oid]},
+        }
+        dag_ref = {
+            "kind": "ref",
+            "schema": 0,
+            "target": dag_manifest_oid,
+            "created_at": 1234567890,
+            "meta": {"dag": {"id": dag_oid}},
+        }
+
+        remote_ops._remote_put_cas(top_manifest_oid, top_manifest_bytes)
+        remote_ops._remote_put_cas(dag_manifest_oid, dag_manifest_bytes)
+        remote_ops._remote_put_cas(commit_oid, commit_data)
+        remote_ops._remote_put_cas(dag_oid, dag_data)
+        remote_ops._remote_put_cas(blob_oid, blob_data)
+        remote_ops._remote_put_ref(
+            "tags/main/with-dag.json",
+            json.dumps(top_ref, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        )
+        remote_ops._remote_put_dag_ref(
+            dag_oid,
+            json.dumps(dag_ref, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        )
+
+        with patch.object(remote_ops, "_local_has", return_value=False):
+            with patch.object(remote_ops, "_local_load_dict") as mock_load:
+                with patch.object(remote_ops, "_local_put_head"):
+                    remote_ops.pull("tags/main/with-dag.json")
+                    loaded_manifest = mock_load.call_args[0][1]
+                    assert loaded_manifest["closure"]["commit"][commit_oid] == base64.b64encode(commit_data).decode(
+                        "ascii"
+                    )
+                    assert loaded_manifest["closure"]["blob"][blob_oid] == base64.b64encode(blob_data).decode("ascii")
+
+    def test_pull_fails_when_dag_ref_is_malformed(self, remote_ops):
+        """Test pull fails on malformed DAG refs."""
+        commit_oid = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        dag_oid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        top_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {"dag": [dag_oid]},
+        }
+        top_manifest_bytes = json.dumps(top_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        top_manifest_oid = hashlib.sha256(top_manifest_bytes).hexdigest()
+        top_ref = {
+            "kind": "ref",
+            "schema": 0,
+            "target": top_manifest_oid,
+            "created_at": 1234567890,
+            "targets": {"dag": [dag_oid]},
+        }
+
+        remote_ops._remote_put_cas(top_manifest_oid, top_manifest_bytes)
+        remote_ops._remote_put_ref(
+            "tags/main/bad-dag-ref.json",
+            json.dumps(top_ref, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        )
+        remote_ops.client.put_object(
+            Bucket=remote_ops.bucket,
+            Key=remote_ops._dag_ref_key(dag_oid),
+            Body=json.dumps({"kind": "not-ref", "schema": 0}).encode("utf-8"),
+        )
+
+        with pytest.raises(DmlRepoError, match="kind must be 'ref'"):
+            remote_ops.pull("tags/main/bad-dag-ref.json")
+
+    def test_load_ptr_in_txn_fails_when_dag_ref_missing_even_if_raw_dag_exists(self, remote_ops):
+        """Test readers no longer fall back to raw DAG CAS without refs/dags."""
+        commit_data = b'{"kind":"commit-legacy-dag"}'
+        commit_oid = hashlib.sha256(commit_data).hexdigest()
+        dag_data = b'{"kind":"dag-legacy"}'
+        dag_oid = hashlib.sha256(dag_data).hexdigest()
+        top_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {"commit": [commit_oid], "dag": [dag_oid]},
+        }
+        top_manifest_bytes = json.dumps(top_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        top_manifest_oid = hashlib.sha256(top_manifest_bytes).hexdigest()
+        remote_ops._remote_put_cas(top_manifest_oid, top_manifest_bytes)
+        remote_ops._remote_put_cas(commit_oid, commit_data)
+        remote_ops._remote_put_cas(dag_oid, dag_data)
+
+        with pytest.raises(DmlRepoError, match=rf"Ref dags/{dag_oid}\.json not found"):
+            with remote_ops._tx(readonly=False) as txn:
+                with patch.object(remote_ops, "_local_has", return_value=False):
+                    remote_ops.load_ptr_in_txn(top_manifest_oid, txn, expected_root_ns="commit")
 
     def test_pull_rejects_non_commit_root(self, remote_ops):
         """Test that pull rejects manifests with non-commit root namespace."""
@@ -1008,6 +1421,7 @@ class TestPull:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -1050,6 +1464,7 @@ class TestPull:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -1125,6 +1540,7 @@ class TestPull:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -1182,6 +1598,7 @@ class TestPull:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -1218,6 +1635,7 @@ class TestPull:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -1260,6 +1678,7 @@ class TestPull:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
         # Upload to remote
@@ -1305,8 +1724,9 @@ class TestTask17PublicApiPolish:
                 "_resolve_push_target",
                 return_value=(commit_ref, "tags/main/test.json"),
             ):
-                with pytest.raises(DmlRepoError, match="Cannot push non-commit root namespace: 'blob'"):
-                    remote_ops.push(Ref("head:main"))
+                with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
+                    with pytest.raises(DmlRepoError, match="Cannot push non-commit root namespace: 'blob'"):
+                        remote_ops.push(Ref("head:main"))
 
     def test_pull_raises_on_missing_cas_object(self, remote_ops):
         """Test that pull surfaces missing CAS objects as DmlRepoError."""
@@ -1325,6 +1745,7 @@ class TestTask17PublicApiPolish:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -1370,6 +1791,348 @@ class TestTask17PublicApiPolish:
         ref_bytes = json.dumps(invalid_ref).encode("utf-8")
         with pytest.raises(InvalidRef, match="target must be 64 lowercase hex"):
             remote_ops._decode_ref(ref_bytes)
+
+        # Test invalid targets object
+        invalid_ref = {
+            "kind": "ref",
+            "schema": 0,
+            "target": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "created_at": 1234567890,
+            "targets": [],
+        }
+        ref_bytes = json.dumps(invalid_ref).encode("utf-8")
+        with pytest.raises(InvalidRef, match="targets must be an object"):
+            remote_ops._decode_ref(ref_bytes)
+
+        # Test invalid targets namespace
+        invalid_ref["targets"] = {"blob": []}
+        ref_bytes = json.dumps(invalid_ref).encode("utf-8")
+        with pytest.raises(InvalidRef, match="targets supports only the 'dag' namespace"):
+            remote_ops._decode_ref(ref_bytes)
+
+        # Test unsorted dag targets
+        invalid_ref["targets"] = {
+            "dag": [
+                "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ]
+        }
+        ref_bytes = json.dumps(invalid_ref).encode("utf-8")
+        with pytest.raises(InvalidRef, match="targets.dag must be a sorted unique list of 64 lowercase hex ids"):
+            remote_ops._decode_ref(ref_bytes)
+
+        # Test duplicate dag targets
+        invalid_ref["targets"] = {
+            "dag": [
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ]
+        }
+        ref_bytes = json.dumps(invalid_ref).encode("utf-8")
+        with pytest.raises(InvalidRef, match="targets.dag must be a sorted unique list of 64 lowercase hex ids"):
+            remote_ops._decode_ref(ref_bytes)
+
+        # Test malformed dag target id
+        invalid_ref["targets"] = {"dag": ["not-an-oid"]}
+        ref_bytes = json.dumps(invalid_ref).encode("utf-8")
+        with pytest.raises(InvalidRef, match="targets.dag must be a sorted unique list of 64 lowercase hex ids"):
+            remote_ops._decode_ref(ref_bytes)
+
+
+class TestDagPublicationHelpers:
+    """Tests for per-DAG publication helpers."""
+
+    def test_ensure_dag_ref_rejects_non_dag_ref(self, remote_ops):
+        """Test that _ensure_dag_ref requires dag refs."""
+        with pytest.raises(ValueError, match="Expected dag ref"):
+            remote_ops._ensure_dag_ref(Ref("commit:abc"))
+
+    def test_ensure_dag_ref_fast_path_skips_rebuild(self, remote_ops, monkeypatch):
+        """Test fast-path success when DAG ref already exists."""
+        dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ref_bytes = json.dumps(
+            {
+                "kind": "ref",
+                "schema": 0,
+                "target": "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "created_at": 1234567890,
+                "meta": {"dag": {"id": dag_id}},
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+        monkeypatch.setattr(remote_ops, "_remote_get_dag_ref", lambda _dag_id: ref_bytes)
+        monkeypatch.setattr(remote_ops, "_local_dump_dict", lambda *_args, **_kwargs: pytest.fail("should not rebuild"))
+        monkeypatch.setattr(
+            remote_ops, "_push_upload_objects", lambda *_args, **_kwargs: pytest.fail("should not upload")
+        )
+
+        assert remote_ops._ensure_dag_ref(Ref(f"dag:{dag_id}")) is True
+
+    def test_ensure_dag_ref_miss_path_publishes_manifest_and_ref(self, remote_ops, monkeypatch):
+        """Test publish-on-miss behavior and write ordering."""
+        dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        child_id = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        local_manifest = {
+            "kind": "local-manifest",
+            "schema": 0,
+            "root-ns": "dag",
+            "root-id": dag_id,
+            "closure": {
+                "dag": {
+                    dag_id: base64.b64encode(b"root-dag").decode("ascii"),
+                    child_id: base64.b64encode(b"child-dag").decode("ascii"),
+                }
+            },
+        }
+        child_manifest = {
+            "kind": "local-manifest",
+            "schema": 0,
+            "root-ns": "dag",
+            "root-id": child_id,
+            "closure": {"dag": {child_id: base64.b64encode(b"child-dag").decode("ascii")}},
+        }
+        root_manifest_bytes = (
+            b'{"closure":{"dag":["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",'
+            b'"1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]},'
+            b'"kind":"manifest","root-id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",'
+            b'"root-ns":"dag","schema":0}'
+        )
+        child_manifest_bytes = (
+            b'{"closure":{"dag":["1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]},'
+            b'"kind":"manifest","root-id":"1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",'
+            b'"root-ns":"dag","schema":0}'
+        )
+        manifest_oid = hashlib.sha256(root_manifest_bytes).hexdigest()
+        child_manifest_oid = hashlib.sha256(child_manifest_bytes).hexdigest()
+        events = []
+
+        def fake_remote_get_dag_ref(requested_dag_id):
+            raise RemoteError(f"Ref dags/{requested_dag_id}.json not found")
+
+        def fake_local_dump_dict(_txn, requested_ref):
+            if requested_ref == Ref(f"dag:{dag_id}"):
+                return local_manifest
+            assert requested_ref == Ref(f"dag:{child_id}")
+            return child_manifest
+
+        monkeypatch.setattr(remote_ops, "_remote_get_dag_ref", fake_remote_get_dag_ref)
+        monkeypatch.setattr(remote_ops, "_local_dump_dict", fake_local_dump_dict)
+        monkeypatch.setattr(
+            remote_ops, "_push_upload_objects", lambda manifest: events.append(("upload-raw", manifest["root-id"]))
+        )
+        monkeypatch.setattr(
+            remote_ops,
+            "_build_remote_manifest",
+            lambda manifest, require_commit_root=False, direct_dag_ids=None: (  # noqa: ARG005
+                {"kind": "manifest"},
+                root_manifest_bytes if manifest["root-id"] == dag_id else child_manifest_bytes,
+            ),
+        )
+        monkeypatch.setattr(
+            remote_ops,
+            "_direct_dag_ids",
+            lambda _txn, root_ref: [child_id] if root_ref.id() == dag_id else [],
+        )
+        monkeypatch.setattr(remote_ops, "_remote_has_cas", lambda oid: False)
+        monkeypatch.setattr(remote_ops, "_remote_put_cas", lambda oid, data: events.append(("put-cas", oid, data)))
+        monkeypatch.setattr(
+            remote_ops,
+            "_remote_put_dag_ref",
+            lambda requested_dag_id, data: events.append(("put-ref", requested_dag_id, json.loads(data))),
+        )
+
+        assert remote_ops._ensure_dag_ref(Ref(f"dag:{dag_id}")) is True
+        assert events[0] == ("upload-raw", child_id)
+        assert events[1] == ("put-cas", child_manifest_oid, child_manifest_bytes)
+        assert events[2][0:2] == ("put-ref", child_id)
+        assert events[3] == ("upload-raw", dag_id)
+        assert events[4] == ("put-cas", manifest_oid, root_manifest_bytes)
+        assert events[5][0:2] == ("put-ref", dag_id)
+        assert events[5][2]["meta"] == {"dag": {"id": dag_id}}
+        assert events[5][2]["target"] == manifest_oid
+
+    def test_ensure_dag_ref_rejects_non_dag_manifest_root(self, remote_ops, monkeypatch):
+        """Test that _ensure_dag_ref enforces root-ns == dag."""
+        dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        monkeypatch.setattr(
+            remote_ops, "_remote_get_dag_ref", lambda _dag_id: (_ for _ in ()).throw(RemoteError("missing"))
+        )
+        monkeypatch.setattr(
+            remote_ops,
+            "_local_dump_dict",
+            lambda _txn, _ref: {
+                "kind": "local-manifest",
+                "schema": 0,
+                "root-ns": "commit",
+                "root-id": dag_id,
+                "closure": {},
+            },
+        )
+
+        with pytest.raises(ValueError, match="root namespace 'dag'"):
+            remote_ops._ensure_dag_ref(Ref(f"dag:{dag_id}"))
+
+    def test_ensure_dag_ref_detects_cycles(self, remote_ops, monkeypatch):
+        """Test cycle detection across DAG refs."""
+        dag_a = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        dag_b = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+        def fake_remote_get_dag_ref(_dag_id):
+            raise RemoteError("missing")
+
+        def fake_local_dump_dict(_txn, ref):
+            if ref.id() == dag_a:
+                return {
+                    "kind": "local-manifest",
+                    "schema": 0,
+                    "root-ns": "dag",
+                    "root-id": dag_a,
+                    "closure": {"dag": {dag_a: "YQ==", dag_b: "Yg=="}},
+                }
+            return {
+                "kind": "local-manifest",
+                "schema": 0,
+                "root-ns": "dag",
+                "root-id": dag_b,
+                "closure": {"dag": {dag_a: "YQ==", dag_b: "Yg=="}},
+            }
+
+        monkeypatch.setattr(remote_ops, "_remote_get_dag_ref", fake_remote_get_dag_ref)
+        monkeypatch.setattr(remote_ops, "_local_dump_dict", fake_local_dump_dict)
+        monkeypatch.setattr(
+            remote_ops,
+            "_direct_dag_ids",
+            lambda _txn, root_ref: [dag_b] if root_ref.id() == dag_a else [dag_a],
+        )
+
+        with pytest.raises(DmlRepoError, match="Cycle detected in DAG closure"):
+            remote_ops._ensure_dag_ref(Ref(f"dag:{dag_a}"))
+
+    def test_ensure_dag_ref_ref_already_exists_reads_back(self, remote_ops, monkeypatch):
+        """Test RefAlreadyExists handling during DAG ref creation."""
+        dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        local_manifest = {
+            "kind": "local-manifest",
+            "schema": 0,
+            "root-ns": "dag",
+            "root-id": dag_id,
+            "closure": {"dag": {dag_id: base64.b64encode(b"root-dag").decode("ascii")}},
+        }
+        manifest_bytes = (
+            b'{"closure":{"dag":["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]},'
+            b'"kind":"manifest","root-id":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",'
+            b'"root-ns":"dag","schema":0}'
+        )
+        manifest_oid = hashlib.sha256(manifest_bytes).hexdigest()
+        readback = json.dumps(
+            {
+                "kind": "ref",
+                "schema": 0,
+                "target": manifest_oid,
+                "created_at": 1234567890,
+                "meta": {"dag": {"id": dag_id}},
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        state = {"count": 0}
+
+        def fake_remote_get_dag_ref(_dag_id):
+            state["count"] += 1
+            if state["count"] == 1:
+                raise RemoteError("missing")
+            return readback
+
+        monkeypatch.setattr(remote_ops, "_remote_get_dag_ref", fake_remote_get_dag_ref)
+        monkeypatch.setattr(remote_ops, "_local_dump_dict", lambda _txn, _ref: local_manifest)
+        monkeypatch.setattr(remote_ops, "_push_upload_objects", lambda _manifest: None)
+        monkeypatch.setattr(
+            remote_ops,
+            "_build_remote_manifest",
+            lambda _manifest, require_commit_root=False, direct_dag_ids=None: ({"kind": "manifest"}, manifest_bytes),
+        )  # noqa: ARG005
+        monkeypatch.setattr(remote_ops, "_direct_dag_ids", lambda _txn, _root_ref: [])
+        monkeypatch.setattr(remote_ops, "_remote_has_cas", lambda _oid: False)
+        monkeypatch.setattr(remote_ops, "_remote_put_cas", lambda _oid, _data: None)
+        monkeypatch.setattr(
+            remote_ops, "_remote_put_dag_ref", lambda _dag_id, _data: (_ for _ in ()).throw(RefAlreadyExists("exists"))
+        )
+
+        assert remote_ops._ensure_dag_ref(Ref(f"dag:{dag_id}")) is True
+
+    def test_put_ref_manifest_uploads_top_manifest_and_ensures_dags(self, remote_ops, monkeypatch):
+        """Test top-level manifest upload via put_ref_manifest."""
+        dag_a = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        dag_b = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        local_manifest = {
+            "kind": "local-manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "closure": {
+                "commit": {
+                    "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef": base64.b64encode(
+                        b"commit"
+                    ).decode("ascii")
+                },
+                "dag": {
+                    dag_b: base64.b64encode(b"dag-b").decode("ascii"),
+                    dag_a: base64.b64encode(b"dag-a").decode("ascii"),
+                },
+            },
+        }
+        manifest_bytes = (
+            b'{"closure":{"commit":["2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],'
+            b'"dag":["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",'
+            b'"1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"]},'
+            b'"kind":"manifest","root-id":"2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",'
+            b'"root-ns":"commit","schema":0}'
+        )
+        manifest_oid = hashlib.sha256(manifest_bytes).hexdigest()
+        ensured = []
+        uploaded = []
+
+        monkeypatch.setattr(remote_ops, "_local_dump_dict", lambda _txn, _ref: local_manifest)
+        monkeypatch.setattr(remote_ops, "_direct_dag_ids", lambda _txn, _root_ref: [dag_a, dag_b])
+        monkeypatch.setattr(
+            remote_ops, "_ensure_dag_ref_in_txn", lambda dag_ref, _txn, _stack: ensured.append(dag_ref.id()) or True
+        )
+        monkeypatch.setattr(
+            remote_ops, "_push_upload_objects", lambda manifest: uploaded.append(("raw", manifest["root-id"]))
+        )
+        monkeypatch.setattr(
+            remote_ops,
+            "_build_remote_manifest",
+            lambda _manifest, require_commit_root=False, direct_dag_ids=None: ({"kind": "manifest"}, manifest_bytes),
+        )  # noqa: ARG005
+        monkeypatch.setattr(remote_ops, "_remote_has_cas", lambda _oid: False)
+        monkeypatch.setattr(remote_ops, "_remote_put_cas", lambda oid, data: uploaded.append((oid, data)))
+
+        assert (
+            remote_ops.put_ref_manifest(Ref("commit:2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
+            == manifest_oid
+        )
+        assert ensured == [dag_a, dag_b]
+        assert uploaded[0] == ("raw", local_manifest["root-id"])
+        assert uploaded[1] == (manifest_oid, manifest_bytes)
+
+    def test_put_cache_ref_writes_targets(self, remote_ops):
+        """Test cache refs include validated targets."""
+        target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        remote_ops.put_cache_ref("build", "cache:key", target, overwrite=False, targets={"dag": [dag_id]})
+
+        ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref("cache/build/cache:key.json"))
+        assert ref_obj["target"] == target
+        assert ref_obj["targets"] == {"dag": [dag_id]}
+
+    def test_put_cache_ref_rejects_invalid_targets(self, remote_ops):
+        """Test cache ref validation rejects malformed targets."""
+        target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        with pytest.raises(DmlRepoError, match="Invalid targets"):
+            remote_ops.put_cache_ref("build", "cache:key", target, overwrite=False, targets={"blob": []})
 
     def test_decode_manifest_raises_invalid_manifest(self, remote_ops):
         """Test that _decode_manifest raises InvalidManifest for invalid manifests."""
@@ -1471,6 +2234,7 @@ class TestTask17PublicApiPolish:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -1528,6 +2292,7 @@ class TestGcMark:
             "schema": 0,
             "target": manifest_id,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
@@ -1557,6 +2322,7 @@ class TestGcMark:
             "schema": 0,
             "target": manifest_id,  # Same manifest
             "created_at": 1234567891,
+            "targets": {"dag": []},
             "meta": {"cache": {"expires_at": 2000000000}},
         }
         cache_ref_bytes = json.dumps(cache_ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -1569,8 +2335,8 @@ class TestGcMark:
         # Should still include the same OIDs (manifest referenced by both refs)
         assert live_oids == expected_oids
 
-    def test_gc_mark_raises_on_malformed_manifest(self, remote_ops):
-        """Test that _gc_mark fails closed when a referenced manifest is malformed."""
+    def test_gc_mark_warns_and_deletes_malformed_manifest_by_default(self, remote_ops, caplog):
+        """Test default malformed='warn' behavior for malformed manifests."""
         bucket, _prefix = remote_bucket_and_prefix_from_env()
         paginator = remote_ops.client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket):
@@ -1593,14 +2359,213 @@ class TestGcMark:
             "schema": 0,
             "target": manifest_oid,
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
         remote_ops._remote_put_cas(manifest_oid, manifest_bytes)
         remote_ops._remote_put_ref("tags/main/invalid-manifest.json", ref_bytes)
 
-        with pytest.raises(InvalidManifest, match="kind must be 'manifest'"):
-            remote_ops._gc_mark()
+        live_oids = remote_ops._gc_mark()
+        assert live_oids == {manifest_oid}
+        assert not remote_ops._remote_has_cas(manifest_oid)
+        assert f"Malformed manifest {manifest_oid}: kind must be 'manifest'" in caplog.text
+
+    def test_gc_mark_raises_on_malformed_manifest_when_requested(self, remote_ops):
+        """Test malformed='raise' fails with a clear message."""
+        bucket, _prefix = remote_bucket_and_prefix_from_env()
+        paginator = remote_ops.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket):
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    remote_ops.client.delete_object(Bucket=bucket, Key=obj["Key"])
+
+        invalid_manifest = {
+            "kind": "not-a-manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "closure": {},
+        }
+        manifest_bytes = json.dumps(invalid_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        manifest_oid = hashlib.sha256(manifest_bytes).hexdigest()
+        ref_obj = {
+            "kind": "ref",
+            "schema": 0,
+            "target": manifest_oid,
+            "created_at": 1234567890,
+            "targets": {"dag": []},
+        }
+        remote_ops._remote_put_cas(manifest_oid, manifest_bytes)
+        remote_ops._remote_put_ref(
+            "tags/main/invalid-manifest.json",
+            json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        )
+
+        with pytest.raises(DmlRepoError, match=rf"Malformed manifest {manifest_oid}: kind must be 'manifest'"):
+            remote_ops._gc_mark(malformed="raise")
+        assert remote_ops._remote_has_cas(manifest_oid)
+
+    def test_gc_mark_ignores_warning_but_deletes_malformed_manifest(self, remote_ops, caplog):
+        """Test malformed='ignore' suppresses warnings but still deletes malformed objects."""
+        bucket, _prefix = remote_bucket_and_prefix_from_env()
+        paginator = remote_ops.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket):
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    remote_ops.client.delete_object(Bucket=bucket, Key=obj["Key"])
+
+        invalid_manifest = {
+            "kind": "not-a-manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "closure": {},
+        }
+        manifest_bytes = json.dumps(invalid_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        manifest_oid = hashlib.sha256(manifest_bytes).hexdigest()
+        ref_obj = {
+            "kind": "ref",
+            "schema": 0,
+            "target": manifest_oid,
+            "created_at": 1234567890,
+            "targets": {"dag": []},
+        }
+        remote_ops._remote_put_cas(manifest_oid, manifest_bytes)
+        remote_ops._remote_put_ref(
+            "tags/main/invalid-manifest.json",
+            json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        )
+
+        caplog.clear()
+        live_oids = remote_ops._gc_mark(malformed="ignore")
+        assert live_oids == {manifest_oid}
+        assert not remote_ops._remote_has_cas(manifest_oid)
+        assert f"Malformed manifest {manifest_oid}" not in caplog.text
+
+    def test_gc_mark_raises_on_malformed_root_ref_when_requested(self, remote_ops):
+        """Test malformed='raise' names the bad root ref and reason."""
+        bucket, _prefix = remote_bucket_and_prefix_from_env()
+        paginator = remote_ops.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket):
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    remote_ops.client.delete_object(Bucket=bucket, Key=obj["Key"])
+
+        remote_ops.client.put_object(
+            Bucket=remote_ops.bucket,
+            Key=remote_ops._ref_key("tags/main/bad.json"),
+            Body=json.dumps({"kind": "nope", "schema": 0}).encode("utf-8"),
+        )
+
+        with pytest.raises(DmlRepoError, match=r"Malformed ref refs/tags/main/bad.json: kind must be 'ref'"):
+            remote_ops._gc_mark(malformed="raise")
+
+    def test_gc_mark_follows_dag_refs_not_dag_refs_as_roots(self, remote_ops):
+        """Test GC follows DAG refs only from tag/cache roots."""
+        bucket, _prefix = remote_bucket_and_prefix_from_env()
+        paginator = remote_ops.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket):
+            if "Contents" in page:
+                for obj in page["Contents"]:
+                    remote_ops.client.delete_object(Bucket=bucket, Key=obj["Key"])
+
+        commit_data = b'{"kind":"commit"}'
+        blob_data = b"blob-data"
+        dag_data = b'{"kind":"dag-root"}'
+        commit_oid = hashlib.sha256(commit_data).hexdigest()
+        blob_oid = hashlib.sha256(blob_data).hexdigest()
+        dag_oid = hashlib.sha256(dag_data).hexdigest()
+        top_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {"commit": [commit_oid], "dag": [dag_oid]},
+        }
+        dag_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "dag",
+            "root-id": dag_oid,
+            "closure": {"blob": [blob_oid]},
+        }
+        top_manifest_bytes = json.dumps(top_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        dag_manifest_bytes = json.dumps(dag_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        top_manifest_oid = hashlib.sha256(top_manifest_bytes).hexdigest()
+        dag_manifest_oid = hashlib.sha256(dag_manifest_bytes).hexdigest()
+        remote_ops._remote_put_cas(top_manifest_oid, top_manifest_bytes)
+        remote_ops._remote_put_cas(dag_manifest_oid, dag_manifest_bytes)
+        remote_ops._remote_put_cas(commit_oid, commit_data)
+        remote_ops._remote_put_cas(dag_oid, dag_data)
+        remote_ops._remote_put_cas(blob_oid, blob_data)
+        remote_ops._remote_put_ref(
+            "tags/main/gc.json",
+            json.dumps(
+                {
+                    "kind": "ref",
+                    "schema": 0,
+                    "target": top_manifest_oid,
+                    "created_at": 1,
+                    "targets": {"dag": [dag_oid]},
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+        remote_ops._remote_put_dag_ref(
+            dag_oid,
+            json.dumps(
+                {
+                    "kind": "ref",
+                    "schema": 0,
+                    "target": dag_manifest_oid,
+                    "created_at": 1,
+                    "meta": {"dag": {"id": dag_oid}},
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+
+        live_oids = remote_ops._gc_mark()
+        assert {top_manifest_oid, dag_manifest_oid, commit_oid, dag_oid, blob_oid}.issubset(live_oids)
+
+    def test_gc_mark_skips_missing_dag_ref(self, remote_ops):
+        """Test GC skips missing DAG refs listed in targets/closure."""
+        commit_data = b'{"kind":"commit"}'
+        commit_oid = hashlib.sha256(commit_data).hexdigest()
+        dag_oid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        top_manifest = {
+            "kind": "manifest",
+            "schema": 0,
+            "root-ns": "commit",
+            "root-id": commit_oid,
+            "closure": {"commit": [commit_oid], "dag": [dag_oid]},
+        }
+        top_manifest_bytes = json.dumps(top_manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        top_manifest_oid = hashlib.sha256(top_manifest_bytes).hexdigest()
+        remote_ops._remote_put_cas(top_manifest_oid, top_manifest_bytes)
+        remote_ops._remote_put_cas(commit_oid, commit_data)
+        remote_ops._remote_put_ref(
+            "tags/main/missing-dag-ref.json",
+            json.dumps(
+                {
+                    "kind": "ref",
+                    "schema": 0,
+                    "target": top_manifest_oid,
+                    "created_at": 1,
+                    "targets": {"dag": [dag_oid]},
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+
+        live_oids = remote_ops._gc_mark()
+        assert top_manifest_oid in live_oids
+        assert commit_oid in live_oids
+        assert dag_oid not in live_oids
 
 
 class TestGcSweep:
@@ -1722,11 +2687,21 @@ class TestGc:
 
                     # Verify methods were called
                     mock_prune.assert_called_once()
-                    mock_mark.assert_called_once()
+                    mock_mark.assert_called_once_with(malformed="warn")
                     mock_sweep.assert_called_once_with(set(), 100)
 
                     # Verify result is returned
                     assert result == {"deleted": 0, "kept_live": 0, "kept_young": 0}
+
+    def test_gc_passes_through_explicit_malformed_policy(self, remote_ops):
+        """Test gc forwards malformed policy to mark phase."""
+        with patch.object(remote_ops, "prune", return_value=0):
+            with patch.object(remote_ops, "_gc_mark", return_value=set()) as mock_mark:
+                with patch.object(
+                    remote_ops, "_gc_sweep", return_value={"deleted": 0, "kept_live": 0, "kept_young": 0}
+                ):
+                    remote_ops.gc(min_age_seconds=100, malformed="raise")
+                    mock_mark.assert_called_once_with(malformed="raise")
 
 
 class TestList:
@@ -1749,6 +2724,7 @@ class TestList:
             "schema": 0,
             "target": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "created_at": 1234567890,
+            "targets": {"dag": []},
             "meta": {"author": "test@example.com", "message": "test commit"},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -1791,12 +2767,14 @@ class TestList:
             "schema": 0,
             "target": "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
             "created_at": 1234567891,
+            "targets": {"dag": []},
         }
         cache_ref = {
             "kind": "ref",
             "schema": 0,
             "target": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "created_at": 1234567892,
+            "targets": {"dag": []},
         }
 
         # Put refs in different prefixes
@@ -1840,6 +2818,7 @@ class TestList:
             "schema": 0,
             "target": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "created_at": 1234567890,
+            "targets": {"dag": []},
         }
         remote_ops._remote_put_ref(
             "tags/main/valid.json", json.dumps(valid_ref, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -1945,7 +2924,8 @@ class TestE2E:
                 "_resolve_push_target",
                 return_value=(Ref(f"commit:{commit_oid}"), f"tags/main/{commit_oid}.json"),
             ):
-                ref_path = push_remote_ops.push(Ref("head:main"))
+                with patch.object(push_remote_ops, "_direct_dag_ids", return_value=[]):
+                    ref_path = push_remote_ops.push(Ref("head:main"))
             assert ref_path == f"tags/main/{commit_oid}.json"
 
         # Verify push artifacts exist

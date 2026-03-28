@@ -44,17 +44,29 @@ Push operation MUST:
 
 1. validate remote descriptor/layout compatibility per [remote-data-model.md](remote-data-model.md),
 2. resolve the local commit root and closure for publication,
-3. upload missing CAS objects after hash verification,
-4. upload/verify manifest object for the closure,
-5. write destination ref path and payload according to [remote-data-model.md](remote-data-model.md).
+3. compute direct DAG ids for the pushed commit from that commit's `Tree.dags`,
+4. ensure each directly referenced DAG has a `refs/dags/<dag_id>.json` entry, recursing only when a missing direct DAG itself directly references other missing DAGs,
+5. upload missing CAS objects after hash verification,
+6. upload/verify manifest object for the closure,
+7. write destination ref path and payload according to [remote-data-model.md](remote-data-model.md).
 
 Rules:
 
 - push publication MUST target only the tag-ref namespace/keying defined in [remote-data-model.md](remote-data-model.md).
 - push publication MUST resolve the source commit and write a tag ref pointing to the manifest for that commit closure.
+- push publication MUST derive direct DAG ids only from the pushed commit's `Tree.dags`, not from the transitive dumped closure.
+- DAG publication on miss MUST derive direct child DAG ids only from that DAG's own nodes.
+- non-commit, non-dag manifest publication MUST derive direct DAG ids from the root-owned object graph without traversing into child DAG roots.
+- manifest `closure["dag"]` and ref `targets["dag"]` written during push MUST contain only direct DAG ids for that manifest layer.
+- tag/cache ref publication MUST validate that `targets["dag"]` exactly equals the referenced manifest's `closure["dag"]`; on mismatch, publication MUST fail and no ref may be written.
+- before writing any ref that points at a manifest (`refs/tags/**`, `refs/cache/**`, or `refs/dags/**`), the publisher MUST ensure the manifest CAS bytes exist remotely and that the manifest OID matches the SHA-256 of those canonical bytes.
+- per-DAG publication fast path MUST check only whether `refs/dags/<dag_id>.json` exists; it MUST NOT verify the target CAS on that fast path.
+- if `refs/dags/<dag_id>.json` already exists, publication MUST treat that DAG as already published and MUST NOT inspect descendants of that DAG.
+- if a direct DAG ref is missing, publication MUST inspect only that missing DAG's direct child DAG ids and recurse only for those missing direct children.
 - push to an existing tag-ref path MUST fail deterministically (no in-place overwrite).
 - destination ref paths MUST satisfy segment/path constraints defined in [remote-data-model.md](remote-data-model.md).
 - push sync operations MUST NOT write transport blobs under `io/**`.
+- concurrent DAG-ref creation races MUST be resolved by handling `RefAlreadyExists`, reading back the existing ref, and accepting that as the canonical result.
 
 
 ## Pull Protocol
@@ -63,15 +75,19 @@ Pull operation MUST:
 
 1. read ref JSON from the requested ref path in the ref layout defined by [remote-data-model.md](remote-data-model.md),
 2. read and validate target manifest per [remote-data-model.md](remote-data-model.md),
-3. fetch missing CAS objects referenced by manifest closure,
-4. verify fetched CAS object hashes,
-5. materialize fetched state into local storage,
-6. update local pulled-head pointer for the resolved commit.
+3. resolve any `closure["dag"]` entries via `refs/dags/<dag_id>.json` and recurse into those child manifests,
+4. fetch missing CAS objects referenced by manifest closure,
+5. verify fetched CAS object hashes,
+6. materialize fetched state into local storage,
+7. update local pulled-head pointer for the resolved commit.
 
 Rules:
 
 - pull MUST fail when required remote objects are missing or invalid.
 - pull MUST fail when manifest/root contracts are invalid.
+- pull MUST fail when a manifest references a DAG id whose `refs/dags/<dag_id>.json` entry is missing.
+- pull/load MUST reject tag/cache refs that point at manifests but omit `targets`.
+- pull/load MUST deduplicate recursive DAG manifest loads within one top-level materialization.
 - pull sync operations MUST NOT require transport blobs under `io/**`.
 
 
@@ -93,6 +109,8 @@ Rules:
 - cache-ref writes MUST fail deterministically on target conflict unless explicit overwrite behavior is requested by caller.
 - protocol implementations MAY support explicit overwrite behavior for cache-ref writes.
 - cache ref writes MUST be deterministic for a given cache key.
+- cache-ref writes MUST include top-level `targets` for the direct DAG ids of the referenced manifest.
+- if `overwrite` is false and an existing cache ref points to a different manifest OID, the write MUST fail.
 
 
 ## Prune/GC Protocol
@@ -102,7 +120,13 @@ Rules:
 - cache refs are manually managed and MUST NOT be deleted by age-based policy.
 - `prune()` MUST NOT delete cache-ref namespace entries by expiry metadata.
 - remote GC MUST use mark-and-sweep with roots from remaining refs (`tags`, `cache`).
-- remote GC MUST keep all manifest targets and closure OIDs reachable from those roots.
+- remote GC MUST keep all manifest targets and non-`dag` closure OIDs reachable from those roots.
+- remote GC MUST resolve `closure["dag"]` through `refs/dags/**`; `refs/dags/**` are not GC roots by themselves.
+- remote GC MUST support malformed-object handling modes `raise`, `warn`, and `ignore`; default behavior is `warn`.
+- `malformed="raise"` MUST fail immediately with a clear error naming the malformed object and why it is malformed.
+- `malformed="warn"` MUST emit a clear warning naming the malformed object and why it is malformed, then delete the malformed object if present and continue.
+- `malformed="ignore"` MUST continue silently but still delete malformed objects if present.
+- missing `refs/dags/**` entries are not malformed for GC purposes and MUST be skipped as unreachable.
 - prune/gc semantics in this document apply to CAS+refs only.
 - `io/invoke/**` blobs are ephemeral transport data and MAY be deleted by age-based cleanup.
 - transport cleanup MUST be independent of CAS/ref reachability (no mark-and-sweep roots for `io/invoke/**`).
@@ -115,6 +139,8 @@ Rules:
 - invalid descriptor/ref/manifest shape is a hard failure at decode/validation boundaries.
 - malformed remote data MUST never be silently accepted.
 - operations MUST fail closed on validation errors.
+- GC MAY continue past malformed remote data only under an explicit malformed-object policy that permits continuation.
+- if a `refs/dags/**` entry exists but its target manifest CAS object is missing, that is a broken remote state; publication fast paths do not repair it, and consumers that need the manifest MUST fail.
 
 
 ## References

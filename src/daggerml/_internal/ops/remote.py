@@ -9,13 +9,13 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from functools import wraps
-from typing import Any
+from typing import Any, Literal
 
 from daggerml._internal._db import Ref
-from daggerml._internal.ops.base_ops import BaseOps
-from daggerml._internal.types import DmlRepoError, Head
+from daggerml._internal.ops.base_ops import BaseOps, TxnContext
+from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 
 try:
     import boto3
@@ -166,6 +166,19 @@ class RemoteOps(BaseOps):
         if not isinstance(manifest_oid, str) or not re.match(r"^[0-9a-f]{64}$", manifest_oid):
             raise InvalidOid(f"Invalid OID: must be 64 lowercase hex characters, got {manifest_oid!r}")
         return manifest_oid
+
+    @staticmethod
+    def _validate_dag_id(dag_id: str) -> str:
+        if not isinstance(dag_id, str) or not re.match(r"^[0-9a-f]{64}$", dag_id):
+            raise ValueError(f"Invalid DAG id: must be 64 lowercase hex characters, got {dag_id!r}")
+        return dag_id
+
+    def _dag_ref_path(self, dag_id: str) -> str:
+        dag_id = self._validate_dag_id(dag_id)
+        return f"dags/{dag_id}.json"
+
+    def _dag_ref_key(self, dag_id: str) -> str:
+        return self._prefixed_key(f"refs/{self._dag_ref_path(dag_id)}")
 
     def _cache_ref_path(self, cache: str, cache_key: str) -> str:
         cache = self._validate_cache_name(cache)
@@ -340,6 +353,18 @@ class RemoteOps(BaseOps):
                 raise RemoteError(f"Ref {ref_path} not found") from None
             raise
 
+    def _remote_get_dag_ref(self, dag_id: str) -> bytes:
+        dag_id = self._validate_dag_id(dag_id)
+        ref_path = self._dag_ref_path(dag_id)
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=self._dag_ref_key(dag_id))
+            return response["Body"].read()
+        except self.client.exceptions.ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            if error_code in ("NoSuchKey", "404"):
+                raise RemoteError(f"Ref {ref_path} not found") from None
+            raise
+
     def _remote_put_ref(self, ref_path: str, data: bytes) -> None:
         """Put ref data to remote storage.
 
@@ -368,6 +393,23 @@ class RemoteOps(BaseOps):
         self.client.put_object(
             Bucket=self.bucket,
             Key=self._ref_key(ref_path),
+            Body=data,
+        )
+
+    def _remote_put_dag_ref(self, dag_id: str, data: bytes) -> None:
+        dag_id = self._validate_dag_id(dag_id)
+        ref_path = self._dag_ref_path(dag_id)
+        try:
+            self.client.head_object(Bucket=self.bucket, Key=self._dag_ref_key(dag_id))
+            raise RefAlreadyExists(f"Ref {ref_path} already exists")
+        except self.client.exceptions.ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            if error_code not in ("NoSuchKey", "404"):
+                raise
+
+        self.client.put_object(
+            Bucket=self.bucket,
+            Key=self._dag_ref_key(dag_id),
             Body=data,
         )
 
@@ -410,6 +452,20 @@ class RemoteOps(BaseOps):
         created_at = o.get("created_at")
         if not isinstance(created_at, int):
             raise InvalidRef("Invalid ref: created_at must be an integer")
+        targets = o.get("targets")
+        if targets is not None:
+            if not isinstance(targets, dict):
+                raise InvalidRef("Invalid ref: targets must be an object")
+            if set(targets) != {"dag"}:
+                raise InvalidRef("Invalid ref: targets supports only the 'dag' namespace")
+            dag_targets = targets["dag"]
+            if not isinstance(dag_targets, list):
+                raise InvalidRef("Invalid ref: targets.dag must be a sorted unique list of 64 lowercase hex ids")
+            if dag_targets != sorted(dag_targets) or len(dag_targets) != len(set(dag_targets)):
+                raise InvalidRef("Invalid ref: targets.dag must be a sorted unique list of 64 lowercase hex ids")
+            for dag_id in dag_targets:
+                if not isinstance(dag_id, str) or not re.match(r"^[0-9a-f]{64}$", dag_id):
+                    raise InvalidRef("Invalid ref: targets.dag must be a sorted unique list of 64 lowercase hex ids")
         return o
 
     def _decode_manifest(self, data: bytes) -> dict:
@@ -567,7 +623,9 @@ class RemoteOps(BaseOps):
         except DmlRepoError:
             return False
 
-    def _build_remote_manifest(self, local_manifest: dict, *, require_commit_root: bool = True) -> tuple[dict, bytes]:
+    def _build_remote_manifest(
+        self, local_manifest: dict, *, require_commit_root: bool = True, direct_dag_ids: list[str] | None = None
+    ) -> tuple[dict, bytes]:
         """Build remote manifest dict and canonical bytes from local manifest.
 
         Parameters
@@ -599,6 +657,11 @@ class RemoteOps(BaseOps):
             ids = list(set(items.keys()))
             ids.sort()
             remote_closure[ns] = ids
+        if direct_dag_ids is not None:
+            if direct_dag_ids:
+                remote_closure["dag"] = sorted(set(direct_dag_ids))
+            else:
+                remote_closure.pop("dag", None)
 
         # Build remote manifest dict
         manifest_dict = {
@@ -614,48 +677,199 @@ class RemoteOps(BaseOps):
 
         return manifest_dict, manifest_bytes
 
-    @_remote_boundary("pointer upload")
-    def put_ptr(self, root_ref: Ref) -> str:
-        """Upload root closure and return manifest OID pointer."""
-        with self._tx(readonly=True) as txn:
-            lm = self._local_dump_dict(txn, root_ref)
-        return self.put_local_manifest(lm)
+    def _validate_targets(self, targets: dict[str, list[str]]) -> dict[str, list[str]]:
+        if not isinstance(targets, dict):
+            raise ValueError("Invalid targets: expected {'dag': [...]} mapping")
+        if set(targets) != {"dag"}:
+            raise ValueError("Invalid targets: expected only the 'dag' namespace")
+        dag_ids = targets["dag"]
+        if not isinstance(dag_ids, list):
+            raise ValueError("Invalid targets: dag targets must be a sorted unique list of 64 lowercase hex ids")
+        validated = [self._validate_dag_id(dag_id) for dag_id in dag_ids]
+        if validated != sorted(validated) or len(validated) != len(set(validated)):
+            raise ValueError("Invalid targets: dag targets must be a sorted unique list of 64 lowercase hex ids")
+        return {"dag": validated}
 
-    @_remote_boundary("pointer upload")
-    def put_local_manifest(self, local_manifest: dict) -> str:
-        """Upload a local-manifest payload and return manifest OID pointer."""
-        if local_manifest.get("kind") != "local-manifest":
-            raise ValueError("Invalid local manifest: kind must be 'local-manifest'")
-        if local_manifest.get("schema", 0) != 0:
-            raise ValueError("Invalid local manifest: schema must be 0")
-        if "root-ns" not in local_manifest or "root-id" not in local_manifest:
-            raise ValueError("Invalid local manifest: must have 'root-ns' and 'root-id'")
+    def _collect_direct_dag_ids_from_obj(
+        self,
+        obj: Any,
+        *,
+        root_ref: Ref,
+        to_visit: list[Ref],
+        visited: set[Ref],
+        dag_ids: set[str],
+    ) -> None:
+        if isinstance(obj, Ref):
+            if obj.ns() == "dag" and obj != root_ref:
+                dag_ids.add(obj.id())
+                return
+            if obj not in visited:
+                to_visit.append(obj)
+            return
+        if isinstance(obj, dict):
+            for value in obj.values():
+                self._collect_direct_dag_ids_from_obj(
+                    value, root_ref=root_ref, to_visit=to_visit, visited=visited, dag_ids=dag_ids
+                )
+            return
+        if isinstance(obj, list):
+            for value in obj:
+                self._collect_direct_dag_ids_from_obj(
+                    value, root_ref=root_ref, to_visit=to_visit, visited=visited, dag_ids=dag_ids
+                )
+            return
+        if is_dataclass(obj):
+            for field_def in fields(obj):
+                self._collect_direct_dag_ids_from_obj(
+                    getattr(obj, field_def.name), root_ref=root_ref, to_visit=to_visit, visited=visited, dag_ids=dag_ids
+                )
+
+    def _direct_dag_ids(self, txn, root_ref: Ref) -> list[str]:
+        if root_ref.ns() == "commit":
+            commit: Commit = txn.get(root_ref)
+            tree: Tree = txn.get(commit.tree)
+            return sorted({dag_ref.id() for dag_ref in tree.dags.values()})
+
+        dag_ids: set[str] = set()
+        visited: set[Ref] = set()
+        to_visit: list[Ref] = [root_ref]
+
+        while to_visit:
+            ref = to_visit.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            obj = txn.get(ref)
+            self._collect_direct_dag_ids_from_obj(
+                obj, root_ref=root_ref, to_visit=to_visit, visited=visited, dag_ids=dag_ids
+            )
+
+        return sorted(dag_ids)
+
+    def _targets_for_root(self, txn, root_ref: Ref) -> dict[str, list[str]]:
+        return {"dag": self._direct_dag_ids(txn, root_ref)}
+
+    def _require_manifest_ref_targets(self, ref_obj: dict, ref_path: str) -> dict[str, list[str]]:
+        targets = ref_obj.get("targets")
+        if targets is None:
+            raise InvalidRef(f"Invalid ref: manifest ref {ref_path} must include targets")
+        return self._validate_targets(targets)
+
+    def _put_ref_manifest_from_local_manifest(self, local_manifest: dict, root_ref: Ref, txn) -> str:
+        direct_dag_ids = self._direct_dag_ids(txn, root_ref)
+        for dag_id in direct_dag_ids:
+            self._ensure_dag_ref_in_txn(Ref(f"dag:{dag_id}"), txn, ())
+
         self._push_upload_objects(local_manifest)
-        _manifest_dict, manifest_bytes = self._build_remote_manifest(local_manifest, require_commit_root=False)
+        _manifest_dict, manifest_bytes = self._build_remote_manifest(
+            local_manifest, require_commit_root=False, direct_dag_ids=direct_dag_ids
+        )
         manifest_id = hashlib.sha256(manifest_bytes).hexdigest()
         if not self._remote_has_cas(manifest_id):
             self._remote_put_cas(manifest_id, manifest_bytes)
         return manifest_id
 
-    @_remote_boundary("pointer load")
+    def _ensure_dag_ref_in_txn(self, dag_ref: Ref, txn, stack: tuple[str, ...]) -> bool:
+        dag_id = self._validate_dag_id(dag_ref.id())
+        if dag_id in stack:
+            cycle = " -> ".join([*stack, dag_id])
+            raise DmlRepoError(f"Cycle detected in DAG closure: {cycle}")
+
+        try:
+            self._remote_get_dag_ref(dag_id)
+            return True
+        except RemoteError:
+            pass
+
+        local_manifest = self._local_dump_dict(txn, dag_ref)
+        if local_manifest.get("root-ns") != "dag":
+            raise ValueError(f"Expected local dag manifest root namespace 'dag', got {local_manifest.get('root-ns')!r}")
+
+        next_stack = (*stack, dag_id)
+        for child_dag_id in self._direct_dag_ids(txn, dag_ref):
+            self._ensure_dag_ref_in_txn(Ref(f"dag:{child_dag_id}"), txn, next_stack)
+
+        self._push_upload_objects(local_manifest)
+        _manifest_dict, manifest_bytes = self._build_remote_manifest(
+            local_manifest, require_commit_root=False, direct_dag_ids=self._direct_dag_ids(txn, dag_ref)
+        )
+        manifest_oid = hashlib.sha256(manifest_bytes).hexdigest()
+        if not self._remote_has_cas(manifest_oid):
+            self._remote_put_cas(manifest_oid, manifest_bytes)
+
+        ref_obj = {
+            "kind": "ref",
+            "schema": 0,
+            "target": manifest_oid,
+            "created_at": int(time.time()),
+            "meta": {"dag": {"id": dag_id}},
+        }
+        ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        try:
+            self._remote_put_dag_ref(dag_id, ref_bytes)
+        except RefAlreadyExists:
+            self._decode_ref(self._remote_get_dag_ref(dag_id))
+            return True
+        return True
+
+    def _ensure_dag_ref(self, dag_ref: Ref) -> bool:
+        if dag_ref.ns() != "dag":
+            raise ValueError(f"Expected dag ref, got: {dag_ref}")
+        try:
+            self._remote_get_dag_ref(dag_ref.id())
+            return True
+        except RemoteError:
+            pass
+        with self._db.tx(readonly=True) as raw_txn:
+            txn = TxnContext(db=self._db, txn=raw_txn, logger=self._logger)
+            return self._ensure_dag_ref_in_txn(dag_ref, txn, ())
+
+    @_remote_boundary("manifest upload")
+    def put_ref_manifest(self, root_ref: Ref) -> str:
+        with self._tx(readonly=True) as txn:
+            local_manifest = self._local_dump_dict(txn, root_ref)
+            return self._put_ref_manifest_from_local_manifest(local_manifest, root_ref, txn)
+
+    @_remote_boundary("manifest load")
     def load_ptr(self, manifest_oid: str, *, expected_root_ns: str | None = None) -> Ref:
-        """Resolve manifest pointer, materialize closure locally, and return root ref."""
+        """Resolve a manifest OID, materialize closure locally, and return root ref."""
         with self._tx(readonly=False) as txn:
             return self.load_ptr_in_txn(manifest_oid, txn, expected_root_ns=expected_root_ns)
 
-    def load_ptr_in_txn(self, manifest_oid: str, txn, *, expected_root_ns: str | None = None) -> Ref:
-        """Resolve manifest pointer and materialize closure using a provided transaction."""
+    def _load_manifest_into_local_closure(
+        self,
+        manifest_oid: str,
+        txn,
+        local_closure: dict[str, dict[str, str]],
+        loaded_manifest_oids: set[str],
+    ) -> tuple[str, str]:
         manifest_oid = self._validate_manifest_oid(manifest_oid)
+        if manifest_oid in loaded_manifest_oids:
+            manifest_bytes = self._remote_get_cas(manifest_oid)
+            manifest = self._decode_manifest(manifest_bytes)
+            return manifest["root-ns"], manifest["root-id"]
+
         manifest_bytes = self._remote_get_cas(manifest_oid)
         manifest = self._decode_manifest(manifest_bytes)
-        root_ns = manifest["root-ns"]
-        root_id = manifest["root-id"]
-        root_ref = Ref(f"{root_ns}:{root_id}")
-        if expected_root_ns is not None and root_ns != expected_root_ns:
-            raise ValueError(f"Manifest root namespace mismatch: expected {expected_root_ns!r}, got {root_ns!r}")
+        loaded_manifest_oids.add(manifest_oid)
 
-        local_closure = {}
+        if manifest["root-ns"] == "dag":
+            root_dag_id = manifest["root-id"]
+            if not self._local_has(txn, "dag", root_dag_id) and root_dag_id not in local_closure.get("dag", {}):
+                raw_root = self._remote_get_cas(root_dag_id)
+                computed_hash = hashlib.sha256(raw_root).hexdigest()
+                if computed_hash != root_dag_id:
+                    raise ShaMismatch(
+                        f"SHA256 mismatch for object {root_dag_id}: expected {root_dag_id}, got {computed_hash}"
+                    )
+                local_closure.setdefault("dag", {})[root_dag_id] = base64.b64encode(raw_root).decode("ascii")
+
         for ns, ids in manifest["closure"].items():
+            if ns == "dag":
+                for dag_id in ids:
+                    dag_ref = self._decode_ref(self._remote_get_dag_ref(dag_id))
+                    self._load_manifest_into_local_closure(dag_ref["target"], txn, local_closure, loaded_manifest_oids)
+                continue
             for oid in ids:
                 if self._local_has(txn, ns, oid):
                     continue
@@ -667,6 +881,16 @@ class RemoteOps(BaseOps):
                 if ns not in local_closure:
                     local_closure[ns] = {}
                 local_closure[ns][oid] = dump_str
+
+        return manifest["root-ns"], manifest["root-id"]
+
+    def load_ptr_in_txn(self, manifest_oid: str, txn, *, expected_root_ns: str | None = None) -> Ref:
+        """Resolve a manifest OID and materialize closure using a provided transaction."""
+        local_closure = {}
+        root_ns, root_id = self._load_manifest_into_local_closure(manifest_oid, txn, local_closure, set())
+        root_ref = Ref(f"{root_ns}:{root_id}")
+        if expected_root_ns is not None and root_ns != expected_root_ns:
+            raise ValueError(f"Manifest root namespace mismatch: expected {expected_root_ns!r}, got {root_ns!r}")
 
         if not local_closure:
             return root_ref
@@ -694,10 +918,13 @@ class RemoteOps(BaseOps):
         except RemoteError:
             return None
         ref_obj = self._decode_ref(ref_bytes)
+        self._require_manifest_ref_targets(ref_obj, ref_path)
         return ref_obj["target"]
 
     @_remote_boundary("cache put")
-    def put_cache_ref(self, cache: str, cache_key: str, target: str, *, overwrite: bool = False) -> None:
+    def put_cache_ref(
+        self, cache: str, cache_key: str, target: str, *, overwrite: bool = False, targets: dict[str, list[str]]
+    ) -> None:
         """Create or update a cache ref.
 
         Create when missing. If present:
@@ -705,12 +932,14 @@ class RemoteOps(BaseOps):
         - conflict unless overwrite=True.
         """
         target = self._validate_manifest_oid(target)
+        targets = self._validate_targets(targets)
         ref_path = self._cache_ref_path(cache, cache_key)
         ref_obj = {
             "kind": "ref",
             "schema": 0,
             "target": target,
             "created_at": int(time.time()),
+            "targets": targets,
             "meta": {"cache": {"name": cache}},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -818,35 +1047,27 @@ class RemoteOps(BaseOps):
         """
         root_ref, ref_path = self._resolve_push_target(ref)
 
-        # Step 1: Dump local manifest from database
         with self._tx(readonly=True) as txn:
             lm = self._local_dump_dict(txn, root_ref)
+            targets = self._targets_for_root(txn, root_ref)
+            manifest_dict, _manifest_bytes = self._build_remote_manifest(
+                lm, require_commit_root=True, direct_dag_ids=targets["dag"]
+            )
+            expected_targets = {"dag": sorted(set(manifest_dict["closure"].get("dag", [])))}
+            if targets != expected_targets:
+                raise ValueError(f"Manifest targets mismatch: expected {expected_targets}, got {targets}")
+            manifest_id = self._put_ref_manifest_from_local_manifest(lm, root_ref, txn)
 
-        # Step 2: Upload missing CAS objects
-        self._push_upload_objects(lm)
-
-        # Step 3-4: Build remote manifest and compute manifest ID
-        manifest_dict, manifest_bytes = self._build_remote_manifest(lm, require_commit_root=True)
-        manifest_id = hashlib.sha256(manifest_bytes).hexdigest()
-
-        # Step 5: Upload manifest CAS object if missing
-        if not self._remote_has_cas(manifest_id):
-            self._remote_put_cas(manifest_id, manifest_bytes)
-
-        # Step 6: Build ref JSON bytes
         ref_obj = {
             "kind": "ref",
             "schema": 0,
             "target": manifest_id,
             "created_at": int(time.time()),
+            "targets": targets,
             "meta": {},  # Optional metadata
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
-
-        # Step 7: Create the ref (must fail if exists)
         self._remote_put_ref(ref_path, ref_bytes)
-
-        # Step 8: Return ref_path
         return ref_path
 
     @_remote_boundary("pull")
@@ -870,6 +1091,7 @@ class RemoteOps(BaseOps):
 
         # Step 2: Decode ref
         ref_obj = self._decode_ref(ref_bytes)
+        self._require_manifest_ref_targets(ref_obj, ref_path)
 
         # Step 3: Get manifest bytes from CAS
         manifest_bytes = self._remote_get_cas(ref_obj["target"])
@@ -882,29 +1104,28 @@ class RemoteOps(BaseOps):
             raise ValueError(f"Cannot pull non-commit root namespace: {manifest['root-ns']!r}")
 
         # Step 6-7: Fetch missing CAS objects and build local manifest
-        local_closure = {}
-        for ns, ids in manifest["closure"].items():
-            for oid in ids:
-                # Check if we already have this object locally
-                with self._tx(readonly=True) as txn:
+        with self._tx(readonly=False) as txn:
+            local_closure = {}
+            loaded_manifest_oids = set()
+            for ns, ids in manifest["closure"].items():
+                if ns == "dag":
+                    for dag_id in ids:
+                        dag_ref = self._decode_ref(self._remote_get_dag_ref(dag_id))
+                        self._load_manifest_into_local_closure(
+                            dag_ref["target"], txn, local_closure, loaded_manifest_oids
+                        )
+                    continue
+                for oid in ids:
                     if self._local_has(txn, ns, oid):
-                        continue  # Skip download
-
-                # Fetch the object from remote
-                raw_bytes = self._remote_get_cas(oid)
-
-                # Verify SHA256
-                computed_hash = hashlib.sha256(raw_bytes).hexdigest()
-                if computed_hash != oid:
-                    raise ShaMismatch(f"SHA256 mismatch for object {oid}: expected {oid}, got {computed_hash}")
-
-                # Base64 encode for local manifest
-                dump_str = base64.b64encode(raw_bytes).decode("ascii")
-
-                # Add to local closure
-                if ns not in local_closure:
-                    local_closure[ns] = {}
-                local_closure[ns][oid] = dump_str
+                        continue
+                    raw_bytes = self._remote_get_cas(oid)
+                    computed_hash = hashlib.sha256(raw_bytes).hexdigest()
+                    if computed_hash != oid:
+                        raise ShaMismatch(f"SHA256 mismatch for object {oid}: expected {oid}, got {computed_hash}")
+                    dump_str = base64.b64encode(raw_bytes).decode("ascii")
+                    if ns not in local_closure:
+                        local_closure[ns] = {}
+                    local_closure[ns][oid] = dump_str
 
         # Step 8: Build local manifest
         local_manifest = {
@@ -969,6 +1190,7 @@ class RemoteOps(BaseOps):
                 # Get and decode the ref
                 ref_bytes = self._remote_get_ref(ref_path)
                 ref_obj = self._decode_ref(ref_bytes)
+                self._require_manifest_ref_targets(ref_obj, ref_path)
 
                 # Add inferred ref_path to the result
                 ref_obj["ref_path"] = ref_path
@@ -1007,7 +1229,7 @@ class RemoteOps(BaseOps):
 
         return deleted_count
 
-    def _gc_mark(self) -> set[str]:
+    def _gc_mark(self, *, malformed: Literal["raise", "warn", "ignore"] = "warn") -> set[str]:
         """Build the set of live OIDs by marking reachable objects from refs.
 
         Refs are the roots; manifests define reachability through their closure.
@@ -1017,26 +1239,120 @@ class RemoteOps(BaseOps):
         set[str]
             Set of all live OIDs (manifest targets + closure union)
         """
+        if malformed not in {"raise", "warn", "ignore"}:
+            raise ValueError(f"Invalid malformed policy: {malformed!r}")
+
         live_oids = set()
+        worklist = []
+        seen_manifests = set()
 
-        # Get all refs (tags, cache) after prune
-        # Note: prune is not called here as it's assumed to be called before GC
-        all_refs = []
-        all_refs.extend(self.list("tags"))
-        all_refs.extend(self.list("cache"))
+        def _malformed_detail(exc: Exception) -> str:
+            msg = str(exc)
+            for prefix in ("Invalid ref: ", "Invalid manifest: "):
+                if msg.startswith(prefix):
+                    return msg[len(prefix) :]
+            return msg
 
-        # For each ref, add its target (manifest OID) to live_oids
-        for ref_obj in all_refs:
+        def _handle_malformed(message: str, *, delete_ref_path: str | None = None, delete_cas_oid: str | None = None):
+            if malformed == "raise":
+                raise DmlRepoError(message)
+            if malformed == "warn":
+                self._logger.warning(message)
+            if delete_ref_path is not None:
+                _safe_delete_ref(delete_ref_path)
+            if delete_cas_oid is not None:
+                _safe_delete_cas(delete_cas_oid)
+
+        def _safe_delete_ref(ref_path: str):
+            try:
+                self._remote_delete_ref(ref_path)
+            except Exception:
+                pass
+
+        def _safe_delete_cas(oid: str):
+            try:
+                self.client.delete_object(Bucket=self.bucket, Key=self._cas_key(oid))
+            except Exception:
+                pass
+
+        def _visit_root_ref(ref_obj: dict):
             manifest_oid = ref_obj["target"]
             live_oids.add(manifest_oid)
+            worklist.append(manifest_oid)
 
-            # Fetch and decode the manifest
-            manifest_bytes = self._remote_get_cas(manifest_oid)
-            manifest = self._decode_manifest(manifest_bytes)
+        for prefix in ("tags", "cache"):
+            prefix_key = f"{self.prefix}/refs/{prefix}/" if self.prefix else f"refs/{prefix}/"
+            paginator = self.client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix_key):
+                if "Contents" not in page:
+                    continue
+                for obj in page["Contents"]:
+                    key = obj["Key"]
+                    if not key.endswith(".json"):
+                        continue
+                    ref_path = key[len(f"{self.prefix}/refs/") :] if self.prefix else key[len("refs/") :]
+                    try:
+                        ref_obj = self._decode_ref(self._remote_get_ref(ref_path))
+                        self._require_manifest_ref_targets(ref_obj, ref_path)
+                        _visit_root_ref(ref_obj)
+                    except InvalidRef as exc:
+                        _handle_malformed(
+                            f"Malformed ref refs/{ref_path}: {_malformed_detail(exc)}", delete_ref_path=ref_path
+                        )
+                    except MissingCasObject:
+                        _safe_delete_ref(ref_path)
 
-            # Add all OIDs from the manifest closure
-            closure_oids = self._closure_union(manifest["closure"])
-            live_oids.update(closure_oids)
+        while worklist:
+            manifest_oid = worklist.pop()
+            if manifest_oid in seen_manifests:
+                continue
+            seen_manifests.add(manifest_oid)
+            try:
+                manifest = self._decode_manifest(self._remote_get_cas(manifest_oid))
+            except InvalidManifest as exc:
+                _handle_malformed(
+                    f"Malformed manifest {manifest_oid}: {_malformed_detail(exc)}", delete_cas_oid=manifest_oid
+                )
+                continue
+            except MissingCasObject:
+                continue
+
+            if manifest.get("root-ns") == "dag":
+                live_oids.add(manifest["root-id"])
+
+            for ns, ids in manifest["closure"].items():
+                if ns == "dag":
+                    for dag_id in ids:
+                        try:
+                            dag_ref = self._decode_ref(self._remote_get_dag_ref(dag_id))
+                        except RemoteError:
+                            continue
+                        except InvalidRef as exc:
+                            _handle_malformed(
+                                f"Malformed ref refs/{self._dag_ref_path(dag_id)}: {_malformed_detail(exc)}",
+                                delete_ref_path=self._dag_ref_path(dag_id),
+                            )
+                            continue
+                        child_manifest_oid = dag_ref["target"]
+                        live_oids.add(child_manifest_oid)
+                        try:
+                            self._remote_get_cas(child_manifest_oid)
+                        except MissingCasObject:
+                            _safe_delete_ref(self._dag_ref_path(dag_id))
+                            continue
+                        worklist.append(child_manifest_oid)
+                    continue
+                for oid in ids:
+                    live_oids.add(oid)
+                    try:
+                        raw = self._remote_get_cas(oid)
+                    except MissingCasObject:
+                        continue
+                    if hashlib.sha256(raw).hexdigest() != oid:
+                        _handle_malformed(
+                            f"Malformed CAS {oid}: sha256 mismatch for stored bytes",
+                            delete_cas_oid=oid,
+                        )
 
         return live_oids
 
@@ -1109,7 +1425,9 @@ class RemoteOps(BaseOps):
         }
 
     @_remote_boundary("gc")
-    def gc(self, min_age_seconds: int = 24 * 3600) -> dict[str, int]:
+    def gc(
+        self, min_age_seconds: int = 24 * 3600, *, malformed: Literal["raise", "warn", "ignore"] = "warn"
+    ) -> dict[str, int]:
         """Run garbage collection on the remote storage.
 
         This performs mark-and-sweep GC where refs are the roots.
@@ -1121,6 +1439,9 @@ class RemoteOps(BaseOps):
         min_age_seconds : int, optional
             Minimum age in seconds for unreferenced objects to be deleted.
             Defaults to 24 hours.
+        malformed : {"raise", "warn", "ignore"}, optional
+            Handling policy for malformed refs/manifests/CAS encountered during mark.
+            Defaults to "warn".
 
         Returns
         -------
@@ -1131,7 +1452,7 @@ class RemoteOps(BaseOps):
         self.prune()
 
         # Mark phase: build set of live OIDs
-        live_oids = self._gc_mark()
+        live_oids = self._gc_mark(malformed=malformed)
 
         # Sweep phase: delete unreferenced objects older than safety window
         return self._gc_sweep(live_oids, min_age_seconds)

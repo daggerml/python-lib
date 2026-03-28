@@ -1064,7 +1064,7 @@ class TestIndexOps:
             bucket, _prefix = remote_bucket_and_prefix_from_env()
             prefix = _remote_protocol_prefix_from_env()
             remote_ops = RemoteOps(_db=temp_bo._db, client=s3, bucket=bucket, prefix=prefix)
-            bad_ptr = remote_ops.put_ptr(literal_node)
+            bad_ptr = remote_ops.put_ref_manifest(literal_node)
             with pytest.raises(DmlRepoError, match="Manifest root namespace mismatch"):
                 remote_index_ops.create(argv_ptr=bad_ptr)
         finally:
@@ -1103,7 +1103,7 @@ class TestIndexOps:
             bucket, _prefix = remote_bucket_and_prefix_from_env()
             prefix = _remote_protocol_prefix_from_env()
             remote_ops = RemoteOps(_db=temp_bo._db, client=s3, bucket=bucket, prefix=prefix)
-            argv_ptr = remote_ops.put_ptr(argv_ref)
+            argv_ptr = remote_ops.put_ref_manifest(argv_ref)
 
             remote_index_ops = IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env())
             created_index = remote_index_ops.create(argv_ptr=argv_ptr)

@@ -67,8 +67,15 @@ class CacheOps(BaseOps):
             raise DmlRepoError(f"DAG {dag_ref} has no argv, cannot cache")
         cache_ref = self._cache_ref(argv_ref, txn)
         remote_ops, cache_name = self._require_remote_context()
-        target = remote_ops.put_local_manifest(txn.dump_dict(dag_ref))
-        remote_ops.put_cache_ref(cache_name, cache_ref.to, target, overwrite=True)
+        local_manifest = txn.dump_dict(dag_ref)
+        target = remote_ops._put_ref_manifest_from_local_manifest(local_manifest, dag_ref, txn)
+        remote_ops.put_cache_ref(
+            cache_name,
+            cache_ref.to,
+            target,
+            overwrite=True,
+            targets=remote_ops._targets_for_root(txn, dag_ref),
+        )
         return cache_ref
 
     def _get(self, argv_ref: Ref, txn) -> Optional[Ref]:

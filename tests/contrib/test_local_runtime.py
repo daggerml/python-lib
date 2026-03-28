@@ -68,7 +68,7 @@ def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
         arg_refs = [dml.index.put_literal(index_ref, value) for value in args]
         with dml.index._tx(readonly=False) as txn:
             argv_ref = dml.index._prepare_fn(index_ref, [fn_ref, *arg_refs], {}, txn)
-        return dml.index._remote_ops().put_ptr(argv_ref)
+        return dml.index._remote_ops().put_ref_manifest(argv_ref)
 
 
 def _poll_until_terminal(*, runnable: Runnable, argv_ptr: str, cache_key: str) -> dict[str, Any]:
