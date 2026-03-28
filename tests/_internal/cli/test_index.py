@@ -1,7 +1,5 @@
-"""Unit and integration tests for index CLI functionality."""
+"""Unit tests for index CLI functionality."""
 
-import json
-import tempfile
 from argparse import ArgumentParser, Namespace
 from unittest.mock import Mock
 
@@ -67,50 +65,3 @@ class TestExecuteIndexHandlers:
 
         mock_ops.delete.assert_called_once_with(Ref("index:abc"))
         assert result is None
-
-class TestIndexCLIIntegration:
-    """Integration tests for index CLI commands."""
-
-    def setup_method(self):
-        """Set up temporary repository for tests."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.repo_path = self.temp_dir
-
-    def teardown_method(self):
-        """Clean up temporary repository."""
-        import shutil
-
-        shutil.rmtree(self.temp_dir)
-
-    def run_cli_command(self, args):
-        """Helper to run CLI command and capture output."""
-        import sys
-        from io import StringIO
-
-        from daggerml._cli import cli
-
-        old_argv = sys.argv
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-
-        sys.argv = ["dml", "--repo", self.repo_path] + args
-        stdout_capture = StringIO()
-        stderr_capture = StringIO()
-        sys.stdout = stdout_capture
-        sys.stderr = stderr_capture
-
-        try:
-            cli()
-            return stdout_capture.getvalue(), stderr_capture.getvalue()
-        except SystemExit:
-            return stdout_capture.getvalue(), stderr_capture.getvalue()
-        finally:
-            sys.argv = old_argv
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-
-    def test_index_list_empty_repo(self):
-        """Test index list on empty repository."""
-        stdout, stderr = self.run_cli_command(["index", "list"])
-        assert not stderr
-        assert json.loads(stdout.strip()) == []

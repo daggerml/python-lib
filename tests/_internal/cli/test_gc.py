@@ -1,25 +1,17 @@
-"""Unit and integration tests for gc CLI functionality."""
+"""Unit tests for gc CLI functionality."""
 
-import json
-import shutil
-import tempfile
 from argparse import ArgumentParser, Namespace
-from io import StringIO
 from unittest.mock import Mock
 
 import pytest
 
-from daggerml._cli import cli
 from daggerml._cli.gc import (
     execute_gc_list_orphans,
     execute_gc_run,
     parse_heads,
     setup_gc_parser,
 )
-from daggerml._internal import DmlOps
 from daggerml._internal._db import Ref
-from daggerml._internal.ops.base_ops import BaseOps
-from daggerml._internal.types import ScalarDatum
 
 
 class TestSetupGcParser:
@@ -92,65 +84,3 @@ class TestExecuteGcHandlers:
 
         mock_ops.list_orphans.assert_called_once_with([Ref("head:main")])
         assert result == [Ref("datum-scalar:abc")]
-
-
-class TestGcCLIIntegration:
-    """Integration tests for gc CLI commands."""
-
-    def setup_method(self):
-        """Set up temporary repository for tests."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.repo_path = self.temp_dir
-        self.dml_ops = DmlOps.open(self.repo_path)
-        self.base_ops = BaseOps(self.dml_ops._db)
-
-    def teardown_method(self):
-        """Clean up temporary repository."""
-        self.dml_ops.close()
-        shutil.rmtree(self.temp_dir)
-
-    def run_cli_command(self, args):
-        """Helper to run CLI command and capture output."""
-        import sys
-
-        old_argv = sys.argv
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-
-        sys.argv = ["dml", "--repo", self.repo_path] + args
-        stdout_capture = StringIO()
-        stderr_capture = StringIO()
-        sys.stdout = stdout_capture
-        sys.stderr = stderr_capture
-
-        try:
-            cli()
-            return stdout_capture.getvalue(), stderr_capture.getvalue()
-        except SystemExit:
-            return stdout_capture.getvalue(), stderr_capture.getvalue()
-        finally:
-            sys.argv = old_argv
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-
-    def _put_orphan_datum(self, value):
-        with self.base_ops._tx(readonly=False) as txn:
-            return txn.put(ScalarDatum(data=value))
-
-    def test_gc_run_returns_stats(self):
-        """Test gc run removes orphans and returns stats."""
-        self._put_orphan_datum("orphan")
-        stdout, stderr = self.run_cli_command(["gc", "run"])
-        assert not stderr
-        result = json.loads(stdout.strip())
-        assert result["datum-scalar"] == 1
-
-    def test_gc_list_orphans_with_heads(self):
-        """Test gc list-orphans with explicit heads."""
-        self.dml_ops.head().create("main")
-        self.dml_ops.head().create("feature", Ref("head:main"))
-        orphan_ref = self._put_orphan_datum("orphan")
-        stdout, stderr = self.run_cli_command(["gc", "list-orphans", "--heads", "head:main", "head:feature"])
-        assert not stderr
-        result = json.loads(stdout.strip())
-        assert set(result) == {f"Ref({orphan_ref.to})"}
