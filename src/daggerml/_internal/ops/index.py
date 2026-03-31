@@ -51,31 +51,29 @@ def _random_ref(ns: str) -> Ref:
     return Ref(f"{ns}:{uuid4().hex}")
 
 
+@dataclass(frozen=True)
+class _PreparedAdapterCall:
+    argv_ref: Ref
+    adapter_path: str
+    cache_key: str
+    runnable: dict[str, Any]
+
+
 @dataclass
 class IndexOps(BaseOps):
     remote_root: Optional[str] = None
     remote_cache: Optional[str] = None
-
-    @staticmethod
-    def _split_remote_root(remote_root: str) -> tuple[str, str]:
-        if not remote_root.startswith("s3://"):
-            raise DmlRepoError(f"Invalid remote root URI: {remote_root!r}")
-        rest = remote_root[5:]
-        if not rest:
-            raise DmlRepoError(f"Invalid remote root URI: {remote_root!r}")
-        if "/" not in rest:
-            return rest, "dml"
-        bucket, prefix = rest.split("/", 1)
-        prefix = prefix.strip("/")
-        return bucket, f"{prefix}/dml" if prefix else "dml"
 
     def _remote_ops(self):
         if not self.remote_root:
             raise DmlRepoError("Remote context required for argv_ptr")
         from daggerml._internal.ops.remote import RemoteOps
 
-        bucket, prefix = self._split_remote_root(self.remote_root)
-        return RemoteOps(_db=self._db, bucket=bucket, prefix=prefix)
+        parsed = urlparse(self.remote_root)
+        if parsed.scheme != "s3" or not parsed.netloc:
+            raise DmlRepoError(f"Invalid remote root URI: {self.remote_root!r}")
+        prefix = parsed.path.strip("/")
+        return RemoteOps(_db=self._db, bucket=parsed.netloc, prefix=f"{prefix}/dml" if prefix else "dml")
 
     @staticmethod
     def _kwargv_ref_from_nodes(dag: Dag, txn) -> Ref | None:
@@ -113,7 +111,24 @@ class IndexOps(BaseOps):
         kwargv = kwargv or {}
         kwargv = {k: self._normalize_codec_value(v, ctx=codec_ctx) for k, v in kwargv.items()}
         with self._tx(readonly=False) as txn:
-            return self._start_fn(txn, index_ref, argv, kwargv, name)
+            argv_ref = self._prepare_fn(index_ref, argv, kwargv, txn)
+            dag_ref = self._run_builtin(argv_ref, txn)
+            if dag_ref is not None:
+                return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+            cops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
+            dag_ref = cops._get(argv_ref, txn)
+            if dag_ref is not None:
+                return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+            prepared = self._prepare_adapter_call(argv_ref, txn)
+        status = self._call_adapter(prepared, index_ref)
+        if status in {"pending", "running"}:
+            return None
+        with self._tx(readonly=False) as txn:
+            cops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
+            dag_ref = cops._get(prepared.argv_ref, txn)
+            if dag_ref is None:
+                raise DmlRepoError("Adapter reported success but no cached DAG was published")
+            return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
 
     def delete(self, index_ref: Ref) -> None:
         """Delete an index object from db."""
@@ -567,7 +582,7 @@ class IndexOps(BaseOps):
                 raise DmlRepoError("Adapter output schema invalid")
         return payload
 
-    def _call_adapter(self, argv_ref: Ref, parent_index_ref: Ref, txn) -> str:
+    def _prepare_adapter_call(self, argv_ref: Ref, txn) -> _PreparedAdapterCall:
         if self.remote_root is None or self.remote_cache is None:
             raise DmlRepoError("Remote context required for adapter invocation")
         argv_node: ArgvNode = txn.get(argv_ref)
@@ -583,22 +598,30 @@ class IndexOps(BaseOps):
         if not adapter_path:
             raise DmlRepoError(f"No such adapter: {fn_runnable.adapter}")
         node_ops = NodeOps(_db=self._db)
+        return _PreparedAdapterCall(
+            argv_ref=argv_ref,
+            adapter_path=adapter_path,
+            cache_key=argv_ref.id(),
+            runnable=self._runnable_envelope(fn_runnable_ref, txn, node_ops),
+        )
+
+    def _call_adapter(self, prepared: _PreparedAdapterCall, parent_index_ref: Ref) -> str:
+        if self.remote_root is None or self.remote_cache is None:
+            raise DmlRepoError("Remote context required for adapter invocation")
         remote_ops = self._remote_ops()
-        cache_ops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
-        argv_manifest = txn.dump_dict(argv_ref)
         envelope = {
-            "argv_ptr": remote_ops._put_ref_manifest_from_local_manifest(argv_manifest, argv_ref, txn),
-            "cache_key": cache_ops._cache_ref(argv_ref, txn).to,
+            "argv_ptr": remote_ops.put_ref_manifest(prepared.argv_ref),
+            "cache_key": prepared.cache_key,
             "parent_id": parent_index_ref.id(),
             "remote": {
                 "root": self.remote_root,
                 "cache": self.remote_cache,
             },
-            "runnable": self._runnable_envelope(fn_runnable_ref, txn, node_ops),
+            "runnable": prepared.runnable,
         }
-        cmd = [adapter_path]
-        if adapter_path.endswith(".py"):
-            cmd = [sys.executable, adapter_path]
+        cmd = [prepared.adapter_path]
+        if prepared.adapter_path.endswith(".py"):
+            cmd = [sys.executable, prepared.adapter_path]
         result_data = run(
             cmd,
             input=json.dumps(envelope, default=lambda x: x.uri if isinstance(x, Uri) else x),
@@ -622,30 +645,7 @@ class IndexOps(BaseOps):
             raise DmlRepoError(msg or "Adapter reported failure")
         return status
 
-    def _start_fn(
-        self,
-        txn,
-        index_ref: Ref,
-        argv: list[Ref],
-        kwargv: Optional[dict[str, Ref]] = None,
-        name: Optional[str] = None,
-    ) -> Optional[Ref]:
-        self._validate_index_ref(index_ref)
-        kwargv = kwargv or {}
-        argv_ref = self._prepare_fn(index_ref, argv, kwargv, txn)
-        dag_ref = self._run_builtin(argv_ref, txn)
-        if dag_ref is None:
-            cops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
-            dag_ref = cops._get(argv_ref, txn)
-            if dag_ref is None:
-                status = self._call_adapter(argv_ref, index_ref, txn)
-                if status in {"pending", "running"}:
-                    return None
-                dag_ref = cops._get(argv_ref, txn)
-                if dag_ref is None:
-                    raise DmlRepoError("Adapter reported success but no cached DAG was published")
-        if dag_ref is None:
-            return None
+    def _finish_fn_result(self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_ref: Ref) -> Ref:
         dag_obj: Dag = txn.get(dag_ref)
         if dag_obj.result is None and dag_obj.error is None:
             raise DmlRepoError("Function DAG has no result node.")
@@ -715,8 +715,16 @@ class IndexOps(BaseOps):
                     fn = self._put_literal(
                         RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""), txn, index_ref
                     )
-                    resp = self._start_fn(txn, index_ref, [fn, *ys], {})
-                    assert resp is not None
+                    argv_refs = [fn, *ys]
+                    argv_ref = self._prepare_fn(index_ref, argv_refs, {}, txn)
+                    dag_ref = self._run_builtin(argv_ref, txn)
+                    assert dag_ref is not None
+                    dag_obj: Dag = txn.get(dag_ref)
+                    if dag_obj.result is None and dag_obj.error is None:
+                        raise DmlRepoError("Function DAG has no result node.")
+                    resp = self._put_node(FnNode(argv_refs, dag_ref), name=None, txn=txn, index_ref=index_ref)
+                    if dag_obj.error is not None:
+                        raise txn.get(dag_obj.error)
                     return resp
                 return txn.put(ListDatum(ys))
             if isinstance(x, dict):
@@ -729,8 +737,16 @@ class IndexOps(BaseOps):
                     fn = self._put_literal(
                         RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""), txn, index_ref
                     )
-                    resp = self._start_fn(txn, index_ref, [fn, *unnest(zip(yks, yvs, strict=True))], {})
-                    assert resp is not None
+                    argv_refs = [fn, *unnest(zip(yks, yvs, strict=True))]
+                    argv_ref = self._prepare_fn(index_ref, argv_refs, {}, txn)
+                    dag_ref = self._run_builtin(argv_ref, txn)
+                    assert dag_ref is not None
+                    dag_obj: Dag = txn.get(dag_ref)
+                    if dag_obj.result is None and dag_obj.error is None:
+                        raise DmlRepoError("Function DAG has no result node.")
+                    resp = self._put_node(FnNode(argv_refs, dag_ref), name=None, txn=txn, index_ref=index_ref)
+                    if dag_obj.error is not None:
+                        raise txn.get(dag_obj.error)
                     return resp
                 return txn.put(DictDatum(ys))
             return txn.put(ScalarDatum(x))

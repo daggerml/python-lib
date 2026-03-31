@@ -1,6 +1,7 @@
 """Common test fixtures for dml-util tests."""
 
-import logging
+import base64
+import hashlib
 import os
 import tempfile
 from contextlib import contextmanager
@@ -10,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from daggerml._internal._db import DmlDbEnv, DmlDbMapFullError
+from daggerml._internal._db import DmlDbEnv, DmlDbMapFullError, Ref
 from daggerml._internal.ops.base_ops import BaseOps
 from daggerml._internal.types import NAMESPACES
 
@@ -210,14 +211,27 @@ class FakeTxn:
     kv: Dict[str, Any]
     readonly: bool
 
-    def get(self, ref):
+    def get(self, ref, raw=False):
         """Get value by ref from fake storage."""
         return self.kv.get(ref.to)
+
+    def exists(self, ref):
+        """Check whether a ref exists in fake storage."""
+        return ref.to in self.kv
 
     def put(self, value, *, to=None, **kwargs):
         """Put value at ref in fake storage."""
         if self.readonly:
             raise ValueError("Cannot put in readonly transaction")
+        if to is None:
+            ns = kwargs.get("ns")
+            if ns is None:
+                raise ValueError("FakeTxn.put requires either to or ns")
+            if kwargs.get("raw"):
+                decoded = base64.b64decode(value)
+                to = Ref(f"{ns}:{hashlib.sha256(decoded).hexdigest()}")
+            else:
+                raise ValueError("FakeTxn.put without 'to' only supports raw=True")
         self.kv[to.to] = value
         return to
 
@@ -231,12 +245,8 @@ class FakeDb:
 
     @contextmanager
     def tx(self, readonly=False):
-        """Transaction context manager returning TxnContext."""
-        from daggerml._internal.ops.base_ops import TxnContext
-
-        txn = FakeTxn(self.kv, readonly)
-        logger = logging.getLogger("fake_db")
-        yield TxnContext(db=self, txn=txn, logger=logger)
+        """Transaction context manager returning a raw fake transaction."""
+        yield FakeTxn(self.kv, readonly)
 
 
 @dataclass

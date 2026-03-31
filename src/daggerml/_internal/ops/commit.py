@@ -328,16 +328,6 @@ class CommitOps(BaseOps):
             "modified": commit_obj.modified,
         }
 
-    def dump(self, commit: Ref) -> str:
-        """Dump a completed Commit."""
-        if commit.ns() != "commit":
-            raise DmlRepoError(f"Expected commit reference, got: {commit}")
-        try:
-            with self._tx(readonly=True) as txn:
-                return txn.dump(commit)
-        except Exception as e:
-            raise DmlRepoError(f"Failed to dump commit: {e}") from e
-
     # FIXME: Move to HeadOps.delete_dag.
     def delete_dag(self, name: str, head: Ref, user: str) -> Self:
         """Remove DAG from head's tree and create new commit.

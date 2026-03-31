@@ -20,7 +20,7 @@ If related docs conflict on this scope, this document is the source of truth.
 - Compute merge base and diffs between trees.
 - Merge commits with DAG-name conflict detection.
 - Rebase commit ancestry onto a target.
-- Describe, dump, and load commits.
+- Describe commits and resolve DAGs from commit tree state.
 
 ## Core Contracts
 

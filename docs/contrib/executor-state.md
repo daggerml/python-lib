@@ -10,11 +10,9 @@ This document is authoritative for contrib executor-state record shape and backe
 
 Normative lifecycle ownership and parent-comms behavior are authoritative in [runtime-contract.md](runtime-contract.md); this document is authoritative for the shared State record/reference shape used by those contracts.
 
-
 ## Purpose
 
 Provide a focused state-reference profile for contrib runtime planning and implementation.
-
 
 ## Scope
 
@@ -26,7 +24,6 @@ This document defines:
 - how parent comms reuses State backends without redefining a second mutable record format.
 
 This document does not define kickoff/poll dispatch rules.
-
 
 ## Reference State Record
 
@@ -44,7 +41,7 @@ Reference record example:
 ```json
 {
   "version": 1,
-  "cache_key": "cache:abc123",
+  "cache_key": "abc123",
   "status": "pending",
   "error": null,
   "heartbeat_ts": 1710370000.123,
@@ -92,7 +89,6 @@ Lock contract:
 - state backends expose lock acquisition as a contextmanager (`State.lock(cache_key)`), yielding locked state instance or `None` when lock acquisition fails.
 - lock release is automatic on context exit.
 
-
 ## Backend Profiles
 
 - `LocalState`: process-local backend profile for local adapter/executor flows.
@@ -104,7 +100,6 @@ Lock contract:
 - A local Parent Comms descriptor identifies a local state location such as `cache_dir`.
 - A Dynamo Parent Comms descriptor identifies backend coordinates such as `table_name`.
 - The parent observer reads an ordinary State record from that backend; there is no separate comms-specific mutable file/document schema.
-
 
 ## References
 

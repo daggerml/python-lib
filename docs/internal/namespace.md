@@ -32,7 +32,7 @@ The namespace model defines reference namespaces and the validity rules for cros
 - Namespace must match object type on read/write.
 - Cross-namespace misuse is a validation/runtime error.
 - Namespace checks are part of type validation and ops boundary checks.
-- Execution cache keys (for example `cache:<argv-id>`) are key-format values, not persisted object namespaces.
+- Execution cache keys (for example `<argv-id>`) are key-format values, not persisted object namespaces.
 
 ## Scope
 

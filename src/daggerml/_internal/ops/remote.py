@@ -9,12 +9,13 @@ import hashlib
 import json
 import re
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, fields, is_dataclass
 from functools import wraps
 from typing import Any, Literal
 
 from daggerml._internal._db import Ref
-from daggerml._internal.ops.base_ops import BaseOps, TxnContext
+from daggerml._internal.ops.base_ops import BaseOps
 from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 
 try:
@@ -69,6 +70,28 @@ class ShaMismatch(Exception):
     """Raised when SHA256 verification fails."""
 
     pass
+
+
+@dataclass(frozen=True)
+class _ManifestFetchResult:
+    manifest_oid: str
+    manifest: dict
+
+
+@dataclass(frozen=True)
+class _DagRefFetchResult:
+    dag_id: str
+    manifest_oid: str
+
+
+@dataclass(frozen=True)
+class _CasFetchResult:
+    ns: str
+    oid: str
+    raw_bytes: bytes
+
+
+_REMOTE_FETCH_WORKERS = 32
 
 
 def _remote_boundary(action: str):
@@ -513,78 +536,47 @@ class RemoteOps(BaseOps):
         return union_oids
 
     def _local_dump_dict(self, txn, root_ref) -> dict:
-        """Dump local manifest from transaction and validate/normalize shape.
+        closure: dict[str, dict[str, str]] = {}
+        visited: set[Ref] = set()
+        to_visit = [root_ref]
 
-        Parameters
-        ----------
-        txn : TxnContext
-            Transaction context
-        root_ref : Ref
-            Root reference to dump
+        while to_visit:
+            ref = to_visit.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            closure.setdefault(ref.ns(), {})[ref.id()] = txn.txn.get(ref, raw=True)
+            obj = txn.get(ref)
+            self._collect_local_manifest_refs(obj, root_ref=root_ref, to_visit=to_visit, visited=visited)
 
-        Returns
-        -------
-        dict
-            Normalized local manifest dictionary
+        return {
+            "kind": "local-manifest",
+            "schema": 0,
+            "root-ns": root_ref.ns(),
+            "root-id": root_ref.id(),
+            "closure": closure,
+        }
 
-        Raises
-        ------
-        ValueError
-            If manifest shape is invalid
-        """
-        manifest = txn.dump_dict(root_ref)
-
-        # Validate kind
-        if manifest.get("kind") != "local-manifest":
-            raise ValueError("Invalid local manifest: kind must be 'local-manifest'")
-
-        # Check for schema - tolerate missing but normalize to 0
-        schema = manifest.get("schema", 0)
-        if schema != 0:
-            raise ValueError("Invalid local manifest: schema must be 0")
-
-        # Ensure required fields are present
-        if "root-ns" not in manifest or "root-id" not in manifest:
-            raise ValueError("Invalid local manifest: must have 'root-ns' and 'root-id'")
-
-        # Validate closure structure
-        closure = manifest.get("closure", {})
-        if not isinstance(closure, dict):
-            raise ValueError("Invalid local manifest: 'closure' must be a dict")
-
-        for ns, items in closure.items():
-            if not isinstance(items, dict):
-                raise ValueError(f"Invalid local manifest: closure['{ns}'] must be a dict")
-            for id_, dump_str in items.items():
-                if not isinstance(dump_str, str):
-                    raise ValueError(f"Invalid local manifest: closure['{ns}']['{id_}'] must be a string")
-
-        # Return normalized manifest (ensuring schema is set)
-        normalized = manifest.copy()
-        normalized["schema"] = 0
-        return normalized
-
-    def _local_load_dict(self, txn, local_manifest: dict) -> None:
-        """Load local manifest into transaction after validation.
-
-        Parameters
-        ----------
-        txn : TxnContext
-            Transaction context
-        local_manifest : dict
-            Local manifest dictionary to load
-
-        Raises
-        ------
-        ValueError
-            If manifest shape is invalid
-        """
-        # Validate kind
-        if local_manifest.get("kind") != "local-manifest":
-            raise ValueError("Invalid local manifest: kind must be 'local-manifest'")
-
-        # Load into transaction
-        txn.load_dict(local_manifest)
+    def _collect_local_manifest_refs(self, obj: Any, *, root_ref: Ref, to_visit: list[Ref], visited: set[Ref]) -> None:
+        if isinstance(obj, Ref):
+            if obj.ns() == "dag" and obj != root_ref:
+                return
+            if obj not in visited:
+                to_visit.append(obj)
+            return
+        if isinstance(obj, dict):
+            for value in obj.values():
+                self._collect_local_manifest_refs(value, root_ref=root_ref, to_visit=to_visit, visited=visited)
+            return
+        if isinstance(obj, list):
+            for value in obj:
+                self._collect_local_manifest_refs(value, root_ref=root_ref, to_visit=to_visit, visited=visited)
+            return
+        if is_dataclass(obj):
+            for field_def in fields(obj):
+                self._collect_local_manifest_refs(
+                    getattr(obj, field_def.name), root_ref=root_ref, to_visit=to_visit, visited=visited
+                )
 
     def _local_has(self, txn, ns: str, id: str) -> bool:
         """Check if a local object exists in the given namespace.
@@ -798,18 +790,6 @@ class RemoteOps(BaseOps):
             return True
         return True
 
-    def _ensure_dag_ref(self, dag_ref: Ref) -> bool:
-        if dag_ref.ns() != "dag":
-            raise ValueError(f"Expected dag ref, got: {dag_ref}")
-        try:
-            self._remote_get_dag_ref(dag_ref.id())
-            return True
-        except RemoteError:
-            pass
-        with self._db.tx(readonly=True) as raw_txn:
-            txn = TxnContext(db=self._db, txn=raw_txn, logger=self._logger)
-            return self._ensure_dag_ref_in_txn(dag_ref, txn, ())
-
     @_remote_boundary("manifest upload")
     def put_ref_manifest(self, root_ref: Ref) -> str:
         with self._tx(readonly=True) as txn:
@@ -822,78 +802,105 @@ class RemoteOps(BaseOps):
         with self._tx(readonly=False) as txn:
             return self.load_ptr_in_txn(manifest_oid, txn, expected_root_ns=expected_root_ns)
 
-    def _load_manifest_into_local_closure(
-        self,
-        manifest_oid: str,
-        txn,
-        local_closure: dict[str, dict[str, str]],
-        loaded_manifest_oids: set[str],
-    ) -> tuple[str, str]:
+    def _fetch_manifest_result(self, manifest_oid: str) -> _ManifestFetchResult:
         manifest_oid = self._validate_manifest_oid(manifest_oid)
-        if manifest_oid in loaded_manifest_oids:
-            manifest_bytes = self._remote_get_cas(manifest_oid)
-            manifest = self._decode_manifest(manifest_bytes)
-            return manifest["root-ns"], manifest["root-id"]
-
         manifest_bytes = self._remote_get_cas(manifest_oid)
-        manifest = self._decode_manifest(manifest_bytes)
-        loaded_manifest_oids.add(manifest_oid)
+        return _ManifestFetchResult(manifest_oid, self._decode_manifest(manifest_bytes))
 
-        if manifest["root-ns"] == "dag":
-            root_dag_id = manifest["root-id"]
-            if not self._local_has(txn, "dag", root_dag_id) and root_dag_id not in local_closure.get("dag", {}):
-                raw_root = self._remote_get_cas(root_dag_id)
-                computed_hash = hashlib.sha256(raw_root).hexdigest()
-                if computed_hash != root_dag_id:
-                    raise ShaMismatch(
-                        f"SHA256 mismatch for object {root_dag_id}: expected {root_dag_id}, got {computed_hash}"
-                    )
-                local_closure.setdefault("dag", {})[root_dag_id] = base64.b64encode(raw_root).decode("ascii")
+    def _fetch_dag_ref_result(self, dag_id: str) -> _DagRefFetchResult:
+        dag_ref = self._decode_ref(self._remote_get_dag_ref(dag_id))
+        return _DagRefFetchResult(dag_id, dag_ref["target"])
 
-        for ns, ids in manifest["closure"].items():
-            if ns == "dag":
-                for dag_id in ids:
-                    dag_ref = self._decode_ref(self._remote_get_dag_ref(dag_id))
-                    self._load_manifest_into_local_closure(dag_ref["target"], txn, local_closure, loaded_manifest_oids)
-                continue
-            for oid in ids:
-                if self._local_has(txn, ns, oid):
-                    continue
-                raw_bytes = self._remote_get_cas(oid)
-                computed_hash = hashlib.sha256(raw_bytes).hexdigest()
-                if computed_hash != oid:
-                    raise ShaMismatch(f"SHA256 mismatch for object {oid}: expected {oid}, got {computed_hash}")
-                dump_str = base64.b64encode(raw_bytes).decode("ascii")
-                if ns not in local_closure:
-                    local_closure[ns] = {}
-                local_closure[ns][oid] = dump_str
+    def _fetch_cas_result(self, ns: str, oid: str) -> _CasFetchResult:
+        raw_bytes = self._remote_get_cas(oid)
+        computed_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if computed_hash != oid:
+            raise ShaMismatch(f"SHA256 mismatch for object {oid}: expected {oid}, got {computed_hash}")
+        return _CasFetchResult(ns, oid, raw_bytes)
 
-        return manifest["root-ns"], manifest["root-id"]
+    def _put_local_cas_object(self, txn, ns: str, oid: str, raw_bytes: bytes) -> Ref:
+        dump_str = base64.b64encode(raw_bytes).decode("ascii")
+        return txn.txn.put(dump_str, ns=ns, raw=True)
 
     def load_ptr_in_txn(self, manifest_oid: str, txn, *, expected_root_ns: str | None = None) -> Ref:
         """Resolve a manifest OID and materialize closure using a provided transaction."""
-        local_closure = {}
-        root_ns, root_id = self._load_manifest_into_local_closure(manifest_oid, txn, local_closure, set())
-        root_ref = Ref(f"{root_ns}:{root_id}")
-        if expected_root_ns is not None and root_ns != expected_root_ns:
-            raise ValueError(f"Manifest root namespace mismatch: expected {expected_root_ns!r}, got {root_ns!r}")
+        seen_manifests: set[str] = set()
+        seen_dag_refs: set[str] = set()
+        seen_objects: set[tuple[str, str]] = set()
+        pending = set()
+        root_ref: Ref | None = None
 
-        if not local_closure:
-            return root_ref
+        def submit_manifest(pool, next_manifest_oid: str) -> None:
+            next_manifest_oid = self._validate_manifest_oid(next_manifest_oid)
+            if next_manifest_oid in seen_manifests:
+                return
+            seen_manifests.add(next_manifest_oid)
+            pending.add(pool.submit(self._fetch_manifest_result, next_manifest_oid))
 
-        local_manifest = {
-            "kind": "local-manifest",
-            "schema": 0,
-            "root-ns": root_ns,
-            "root-id": root_id,
-            "closure": local_closure,
-        }
+        def submit_dag_ref(pool, dag_id: str) -> None:
+            if dag_id in seen_dag_refs:
+                return
+            seen_dag_refs.add(dag_id)
+            pending.add(pool.submit(self._fetch_dag_ref_result, dag_id))
 
-        if root_id not in local_manifest["closure"].get(root_ns, {}):
-            raw_root = txn.txn.get(root_ref, raw=True)
-            local_manifest["closure"].setdefault(root_ns, {})[root_id] = base64.b64encode(raw_root).decode("ascii")
+        def submit_object(pool, ns: str, oid: str) -> None:
+            key = (ns, oid)
+            if key in seen_objects:
+                return
+            if self._local_has(txn, ns, oid):
+                seen_objects.add(key)
+                return
+            seen_objects.add(key)
+            pending.add(pool.submit(self._fetch_cas_result, ns, oid))
 
-        return txn.load_dict(local_manifest)
+        with ThreadPoolExecutor(max_workers=_REMOTE_FETCH_WORKERS) as pool:
+            submit_manifest(pool, manifest_oid)
+
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    result = fut.result()
+
+                    if isinstance(result, _ManifestFetchResult):
+                        manifest = result.manifest
+                        current_root_ref = Ref(f"{manifest['root-ns']}:{manifest['root-id']}")
+                        if root_ref is None:
+                            root_ref = current_root_ref
+                            if expected_root_ns is not None and root_ref.ns() != expected_root_ns:
+                                raise ValueError(
+                                    "Manifest root namespace mismatch: "
+                                    f"expected {expected_root_ns!r}, got {root_ref.ns()!r}"
+                                )
+                        if manifest["root-ns"] == "dag":
+                            submit_object(pool, "dag", manifest["root-id"])
+                        for ns, ids in manifest["closure"].items():
+                            if ns == "dag":
+                                for dag_id in ids:
+                                    submit_dag_ref(pool, dag_id)
+                            else:
+                                for oid in ids:
+                                    submit_object(pool, ns, oid)
+                        continue
+
+                    if isinstance(result, _DagRefFetchResult):
+                        submit_manifest(pool, result.manifest_oid)
+                        continue
+
+                    if isinstance(result, _CasFetchResult):
+                        inserted_ref = self._put_local_cas_object(txn, result.ns, result.oid, result.raw_bytes)
+                        if inserted_ref.ns() != result.ns or inserted_ref.id() != result.oid:
+                            raise DmlRepoError(
+                                f"Loaded object mismatch: expected {result.ns}:{result.oid}, got {inserted_ref}"
+                            )
+                        continue
+
+                    raise AssertionError(f"Unhandled remote load result: {type(result)!r}")
+
+        if root_ref is None:
+            raise DmlRepoError("Remote manifest load produced no root")
+        if not txn.exists(root_ref):
+            raise DmlRepoError(f"Remote manifest load did not materialize root object: {root_ref}")
+        return root_ref
 
     @_remote_boundary("cache get")
     def get_cache_ref(self, cache: str, cache_key: str) -> str | None:
@@ -1079,57 +1086,14 @@ class RemoteOps(BaseOps):
         ref_obj = self._decode_ref(ref_bytes)
         self._require_manifest_ref_targets(ref_obj, ref_path)
 
-        # Step 3: Get manifest bytes from CAS
-        manifest_bytes = self._remote_get_cas(ref_obj["target"])
-
-        # Step 4: Decode manifest
-        manifest = self._decode_manifest(manifest_bytes)
-
-        # Step 5: Validate root namespace is "commit"
-        if manifest["root-ns"] != "commit":
-            raise ValueError(f"Cannot pull non-commit root namespace: {manifest['root-ns']!r}")
-
-        # Step 6-7: Fetch missing CAS objects and build local manifest
-        with self._tx(readonly=False) as txn:
-            local_closure = {}
-            loaded_manifest_oids = set()
-            for ns, ids in manifest["closure"].items():
-                if ns == "dag":
-                    for dag_id in ids:
-                        dag_ref = self._decode_ref(self._remote_get_dag_ref(dag_id))
-                        self._load_manifest_into_local_closure(
-                            dag_ref["target"], txn, local_closure, loaded_manifest_oids
-                        )
-                    continue
-                for oid in ids:
-                    if self._local_has(txn, ns, oid):
-                        continue
-                    raw_bytes = self._remote_get_cas(oid)
-                    computed_hash = hashlib.sha256(raw_bytes).hexdigest()
-                    if computed_hash != oid:
-                        raise ShaMismatch(f"SHA256 mismatch for object {oid}: expected {oid}, got {computed_hash}")
-                    dump_str = base64.b64encode(raw_bytes).decode("ascii")
-                    if ns not in local_closure:
-                        local_closure[ns] = {}
-                    local_closure[ns][oid] = dump_str
-
-        # Step 8: Build local manifest
-        local_manifest = {
-            "kind": "local-manifest",
-            "schema": 0,
-            "root-ns": manifest["root-ns"],
-            "root-id": manifest["root-id"],
-            "closure": local_closure,
-        }
-
-        # Step 9-10: Load local manifest and write head pointer in write transaction
+        # Step 3-7: Materialize pointed commit manifest and write pulled head pointer
         remote_name = f"s3://{self.bucket}"
         if self.prefix:
             remote_name = f"s3://{self.bucket}/{self.prefix}"
 
         with self._tx(readonly=False) as txn:
-            self._local_load_dict(txn, local_manifest)
-            self._local_put_head(txn, remote_name, ref_path, manifest["root-id"])
+            root_ref = self.load_ptr_in_txn(ref_obj["target"], txn, expected_root_ns="commit")
+            self._local_put_head(txn, remote_name, ref_path, root_ref.id())
 
     @_remote_boundary("list")
     def list(self, prefix: str) -> list[dict]:

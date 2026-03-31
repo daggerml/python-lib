@@ -720,7 +720,7 @@ class Dag(DmlBase):
     def cache_key(self, txn: "TxnContext") -> str:
         """Compute a cache key for this DAG.
 
-        Items in the cache are stored as `cache:{key}`.
+        Items in the cache are stored under `{key}`.
 
         Parameters
         ----------

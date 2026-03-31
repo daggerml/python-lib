@@ -58,8 +58,8 @@ Define the stable user-facing contract for DAG authoring, execution entry, cache
 - Wrapper exports:
   - `daggerml.api` MUST expose public wrapper objects for `Dml`, `Dag`, `Node`, `Ref`, `Uri`, and `Runnable`.
   - The API boundary MUST normalize caller-supplied Python values into the public wrapper and staging surfaces defined by this document before delegating to internal subsystems.
-- `Dag.cache() -> Ref`:
-  - `Dag.cache()` MUST publish the current committed DAG into remote cache and return the corresponding cache `Ref`.
+- `Dag.cache() -> str`:
+  - `Dag.cache()` MUST publish the current committed DAG into remote cache and return the corresponding cache key.
   - `Dag.cache()` MUST fail deterministically when called before the DAG has a committed identity.
   - `Dag.cache()` MUST fail deterministically when required remote cache context is unavailable.
   - Cache-identity derivation is authoritative in [adapter-execution-contract.md](adapter-execution-contract.md).

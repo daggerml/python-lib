@@ -43,7 +43,12 @@ Define `IndexOps` behavior boundaries and invariants for staging-time execution 
   - First call arg resolves to runnable.
   - Kwargs resolve inner-most to outer-most by key.
   - Unknown key raises `DmlRepoError("Unknown kwarg: <key>")`.
+  - Builtin execution precedes adapter invocation.
+  - Cache-hit resolution precedes adapter invocation for non-builtin calls.
   - Non-builtin execution always performs remote cache lookup by argv identity before adapter invocation.
+  - On cache miss, `start_fn(...)` MUST stage adapter inputs in one local transaction, invoke the adapter outside that transaction, then resolve the cached result in a later transaction.
+  - Adapter invocation payload MUST publish `argv_ptr` through the remote manifest path before subprocess execution.
+  - Adapter `pending` and `running` status MUST return `None` without materializing a `FnNode`.
   - Adapter `succeeded` status requires cache-backed result resolution.
 - `put_import(...)`
   - Stages `ImportNode` refs from committed DAG nodes.
@@ -58,6 +63,7 @@ Unspecified interface fields are rejected.
 
 - Index methods validate index ownership and DAG membership.
 - Function result DAG contains `result` or `error`.
+- Successful function-result materialization creates an `FnNode` that links the original call-site node refs to the resolved function DAG.
 - Commit finalization writes commit state and removes index ref.
 
 ### Error Semantics

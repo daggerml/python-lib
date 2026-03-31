@@ -50,7 +50,7 @@ Define the canonical external adapter invocation contract used by runtime execut
 - **Adapter Output**
   - **Location/Name**: Adapter stdout payload.
   - **Signature/Schema**: JSON object containing exactly `status` and `error` keys:
-    - `status` in `pending|running|succeeded|failed|canceled`,
+    - `status` in `pending|running|succeeded|failed`,
     - `error` present only for `failed`.
 
 ### Invariants
@@ -61,7 +61,7 @@ Define the canonical external adapter invocation contract used by runtime execut
 - Long-running execution is asynchronous and resumed/polled by repeated invocations using `cache_key`.
 - On `succeeded`, adapters/executors MUST publish the result DAG into remote cache for the execution cache identity before returning `succeeded`.
 - Runtime result resolution on `succeeded` is cache-driven via execution cache identity, not adapter-returned commit pointers.
-- Cache key basis is `cache:{argv_ref.id()}` and is authoritative for adapter/executor state lookup.
+- Cache key basis is `argv_ref.id()` and is authoritative for adapter/executor state lookup.
 - Adapter payload `cache_key` is a helper token for deduplication/correlation and MUST NOT override canonical cache identity derived from `argv`.
 
 ### Error Semantics

@@ -81,14 +81,13 @@ class TestExecuteCacheHandlers:
     def test_execute_cache_put(self):
         """Test execute_cache_put handler."""
         mock_ops = Mock()
-        mock_ref = Ref("cache:cache123")
-        mock_ops.put.return_value = mock_ref
+        mock_ops.put.return_value = "cache123"
 
         args = Namespace(dag_ref="dag:abc123")
         result = execute_cache_put(mock_ops, args)
 
         mock_ops.put.assert_called_once_with(Ref("dag:abc123"))
-        assert result == "cache:cache123"
+        assert result == "cache123"
 
     def test_execute_cache_get_found(self):
         """Test execute_cache_get when entry found."""
@@ -127,19 +126,17 @@ class TestExecuteCacheHandlers:
     def test_execute_cache_list(self):
         """Test execute_cache_list handler."""
         mock_ops = Mock()
-        mock_cache_ref1 = Ref("cache:argv1")
         dag_ref1 = Ref("dag:dag1")
-        mock_cache_ref2 = Ref("cache:argv2")
         dag_ref2 = Ref("dag:dag2")
-        mock_ops.list.return_value = [(mock_cache_ref1, dag_ref1), (mock_cache_ref2, dag_ref2)]
+        mock_ops.list.return_value = [("argv1", dag_ref1), ("argv2", dag_ref2)]
 
         args = Namespace(limit=10)
         result = execute_cache_list(mock_ops, args)
 
         mock_ops.list.assert_called_once_with(10)
         assert result == [
-            ["cache:argv1", {"dag": "dag:dag1"}],
-            ["cache:argv2", {"dag": "dag:dag2"}],
+            ["argv1", {"dag": "dag:dag1"}],
+            ["argv2", {"dag": "dag:dag2"}],
         ]
 
     def test_execute_cache_clear(self):

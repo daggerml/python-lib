@@ -8,7 +8,6 @@ Public API:
     BaseOps - Base class for repository operations
 """
 
-import json
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -266,121 +265,6 @@ class TxnContext:
         except Exception as e:
             self.logger.exception(f"iter: namespace={namespace}")
             raise DmlRepoError(f"Failed to iterate over namespace '{namespace}': {e}") from e
-
-    def dump(self, ref: Ref) -> str:
-        """Dump an object at reference to a JSON string with commit-manifest structure.
-
-        Uses recursive put/get(raw=True) to collect object graph data and formats
-        it as a commit-manifest JSON object.
-
-        Parameters
-        ----------
-        ref : Ref
-            Reference to the object to dump.
-
-        Returns
-        -------
-        str
-            JSON string representing the commit-manifest structure.
-
-        Raises
-        ------
-        DmlRepoError
-            If the dump operation fails.
-        """
-        try:
-            manifest = self.dump_dict(ref)
-            return json.dumps(manifest, separators=(",", ":"))
-        except Exception as e:
-            raise DmlRepoError(f"Failed to dump object: {e}") from e
-
-    def dump_dict(self, ref: Ref) -> dict:
-        """Dump an object at reference to a JSON string with commit-manifest structure.
-
-        Uses recursive put/get(raw=True) to collect object graph data and formats
-        it as a commit-manifest JSON object.
-
-        Parameters
-        ----------
-        ref : Ref
-            Reference to the object to dump.
-
-        Returns
-        -------
-        str
-            JSON string representing the commit-manifest structure.
-
-        Raises
-        ------
-        DmlRepoError
-            If the dump operation fails.
-        """
-        try:
-            dump_list = self._dump_to_list(ref)
-            closure = {}
-            for item in dump_list:
-                ns = item["ns"]
-                if ns not in closure:
-                    closure[ns] = {}
-                closure[ns][item["id"]] = item["dump"]
-            return {"schema": 0, "kind": "local-manifest", "root-ns": ref.ns(), "root-id": ref.id(), "closure": closure}
-        except Exception as e:
-            raise DmlRepoError(f"Failed to dump object: {e}") from e
-
-    def _dump_to_list(self, ref: Ref) -> List[dict]:
-        """Internal method to dump object graph to list of dicts."""
-        # Collect all unique refs in the object graph
-        visited = set()
-        to_visit = set([ref])
-        result = []
-        while to_visit:
-            ref = to_visit.pop()
-            if ref in visited:
-                continue
-            visited.add(ref)
-            result.append({"id": ref.id(), "ns": ref.ns(), "dump": self.txn.get(ref, raw=True)})
-            obj_dict = self.txn.get(ref)
-            self._collect_refs(obj_dict, to_visit, visited)
-        return result
-
-    def _collect_refs(self, obj: Any, to_visit: set, visited: set) -> None:
-        """Recursively collect Refs from the db dict object representation."""
-        # Note: this runs on the raw dict -- before it is converted to a dml type
-        if isinstance(obj, Ref):
-            if obj not in visited:
-                to_visit.add(obj)
-        elif isinstance(obj, dict):
-            for v in obj.values():
-                self._collect_refs(v, to_visit, visited)
-        elif isinstance(obj, list):
-            for v in obj:
-                self._collect_refs(v, to_visit, visited)
-
-    def load(self, payload: str) -> Ref:
-        """Load an object from a commit-manifest JSON payload.
-
-        Parses the commit-manifest JSON structure and restores the object graph.
-
-        Parameters
-        ----------
-        payload : str
-            JSON string representing the commit-manifest structure.
-
-        Returns
-        -------
-        Ref
-            Reference to the loaded object.
-
-        Raises
-        ------
-        DmlRepoError
-            If the load operation fails.
-        """
-        try:
-            manifest = json.loads(payload)
-            return self.load_dict(manifest)
-        except Exception as e:
-            raise DmlRepoError(f"Failed to load object: {e}") from e
 
     def load_dict(self, manifest: dict) -> Ref:
         """Load an object from a commit-manifest JSON payload.

@@ -31,8 +31,9 @@ The execution model defines end-to-end function execution: call preparation, run
 
 1. Attempt builtin execution for supported `daggerml:` URIs.
 2. If not builtin, resolve cache via remote refs using argv identity.
-3. If cache miss, invoke adapter via stdin JSON envelope with remote context.
+3. If cache miss, publish `argv_ptr` via remote manifest upload and invoke the adapter via stdin JSON envelope with remote context.
 4. On adapter `succeeded`, caller resolves the result DAG from remote cache refs using argv identity.
+5. On adapter `pending` or `running`, caller returns without materializing a result node.
 
 Cache rules:
 

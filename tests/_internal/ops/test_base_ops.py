@@ -7,8 +7,8 @@ from hypothesis import given
 
 from daggerml._internal._db import DmlDbEnv, Ref
 from daggerml._internal.ops.base_ops import BaseOps, with_retry
-from daggerml._internal.types import NAMESPACES, Deletable, DictDatum, ListDatum, ScalarDatum, Uri
-from tests._internal.test__db import _gen_ref, dml_object
+from daggerml._internal.types import NAMESPACES, Deletable, ScalarDatum, Uri
+from tests._internal.test__db import _gen_ref
 from tests._internal.test_types import DmlRepoError, _dml_obj_strategy
 
 
@@ -25,44 +25,6 @@ class TestBaseOps:
         assert retrieved_obj == obj
         with temp_bo._tx(readonly=False) as ctx:
             ctx.delete(ref)
-
-    @given(dml_object())
-    def test_dump_load_roundtrip(self, obj):
-        """Test successful private _dump and _load operations."""
-
-        def insert(txn, x):
-            ## recursively insert object as Datums and return Ref.
-            if isinstance(x, (tuple, list)):
-                x = [insert(txn, item) for item in x]
-            elif isinstance(x, dict):
-                x = {k: insert(txn, v) for k, v in x.items()}
-            if isinstance(x, list):
-                return txn.put(ListDatum(x))
-            if isinstance(x, dict):
-                return txn.put(DictDatum(x))
-            return txn.put(ScalarDatum(x))
-
-        def get(txn, ref):
-            ## recursively get object from Ref.
-            obj = txn.get(ref)
-            if isinstance(obj, ListDatum):
-                return [get(txn, item) for item in obj.data]
-            if isinstance(obj, DictDatum):
-                return {k: get(txn, v) for k, v in obj.data.items()}
-            return obj.data
-
-        with TemporaryDirectory() as temp_dir:
-            new_db = DmlDbEnv.create(temp_dir, namespaces=sorted(NAMESPACES))
-            with BaseOps(new_db)._tx(readonly=False) as ctx:
-                ref = insert(ctx, obj)
-                dump_payload = ctx.dump(ref)
-        assert isinstance(dump_payload, str)
-        with TemporaryDirectory() as temp_dir:
-            new_db = DmlDbEnv.create(temp_dir, namespaces=sorted(NAMESPACES))
-            with BaseOps(new_db)._tx(readonly=False) as ctx:
-                loaded_ref = ctx.load(dump_payload)
-                loaded_obj = get(ctx, loaded_ref)
-        assert loaded_obj == obj
 
     @given(_dml_obj_strategy())
     def test_delete(self, temp_bo, obj):

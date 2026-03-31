@@ -4,8 +4,6 @@ import tempfile
 from uuid import uuid4
 
 from daggerml._internal._db import DmlDbEnv
-from daggerml._internal.ops.cache import CacheOps
-from daggerml._internal.ops.commit import CommitOps
 from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, Commit, Head, Tree
 
@@ -30,9 +28,7 @@ if __name__ == "__main__":
             ops = IndexOps(db, remote_root=remote_root, remote_cache=remote_cache)
             index_ref = ops.create(argv_ptr=argv_ptr)
             result = ops.put_literal(index_ref, str(uuid4()))
-            commit_ref = ops.commit(index_ref, result, message="rand function result")
-            dag_ref = CommitOps(_db=db).describe(commit_ref)["dag"]
-            CacheOps(_db=db, remote_root=remote_root, remote_cache=remote_cache).put(dag_ref)
+            ops.commit(index_ref, result, message="rand function result")
             print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
         finally:
             db.close()

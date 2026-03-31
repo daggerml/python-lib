@@ -26,9 +26,9 @@ def _put_argv_node_hashed(temp_bo, datum_ref: Ref) -> Ref:
         return argv_node_ref
 
 
-def _cache_ref_for_argv(temp_bo, argv_ref: Ref) -> Ref:
+def _cache_key_for_argv(temp_bo, argv_ref: Ref) -> str:
     with temp_bo._tx(readonly=True) as txn:
-        return Ref(f"cache:{txn.get(argv_ref).datum_ref(txn).id()}")
+        return txn.get(argv_ref).datum_ref(txn).id()
 
 
 def _put_dag_hashed(temp_bo, argv_ref: Ref | None = None) -> Ref:
@@ -46,12 +46,12 @@ def test_put_get_delete_roundtrip_remote(temp_bo, s3):
     datum_ref = _put_datum_hashed(temp_bo, "value")
     argv_ref = _put_argv_node_hashed(temp_bo, datum_ref)
     dag_ref = _put_dag_hashed(temp_bo, argv_ref)
-    cache_ref = _cache_ref_for_argv(temp_bo, argv_ref)
+    cache_key = _cache_key_for_argv(temp_bo, argv_ref)
 
     assert ops.get(argv_ref) is None
-    assert ops.put(dag_ref) == cache_ref
+    assert ops.put(dag_ref) == cache_key
     remote_ops, cache_name = ops._require_remote_context()
-    cache_ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref(f"cache/{cache_name}/{cache_ref.to}.json"))
+    cache_ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref(f"cache/{cache_name}/{cache_key}.json"))
     assert cache_ref_obj["targets"] == {"dag": []}
     assert ops.get(argv_ref) == dag_ref
     assert ops.delete(argv_ref) is True
@@ -61,14 +61,14 @@ def test_put_get_delete_roundtrip_remote(temp_bo, s3):
 
 def test_list_limit_and_clear_remote(temp_bo, s3):
     ops = _new_ops(temp_bo, f"cachetest-{uuid4().hex}")
-    entries: list[tuple[Ref, Ref]] = []
+    entries: list[tuple[str, Ref]] = []
     for i in range(3):
         datum_ref = _put_datum_hashed(temp_bo, f"value-{i}")
         argv_ref = _put_argv_node_hashed(temp_bo, datum_ref)
         dag_ref = _put_dag_hashed(temp_bo, argv_ref)
-        cache_ref = _cache_ref_for_argv(temp_bo, argv_ref)
+        cache_key = _cache_key_for_argv(temp_bo, argv_ref)
         ops.put(dag_ref)
-        entries.append((cache_ref, dag_ref))
+        entries.append((cache_key, dag_ref))
 
     limited = list(ops.list(limit=1))
     assert len(limited) == 1

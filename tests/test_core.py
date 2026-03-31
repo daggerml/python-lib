@@ -1,4 +1,3 @@
-import json
 import os
 from pathlib import Path
 from unittest import TestCase
@@ -191,8 +190,7 @@ class TestSetAttrs:
             result = dag.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), 1, 2, 3)
             dag.commit(result)
         fn_dag = result.load()
-        cache_ref = fn_dag.cache()
-        assert cache_ref.ns() == "cache"
+        assert isinstance(fn_dag.cache(), str)
 
     def test_async_fn_ok(self, dml):
         debug_file = os.path.join(dml.config_dir, "debug")
@@ -245,38 +243,9 @@ class TestSetAttrs:
 
 
 class TestBasic(TestCase):
-    def test_message_handler_load(self):
-        local_value = None
-
-        def message_handler(dump):
-            nonlocal local_value
-            local_value = dump
-
-        with Dml.temporary() as dml:
-            d0 = dml.new("d0", "d0", message_handler=message_handler)
-            data = {
-                "key": "value",
-                "list": [1, 2, 3],
-                "dict": {"a": 1, "b": 2},
-                "uri": TestSetAttrs()._mk_runnable(dml, SUM_URI, FN_ADAPTER),
-            }
-            n0 = d0.put(data, name="n0")
-            d0.commit(n0)
-        assert isinstance(local_value, str)
-        payload = json.loads(local_value)
-        assert payload.get("root-ns") == "commit"
-        assert "root-id" in payload
-        assert "closure" in payload
-
     def test_dag(self):
-        local_value = None
-
-        def message_handler(dump):
-            nonlocal local_value
-            local_value = dump
-
         with Dml.temporary() as dml:
-            d0 = dml.new("d0", "d0", message_handler=message_handler)
+            d0 = dml.new("d0", "d0")
             self.assertIsInstance(d0, Dag)
             n0 = d0.put([42], name="n0")
             assert isinstance(n0, Node)
@@ -315,7 +284,6 @@ class TestBasic(TestCase):
             d0.n5 = d0.n4[1:]
             self.assertListEqual([x.value() for x in d0.n5], [2, 3, 4, 5])
             d0.commit(n0)
-            self.assertIsInstance(local_value, str)
             commit_ref = dml.head.describe(dml.head_ref)["commit"]
             dag_ref = dml.commit.get_dag(commit_ref, "d0")
             assert dag_ref is not None

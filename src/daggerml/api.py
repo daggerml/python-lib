@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from tempfile import TemporaryDirectory
-from typing import Any, Callable, Iterator, Optional, Union, cast, overload
+from typing import Any, Iterator, Optional, Union, cast, overload
 
 from daggerml._config import DmlConfig
 from daggerml._internal import (
@@ -75,9 +75,9 @@ def use_default_dml(dml: "Dml"):
         _SCOPED_DEFAULT_DML.reset(token)
 
 
-def new(name="", message="", argv_ptr=None, message_handler=None) -> "Dag":
+def new(name="", message="", argv_ptr=None) -> "Dag":
     """Create a new DAG using the active default Dml runtime."""
-    return get_default_dml().new(name=name, message=message, argv_ptr=argv_ptr, message_handler=message_handler)
+    return get_default_dml().new(name=name, message=message, argv_ptr=argv_ptr)
 
 
 def load(name: Union[str, "Node"]) -> "Dag":
@@ -247,7 +247,7 @@ class Dml:
 
         return cls(repo=repo_path, user=user, branch=branch, tmpdirs={"repo": tmpdir})
 
-    def new(self, name="", message="", argv_ptr=None, message_handler=None) -> "Dag":
+    def new(self, name="", message="", argv_ptr=None) -> "Dag":
         """Create a new DAG.
 
         Parameters
@@ -258,9 +258,6 @@ class Dml:
             Commit message
         argv_ptr : str, optional
             Remote manifest pointer for argv state (used by adapter executions)
-        message_handler : callable, optional
-            Callback for commit messages
-
         Returns
         -------
         Dag
@@ -271,14 +268,7 @@ class Dml:
         else:
             index_ref = self.ops.index().create(head=self.head_ref)
 
-        return Dag(
-            dml=self,
-            message_handler=message_handler,
-            token=index_ref,
-            ref=None,
-            name=name,
-            message=message,
-        )
+        return Dag(dml=self, token=index_ref, ref=None, name=name, message=message)
 
     def load(self, name: Union[str, "Node"]) -> "Dag":
         """Load an existing DAG by name.
@@ -296,7 +286,7 @@ class Dml:
         if isinstance(name, Node):
             node_info = self.ops.node().describe(name.ref)
             if "dag" in node_info and node_info["dag"] is not None:
-                return Dag(dml=self, message_handler=None, ref=node_info["dag"])
+                return Dag(dml=self, ref=node_info["dag"])
             dag_name = self.ops.node().unroll(name.ref)
         else:
             dag_name = name
@@ -307,7 +297,7 @@ class Dml:
         if dag_ref is None:
             raise DmlRepoError(f"DAG '{dag_name}' not found")
 
-        return Dag(dml=self, message_handler=None, ref=dag_ref)
+        return Dag(dml=self, ref=dag_ref)
 
 
 def make_node(dag: "Dag", ref: Ref) -> "Node":
@@ -347,7 +337,6 @@ def make_node(dag: "Dag", ref: Ref) -> "Node":
 @dataclass
 class Dag:
     dml: Dml
-    message_handler: Optional[Callable] = None
     token: Optional[Ref] = None  # Working index reference
     ref: Optional[Ref] = None
     name: str = ""  # DAG name for commit
@@ -639,15 +628,10 @@ class Dag:
                 dag_name=self.name,
             )
 
-        if self.message_handler:
-            # Get dump from DmlOps
-            dump = self.dml.ops.commit().dump(commit_ref)
-            self.message_handler(dump)
-
         # Extract the dag ref from the commit
         self.ref = self.dml.ops.commit().describe(commit_ref)["dag"]
 
-    def cache(self) -> Ref:
+    def cache(self) -> str:
         """Publish this committed DAG into the configured remote cache namespace."""
         if self.ref is None:
             raise DmlRepoError("DAG must be committed before caching")

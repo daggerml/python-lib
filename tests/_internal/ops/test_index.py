@@ -917,7 +917,9 @@ class TestIndexOps:
             result_ref = remote_ops.start_fn(index_ref, [fn_node])
             assert result_ref is None
             payload = json.loads(payload_log.read_text(encoding="utf-8"))
-            assert payload.get("cache_key", "").startswith("cache:")
+            assert isinstance(payload.get("cache_key"), str)
+            assert len(payload["cache_key"]) == 64
+            assert ":" not in payload["cache_key"]
             assert isinstance(payload.get("argv_ptr"), str)
             assert len(payload["argv_ptr"]) == 64
             assert payload["remote"] == {"root": _remote_root_from_env(), "cache": "cachetest"}

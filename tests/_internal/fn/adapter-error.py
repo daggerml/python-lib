@@ -3,8 +3,6 @@ import sys
 import tempfile
 
 from daggerml._internal._db import DmlDbEnv
-from daggerml._internal.ops.cache import CacheOps
-from daggerml._internal.ops.commit import CommitOps
 from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, Commit, Error, Head, Tree
 
@@ -32,9 +30,7 @@ if __name__ == "__main__":
                 raise ValueError("test error")
             except Exception as e:
                 result = Error.from_ex(e)
-            commit_ref = ops.commit(index_ref, result, message="adapter_error function result")
-            dag_ref = CommitOps(_db=db).describe(commit_ref)["dag"]
-            CacheOps(_db=db, remote_root=remote_root, remote_cache=remote_cache).put(dag_ref)
+            ops.commit(index_ref, result, message="adapter_error function result")
             print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
         finally:
             db.close()

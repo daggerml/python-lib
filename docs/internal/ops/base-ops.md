@@ -18,7 +18,7 @@ If related docs conflict on this scope, this document is the source of truth.
 
 - Manage transactional context (`_tx`) with read/write mode.
 - Provide typed object serialization/deserialization through `TxnContext.put/get`.
-- Expose shared helpers for dump/load, object existence, iteration, and context resolution (`get_ctx`).
+- Expose shared helpers for local-manifest load, object existence, iteration, and context resolution (`get_ctx`).
 - Apply retry policy (`with_retry`) for recoverable DB conditions.
 
 ## Core Contracts

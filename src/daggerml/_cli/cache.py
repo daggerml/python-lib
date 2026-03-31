@@ -86,8 +86,7 @@ def setup_cache_clear_parser(clear_parser: ArgumentParser) -> None:
 def execute_cache_put(ops_obj, args):
     """Execute cache put command, return JSON-serializable result."""
     dag_ref = parse_ref(args.dag_ref)
-    result = ops_obj.put(dag_ref)
-    return result.to
+    return ops_obj.put(dag_ref)
 
 
 def execute_cache_get(ops_obj, args) -> Optional[object]:
@@ -107,7 +106,7 @@ def execute_cache_delete(ops_obj, args) -> bool:
 def execute_cache_list(ops_obj, args):
     """Execute cache list command, return JSON-serializable result."""
     result = ops_obj.list(args.limit)
-    return [[cache_ref.to, {"dag": dag_ref.to}] for cache_ref, dag_ref in result]
+    return [[cache_key, {"dag": dag_ref.to}] for cache_key, dag_ref in result]
 
 
 def execute_cache_clear(ops_obj, args) -> int:

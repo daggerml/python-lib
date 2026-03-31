@@ -136,18 +136,26 @@ def main() -> None:
             with dml.new("examples/00-docker-dataset") as dag:
                 dag.dkr_build = docker_build
                 s3 = S3Store()
+                print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
                 dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS)
                 dag.put(flags, name="dkr-flags")
+                print("Building Docker image (this may take a moment)...")
                 t0 = time()
                 dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
                 t1 = time()
-                dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
+                print("Re-building Docker image to demonstrate caching...")
                 t2 = time()
+                dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
+                t3 = time()
                 dag.download = download_dataset
+                print("Downloading dataset within Docker...")
                 dataset = dag.download(name="dataset")
+                print("Training model and generating predictions within Docker...")
                 predictions = dag.call(predict_target, dataset, name="predictions")
+                print("Committing DAG to persist artifacts...")
                 dag.commit(predictions)
-                df = pl.read_parquet(predictions.value().uri)
+            print("Reading predictions parquet from S3...")
+            df = pl.read_parquet(predictions.value().uri)
             print(f"Dataset parquet URI: {dataset.value()}")
             print(f"\nPredictions parquet URI: {predictions.value().uri}")
     finally:
@@ -155,7 +163,7 @@ def main() -> None:
             moto_server.stop()
     print("\nPredictions:")
     print(df.head())
-    print(f"\nBuild times: {t1 - t0:.2f}s (cached: {t2 - t1:.2f}s)")
+    print(f"\nBuild times: {t1 - t0:.2f}s (cached: {t3 - t2:.2f}s)")
 
 
 if __name__ == "__main__":

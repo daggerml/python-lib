@@ -6,7 +6,6 @@ from unittest.mock import Mock
 from daggerml._cli.commit import (
     execute_commit_delete_dag,
     execute_commit_describe,
-    execute_commit_dump,
     execute_commit_get_dag,
     execute_commit_list,
     execute_commit_merge,
@@ -29,8 +28,6 @@ class TestSetupCommitParser:
         assert args.subcommand == "merge"
         args = parser.parse_args(["rebase", "s", "t", "--user", "u"])
         assert args.subcommand == "rebase"
-        args = parser.parse_args(["dump", "c"])
-        assert args.subcommand == "dump"
         args = parser.parse_args(["get-dag", "c", "n"])
         assert args.subcommand == "get-dag"
         args = parser.parse_args(["describe", "c"])
@@ -92,14 +89,6 @@ class TestSetupCommitParser:
         setup_commit_parser(parser)
         args = parser.parse_args(["describe", "commit:abc123"])
         assert args.subcommand == "describe"
-        assert args.commit == "commit:abc123"
-
-    def test_dump_parser_args(self):
-        """Test dump subcommand arguments."""
-        parser = ArgumentParser()
-        setup_commit_parser(parser)
-        args = parser.parse_args(["dump", "commit:abc123"])
-        assert args.subcommand == "dump"
         assert args.commit == "commit:abc123"
 
 
@@ -209,16 +198,3 @@ class TestExecuteCommitHandlers:
 
         mock_ops.describe.assert_called_once_with(Ref("commit:abc123"))
         assert result == payload
-
-    def test_execute_commit_dump(self):
-        """Test execute_commit_dump handler."""
-        from daggerml._internal._db import Ref
-
-        mock_ops = Mock()
-        mock_ops.dump.return_value = "payload"
-
-        args = Namespace(commit="commit:abc123")
-        result = execute_commit_dump(mock_ops, args)
-
-        mock_ops.dump.assert_called_once_with(Ref("commit:abc123"))
-        assert result == "payload"

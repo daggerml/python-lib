@@ -15,7 +15,6 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
             "dml commit list HEAD --limit 10",
             "dml commit merge commit:abc commit:def --user alice",
             "dml commit rebase head:feature head:main --user bob",
-            "dml commit dump commit:abc",
             "dml commit get-dag commit:abc mydag",
             "dml commit delete-dag mydag HEAD --user alice",
         ],
@@ -78,16 +77,6 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
     describe_parser.add_argument("commit", help="Commit ref (commit:<id>)")
     describe_parser.set_defaults(func=execute_commit_describe)
 
-    # dump subcommand
-    dump_parser = subparsers.add_parser("dump", help="Dump a commit payload")
-    apply_help_config(
-        dump_parser,
-        description="Dump a commit payload.",
-        examples=["dml commit dump commit:abc"],
-    )
-    dump_parser.add_argument("commit", help="Commit ref (commit:<id>)")
-    dump_parser.set_defaults(func=execute_commit_dump)
-
     # delete-dag subcommand
     delete_dag_parser = subparsers.add_parser("delete-dag", help="Delete DAG from head commit")
     apply_help_config(
@@ -135,12 +124,6 @@ def execute_commit_describe(ops_obj, args) -> dict:
     """Execute commit describe command, return JSON-serializable result."""
     commit = parse_ref(args.commit)
     return ops_obj.describe(commit)
-
-
-def execute_commit_dump(ops_obj, args) -> str:
-    """Execute commit dump command, return payload string."""
-    commit = parse_ref(args.commit)
-    return ops_obj.dump(commit)
 
 
 def execute_commit_delete_dag(ops_obj, args) -> str:

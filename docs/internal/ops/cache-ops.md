@@ -23,13 +23,16 @@ If related docs conflict on this scope, this document is the source of truth.
 ## Core Contracts
 
 - Cache key format follows [../../adapter-execution-contract.md](../../adapter-execution-contract.md).
-- `_cache_ref(argv_ref)` requires namespace `node-argv`.
+- `_cache_key(argv_ref)` requires namespace `node-argv` and returns the underlying argv datum-list id.
 - Cache identity semantics are defined in [../../adapter-execution-contract.md](../../adapter-execution-contract.md).
 - Remote cache-ref storage/layout is defined in [../../remote-data-model.md](../../remote-data-model.md).
 - Cache-ref operation semantics (conflict/idempotence/overwrite behavior) are defined in [../../remote-protocol.md](../../remote-protocol.md).
 - `CacheOps` MUST NOT persist function-result cache entries in LMDB cache namespaces.
 - Cache operations that require remote context MUST fail deterministically when required context is unavailable.
 - `CacheOps.put(dag_ref)` derives canonical cache identity from `dag.argv`; caller-provided helper keys are not authoritative for cache identity.
+- `CacheOps.put(dag_ref)` MUST publish the referenced DAG manifest through `RemoteOps.put_ref_manifest(...)` so cache publication inherits the same direct-only DAG-boundary rules as other remote manifest publication.
+- `CacheOps.put(dag_ref)` opens its own local read transaction to derive cache identity/targets, then performs remote manifest publication outside that transaction.
+- `CacheOps.list()` yields `(cache_key, dag_ref)` pairs.
 
 ## Invariants
 
@@ -38,6 +41,8 @@ If related docs conflict on this scope, this document is the source of truth.
 - determinism of `argv_ref.id()` for equivalent call payloads MUST be covered by unit tests.
 - Cache-ref CRUD through `CacheOps` is remote-backed and uses cache namespace constraints from [../../remote-data-model.md](../../remote-data-model.md).
 - cache publication is idempotent for same target and conflict semantics are defined by [../../remote-protocol.md](../../remote-protocol.md).
+- cache publication MUST NOT build its own recursive local manifest independent of `RemoteOps`.
+- cache keys are strings derived from `argv_ref.id()` and are not LMDB object refs.
 
 ## Non-goals
 

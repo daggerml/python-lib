@@ -25,7 +25,7 @@ System architecture defines the public-to-internal layering and subsystem bounda
 ## Subsystem Responsibilities
 
 - `HeadOps`: branch pointers.
-- `CommitOps`: history, merge, rebase, dump/load.
+- `CommitOps`: history, merge, rebase, commit description, and DAG lookup.
 - `DagOps`: DAG read/query surface.
 - `IndexOps`: mutable staging + execution.
 - `NodeOps`: value retrieval/unrolling.
