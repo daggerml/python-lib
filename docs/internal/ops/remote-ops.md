@@ -21,7 +21,7 @@ If related docs conflict on this scope, this document is the source of truth.
 - Pull remote objects/refs into local store.
 - Maintain remote cache refs.
 - Publish and resolve per-DAG refs under `refs/dags/**`.
-- Build and consume `local-manifest` transport payloads for local/remote handoff.
+- Build `local-manifest` transport payloads for publication handoff.
 - Validate content integrity (SHA-256).
 - Apply malformed-object policy during remote GC.
 
@@ -44,11 +44,13 @@ If related docs conflict on this scope, this document is the source of truth.
 - CAS content is addressed by hash and immutable.
 - Ref updates are explicit and scoped to requested operations.
 - Remote operations fail closed on malformed data.
-- Local handoff payloads use `local-manifest` with raw dump closure entries; remote protocol storage does not.
+- Publication handoff payloads use `local-manifest` with raw dump closure entries; remote protocol storage does not.
 - Local closure collection for remote publication is direct-only across DAG boundaries: child DAG refs are recorded as direct DAG ids, not expanded inline into the parent closure.
 - Tag/cache manifest refs always carry direct-DAG `targets` metadata.
 - DAG publication and manifest `closure["dag"]` are direct-only per manifest layer.
 - Recursive DAG publication is limited to the explicit publish-on-miss path for missing direct child DAG refs.
+- Remote read/materialization uses one centralized recursive materialization path.
+- Remote read/materialization stops scheduling a manifest or CAS object once it is already present locally or already scheduled within the active materialization.
 - Remote read/materialization may fetch independent manifest refs and CAS objects concurrently.
 
 ## Non-goals

@@ -54,7 +54,6 @@ Rules:
 
 - push publication MUST target only the tag-ref namespace/keying defined in [remote-data-model.md](remote-data-model.md).
 - push publication MUST resolve the source commit and write a tag ref pointing to the manifest for that commit closure.
-- local dump materialization used for push/load handoff MUST use the `local-manifest` shape with `closure` as `{ns: {id: dump_str}}`; this is a local transport representation, not a remote protocol object.
 - push publication MUST derive direct DAG ids only from the pushed commit's `Tree.dags`, not from the transitive dumped closure.
 - DAG publication on miss MUST derive direct child DAG ids only from that DAG's own nodes.
 - non-commit, non-dag manifest publication MUST derive direct DAG ids from the root-owned object graph without traversing into child DAG roots.
@@ -89,7 +88,9 @@ Rules:
 - pull MUST fail when manifest/root contracts are invalid.
 - pull MUST fail when a manifest references a DAG id whose `refs/dags/<dag_id>.json` entry is missing.
 - pull/load MUST reject tag/cache refs that point at manifests but omit `targets`.
+- pull/load MUST use one centralized internal recursive materialization path.
 - pull/load MUST deduplicate recursive DAG manifest loads within one top-level materialization.
+- pull/load MUST stop scheduling a manifest or CAS object once it is already present locally or already scheduled within the active materialization.
 - pull/load local materialization MAY recursively load child DAG manifests only through `closure["dag"]` resolution via `refs/dags/**`; it MUST NOT infer child DAG closure from raw DAG CAS presence alone.
 - pull/load MAY fetch independent manifest refs and CAS objects concurrently.
 - pull sync operations MUST NOT require transport blobs under `io/**`.
