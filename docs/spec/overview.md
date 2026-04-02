@@ -80,7 +80,7 @@ When a concept is not listed in this document, callers MUST treat it as unresolv
 | Contrib literal codecs and dataframe serialization | `docs/contrib/codecs.md` | Contrib-owned codec behavior and dataframe serialization semantics. |
 | Contrib prebuilt funks | `docs/contrib/funks.md` | Contrib-owned prebuilt function contracts. |
 | Contrib testing helpers | `docs/contrib/testing.md` | Testing helpers intended for author-code unit tests. |
-| Contrib runtime lifecycle | `docs/contrib/runtime-contract.md`, `docs/contrib/executor-state.md`, `docs/contrib/executor-catalog.md` | Supervisor launch, executor start/poll/gc, shared state and comms propagation, adapter/executor pairing, and per-executor runtime behavior. |
+| Contrib runtime lifecycle | `docs/contrib/runtime-contract.md`, `docs/contrib/executor-state.md`, `docs/contrib/executor-catalog.md`, `docs/contrib/execution-graph.md` | Supervisor launch, executor start/poll/gc, shared state and comms propagation, adapter/executor pairing, live execution-graph storage, and cancel/sweep runtime behavior. |
 | Contrib plugin packaging and discovery | `docs/contrib/registries.md` | Adapter and executor registry contracts, plugin packaging, and discovery behavior. |
 | Contrib runtime diagnostics and status surfaces | `docs/contrib/status.md`, `docs/cli.md` | Contrib runtime status and diagnostics APIs plus CLI pass-through behavior under `dml contrib`. |
 | Contrib S3 utility behavior | `docs/contrib/s3-store.md` | `S3Store`, S3 URI normalization, content-addressed S3 object helpers, JSON helpers, tar helpers, and extraction safety rules. |

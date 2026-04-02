@@ -11,6 +11,8 @@ This document is authoritative for contrib runtime role boundaries and runtime c
 
 This document specifies how contrib realizes the core adapter execution contract for contrib execution surfaces. It does not redefine the core adapter-boundary payload or output schema.
 
+Live execution-graph storage, caller edges, and root-driven cancel or sweep semantics are authoritative in [execution-graph.md](execution-graph.md).
+
 ## Scope
 
 This document defines:
@@ -25,6 +27,7 @@ This document does not define:
 
 - the core adapter-boundary payload or output schema,
 - state-record field shape or backend serialization details,
+- live execution-graph schema or cancel or sweep graph propagation,
 - per-executor kwargs schemas or executor-specific runtime details beyond shared lifecycle requirements.
 
 ## Purpose
@@ -92,6 +95,7 @@ Define the normative runtime contract for contrib execution while keeping author
   - executors MUST own runtime state ownership decisions for their execution surface,
   - executors that create new state records MUST initialize canonical state records via executor-state APIs,
   - executors MAY write executor-specific metadata only through namespaced state metadata owned by the executor,
+  - in runtimes that implement the execution graph defined by [execution-graph.md](execution-graph.md), adapters and executors MUST preserve the caller-identity inputs needed by that graph contract,
   - sub-runnable invocation within contrib runtime MUST be execution-side behavior owned by the executor portion of the Contrib Adapter/Executor Pair,
   - executors MUST NOT receive parent comms as lifecycle parameters.
   - payload `comms` is adapter-owned Parent Comms for the current invocation,
@@ -164,7 +168,7 @@ None identified in this spec. Handled by generic execution environment assumptio
 ### Observability
 
 - While `Supervisor.run(payload)` is active, the supervisor MUST update running heartbeat state through executor-state APIs.
-- Stateful contrib runtime implementations SHOULD preserve enough executor-owned metadata to identify execution ownership and runtime handles needed for polling, cancellation, and debugging.
+- Stateful contrib runtime implementations SHOULD preserve enough executor-owned metadata to identify execution ownership and runtime handles needed for polling, cancellation, cleanup, and debugging.
 - Stateless contrib runtime implementations MAY leave executor-owned metadata empty when no runtime handle or resumable state exists.
 - Parent Comms updates are observational only; canonical mutable execution data remains the current invocation's own State record.
 - Parent Comms handling is a CLI/transport concern layered around `send(...)`, not an executor lifecycle concern.
@@ -173,6 +177,7 @@ None identified in this spec. Handled by generic execution environment assumptio
 ### Authority Handoffs
 
 - The core adapter-boundary payload schema, output schema, and generic adapter invocation rules are authoritative in [../adapter-execution-contract.md](../adapter-execution-contract.md).
+- Live execution-graph schema, caller identity rules, and cancel or sweep semantics are authoritative in [execution-graph.md](execution-graph.md).
 - State-record field shape, ownership fields, and backend reference behavior are authoritative in [executor-state.md](executor-state.md).
 - Per-executor kwargs schemas and executor-specific runtime behavior are authoritative in [executor-catalog.md](executor-catalog.md).
 - Contrib registry/discovery contracts are authoritative in [registries.md](registries.md).
@@ -188,6 +193,7 @@ None identified in this spec. Handled by generic execution environment assumptio
 ## References
 
 - [../adapter-execution-contract.md](../adapter-execution-contract.md)
+- [execution-graph.md](execution-graph.md)
 - [executor-state.md](executor-state.md)
 - [executor-catalog.md](executor-catalog.md)
 - [registries.md](registries.md)

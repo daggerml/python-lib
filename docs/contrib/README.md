@@ -77,6 +77,7 @@ This canonical runtime contract owns:
 
 The following docs are focused companion references that MUST remain consistent with the canonical runtime contract:
 
+- [execution-graph.md](execution-graph.md)
 - [registries.md](registries.md)
 - [executor-state.md](executor-state.md)
 - [executor-catalog.md](executor-catalog.md)
@@ -102,7 +103,8 @@ Contrib executor-state:
 
 - define shared kickoff/poll state contracts for executors,
 - define backend contracts for `LocalState` and `DynamoState`,
-- define shared state record ownership and metadata conventions used by wrappers and deepest executors.
+- define shared state record ownership and metadata conventions used by wrappers and deepest executors,
+- defer live execution-graph schema and cancel/sweep ownership to [execution-graph.md](execution-graph.md).
 
 `daggerml.contrib.status`:
 

@@ -8,7 +8,7 @@ specified
 
 This document is authoritative for contrib executor-state record shape and backend reference conventions.
 
-Normative lifecycle ownership and parent-comms behavior are authoritative in [runtime-contract.md](runtime-contract.md); this document is authoritative for the shared State record/reference shape used by those contracts.
+Normative lifecycle ownership and parent-comms behavior are authoritative in [runtime-contract.md](runtime-contract.md); live execution-graph storage, caller edges, and cancel or sweep behavior are authoritative in [execution-graph.md](execution-graph.md); this document is authoritative for the shared State record/reference shape used by those contracts.
 
 ## Purpose
 
@@ -23,7 +23,7 @@ This document defines:
 - ownership and metadata conventions for executor-managed state,
 - how parent comms reuses State backends without redefining a second mutable record format.
 
-This document does not define kickoff/poll dispatch rules.
+This document does not define kickoff or poll dispatch rules, live execution-graph tables, or cancel propagation.
 
 ## Reference State Record
 
@@ -91,8 +91,10 @@ Lock contract:
 
 ## Backend Profiles
 
-- `LocalState`: process-local backend profile for local adapter/executor flows.
+- `LocalState`: process-local backend profile for local adapter or executor flows.
 - `DynamoState`: cross-invocation backend profile for lambda-style polling flows.
+
+This backend profile list does not by itself define the live execution-graph storage backend for a contrib runtime deployment.
 
 ## Parent Comms Reuse
 
@@ -104,3 +106,4 @@ Lock contract:
 ## References
 
 - [runtime-contract.md](runtime-contract.md)
+- [execution-graph.md](execution-graph.md)

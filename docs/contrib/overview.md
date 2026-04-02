@@ -10,7 +10,7 @@ This document is authoritative for contrib-docs orientation only.
 It defines where to start and which contrib docs to read by task.
 
 Contrib architecture and module ownership contracts remain authoritative in [README.md](README.md).
-Contrib runtime contracts remain authoritative in [runtime-contract.md](runtime-contract.md).
+Contrib runtime contracts remain authoritative in [runtime-contract.md](runtime-contract.md) and [execution-graph.md](execution-graph.md).
 
 ## Purpose
 
@@ -25,6 +25,7 @@ Provide a fast entrypoint to the contrib docs set so readers can pick the right 
 
 - Building or changing adapter/executor runtime behavior:
   - [runtime-contract.md](runtime-contract.md)
+  - [execution-graph.md](execution-graph.md)
   - [executor-catalog.md](executor-catalog.md)
   - [executor-state.md](executor-state.md)
   - [registries.md](registries.md) (only when changing registry/discovery contracts)
@@ -60,6 +61,7 @@ Provide a fast entrypoint to the contrib docs set so readers can pick the right 
 
 - Module boundaries and dependency direction: [README.md](README.md)
 - Canonical contrib runtime contracts: [runtime-contract.md](runtime-contract.md)
+- Contrib live execution graph and cancel/sweep behavior: [execution-graph.md](execution-graph.md)
 - Per-executor runtime contracts: [executor-catalog.md](executor-catalog.md)
 - Focused registry contracts: [registries.md](registries.md)
 - Contrib codec catalog and serialization behavior: [codecs.md](codecs.md)
@@ -82,4 +84,5 @@ See the sections in this document for normative content.
 
 - [README.md](README.md)
 - [runtime-contract.md](runtime-contract.md)
+- [execution-graph.md](execution-graph.md)
 - [status.md](status.md)
