@@ -7,32 +7,16 @@ doc_type: spec
 
 ## Authority
 
-This document is authoritative for contrib runtime role boundaries and runtime contracts for contrib adapters, contrib executors, and the contrib supervisor.
-
-This document specifies how contrib realizes the core adapter execution contract for contrib execution surfaces. It does not redefine the core adapter-boundary payload or output schema.
-
-Live execution-graph storage, caller edges, and root-driven cancel or sweep semantics are authoritative in [execution-graph.md](execution-graph.md).
+This document is authoritative for contrib runtime role boundaries, shared adapter/executor lifecycle contracts, and contrib supervisor payload/behavior.
 
 ## Scope
 
-This document defines:
-
-- the runtime role split between contrib adapters and contrib executors,
-- the rule that the contrib adapter/executor pair, not the contrib adapter class alone, satisfies the core adapter contract for a contrib execution surface,
-- contrib executor lifecycle contracts for `start`, `poll`, and `gc`,
-- shared rules for executor state and adapter-owned parent comms,
-- contrib supervisor payload and behavior.
-
 This document does not define:
 
-- the core adapter-boundary payload or output schema,
-- state-record field shape or backend serialization details,
-- live execution-graph schema or cancel or sweep graph propagation,
-- per-executor kwargs schemas or executor-specific runtime details beyond shared lifecycle requirements.
-
-## Purpose
-
-Define the normative runtime contract for contrib execution while keeping authority boundaries between core adapter semantics, contrib runtime composition, executor-state records, and per-executor behavior explicit.
+- the core adapter-boundary payload or output schema; refer to [../adapter-execution-contract.md](../adapter-execution-contract.md),
+- state-record field shape or backend serialization details; refer to [executor-state.md](executor-state.md),
+- live execution-graph schema or cancel or sweep graph propagation; refer to [execution-graph.md](execution-graph.md),
+- per-executor kwargs schemas or executor-specific runtime details beyond shared lifecycle requirements; refer to [executor-catalog.md](executor-catalog.md).
 
 ## Glossary
 
@@ -43,6 +27,22 @@ Define the normative runtime contract for contrib execution while keeping author
 - Execution Surface: the contrib runtime path associated with one contrib adapter and one selected contrib executor for a given runnable invocation.
 - Parent Comms: optional adapter-payload comms describing where the current adapter invocation reports status/heartbeat/result for its caller.
 - Supervisor: the optional contrib runtime harness helper exposed by `daggerml.contrib.supervisor`.
+
+```mermaid
+flowchart LR
+    A["start_fn"] --> B["Contrib Adapter"]
+    B -->|adapter envelope| C["Contrib Executor"]
+    C -->|status or result| B
+```
+
+```mermaid
+flowchart LR
+    A["Contrib Executor"] --> B{"Existing state?"}
+    B -- no --> C["start(...)"]
+    B -- yes --> D["poll(...)"]
+    C --> E["Update state"]
+    D --> E
+```
 
 ## Contract
 
@@ -89,13 +89,18 @@ Define the normative runtime contract for contrib execution while keeping author
   - polling MUST be idempotent across repeated invocations for stateful executors,
   - stateless executors MAY define `poll` and `gc` as no-op lifecycle hooks when they retain no executor-owned handle or state,
   - state locking MUST be backend-owned via `state_class.lock(cache_key)`,
-  - `gc(*, state)` MUST be idempotent and MUST clean up executor-owned residue that may remain after terminal execution or cancellation, including deleting the state record,
+  - `gc(*, state)` MUST be idempotent and MUST clean up executor-owned residue that may remain after terminal execution or cancellation,
+  - only the executor/runtime owner of a given live execution backend may call `gc(*, state)` for that node,
+  - observing that another execution has reached a terminal state does not by itself authorize the observer to delete that node's live state row,
   - executors that are stateless in normal operation MUST NOT invent synthetic executor-owned state solely to emulate resumability.
 - Shared state/comms handling interface:
   - executors MUST own runtime state ownership decisions for their execution surface,
   - executors that create new state records MUST initialize canonical state records via executor-state APIs,
   - executors MAY write executor-specific metadata only through namespaced state metadata owned by the executor,
   - in runtimes that implement the execution graph defined by [execution-graph.md](execution-graph.md), adapters and executors MUST preserve the caller-identity inputs needed by that graph contract,
+  - executors that create nested child execution state MUST create an executor-private child state backend or directory distinct from the parent execution state backend,
+  - nested child state backends created by an executor are owned by that executor for cleanup and row deletion,
+  - parent comms is observational and MUST NOT be treated as the child execution's canonical mutable state backend,
   - sub-runnable invocation within contrib runtime MUST be execution-side behavior owned by the executor portion of the Contrib Adapter/Executor Pair,
   - executors MUST NOT receive parent comms as lifecycle parameters.
   - payload `comms` is adapter-owned Parent Comms for the current invocation,
