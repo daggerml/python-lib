@@ -1,7 +1,7 @@
 """Run an end-to-end Docker-backed dataset pipeline.
 
 The example builds a Docker image from this repository, starts a local moto S3
-server when no remote root is configured, downloads the iris dataset in one
+server when no remote root is configured, loads the iris dataset in one
 Docker-executed funk, and trains a small classifier in another. It exercises
 the contrib runtime end to end: script funkification, Docker execution, remote
 cache publication, and S3-backed artifact exchange between DAG nodes.
@@ -64,14 +64,9 @@ def _start_local_moto_if_needed() -> Any | None:
 @api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
 @api.funkify
 def download_dataset(dag):
-    import pandas as pd  # pyright:ignore[reportMissingImports] # noqa:F401
+    from sklearn.datasets import load_iris  # pyright:ignore[reportMissingImports] # noqa:F401
 
-    df = pd.read_csv(
-        "https://archive.ics.uci.edu/ml/machine-learning-databases/iris/iris.data",
-        header=None,
-        names=["sepal_length", "sepal_width", "petal_length", "petal_width", "target"],
-    ).dropna()
-    return df
+    return load_iris(as_frame=True).frame.dropna()
 
 
 @api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
@@ -148,7 +143,7 @@ def main() -> None:
                 dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
                 t3 = time()
                 dag.download = download_dataset
-                print("Downloading dataset within Docker...")
+                print("Loading dataset within Docker...")
                 dataset = dag.download(name="dataset")
                 print("Training model and generating predictions within Docker...")
                 predictions = dag.call(predict_target, dataset, name="predictions")
