@@ -99,6 +99,32 @@ def test_s3_store_tar_skips_absolute_symlinks_under_excluded_directory(tmp_path)
     assert not (out / ".venv").exists()
 
 
+def test_s3_store_tar_raises_on_non_excluded_symlink_by_default(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "keep.txt").write_text("keep")
+    (src / "link.txt").symlink_to(src / "keep.txt")
+
+    store = S3Store()
+    with pytest.raises(DmlRepoError, match="symlinks='raise'"):
+        store.tar(src)
+
+
+def test_s3_store_tar_ignores_non_excluded_symlink_when_requested(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "keep.txt").write_text("keep")
+    (src / "link.txt").symlink_to(src / "keep.txt")
+
+    store = S3Store()
+    tar_uri = store.tar(src, symlinks="ignore")
+    out = tmp_path / "out"
+    store.untar(tar_uri, out)
+
+    assert (out / "keep.txt").read_text() == "keep"
+    assert not (out / "link.txt").exists()
+
+
 def test_s3_store_cd_rebases_prefix():
     store = S3Store(bucket="test-bucket", prefix="a/b")
     next_store = store.cd("c")

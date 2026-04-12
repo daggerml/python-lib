@@ -156,14 +156,16 @@ This document does not define:
   - MUST decode as UTF-8 and parse with `json.loads(...)`,
   - MUST return the decoded JSON value produced by `json.loads(...)`,
   - UTF-8 decode failures and JSON parse failures MUST propagate.
-- `S3Store.tar(path: str | os.PathLike[str], excludes: Iterable[str] = ()) -> Uri`:
+- `S3Store.tar(path: str | os.PathLike[str], excludes: Iterable[str] = (), *, symlinks: Literal["ignore", "raise"] = "raise") -> Uri`:
   - `path` MUST identify an existing local directory or the method MUST raise `DmlRepoError`,
   - excludes MUST be matched with `fnmatch` against POSIX-style relative paths from the archive root,
+  - `symlinks` MUST accept only `"ignore"` or `"raise"`,
   - when an excluded path is a directory, the entire excluded subtree MUST be pruned,
   - archive traversal order for directory names and file names MUST be sorted,
   - each emitted tar header MUST normalize `uid=0`, `gid=0`, `uname=""`, `gname=""`, and `mtime=0`,
   - non-root directories that remain after exclusion MUST be emitted as directory entries,
-  - non-excluded symlinks MUST raise `DmlRepoError`,
+  - when `symlinks="raise"`, non-excluded symlinks MUST raise `DmlRepoError`,
+  - when `symlinks="ignore"`, non-excluded symlinks MUST be skipped without archive entries,
   - preserved file mode bits MUST come from the source path metadata captured by `tarfile.gettarinfo(...)`,
   - the resulting tar bytes MUST be stored through `put(..., suffix=".tar")`,
   - side effects are local filesystem reads and a single S3 object write.
@@ -209,7 +211,7 @@ This document does not define:
   - caller behavior: do not retry unchanged,
   - operator action: install or repair the Python S3 client dependency.
 - Caller input validation failures:
-  - includes unsupported identifier types, invalid `remote_root`, invalid `tar(...)` source path, invalid `put(...)` source selection, unsupported symlinks, and safe-extraction path violations,
+  - includes unsupported identifier types, invalid `remote_root`, invalid `tar(...)` source path, invalid `put(...)` source selection, invalid `tar(..., symlinks=...)` mode, unsupported symlinks when `symlinks="raise"`, and safe-extraction path violations,
   - non-retryable until caller input changes,
   - terminal for the current call,
   - caller behavior: correct the input and invoke again,

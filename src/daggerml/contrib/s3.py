@@ -8,7 +8,7 @@ import os
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, cast
+from typing import Any, Iterable, Literal, cast
 from urllib.parse import urlparse
 
 from daggerml import Node, Uri
@@ -173,10 +173,18 @@ class S3Store:
     def get_js(self, name_or_uri):
         return json.loads(self.get(name_or_uri).decode("utf-8"))
 
-    def tar(self, path: str | os.PathLike[str], excludes: Iterable[str] = ()) -> Uri:
+    def tar(
+        self,
+        path: str | os.PathLike[str],
+        excludes: Iterable[str] = (),
+        *,
+        symlinks: Literal["ignore", "raise"] = "raise",
+    ) -> Uri:
         root = Path(path).resolve()
         if not root.exists() or not root.is_dir():
             raise DmlRepoError("S3Store.tar path must be an existing directory")
+        if symlinks not in {"ignore", "raise"}:
+            raise DmlRepoError("S3Store.tar symlinks must be 'ignore' or 'raise'")
         patterns = list(excludes)
         buf = io.BytesIO()
 
@@ -203,7 +211,9 @@ class S3Store:
                     if excluded(rel):
                         continue
                     if child.is_symlink():
-                        raise DmlRepoError(f"S3Store.tar does not support symlinks: {rel}")
+                        if symlinks == "raise":
+                            raise DmlRepoError(f"S3Store.tar encountered symlink with symlinks='raise': {rel}")
+                        continue
                     kept_dirnames.append(dirname)
                 dirnames[:] = kept_dirnames
 
@@ -216,7 +226,9 @@ class S3Store:
                     if excluded(rel):
                         continue
                     if p.is_symlink():
-                        raise DmlRepoError(f"S3Store.tar does not support symlinks: {rel}")
+                        if symlinks == "raise":
+                            raise DmlRepoError(f"S3Store.tar encountered symlink with symlinks='raise': {rel}")
+                        continue
                     with p.open("rb") as f:
                         tf.addfile(normalize(tf.gettarinfo(str(p), arcname=rel)), fileobj=f)
         return self.put(data=buf.getvalue(), suffix=".tar")
