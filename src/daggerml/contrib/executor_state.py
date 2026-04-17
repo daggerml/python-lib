@@ -3,330 +3,350 @@ from __future__ import annotations
 import json
 import os
 import time
-from contextlib import contextmanager
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 from uuid import uuid4
 
 from daggerml._internal.types import DmlRepoError
 from daggerml.util import get_client
 
-Status = Literal["pending", "running", "succeeded", "failed", "canceled"]
-HEARTBEAT_STALENESS = 60.0
+# ---------------------------------------------------------------------------
+# Execution state model
+# ---------------------------------------------------------------------------
+
+Status = Literal["pending", "running", "succeeded", "failed", "done"]
+LOCK_TTL = 15.0
 
 
-class StateRecord(TypedDict):
-    version: int
+class ExecutionRecord(TypedDict):
     cache_key: str
+    argv_ptr: str
     status: Status
+    lock_token: str | None
+    lock_expires_ts: float | None
+    dag_id: str | None
     error: str | None
-    heartbeat_ts: float
-    metadata: dict[str, dict[str, Any]]
+    heartbeat_ts: float | None
+    metadata: dict[str, Any]
+    updated_ts: float
 
 
-def is_stale(record: StateRecord) -> bool:
-    return record["heartbeat_ts"] + HEARTBEAT_STALENESS < time.time()
+def _check_condition_failure(exc: Exception) -> bool:
+    """Return True if the exception is a DynamoDB ConditionalCheckFailedException."""
+    code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+    return code == "ConditionalCheckFailedException"
 
 
-class StateBase:
-    def __init__(self, cache_key: str, **kwargs):
+def _record_from_item(item: dict[str, Any]) -> ExecutionRecord:
+    """Deserialize a DynamoDB item into an ExecutionRecord."""
+    raw = item.get("state", {}).get("S")
+    if not raw:
+        raise DmlRepoError("Execution state item missing 'state' field")
+    return cast(ExecutionRecord, json.loads(raw))
+
+
+def _serialize_record(record: ExecutionRecord) -> str:
+    return json.dumps(record, separators=(",", ":"), sort_keys=True)
+
+
+class ExecutionState:
+    """DynamoDB-backed execution state with advisory locking."""
+
+    def __init__(self, cache_key: str, *, table_name: str | None = None) -> None:
         if not isinstance(cache_key, str) or not cache_key:
-            raise DmlRepoError("State cache_key must be a non-empty string")
+            raise DmlRepoError("ExecutionState cache_key must be a non-empty string")
         self.cache_key = cache_key
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-    def _acquire_lock(self) -> bool:
-        raise NotImplementedError
-
-    def _release_lock(self) -> None:
-        raise NotImplementedError
-
-    def get(self) -> StateRecord | None:
-        raise NotImplementedError
-
-    def put_if_absent(self, state: StateRecord) -> bool:
-        raise NotImplementedError
-
-    def update(self, state: StateRecord) -> None:
-        raise NotImplementedError
-
-    def delete(self) -> None:
-        raise NotImplementedError
-
-    @contextmanager
-    def lock(self):
-        locked = self._acquire_lock()
-        try:
-            yield self if locked else None
-        finally:
-            if locked:
-                self._release_lock()
-
-    @staticmethod
-    def _validate_record(state: dict[str, Any]) -> StateRecord:
-        required = {
-            "version",
-            "cache_key",
-            "status",
-            "error",
-            "heartbeat_ts",
-            "metadata",
-        }
-        missing = sorted(required - set(state.keys()))
-        if missing:
-            raise DmlRepoError(f"State record missing required fields: {', '.join(missing)}")
-        unknown = sorted(set(state.keys()) - required)
-        if unknown:
-            raise DmlRepoError(f"State record has unknown fields: {', '.join(unknown)}")
-        if not isinstance(state["heartbeat_ts"], (int, float)):
-            raise DmlRepoError("State record heartbeat_ts must be a number")
-        if state["status"] not in {"pending", "running", "succeeded", "failed", "canceled"}:
-            raise DmlRepoError("State record status must be one of pending|running|succeeded|failed|canceled")
-        if not isinstance(state["metadata"], dict):
-            raise DmlRepoError("State record metadata must be a dict")
-        for key, value in cast(dict[str, Any], state["metadata"]).items():
-            if not isinstance(key, str) or not key:
-                raise DmlRepoError("State record metadata keys must be non-empty strings")
-            if not isinstance(value, dict):
-                raise DmlRepoError("State record metadata values must be dict objects")
-        return cast(StateRecord, state)
-
-    def init_record(
-        self,
-        *,
-        status: Status = "pending",
-        error: str | None = None,
-        metadata: dict[str, dict[str, Any]] | None = None,
-    ) -> StateRecord:
-        return self._validate_record(
-            {
-                "version": 1,
-                "cache_key": self.cache_key,
-                "status": status,
-                "error": error,
-                "heartbeat_ts": time.time(),
-                "metadata": metadata or {},
-            }
-        )
-
-    def update_status(
-        self,
-        *,
-        status: Status,
-        error: str | None = None,
-    ) -> StateRecord:
-        record = self.get()
-        if record is None:
-            record = self.init_record()
-        next_record: dict[str, Any] = dict(record)
-        next_record.update(
-            {
-                "status": status,
-                "error": error,
-                "heartbeat_ts": time.time(),
-            }
-        )
-        return self._validate_record(next_record)
-
-    def set_executor_metadata(self, executor_id: str, data: dict[str, Any]) -> StateRecord:
-        record = self.get()
-        if record is None:
-            record = self.init_record()
-        next_record: dict[str, Any] = dict(record)
-        metadata = dict(cast(dict[str, dict[str, Any]], next_record.get("metadata", {})))
-        metadata[executor_id] = data
-        next_record["metadata"] = metadata
-        next_record["heartbeat_ts"] = time.time()
-        return self._validate_record(next_record)
-
-    def get_executor_metadata(self, executor_id: str) -> dict[str, Any]:
-        return (self.get() or {}).get("metadata", {}).get(executor_id, {})
-
-
-@dataclass
-class LocalState(StateBase):
-    cache_key: str
-    cache_dir: str | None = None
-    lock_timeout: float = 5.0
-    poll_interval: float = 0.05
-    _has_lock: bool = field(default=False, init=False)
-
-    def __post_init__(self):
-        # TODO: We should use the standard config dir: `<config_dir>/exec-state/<cache-namespace>/daggerml/`
-        # but not yet
-        base = self.cache_dir or os.getenv("DML_FN_CACHE_DIR") or str(Path.home() / ".daggerml" / "contrib-state")
-        root = Path(base)
-        root.mkdir(parents=True, exist_ok=True)
-        self._state_path = root / f"{self.cache_key}.json"
-        self._lock_path = root / f"{self.cache_key}.lock"
-
-    def _acquire_lock(self) -> bool:
-        deadline = time.time() + self.lock_timeout
-        while time.time() < deadline:
-            try:
-                fd = os.open(str(self._lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode("utf-8"))
-                os.close(fd)
-                self._has_lock = True
-                return True
-            except FileExistsError:
-                try:
-                    age = time.time() - self._lock_path.stat().st_mtime
-                    if age > self.lock_timeout:
-                        self._lock_path.unlink(missing_ok=True)
-                        continue
-                except FileNotFoundError:
-                    continue
-                time.sleep(self.poll_interval)
-        return False
-
-    def _release_lock(self) -> None:
-        if self._has_lock and self._lock_path.exists():
-            self._lock_path.unlink(missing_ok=True)
-        self._has_lock = False
-
-    def get(self) -> StateRecord | None:
-        if not self._state_path.exists():
-            return None
-        return self._validate_record(json.loads(self._state_path.read_text()))
-
-    def put_if_absent(self, state: StateRecord) -> bool:
-        if self._state_path.exists():
-            return False
-        state = self._validate_record(dict(state))
-        self._state_path.write_text(json.dumps(state, separators=(",", ":"), sort_keys=True))
-        return True
-
-    def update(self, state: StateRecord) -> None:
-        state = self._validate_record(dict(state))
-        self._state_path.write_text(json.dumps(state, separators=(",", ":"), sort_keys=True))
-
-    def delete(self) -> None:
-        self._state_path.unlink(missing_ok=True)
-
-
-@dataclass
-class DynamoState(StateBase):
-    cache_key: str
-    table_name: str = field(default_factory=lambda: os.getenv("DML_DYNAMODB_TABLE"))  # pyright: ignore[reportAssignmentType]
-    lock_timeout: float = 5.0
-    owner_id: str = field(default_factory=lambda: str(uuid4()))
-    client: Any = field(default_factory=lambda: get_client("dynamodb"))
-
-    def __post_init__(self):
+        self.table_name = table_name or os.getenv("DML_DYNAMODB_TABLE")
         if not self.table_name:
-            raise DmlRepoError("DynamoState requires table_name parameter or DML_DYNAMODB_TABLE env var")
+            raise DmlRepoError("ExecutionState requires table_name or DML_DYNAMODB_TABLE env var")
+        self.lock_token: str | None = None
+        self._client = get_client("dynamodb")
 
-    def _item_key(self):
+    def _item_key(self) -> dict[str, Any]:
         return {"cache_key": {"S": self.cache_key}}
 
-    def _acquire_lock(self) -> bool:
-        try:
-            self.client.update_item(
-                TableName=self.table_name,
-                Key=self._item_key(),
-                UpdateExpression="SET #lk = :lk, #ts = :ts",
-                ConditionExpression="attribute_not_exists(#lk) OR #lk = :lk OR #ts < :stale",
-                ExpressionAttributeNames={"#lk": "lock_owner", "#ts": "updated_ts"},
-                ExpressionAttributeValues={
-                    ":lk": {"S": self.owner_id},
-                    ":ts": {"N": str(time.time())},
-                    ":stale": {"N": str(time.time() - self.lock_timeout)},
-                },
-            )
-            return True
-        except Exception as e:
-            code = getattr(e, "response", {}).get("Error", {}).get("Code")
-            if code == "ConditionalCheckFailedException":
-                return False
-            raise
+    # -- upsert (classmethod) -----------------------------------------------
 
-    def _release_lock(self) -> None:
+    @classmethod
+    def upsert(
+        cls,
+        cache_key: str,
+        argv_ptr: str,
+        *,
+        table_name: str | None = None,
+    ) -> ExecutionRecord:
+        """Create a pending record if absent; return the current record either way."""
+        inst = cls(cache_key, table_name=table_name)
+        now = time.time()
+        record: ExecutionRecord = {
+            "cache_key": cache_key,
+            "argv_ptr": argv_ptr,
+            "status": "pending",
+            "lock_token": None,
+            "lock_expires_ts": None,
+            "dag_id": None,
+            "error": None,
+            "heartbeat_ts": None,
+            "metadata": {},
+            "updated_ts": now,
+        }
         try:
-            self.client.update_item(
-                TableName=self.table_name,
-                Key=self._item_key(),
-                UpdateExpression="REMOVE #lk",
-                ConditionExpression="#lk = :lk",
-                ExpressionAttributeNames={"#lk": "lock_owner"},
-                ExpressionAttributeValues={":lk": {"S": self.owner_id}},
-            )
-        except Exception:
-            return
-
-    def get(self) -> StateRecord | None:
-        resp = self.client.get_item(TableName=self.table_name, Key=self._item_key(), ConsistentRead=True)
-        item = resp.get("Item")
-        if item is None:
-            return None
-        raw = item.get("state", {}).get("S")
-        if not raw:
-            return None
-        return self._validate_record(json.loads(raw))
-
-    def put_if_absent(self, state: StateRecord) -> bool:
-        state = self._validate_record(dict(state))
-        try:
-            self.client.put_item(
-                TableName=self.table_name,
+            inst._client.put_item(
+                TableName=inst.table_name,
                 Item={
-                    "cache_key": {"S": self.cache_key},
-                    "state": {"S": json.dumps(state, separators=(",", ":"), sort_keys=True)},
-                    "updated_ts": {"N": str(time.time())},
-                    "lock_owner": {"S": self.owner_id},
+                    "cache_key": {"S": cache_key},
+                    "state": {"S": _serialize_record(record)},
+                    "updated_ts": {"N": str(now)},
                 },
                 ConditionExpression="attribute_not_exists(cache_key)",
             )
+            return record
+        except Exception as e:
+            if _check_condition_failure(e):
+                existing = inst.get()
+                if existing is None:
+                    raise DmlRepoError("ExecutionState upsert race: item vanished after conflict") from e
+                return existing
+            raise
+
+    # -- get (unlocked read) ------------------------------------------------
+
+    def get(self) -> ExecutionRecord | None:
+        resp = self._client.get_item(
+            TableName=self.table_name,
+            Key=self._item_key(),
+            ConsistentRead=True,
+        )
+        item = resp.get("Item")
+        if item is None:
+            return None
+        return _record_from_item(item)
+
+    # -- lock / unlock ------------------------------------------------------
+
+    def lock(self, ttl: float = LOCK_TTL) -> bool:
+        """Acquire the advisory lock.  Returns True on success."""
+        token = str(uuid4())
+        now = time.time()
+        # Read current state so we can update the lock fields inside the JSON blob.
+        # Safe because the conditional expression below guarantees no other writer
+        # holds the lock; if the lock is stolen between read and write, the
+        # condition fails and we return False.
+        record = self.get()
+        if record is None:
+            return False
+        patched = dict(record)
+        patched["lock_token"] = token
+        patched["lock_expires_ts"] = now + ttl
+        patched["updated_ts"] = now
+        try:
+            self._client.update_item(
+                TableName=self.table_name,
+                Key=self._item_key(),
+                UpdateExpression="SET #st = :st, #ts = :ts, #lt = :lt, #le = :le",
+                ConditionExpression=(
+                    "attribute_exists(cache_key) AND (  attribute_not_exists(#lt) OR #lt = :null OR #le <= :now)"
+                ),
+                ExpressionAttributeNames={
+                    "#st": "state",
+                    "#ts": "updated_ts",
+                    "#lt": "lock_token",
+                    "#le": "lock_expires_ts",
+                },
+                ExpressionAttributeValues={
+                    ":st": {"S": _serialize_record(cast(ExecutionRecord, patched))},
+                    ":ts": {"N": str(now)},
+                    ":lt": {"S": token},
+                    ":le": {"N": str(now + ttl)},
+                    ":null": {"NULL": True},
+                    ":now": {"N": str(now)},
+                },
+            )
+            self.lock_token = token
             return True
         except Exception as e:
-            code = getattr(e, "response", {}).get("Error", {}).get("Code")
-            if code == "ConditionalCheckFailedException":
+            if _check_condition_failure(e):
                 return False
             raise
 
-    def update(self, state: StateRecord) -> None:
-        state = self._validate_record(dict(state))
-        self.client.update_item(
-            TableName=self.table_name,
-            Key=self._item_key(),
-            UpdateExpression="SET #st = :st, #ts = :ts",
-            ConditionExpression="#lk = :lk",
-            ExpressionAttributeNames={"#st": "state", "#ts": "updated_ts", "#lk": "lock_owner"},
-            ExpressionAttributeValues={
-                ":st": {"S": json.dumps(state, separators=(",", ":"), sort_keys=True)},
-                ":ts": {"N": str(time.time())},
-                ":lk": {"S": self.owner_id},
-            },
-        )
-
-    def delete(self) -> None:
+    def unlock(self) -> bool:
+        """Release the advisory lock.  Returns True on success."""
+        if self.lock_token is None:
+            return False
+        now = time.time()
+        record = self.get()
+        if record is None:
+            return False
+        patched = dict(record)
+        patched["lock_token"] = None
+        patched["lock_expires_ts"] = None
+        patched["updated_ts"] = now
         try:
-            self.client.delete_item(
+            self._client.update_item(
                 TableName=self.table_name,
                 Key=self._item_key(),
-                ConditionExpression="#lk = :lk",
-                ExpressionAttributeNames={"#lk": "lock_owner"},
-                ExpressionAttributeValues={":lk": {"S": self.owner_id}},
+                UpdateExpression="SET #st = :st, #ts = :ts REMOVE #lt, #le",
+                ConditionExpression="#lt = :lt AND #le > :now",
+                ExpressionAttributeNames={
+                    "#st": "state",
+                    "#ts": "updated_ts",
+                    "#lt": "lock_token",
+                    "#le": "lock_expires_ts",
+                },
+                ExpressionAttributeValues={
+                    ":st": {"S": _serialize_record(cast(ExecutionRecord, patched))},
+                    ":ts": {"N": str(now)},
+                    ":lt": {"S": self.lock_token},
+                    ":now": {"N": str(now)},
+                },
             )
-        except Exception:
-            return
+            self.lock_token = None
+            return True
+        except Exception as e:
+            if _check_condition_failure(e):
+                return False
+            raise
 
+    # -- heartbeat ----------------------------------------------------------
 
-def state_from_comms(cache_key: str, comms: dict[str, Any]) -> StateBase:
-    kind = comms.get("kind")
-    spec = comms.get("spec")
-    if not isinstance(kind, str) or not isinstance(spec, dict):
-        raise DmlRepoError("State comms requires kind/spec")
-    cls = LocalState if kind == "local" else DynamoState if kind == "dynamo" else None
-    if cls is None:
-        raise DmlRepoError(f"Unsupported comms kind: {kind}")
-    return cls(cache_key, **spec)
+    def heartbeat(self, duration: float = LOCK_TTL) -> bool:
+        """Extend lock and refresh heartbeat_ts.  Requires valid lock."""
+        if self.lock_token is None:
+            return False
+        now = time.time()
+        record = self.get()
+        if record is None:
+            return False
+        patched = dict(record)
+        patched["heartbeat_ts"] = now
+        patched["lock_expires_ts"] = now + duration
+        patched["updated_ts"] = now
+        try:
+            self._client.update_item(
+                TableName=self.table_name,
+                Key=self._item_key(),
+                UpdateExpression="SET #st = :st, #ts = :ts, #le = :le",
+                ConditionExpression="#lt = :lt AND #le > :now",
+                ExpressionAttributeNames={
+                    "#st": "state",
+                    "#ts": "updated_ts",
+                    "#lt": "lock_token",
+                    "#le": "lock_expires_ts",
+                },
+                ExpressionAttributeValues={
+                    ":st": {"S": _serialize_record(cast(ExecutionRecord, patched))},
+                    ":ts": {"N": str(now)},
+                    ":lt": {"S": self.lock_token},
+                    ":le": {"N": str(now + duration)},
+                    ":now": {"N": str(now)},
+                },
+            )
+            return True
+        except Exception as e:
+            if _check_condition_failure(e):
+                return False
+            raise
 
+    # -- update_metadata ----------------------------------------------------
 
-@contextmanager
-def lock_from_comms(cache_key: str, comms: dict[str, Any]):
-    state = state_from_comms(cache_key, comms)
-    with state.lock() as state:
-        yield state
+    def update_metadata(self, data: dict[str, Any]) -> bool:
+        """Merge data into metadata dict.  Requires valid lock."""
+        if self.lock_token is None:
+            return False
+        now = time.time()
+        record = self.get()
+        if record is None:
+            return False
+        patched: dict[str, Any] = dict(record)
+        metadata: dict[str, Any] = dict(patched.get("metadata") or {})
+        metadata.update(data)
+        patched["metadata"] = metadata
+        patched["updated_ts"] = now
+        try:
+            self._client.update_item(
+                TableName=self.table_name,
+                Key=self._item_key(),
+                UpdateExpression="SET #st = :st, #ts = :ts",
+                ConditionExpression="#lt = :lt AND #le > :now",
+                ExpressionAttributeNames={
+                    "#st": "state",
+                    "#ts": "updated_ts",
+                    "#lt": "lock_token",
+                    "#le": "lock_expires_ts",
+                },
+                ExpressionAttributeValues={
+                    ":st": {"S": _serialize_record(cast(ExecutionRecord, patched))},
+                    ":ts": {"N": str(now)},
+                    ":lt": {"S": self.lock_token},
+                    ":now": {"N": str(now)},
+                },
+            )
+            return True
+        except Exception as e:
+            if _check_condition_failure(e):
+                return False
+            raise
+
+    # -- state transitions --------------------------------------------------
+
+    def mark_running(self) -> bool:
+        """pending -> running.  Requires valid lock."""
+        return self._transition(from_status="pending", to_status="running")
+
+    def mark_succeeded(self, dag_id: str) -> bool:
+        """running -> succeeded.  Requires valid lock."""
+        return self._transition(from_status="running", to_status="succeeded", dag_id=dag_id)
+
+    def mark_failed(self, error: str) -> bool:
+        """running -> failed.  Requires valid lock."""
+        return self._transition(from_status="running", to_status="failed", error=error)
+
+    # -- internal helpers ---------------------------------------------------
+
+    def _transition(
+        self,
+        *,
+        from_status: str,
+        to_status: str,
+        dag_id: str | None = None,
+        error: str | None = None,
+    ) -> bool:
+        if self.lock_token is None:
+            return False
+        now = time.time()
+        record = self.get()
+        if record is None:
+            return False
+        if record["status"] != from_status:
+            return False
+        patched = dict(record)
+        patched["status"] = to_status
+        patched["heartbeat_ts"] = now
+        patched["updated_ts"] = now
+        if dag_id is not None:
+            patched["dag_id"] = dag_id
+        if error is not None:
+            patched["error"] = error
+        try:
+            self._client.update_item(
+                TableName=self.table_name,
+                Key=self._item_key(),
+                UpdateExpression="SET #st = :st, #ts = :ts",
+                ConditionExpression="#lt = :lt AND #le > :now",
+                ExpressionAttributeNames={
+                    "#st": "state",
+                    "#ts": "updated_ts",
+                    "#lt": "lock_token",
+                    "#le": "lock_expires_ts",
+                },
+                ExpressionAttributeValues={
+                    ":st": {"S": _serialize_record(cast(ExecutionRecord, patched))},
+                    ":ts": {"N": str(now)},
+                    ":lt": {"S": self.lock_token},
+                    ":now": {"N": str(now)},
+                },
+            )
+            return True
+        except Exception as e:
+            if _check_condition_failure(e):
+                return False
+            raise
