@@ -6,104 +6,106 @@ specified
 
 ## Authority
 
-This document is authoritative for contrib executor-state record shape and backend reference conventions.
+This document is authoritative for the contrib `ExecutionRecord` shape and `ExecutionState` API.
 
-Normative lifecycle ownership and parent-comms behavior are authoritative in [runtime-contract.md](runtime-contract.md); live execution-graph storage, caller edges, and cancel or sweep behavior are authoritative in [execution-graph.md](execution-graph.md); this document is authoritative for the shared State record/reference shape used by those contracts.
+Lifecycle ownership is authoritative in [runtime-contract.md](runtime-contract.md).
 
 ## Purpose
 
-Provide a focused state-reference profile for contrib runtime planning and implementation.
+Define the single execution-state record used by built-in contrib runtimes.
 
 ## Scope
 
 This document defines:
 
-- shared execution-state record fields,
-- backend profiles (`LocalState`, `DynamoState`),
-- ownership and metadata conventions for executor-managed state,
-- how parent comms reuses State backends without redefining a second mutable record format.
+- the `ExecutionRecord` shape,
+- the `ExecutionState` public API,
+- lock and transition rules,
+- ownership of terminal `done` writes.
 
-This document does not define kickoff or poll dispatch rules, live execution-graph tables, or cancel propagation.
+This document does not define adapter payloads, executor-specific behavior, or cache publication rules.
 
-## Reference State Record
+## Execution Record
 
-Common fields used by contrib execution state:
-
-- `version`
-- `cache_key`
-- `status`
-- `error` (nullable)
-- `heartbeat_ts`
-- `metadata` (`dict[str, dict[str, Any]]`), namespaced by executor id
-
-Reference record example:
-
-```json
-{
-  "version": 1,
-  "cache_key": "abc123",
-  "status": "pending",
-  "error": null,
-  "heartbeat_ts": 1710370000.123,
-  "metadata": {}
-}
-```
-
-State ownership and metadata conventions:
-
-- executors/wrappers MUST write custom state only under `metadata[<executor_id>]`.
-- `status`/`error` are canonical run result fields and MUST remain normalized across wrappers.
-- Parent Comms reuses these same State backends and record fields for observational reporting.
-- Parent Comms is immutable invocation input naming where the current invocation reports outward; it is not a second mutable record schema.
-- when adapters report to Parent Comms, they mirror normalized status/heartbeat information into another State record keyed for the parent observer.
-- Parent Comms is one-hop only; it applies to the current adapter invocation and is not forwarded to grandchildren.
-- executor-specific external handles used for debugging/polling (for example docker container ids or batch job ids) belong under `metadata[<executor_id>]` in the relevant State record.
-- `heartbeat_ts` is updated on every state mutation; stale detection uses `heartbeat_ts + HEARTBEAT_STALENESS < time.time()`.
-
-Typed state API surface:
+Built-in contrib runtimes use one DynamoDB-backed record per `cache_key`.
 
 ```python
-Status = Literal["pending", "running", "succeeded", "failed", "canceled"]
-
-def init_record(
-    *,
-    status: Status = "pending",
-    error: str | None = None,
-    metadata: dict[str, dict[str, Any]] | None = None,
-) -> StateRecord: ...
-
-def update_status(
-    *,
-    status: Status,
-    error: str | None = None,
-) -> StateRecord: ...
-
-def set_executor_metadata(self, executor_id: str, data: dict[str, Any]) -> StateRecord: ...
+class ExecutionRecord(TypedDict):
+    cache_key: str
+    argv_ptr: str
+    status: Literal["pending", "running", "succeeded", "failed", "done"]
+    lock_token: str | None
+    lock_expires_ts: float | None
+    dag_id: str | None
+    error: str | None
+    heartbeat_ts: float | None
+    metadata: dict[str, Any]
+    updated_ts: float
 ```
 
-State backends (`LocalState`, `DynamoState`) are generic storage/locking interfaces.
-Runtime interpretation of these fields is owned by runtime orchestration, adapters, and executors rather than by backend-specific serialization code.
+Rules:
 
-Lock contract:
+- `cache_key` is the execution identity.
+- `argv_ptr` is the remote manifest pointer for the invocation argv.
+- `status` is the canonical lifecycle field.
+- `dag_id` is required for `succeeded` records published by built-in runtimes.
+- `error` is populated for `failed` records.
+- `metadata` stores executor-owned runtime handles and debug data.
+- `updated_ts` is refreshed on every successful mutation.
+- `heartbeat_ts` is refreshed by heartbeats and terminal transitions.
 
-- state backends expose lock acquisition as a contextmanager (`State.lock(cache_key)`), yielding locked state instance or `None` when lock acquisition fails.
-- lock release is automatic on context exit.
+## Public API
 
-## Backend Profiles
+```python
+LOCK_TTL = 15.0
 
-- `LocalState`: process-local backend profile for local adapter or executor flows.
-- `DynamoState`: cross-invocation backend profile for lambda-style polling flows.
+class ExecutionState:
+    cache_key: str
+    lock_token: str | None
 
-This backend profile list does not by itself define the live execution-graph storage backend for a contrib runtime deployment.
+    def __init__(self, cache_key: str, *, table_name: str | None = None) -> None: ...
 
-## Parent Comms Reuse
+    @classmethod
+    def upsert(cls, cache_key: str, argv_ptr: str, *, table_name: str | None = None) -> ExecutionRecord: ...
 
-- Parent Comms MAY point at any supported State backend profile.
-- A local Parent Comms descriptor identifies a local state location such as `cache_dir`.
-- A Dynamo Parent Comms descriptor identifies backend coordinates such as `table_name`.
-- The parent observer reads an ordinary State record from that backend; there is no separate comms-specific mutable file/document schema.
+    def get(self) -> ExecutionRecord | None: ...
+    def claim_running(self) -> bool: ...
+    def lock(self, ttl: float = LOCK_TTL) -> bool: ...
+    def unlock(self) -> bool: ...
+    def heartbeat(self, duration: float = LOCK_TTL) -> bool: ...
+    def update_metadata(self, data: dict[str, Any]) -> bool: ...
+    def mark_running(self) -> bool: ...
+    def mark_succeeded(self, dag_id: str) -> bool: ...
+    def mark_failed(self, error: str) -> bool: ...
+    def mark_done(self) -> bool: ...
+```
+
+Rules:
+
+- `upsert(...)` creates the initial `pending` record and returns the existing record unchanged on conflicts.
+- `claim_running()` atomically transitions only `pending -> running` and is the built-in launch-claim primitive.
+- all mutating instance methods require a currently held, unexpired lock.
+- `update_metadata(...)` merges keys into `metadata`.
+- `mark_running()` transitions only `pending -> running`.
+- `mark_succeeded(...)` transitions only `running -> succeeded`.
+- `mark_failed(...)` transitions only `running -> failed`.
+- `mark_done()` transitions only `succeeded|failed -> done`.
+
+## Locking
+
+- locks are advisory and identified by `lock_token`.
+- `lock(ttl=...)` succeeds only when the record is unlocked or the stored lock has expired.
+- `unlock()` succeeds only for the caller that still holds the valid lock.
+- `heartbeat(duration=...)` extends `lock_expires_ts` and refreshes `heartbeat_ts`.
+
+## Ownership
+
+- adapters and executors own only in-flight transitions and metadata updates.
+- `IndexOps.start_fn` owns cache publication for terminal states.
+- `done` is a terminal tombstone written only by `start_fn` after cache publication or failed-result materialization.
+- built-in runtimes do not define legacy per-backend state classes or parent-comms state mirroring.
 
 ## References
 
 - [runtime-contract.md](runtime-contract.md)
-- [execution-graph.md](execution-graph.md)
+- [../adapter-execution-contract.md](../adapter-execution-contract.md)

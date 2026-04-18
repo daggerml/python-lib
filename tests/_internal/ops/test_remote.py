@@ -1729,9 +1729,9 @@ class TestDagPublicationHelpers:
         """Test cache refs include validated targets."""
         target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        remote_ops.put_cache_ref("build", "cache:key", target, overwrite=False, targets={"dag": [dag_id]})
+        remote_ops.put_cache_ref("cache:key", target, overwrite=False, targets={"dag": [dag_id]})
 
-        ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref("cache/build/cache:key.json"))
+        ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref("cache/cache:key.json"))
         assert ref_obj["target"] == target
         assert ref_obj["targets"] == {"dag": [dag_id]}
 
@@ -1739,7 +1739,7 @@ class TestDagPublicationHelpers:
         """Test cache ref validation rejects malformed targets."""
         target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         with pytest.raises(DmlRepoError, match="Invalid targets"):
-            remote_ops.put_cache_ref("build", "cache:key", target, overwrite=False, targets={"blob": []})
+            remote_ops.put_cache_ref("cache:key", target, overwrite=False, targets={"blob": []})
 
     def test_decode_manifest_raises_invalid_manifest(self, remote_ops):
         """Test that _decode_manifest raises InvalidManifest for invalid manifests."""
@@ -1930,10 +1930,9 @@ class TestGcMark:
             "target": manifest_id,  # Same manifest
             "created_at": 1234567891,
             "targets": {"dag": []},
-            "meta": {"cache": {"expires_at": 2000000000}},
         }
         cache_ref_bytes = json.dumps(cache_ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        cache_ref_path = "cache/default/test-cache.json"
+        cache_ref_path = "cache/test-cache.json"
         remote_ops._remote_put_ref(cache_ref_path, cache_ref_bytes)
 
         # Run GC mark again
@@ -2389,7 +2388,7 @@ class TestList:
             "tags/release/v1.0.0.json", json.dumps(tag_ref, separators=(",", ":"), sort_keys=True).encode("utf-8")
         )
         remote_ops._remote_put_ref(
-            "cache/default/temp.json", json.dumps(cache_ref, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            "cache/temp.json", json.dumps(cache_ref, separators=(",", ":"), sort_keys=True).encode("utf-8")
         )
 
         # List each prefix
@@ -2402,7 +2401,7 @@ class TestList:
 
         # Should have correct ref_paths
         assert tags[0]["ref_path"] == "tags/release/v1.0.0.json"
-        assert cache[0]["ref_path"] == "cache/default/temp.json"
+        assert cache[0]["ref_path"] == "cache/temp.json"
 
         # Should have correct targets
         assert tags[0]["target"] == tag_ref["target"]
@@ -2444,8 +2443,13 @@ class TestList:
 
     def test_list_returns_empty_list_when_no_refs(self, remote_ops):
         """Test that list returns empty list when no refs exist for allowed prefix."""
-        refs = remote_ops.list("cache/missing")
+        refs = remote_ops.list("cache")
         assert refs == []
+
+    def test_list_rejects_named_cache_prefixes(self, remote_ops):
+        """Test that list no longer accepts legacy named cache prefixes."""
+        with pytest.raises(DmlRepoError, match="Expected 'tags' or 'cache'"):
+            remote_ops.list("cache/missing")
 
 
 class TestPrune:
@@ -2470,15 +2474,15 @@ class TestPrune:
             "schema": 0,
             "target": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "created_at": 0,
-            "meta": {"cache": {"expires_at": 0}},
+            "targets": {"dag": []},
         }
         remote_ops._remote_put_ref(
-            "cache/default/expired.json",
+            "cache/expired.json",
             json.dumps(cache_ref, separators=(",", ":"), sort_keys=True).encode("utf-8"),
         )
         deleted_count = remote_ops.prune()
         assert deleted_count == 0
-        assert json.loads(remote_ops._remote_get_ref("cache/default/expired.json")) == cache_ref
+        assert json.loads(remote_ops._remote_get_ref("cache/expired.json")) == cache_ref
 
 
 class TestE2E:

@@ -7,11 +7,11 @@ doc_type: spec
 
 ## Authority
 
-This document is authoritative for adapter process invocation payloads, adapter output schema, runnable-chain invocation handoff semantics, and cache-key/argv-pointer execution boundary behavior.
+This document is authoritative for adapter-boundary payloads, adapter output schema, runnable-chain handoff semantics, and cache-key and argv-pointer execution-boundary behavior.
 
 ## Scope
 
-This doc defines runnable payload shape at adapter boundary, stdin/stdout adapter schema, invocation rules, and adapter output constraints.
+This doc defines runnable payload shape at the adapter boundary, stdin and stdout schema, invocation rules, and adapter output constraints.
 
 ## Purpose
 
@@ -19,59 +19,50 @@ Define the canonical external adapter invocation contract used by runtime execut
 
 ## Glossary
 
-- Adapter: The external executable invoked by the runtime.
-- Runnable: The data model representing an execution payload.
-- Uri: The location or identifier of the execution target.
+- Adapter: the external executable invoked by the runtime.
+- Runnable: the data model representing an execution payload.
+- Uri: the location or identifier of the execution target.
 
 ## Contract
 
 ### Interfaces
 
-- **Adapter Invocation Payload**
-  - **Location/Name**: Adapter stdin payload.
-  - **Signature/Schema**: JSON object containing:
-    - `argv_ptr`
-    - `cache_key`
-    - `remote` (`root`, `cache`)
-    - `runnable`
-  - **Constraints**:
-    - `remote` is required for adapter invocation.
-    - Adapter stdin payload normalization is JSON-compatible and lossy (`Uri` values become plain URI strings, `Runnable` values become recursive JSON objects).
-    - Consumers needing internal typed/runtime objects use `argv[0]` via `argv_ptr`, not stdin object typing.
-    - Unspecified fields behavior: not specified.
-
-- **Runnable Model at Execution Boundary**
-  - **Signature/Schema**:
-    - `target` (`Uri`),
-    - `sub` (`None` or nested runnable),
-    - `kwargs` (`dict[str, Any]`),
-    - `adapter` (string).
-
-- **Adapter Output**
-  - **Location/Name**: Adapter stdout payload.
-  - **Signature/Schema**: JSON object containing exactly `status` and `error` keys:
-    - `status` in `pending|running|succeeded|failed`,
-    - `error` present only for `failed`.
+- Adapter invocation payload:
+  - location: adapter stdin payload,
+  - schema: JSON object containing `argv_ptr`, `cache_key`, `remote`, and `runnable`,
+  - `remote` MUST contain `root`.
+- Runnable model at the execution boundary:
+  - `target` (`Uri`),
+  - `sub` (`None` or nested runnable),
+  - `kwargs` (`dict[str, Any]`),
+  - `adapter` (`str`).
+- Adapter output:
+  - location: adapter stdout payload,
+  - schema: JSON object containing exactly `status` and `error`,
+  - `status` is one of `pending|running|succeeded|failed`,
+  - `error` is required only for `failed`.
 
 ### Invariants
 
-- `argv_ptr` is opaque at adapter/executor boundary and is forwarded unchanged.
+- `argv_ptr` is opaque at the adapter and executor boundary and is forwarded unchanged.
 - Adapter output keys are exactly `status` and `error`.
-- Adapter/executor invocation is kickoff-or-poll and must be bounded.
-- Long-running execution is asynchronous and resumed/polled by repeated invocations using `cache_key`.
-- On `succeeded`, adapters/executors MUST publish the result DAG into remote cache for the execution cache identity before returning `succeeded`.
-- Runtime result resolution on `succeeded` is cache-driven via execution cache identity, not adapter-returned commit pointers.
-- Cache key basis is `argv_ref.id()` and is authoritative for adapter/executor state lookup.
-- Adapter payload `cache_key` is a helper token for deduplication/correlation and MUST NOT override canonical cache identity derived from `argv`.
+- Internal execution-state `done` is not an adapter-boundary status and MUST NOT be emitted by adapters.
+- Adapter and executor invocation is kickoff-or-poll and must be bounded.
+- Long-running execution is asynchronous and resumed by repeated invocations using `cache_key`.
+- Built-in adapters and executors MUST NOT publish remote cache refs directly.
+- `IndexOps.start_fn` publishes cache entries after observing terminal execution state.
+- Runtime result resolution on success is cache-driven via execution cache identity, not adapter-returned commit pointers.
+- Cache key basis is `argv_ref.id()` and is authoritative for execution-state lookup.
+- Adapter payload `cache_key` is a helper token and MUST NOT override canonical cache identity derived from `argv`.
 
 ### Error Semantics
 
-- **Failed Status**: Adapter output contains `error` key only when `status` is `failed`.
+- `error` MUST be present only when `status == "failed"`.
 
 ### Authority Handoffs
 
-- Subcall behavior: if `runnable.sub` exists, current adapter invokes `sub.adapter` with same `argv_ptr`, same `cache_key`, same `remote`, and `runnable=sub`.
-- Local contrib runtime may route adapter payload through a supervisor process/module; adapter output contract remains unchanged.
+- If `runnable.sub` exists, the current adapter invokes `sub.adapter` with the same `argv_ptr`, same `remote`, and `runnable=sub`; the nested invocation reuses the current `cache_key` unless the selected executor contract defines a persisted child execution identity for nested transport.
+- Local contrib runtime may route adapter payload through a supervisor; adapter output shape remains unchanged.
 
 ## Compatibility
 

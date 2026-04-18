@@ -32,7 +32,7 @@ def test_status_implicit_default_creation():
 
     cfg = _config_info(status)
     assert set(cfg.keys()) == {"repo", "branch", "user", "config_dir", "remote"}
-    assert set(cfg["remote"].keys()) == {"root", "cache"}
+    assert set(cfg["remote"].keys()) == {"root"}
 
     runtime = _runtime_info(status)
     assert runtime["ops_initialized"] is False

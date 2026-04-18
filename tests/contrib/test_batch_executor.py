@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, cast
-
 import pytest
 
 from daggerml import Uri
 from daggerml._internal.types import DmlRepoError, Runnable
-from daggerml.contrib.executor_state import LocalState
+from daggerml.contrib.executor_state import ExecutionState
 from daggerml.contrib.executors.batch import BatchExecutor
 
 
@@ -61,11 +59,31 @@ def _setup(monkeypatch, tmp_path):
     monkeypatch.setenv("CPU_QUEUE", "cpu-q")
     monkeypatch.setenv("GPU_QUEUE", "gpu-q")
     monkeypatch.setenv("BATCH_TASK_ROLE_ARN", "arn:role/batch")
-    monkeypatch.setattr(BatchExecutor, "state_class", LocalState)
 
 
 def _sub() -> Runnable:
     return Runnable(target=Uri("script"), adapter="dml-local-adapter", kwargs={"x": 1})
+
+
+def _set_child_state(cache_key: str, *, status: str, dag_id: str | None = None, error: str | None = None) -> None:
+    state = ExecutionState(cache_key)
+    record = state.get()
+    assert record is not None
+    if record["status"] == "pending":
+        assert state.claim_running()
+    assert state.lock()
+    try:
+        if status == "succeeded":
+            assert dag_id is not None
+            assert state.mark_succeeded(dag_id)
+            return
+        if status == "failed":
+            assert error is not None
+            assert state.mark_failed(error)
+            return
+        raise AssertionError(f"unsupported child status: {status}")
+    finally:
+        state.unlock()
 
 
 def test_batch_executor_resolve_runnable_shape():
@@ -95,112 +113,191 @@ def test_batch_executor_start_submits_job_and_records_state(monkeypatch):
     fake_client = _FakeBatchClient()
     monkeypatch.setattr(BatchExecutor, "_store", staticmethod(lambda remote: fake_store))
     monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
-    monkeypatch.setattr(
-        BatchExecutor,
-        "_child_comms",
-        staticmethod(lambda state: {"kind": "dynamo", "spec": {"table_name": "test-table"}}),
-    )
     runnable = BatchExecutor.resolve_runnable(
         "batch", {"lambda_uri": "lambda-fn", "image": Uri("repo/image:tag")}, _sub()
     )
 
-    with LocalState("batch-start").lock() as state:
-        assert state is not None
-        result = BatchExecutor.start(
-            runnable=runnable,
-            argv_ptr="argv://ptr",
-            cache_key="batch-start",
-            remote={"root": "s3://bucket/root", "cache": "cache-key"},
-            state=state,
-        )
-        record = cast(dict[str, Any], state.get())
+    cache_key = "batch-start"
+    argv_ptr = "argv://ptr"
+    ExecutionState.upsert(cache_key, argv_ptr)
+    assert ExecutionState(cache_key).claim_running()
 
-    assert result == {"status": "pending", "error": None}
+    executor = BatchExecutor()
+    record = ExecutionState(cache_key).get()
+    assert record is not None
+    executor.start(
+        runnable=runnable,
+        argv_ptr=argv_ptr,
+        cache_key=cache_key,
+        remote={"root": "s3://bucket/root"},
+        state=record,
+    )
+
+    final = ExecutionState(cache_key).get()
+    assert final is not None
     assert fake_client.registered
     assert fake_client.submitted == [
         {"jobName": "dml-batch-batch-start", "jobQueue": "cpu-q", "jobDefinition": "arn:batch:def/123"}
     ]
-    assert record["status"] == "pending"
-    assert record["metadata"]["batch"]["job_id"] == "job-123"
+    assert final["status"] == "running"
+    assert final["metadata"]["batch"]["child_cache_key"] == "batch-start:batch-child"
+    assert final["metadata"]["batch"]["job_id"] == "job-123"
 
 
-def test_batch_executor_start_rejects_non_dynamo_state(monkeypatch):
-    fake_store = _FakeStore()
-    fake_client = _FakeBatchClient()
-    monkeypatch.setattr(BatchExecutor, "_store", staticmethod(lambda remote: fake_store))
-    monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
-    runnable = BatchExecutor.resolve_runnable(
-        "batch", {"lambda_uri": "lambda-fn", "image": Uri("repo/image:tag")}, _sub()
-    )
-
-    with LocalState("batch-start-bad").lock() as state:
-        assert state is not None
-        with pytest.raises(DmlRepoError, match="requires dynamo state backend"):
-            BatchExecutor.start(
-                runnable=runnable,
-                argv_ptr="argv://ptr",
-                cache_key="batch-start-bad",
-                remote={"root": "s3://bucket/root", "cache": "cache-key"},
-                state=state,
-            )
-
-
-def test_batch_executor_poll_marks_succeeded_from_batch_status(monkeypatch):
+def test_batch_executor_poll_projects_child_success(monkeypatch):
     fake_client = _FakeBatchClient(jobs=[{"status": "SUCCEEDED"}])
     monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
 
-    with LocalState("batch-poll").lock() as state:
-        assert state is not None
-        state.put_if_absent(state.init_record(status="pending", error=None))
-        state.update(
-            state.set_executor_metadata(
-                executor_id="batch",
-                data={
-                    "job_id": "job-123",
-                    "job_definition": "arn:batch:def/123",
-                },
-            )
-        )
-        result = BatchExecutor.poll(state=state)
-        record = cast(dict[str, Any], state.get())
+    cache_key = "batch-poll"
+    ExecutionState.upsert(cache_key, "argv://ptr")
+    ExecutionState.upsert("batch-poll:batch-child", "argv://ptr")
+    _set_child_state("batch-poll:batch-child", status="succeeded", dag_id="a" * 64)
+    es = ExecutionState(cache_key)
+    assert es.lock()
+    es.mark_running()
+    es.update_metadata(
+        {
+            "batch": {
+                "child_cache_key": "batch-poll:batch-child",
+                "job_id": "job-123",
+                "job_definition": "arn:batch:def/123",
+            }
+        }
+    )
+    es.unlock()
 
-    assert result == {"status": "succeeded", "error": None}
-    assert record["metadata"]["batch"]["batch_status"] == "succeeded"
+    record = es.get()
+    assert record is not None
+    executor = BatchExecutor()
+    executor.poll(cache_key=cache_key, state=record)
+
+    final = es.get()
+    assert final is not None
+    assert final["status"] == "succeeded"
+    assert final["dag_id"] == "a" * 64
+
+
+def test_batch_executor_poll_marks_failed_when_success_has_no_child_dag(monkeypatch):
+    fake_client = _FakeBatchClient(jobs=[{"status": "SUCCEEDED"}])
+    monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
+
+    cache_key = "batch-missing-dag"
+    ExecutionState.upsert(cache_key, "argv://ptr")
+    ExecutionState.upsert("batch-missing-dag:batch-child", "argv://ptr")
+    _set_child_state("batch-missing-dag:batch-child", status="succeeded", dag_id="")
+    es = ExecutionState(cache_key)
+    assert es.lock()
+    es.mark_running()
+    es.update_metadata(
+        {
+            "batch": {
+                "child_cache_key": "batch-missing-dag:batch-child",
+                "job_id": "job-123",
+                "job_definition": "arn:batch:def/123",
+            }
+        }
+    )
+    es.unlock()
+
+    record = es.get()
+    assert record is not None
+    executor = BatchExecutor()
+    executor.poll(cache_key=cache_key, state=record)
+
+    final = es.get()
+    assert final is not None
+    assert final["status"] == "failed"
+    assert final["error"] == "Batch nested execution succeeded without dag_id"
 
 
 def test_batch_executor_poll_reads_batch_failure_reason(monkeypatch):
     fake_client = _FakeBatchClient(jobs=[{"status": "FAILED", "statusReason": "boom", "attempts": []}])
     monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
 
-    with LocalState("batch-fail").lock() as state:
-        assert state is not None
-        state.put_if_absent(state.init_record(status="pending", error=None))
-        state.update(
-            state.set_executor_metadata(
-                executor_id="batch",
-                data={
-                    "job_id": "job-123",
-                    "job_definition": "arn:batch:def/123",
-                },
-            )
-        )
-        result = BatchExecutor.poll(state=state)
+    cache_key = "batch-fail"
+    ExecutionState.upsert(cache_key, "argv://ptr")
+    es = ExecutionState(cache_key)
+    assert es.lock()
+    es.mark_running()
+    es.update_metadata(
+        {
+            "batch": {
+                "child_cache_key": "batch-fail:batch-child",
+                "job_id": "job-123",
+                "job_definition": "arn:batch:def/123",
+            }
+        }
+    )
+    es.unlock()
 
-    assert result == {"status": "failed", "error": "Batch job job-123 failed: boom"}
+    record = es.get()
+    assert record is not None
+    executor = BatchExecutor()
+    executor.poll(cache_key=cache_key, state=record)
+
+    final = es.get()
+    assert final is not None
+    assert final["status"] == "failed"
+    assert final["error"] is not None
+    assert "Batch job job-123 failed: boom" in final["error"]
 
 
-def test_batch_executor_gc_terminates_job(monkeypatch):
+def test_batch_executor_poll_projects_child_failure(monkeypatch):
+    fake_client = _FakeBatchClient(jobs=[{"status": "FAILED", "statusReason": "boom", "attempts": []}])
+    monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
+
+    cache_key = "batch-child-fail"
+    ExecutionState.upsert(cache_key, "argv://ptr")
+    ExecutionState.upsert("batch-child-fail:batch-child", "argv://ptr")
+    _set_child_state("batch-child-fail:batch-child", status="failed", error="child boom")
+    es = ExecutionState(cache_key)
+    assert es.lock()
+    es.mark_running()
+    es.update_metadata(
+        {
+            "batch": {
+                "child_cache_key": "batch-child-fail:batch-child",
+                "job_id": "job-123",
+                "job_definition": "arn:batch:def/123",
+            }
+        }
+    )
+    es.unlock()
+
+    record = es.get()
+    assert record is not None
+    executor = BatchExecutor()
+    executor.poll(cache_key=cache_key, state=record)
+
+    final = es.get()
+    assert final is not None
+    assert final["status"] == "failed"
+    assert final["error"] == "child boom"
+
+
+def test_batch_executor_cleanup_terminates_job(monkeypatch):
     fake_client = _FakeBatchClient()
     monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
 
-    with LocalState("batch-gc").lock() as state:
-        assert state is not None
-        state.put_if_absent(state.init_record(status="running", error=None))
-        state.update(
-            state.set_executor_metadata(
-                executor_id="batch", data={"job_id": "job-123", "job_definition": "arn:batch:def/123"}
-            )
-        )
-        BatchExecutor.gc(state=state)
+    cache_key = "batch-gc"
+    ExecutionState.upsert(cache_key, "argv://ptr")
+    es = ExecutionState(cache_key)
+    assert es.lock()
+    es.mark_running()
+    es.update_metadata(
+        {
+            "batch": {
+                "child_cache_key": "batch-gc:batch-child",
+                "job_id": "job-123",
+                "job_definition": "arn:batch:def/123",
+            }
+        }
+    )
+    es.unlock()
+
+    record = es.get()
+    assert record is not None
+    executor = BatchExecutor()
+    executor.cleanup(cache_key=cache_key, state=record)
 
     assert fake_client.terminated == [{"jobId": "job-123", "reason": "killed"}]

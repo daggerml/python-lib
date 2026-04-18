@@ -23,7 +23,6 @@ if __name__ == "__main__":
     remote = envelope["remote"]
     argv_ptr = envelope["argv_ptr"]
     remote_root = remote["root"]
-    remote_cache = remote["cache"]
     tmp_dir = os.environ.get("DML_TMP_DIR")
     if not tmp_dir:
         raise ValueError("DML_TMP_DIR environment variable not set")
@@ -37,7 +36,7 @@ if __name__ == "__main__":
         db = DmlDbEnv.create(tmprepo, namespaces=sorted(NAMESPACES))
         try:
             _init_repo(db)
-            ops = IndexOps(db, remote_root=remote_root, remote_cache=remote_cache)
+            ops = IndexOps(db, remote_root=remote_root)
             index_ref = ops.create(argv_ptr=argv_ptr)
             node_ops = NodeOps(db)
 

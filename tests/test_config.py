@@ -54,17 +54,14 @@ def test_remote_config_from_canonical_env():
     cfg = DmlConfig.resolve(
         env={
             "DML_REMOTE_ROOT": "s3://bucket/project",
-            "DML_REMOTE_CACHE": "cache-ns",
         }
     )
     assert cfg.remote.root == "s3://bucket/project"
-    assert cfg.remote.cache == "cache-ns"
 
 
 @patch("daggerml.api.DmlOps.open")
 def test_dml_ops_receives_remote_context(mock_open, monkeypatch):
     monkeypatch.setenv("DML_REMOTE_ROOT", "s3://bucket/project")
-    monkeypatch.setenv("DML_REMOTE_CACHE", "cache-ns")
     mock_open.return_value = Mock(__enter__=Mock(), __exit__=Mock())
 
     dml = Dml(repo="/tmp/test-repo")
@@ -73,5 +70,4 @@ def test_dml_ops_receives_remote_context(mock_open, monkeypatch):
     mock_open.assert_called_once_with(
         "/tmp/test-repo",
         remote_root="s3://bucket/project",
-        remote_cache="cache-ns",
     )

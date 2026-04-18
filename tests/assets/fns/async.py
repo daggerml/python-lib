@@ -14,7 +14,6 @@ if __name__ == "__main__":
     remote = envelope["remote"]
     argv_ptr = envelope["argv_ptr"]
     remote_root = remote["root"]
-    remote_cache = remote["cache"]
     cache_key = hashlib.sha256(argv_ptr.encode()).hexdigest()
     cache_dir = os.getenv("DML_FN_CACHE_DIR", "")
     cache_file = os.path.join(cache_dir, cache_key)
@@ -31,7 +30,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="dml-fn-") as tmpdir:
         db = DmlDbEnv.create(tmpdir, namespaces=sorted(NAMESPACES))
         try:
-            ops = IndexOps(db, remote_root=remote_root, remote_cache=remote_cache)
+            ops = IndexOps(db, remote_root=remote_root)
             index_ref = ops.create(argv_ptr=argv_ptr)
             node_ops = NodeOps(db)
             argv = node_ops.unroll(ops.get_argv(index_ref))

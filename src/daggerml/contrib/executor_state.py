@@ -288,6 +288,39 @@ class ExecutionState:
 
     # -- state transitions --------------------------------------------------
 
+    def claim_running(self) -> bool:
+        """Atomically claim pending work by transitioning ``pending -> running``."""
+        now = time.time()
+        record = self.get()
+        if record is None or record["status"] != "pending":
+            return False
+        patched = dict(record)
+        patched["status"] = "running"
+        patched["heartbeat_ts"] = now
+        patched["updated_ts"] = now
+        try:
+            self._client.update_item(
+                TableName=self.table_name,
+                Key=self._item_key(),
+                UpdateExpression="SET #st = :st, #ts = :ts",
+                ConditionExpression="#st = :old_state AND #ts = :old_updated_ts",
+                ExpressionAttributeNames={
+                    "#st": "state",
+                    "#ts": "updated_ts",
+                },
+                ExpressionAttributeValues={
+                    ":st": {"S": _serialize_record(cast(ExecutionRecord, patched))},
+                    ":ts": {"N": str(now)},
+                    ":old_state": {"S": _serialize_record(record)},
+                    ":old_updated_ts": {"N": str(record["updated_ts"])},
+                },
+            )
+            return True
+        except Exception as e:
+            if _check_condition_failure(e):
+                return False
+            raise
+
     def mark_running(self) -> bool:
         """pending -> running.  Requires valid lock."""
         return self._transition(from_status="pending", to_status="running")
@@ -299,6 +332,13 @@ class ExecutionState:
     def mark_failed(self, error: str) -> bool:
         """running -> failed.  Requires valid lock."""
         return self._transition(from_status="running", to_status="failed", error=error)
+
+    def mark_done(self) -> bool:
+        """succeeded|failed -> done. Requires valid lock."""
+        record = self.get()
+        if record is None or record["status"] not in {"succeeded", "failed"}:
+            return False
+        return self._transition(from_status=record["status"], to_status="done")
 
     # -- internal helpers ---------------------------------------------------
 

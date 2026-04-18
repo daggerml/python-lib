@@ -59,7 +59,7 @@ def setup_remote_list_parser(parser: ArgumentParser) -> None:
         description="List remote refs under a prefix.",
         examples=["dml --remote-root s3://bucket/project remote list tags"],
     )
-    parser.add_argument("prefix", help="Remote prefix to list (e.g. tags, cache, cache/<name>)")
+    parser.add_argument("prefix", help="Remote prefix to list (e.g. tags, cache)")
     parser.set_defaults(method="list", func=execute_remote_list)
 
 

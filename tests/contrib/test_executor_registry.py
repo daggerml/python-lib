@@ -7,15 +7,12 @@ import pytest
 from daggerml import Runnable, Uri
 from daggerml._internal.types import DmlRepoError
 from daggerml.contrib import executor_registry as reg
-from daggerml.contrib.executor_state import LocalState
 
 
 class ExecutorSpec:
     def __init__(self, name: str, adapter: str):
         self.name = name
         self.adapter = adapter
-
-    state_class = LocalState
 
     @staticmethod
     def resolve_runnable(uri, kwargs, sub):
@@ -30,7 +27,7 @@ class ExecutorSpec:
         return {"status": "running", "error": None}
 
     @staticmethod
-    def gc(*, state=None):
+    def cleanup(*, state=None):
         return None
 
 
@@ -53,7 +50,6 @@ def test_register_executor_accepts_class_object():
     class CustomExecutor:
         name = "custom"
         adapter = "local"
-        state_class = LocalState
 
         @staticmethod
         def resolve_runnable(uri, kwargs, sub):
@@ -68,7 +64,7 @@ def test_register_executor_accepts_class_object():
             return {"status": "running", "error": None}
 
         @staticmethod
-        def gc(*, state=None):
+        def cleanup(*, state=None):
             return None
 
     reg.register_executor(CustomExecutor)
@@ -85,38 +81,16 @@ def test_register_executor_missing_required_attribute_fails():
 
 
 def test_register_executor_missing_required_lifecycle_callable_fails():
-    class MissingPollExecutor:
-        name = "missing-poll"
+    class MissingStartExecutor:
+        name = "missing-start"
         adapter = "local"
-        state_class = LocalState
 
         @staticmethod
         def poll(*, state):
             return {"status": "running", "error": None}
 
-    with pytest.raises(DmlRepoError, match="missing required callables: start, gc"):
-        reg.register_executor(MissingPollExecutor)
-
-
-def test_executor_registration_requires_state_class_lock():
-    class MissingStateClassExecutor:
-        name = "no-state"
-        adapter = "local"
-
-        @staticmethod
-        def start(*, runnable, argv_ptr, cache_key, remote, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def poll(*, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def gc(*, state=None):
-            return None
-
-    with pytest.raises(DmlRepoError, match="missing required state_class"):
-        reg.register_executor(MissingStateClassExecutor)
+    with pytest.raises(DmlRepoError, match="missing required callables: start, cleanup"):
+        reg.register_executor(MissingStartExecutor)
 
 
 def test_get_unknown_executor_fails():

@@ -13,7 +13,7 @@ from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib.adapters import LocalAdapter
-from daggerml.contrib.executor_state import LocalState
+from daggerml.contrib.executor_state import ExecutionState
 from daggerml.contrib.executors import ScriptExecutor
 from daggerml.contrib.executors.script import run_payload
 from daggerml.contrib.testing import defunkify
@@ -29,44 +29,26 @@ def _reset_registry(tmp_path, monkeypatch):
     class InnerExecutor:
         name = "inner"
         adapter = "local"
-        state_class = LocalState
 
         @staticmethod
         def resolve_runnable(uri, kwargs, sub):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
-        @staticmethod
-        def start(*, runnable, argv_ptr, cache_key, remote, state=None):
+        @classmethod
+        def handle(cls, *, cache_key, runnable, argv_ptr, remote):
             return {"status": "running", "error": None}
-
-        @staticmethod
-        def poll(*, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def gc(*, state=None):
-            return None
 
     class CustomExecutor:
         name = "custom"
         adapter = "local"
-        state_class = LocalState
 
         @staticmethod
         def resolve_runnable(uri, kwargs, sub):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
-        @staticmethod
-        def start(*, runnable, argv_ptr, cache_key, remote, state=None):
+        @classmethod
+        def handle(cls, *, cache_key, runnable, argv_ptr, remote):
             return {"status": "running", "error": None}
-
-        @staticmethod
-        def poll(*, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def gc(*, state=None):
-            return None
 
     ereg.register_executor(ScriptExecutor)
     ereg.register_executor(InnerExecutor)
@@ -77,7 +59,7 @@ def _reset_registry(tmp_path, monkeypatch):
 
 
 def _remote() -> dict[str, str]:
-    return {"root": os.environ["DML_REMOTE_ROOT"], "cache": "test-cache"}
+    return {"root": os.environ["DML_REMOTE_ROOT"]}
 
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
@@ -193,16 +175,19 @@ def test_funkify_script_integration_runs_to_completion_with_decorator():
     with Dml.temporary() as dml:
         dag = dml.new("dst-int", "dst-int")
         runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
+        argv_ptr = _mk_argv_ptr(4, argv0=runnable)
+        cache_key = "ck-funkify-int-1"
 
-        kickoff = LocalAdapter.send(
-            runnable=runnable, argv_ptr=_mk_argv_ptr(4, argv0=runnable), cache_key="ck-funkify-int-1", remote=_remote()
-        )
-        assert kickoff == {"status": "running", "error": None}
+        # Seed state for ExecutorBase.handle()
+        ExecutionState.upsert(cache_key, argv_ptr)
+
+        kickoff = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
+        assert kickoff["status"] == "running"
 
         result = _poll_until_terminal(
             runnable=runnable,
-            argv_ptr=_mk_argv_ptr(4, argv0=runnable),
-            cache_key="ck-funkify-int-1",
+            argv_ptr=argv_ptr,
+            cache_key=cache_key,
         )
         assert result["status"] == "succeeded", result
 
@@ -232,11 +217,16 @@ def test_funkify_script_integration_runs_with_prepop_from_subchain_using_decorat
             sub=None,
         )
         outer = Runnable(target=Uri("outer"), adapter="dml-local-adapter", kwargs={}, sub=inner)
+        argv_ptr = _mk_argv_ptr(argv0=outer)
+        cache_key = "ck-funkify-int-2"
+
+        # Seed state for ExecutorBase.handle()
+        ExecutionState.upsert(cache_key, argv_ptr)
 
         result = _poll_until_terminal(
             runnable=runnable,
-            argv_ptr=_mk_argv_ptr(argv0=outer),
-            cache_key="ck-funkify-int-2",
+            argv_ptr=argv_ptr,
+            cache_key=cache_key,
         )
         assert result["status"] == "succeeded", result
 
@@ -277,7 +267,10 @@ def test_funkify_script_runtime_executes_generated_source_with_args_and_kwargs(t
         finally:
             os.environ.pop("DML_REPO", None)
 
-    assert result == {"status": "succeeded", "error": None}
+    assert result["status"] == "succeeded"
+    assert result["error"] is None
+    assert isinstance(result["dag_id"], str)
+    assert result["dag_id"]
 
 
 def test_funkify_resolve_runnable_requires_runnable_return():

@@ -1,11 +1,18 @@
 import os
-from uuid import uuid4
 
 import pytest
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.cache import CacheOps
-from daggerml._internal.types import ArgvNode, Dag, DictDatum, DmlRepoError, KwargvNode, ListDatum, ScalarDatum
+from daggerml._internal.types import (
+    ArgvNode,
+    Dag,
+    DictDatum,
+    DmlRepoError,
+    KwargvNode,
+    ListDatum,
+    ScalarDatum,
+)
 
 
 def _remote_root_from_env() -> str:
@@ -37,12 +44,12 @@ def _put_dag_hashed(temp_bo, argv_ref: Ref | None = None) -> Ref:
         return txn.put(dag)
 
 
-def _new_ops(temp_bo, cache_name: str) -> CacheOps:
-    return CacheOps(temp_bo._db, remote_root=_remote_root_from_env(), remote_cache=cache_name)
+def _new_ops(temp_bo) -> CacheOps:
+    return CacheOps(temp_bo._db, remote_root=_remote_root_from_env())
 
 
 def test_put_get_delete_roundtrip_remote(temp_bo, s3):
-    ops = _new_ops(temp_bo, f"cachetest-{uuid4().hex}")
+    ops = _new_ops(temp_bo)
     datum_ref = _put_datum_hashed(temp_bo, "value")
     argv_ref = _put_argv_node_hashed(temp_bo, datum_ref)
     dag_ref = _put_dag_hashed(temp_bo, argv_ref)
@@ -50,8 +57,8 @@ def test_put_get_delete_roundtrip_remote(temp_bo, s3):
 
     assert ops.get(argv_ref) is None
     assert ops.put(dag_ref) == cache_key
-    remote_ops, cache_name = ops._require_remote_context()
-    cache_ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref(f"cache/{cache_name}/{cache_key}.json"))
+    remote_ops = ops._require_remote_context()
+    cache_ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref(f"cache/{cache_key}.json"))
     assert cache_ref_obj["targets"] == {"dag": []}
     assert ops.get(argv_ref) == dag_ref
     assert ops.delete(argv_ref) is True
@@ -60,7 +67,7 @@ def test_put_get_delete_roundtrip_remote(temp_bo, s3):
 
 
 def test_list_limit_and_clear_remote(temp_bo, s3):
-    ops = _new_ops(temp_bo, f"cachetest-{uuid4().hex}")
+    ops = _new_ops(temp_bo)
     entries: list[tuple[str, Ref]] = []
     for i in range(3):
         datum_ref = _put_datum_hashed(temp_bo, f"value-{i}")

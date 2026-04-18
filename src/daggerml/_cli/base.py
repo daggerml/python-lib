@@ -210,14 +210,11 @@ def execute_command(args) -> None:
             explicit={
                 "repo": repo_path,
                 "remote.root": getattr(args, "remote_root", None),
-                "remote.cache": getattr(args, "remote_cache", None),
             }
         ).with_repo_defaults()
         open_kwargs: dict[str, Any] = {}
         if cfg.remote.root is not None:
             open_kwargs["remote_root"] = cfg.remote.root
-        if cfg.remote.cache is not None:
-            open_kwargs["remote_cache"] = cfg.remote.cache
         with DmlOps.open(repo_path, **open_kwargs) as ops:
             ops_obj = get_ops_object(ops, args.op)
             result = args.func(ops_obj, args)

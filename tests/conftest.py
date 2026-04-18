@@ -52,13 +52,27 @@ def remote_env(clear_envvars, _aws_server):
 
     os.environ.update(_aws_server["envvars"])
     os.environ["DML_REMOTE_ROOT"] = "s3://test-bucket/test-prefix"
-    os.environ["DML_REMOTE_CACHE"] = "test-cache"
+    os.environ["DML_DYNAMODB_TABLE"] = "test-dml-state"
     boto3.setup_default_session()
-    s3 = boto3.client("s3", endpoint_url=_aws_server["endpoint"])
+    endpoint = _aws_server["endpoint"]
+    s3 = boto3.client("s3", endpoint_url=endpoint)
     try:
         s3.create_bucket(Bucket="test-bucket")
     except Exception:
         pass
+    dynamo = boto3.client("dynamodb", endpoint_url=endpoint)
+    try:
+        dynamo.create_table(
+            TableName="test-dml-state",
+            KeySchema=[{"AttributeName": "cache_key", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "cache_key", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+    except Exception:
+        # Table exists, clear it
+        scan = dynamo.scan(TableName="test-dml-state")
+        for item in scan.get("Items", []):
+            dynamo.delete_item(TableName="test-dml-state", Key={"cache_key": item["cache_key"]})
     yield
 
 

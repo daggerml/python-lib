@@ -40,7 +40,7 @@ Cache rules:
 - execution cache identity and adapter `cache_key` contracts are defined in [adapter-execution-contract.md](adapter-execution-contract.md).
 - adapter `remote` context contracts are defined in [adapter-execution-contract.md](adapter-execution-contract.md).
 - `remote` context MUST be populated for non-builtin adapter execution and SHOULD be propagated in nested calls.
-- remote cache-ref layout and cache-namespace constraints are defined in [remote-data-model.md](remote-data-model.md).
+- remote cache-ref layout and cache-key path constraints are defined in [remote-data-model.md](remote-data-model.md).
 - non-builtin adapter execution MUST fail deterministically when remote context is unavailable.
 - non-builtin function execution without a configured remote cache context MUST fail deterministically.
 - cache lookup/write policy is caller-owned; adapters/executors return adapter status/output per [adapter-execution-contract.md](adapter-execution-contract.md).

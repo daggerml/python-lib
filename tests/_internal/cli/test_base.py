@@ -262,7 +262,7 @@ class TestExecuteCommand:
 
     @patch("daggerml._cli.base.DmlOps.open")
     @patch("daggerml._cli.base.get_repo_path")
-    @patch.dict(os.environ, {"DML_REMOTE_ROOT": "s3://bucket/project", "DML_REMOTE_CACHE": "cache-ns"})
+    @patch.dict(os.environ, {"DML_REMOTE_ROOT": "s3://bucket/project"})
     def test_execution_passes_remote_context_to_dmlops(self, mock_get_path, mock_open):
         """Test execute_command forwards resolved remote context into DmlOps."""
         mock_get_path.return_value = "/repo/path"
@@ -280,7 +280,6 @@ class TestExecuteCommand:
         mock_open.assert_called_once_with(
             "/repo/path",
             remote_root="s3://bucket/project",
-            remote_cache="cache-ns",
         )
 
     @patch("daggerml._cli.base.get_repo_path")
@@ -338,4 +337,3 @@ class TestTopLevelHelp:
         for op in ["init", "commit", "head", "index", "cache", "dag", "node", "remote", "gc", "contrib"]:
             assert op in out
         assert "--remote-root" in out
-        assert "--remote-cache" in out

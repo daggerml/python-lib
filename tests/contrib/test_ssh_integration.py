@@ -21,6 +21,7 @@ from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib.adapters import LocalAdapter
+from daggerml.contrib.executor_state import ExecutionState
 from daggerml.contrib.executors import ScriptExecutor, SshExecutor
 
 
@@ -144,10 +145,12 @@ def ssh_resource_data(local_sshd, tmp_path):
     aws_exports = "\n".join(
         f"export {name}={shlex.quote(value)}" for name, value in sorted(os.environ.items()) if name.startswith("AWS_")
     )
+    dynamodb_table = os.environ.get("DML_DYNAMODB_TABLE")
     env_file.write_text(
         dedent(
             f"""
             export DML_FN_CACHE_DIR={shlex.quote(str(remote_state_dir))}
+            {f"export DML_DYNAMODB_TABLE={shlex.quote(dynamodb_table)}" if dynamodb_table else ""}
             export PATH={shlex.quote(str(Path(sys.executable).parent))}:$PATH
             export DML_TEST_SSH_VALUE=ssh-ok
             {aws_exports}
@@ -159,7 +162,7 @@ def ssh_resource_data(local_sshd, tmp_path):
 
 
 def _remote() -> dict[str, str]:
-    return {"root": os.environ["DML_REMOTE_ROOT"], "cache": os.environ["DML_REMOTE_CACHE"]}
+    return {"root": os.environ["DML_REMOTE_ROOT"]}
 
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
@@ -177,7 +180,7 @@ def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
 def _poll_until_terminal(*, runnable: Runnable, argv_ptr: str, cache_key: str) -> dict[str, Any]:
     for _ in range(200):
         result = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
-        if result["status"] in {"succeeded", "failed", "canceled"}:
+        if result["status"] in {"succeeded", "failed"}:
             return cast(dict[str, Any], result)
         time.sleep(0.05)
     pytest.fail("ssh executor did not reach terminal state")
@@ -198,5 +201,6 @@ def test_ssh_executor_integration_runs_script_over_local_sshd(ssh_resource_data)
         runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
 
         argv_ptr = _mk_argv_ptr(argv0=runnable)
+        ExecutionState.upsert("ck-ssh-int-success", argv_ptr)
         result = _poll_until_terminal(runnable=runnable, argv_ptr=argv_ptr, cache_key="ck-ssh-int-success")
     assert result == {"status": "succeeded", "error": None}

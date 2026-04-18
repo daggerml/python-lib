@@ -9,7 +9,6 @@ from daggerml._internal import codec as codec_mod
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib import status as cstatus
-from daggerml.contrib.executor_state import LocalState
 
 
 class _FakeEntryPoint:
@@ -69,7 +68,6 @@ def test_status_reports_runtime_registrations(monkeypatch):
     class CustomExecutor:
         name = "custom"
         adapter = "local"
-        state_class = LocalState
 
         @staticmethod
         def resolve_runnable(uri, kwargs, sub):
@@ -84,7 +82,7 @@ def test_status_reports_runtime_registrations(monkeypatch):
             return {"status": "running", "error": None}
 
         @staticmethod
-        def gc(*, state=None):
+        def cleanup(*, state=None):
             return None
 
     class CustomCodec:
@@ -122,8 +120,8 @@ def test_status_reports_runtime_registrations(monkeypatch):
     executor = result["executors"][0]
     assert executor["key"] == "local:custom"
     assert executor["fqn"].endswith("CustomExecutor")
-    assert executor["implements"]["state_class"] is True
-    assert executor["implements"]["state_class_lock"] is True
+    assert executor["implements"]["start"] is True
+    assert executor["implements"]["cleanup"] is True
 
     codec = result["codecs"][0]
     assert codec["fqn"].endswith("CustomCodec")
@@ -152,7 +150,6 @@ def test_status_reports_best_effort_plugin_failures(monkeypatch):
     class PluginExecutor:
         name = "script"
         adapter = "local"
-        state_class = LocalState
 
         @staticmethod
         def resolve_runnable(uri, kwargs, sub):
@@ -167,7 +164,7 @@ def test_status_reports_best_effort_plugin_failures(monkeypatch):
             return {"status": "running", "error": None}
 
         @staticmethod
-        def gc(*, state=None):
+        def cleanup(*, state=None):
             return None
 
     class PluginCodec:

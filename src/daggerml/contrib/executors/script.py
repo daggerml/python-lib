@@ -19,7 +19,7 @@ from typing import Any, cast
 
 import daggerml as dml
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
-from daggerml.contrib.executor_state import LocalState, is_stale
+from daggerml.contrib.executor_state import ExecutionRecord, ExecutionState
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store
 
@@ -28,11 +28,12 @@ logger = logging.getLogger(__name__)
 
 META_KEY = "__dml_script_exec__"
 
+HEARTBEAT_STALENESS = 60.0
+
 
 class ScriptExecutor(ExecutorBase):
     name = "script"
     adapter = "local"
-    state_class = LocalState
 
     def __init__(self, runnable: Runnable | None = None, argv_ptr: str | None = None):
         self.runnable = runnable
@@ -73,16 +74,6 @@ class ScriptExecutor(ExecutorBase):
             },
             **call_kwargs,
         }, script
-
-    @staticmethod
-    def _proc_exists(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
 
     @staticmethod
     def _strip_funkify_decorators(source: str) -> str:
@@ -131,23 +122,22 @@ class ScriptExecutor(ExecutorBase):
             adapter="dml-local-adapter",
         )
 
-    @classmethod
-    def start(cls, runnable, argv_ptr, cache_key, remote, state=None):
+    def start(
+        self, *, cache_key: str, state: ExecutionRecord, runnable: Runnable, argv_ptr: str, remote: dict[str, str]
+    ) -> None:
+        es = ExecutionState(cache_key)
         workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{cache_key[:8]}-"))
         payload_path = workdir / "supervisor-input.json"
         result_path = workdir / "result.json"
         stdout_path = workdir / "stdout.log"
         stderr_path = workdir / "stderr.log"
         payload = {
-            "version": 1,
+            "version": 2,
             "cache_key": cache_key,
             "cmd": ["python", "-m", "daggerml.contrib.executors.script", argv_ptr],
             "remote": remote,
-            "comms": {"kind": "local", "spec": {}},
             "env": {
                 "DML_REMOTE_ROOT": remote["root"],
-                "DML_REMOTE_CACHE": remote["cache"],
-                "DML_CACHE_KEY": cache_key,
             },
         }
         payload_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
@@ -168,44 +158,43 @@ class ScriptExecutor(ExecutorBase):
                 close_fds=True,
                 env={**os.environ, "PYTHONUNBUFFERED": "1", **payload["env"]},
             )
-        initial = state.init_record(
-            status="running",
-        )
-        state.put_if_absent(initial)
-        with_meta = state.set_executor_metadata(
-            executor_id=cls.name,
-            data={
-                "pid": proc.pid,
-                "workdir": str(workdir),
-                "result_path": str(result_path),
-                "stdout_path": str(stdout_path),
-                "stderr_path": str(stderr_path),
-            },
-        )
-        state.update(with_meta)
-        return {"status": "running", "error": None}
+        assert es.lock()
+        try:
+            es.update_metadata(
+                {
+                    self.name: {
+                        "pid": proc.pid,
+                        "workdir": str(workdir),
+                        "result_path": str(result_path),
+                        "stdout_path": str(stdout_path),
+                        "stderr_path": str(stderr_path),
+                    },
+                }
+            )
+        finally:
+            es.unlock()
 
-    @classmethod
-    def poll(cls, state):
-        record = state.get()
-        status = record.get("status")
-        if status in {"succeeded", "failed", "canceled"}:
-            return {"status": status, "error": record.get("error")}
-        if is_stale(record):
-            return {"status": "failed", "error": "Script supervisor heartbeat stale"}
-        return {"status": "running", "error": None}
+    def poll(self, *, cache_key: str, state: ExecutionRecord) -> None:
+        import time
 
-    @classmethod
-    def gc(cls, state):
-        script_meta = state.get_executor_metadata(cls.name)
-        if "pid" in script_meta:
+        if state["heartbeat_ts"] is not None:
+            if state["heartbeat_ts"] + HEARTBEAT_STALENESS < time.time():
+                es = ExecutionState(cache_key)
+                if es.lock():
+                    try:
+                        es.mark_failed("Script supervisor heartbeat stale")
+                    finally:
+                        es.unlock()
+
+    def cleanup(self, *, cache_key: str, state: ExecutionRecord) -> None:
+        meta = (state.get("metadata") or {}).get(self.name, {})
+        if "pid" in meta:
             try:
-                os.killpg(script_meta["pid"], signal.SIGTERM)
+                os.killpg(meta["pid"], signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
-        if "workdir" in script_meta:
-            shutil.rmtree(script_meta["workdir"], ignore_errors=True)
-        state.delete()
+        if "workdir" in meta:
+            shutil.rmtree(meta["workdir"], ignore_errors=True)
 
 
 def _terminal_runnable(root: Runnable) -> Runnable:
@@ -216,17 +205,6 @@ def _terminal_runnable(root: Runnable) -> Runnable:
 
 
 def run_payload(argv_ptr: str) -> dict[str, Any]:
-    # IMPORTANT:
-    # This worker path is intentionally NOT a defensive validation boundary.
-    # `run_payload` is only called by `main`, `main` is only called from this
-    # module's CLI entrypoint, and that entrypoint is only launched by
-    # `ScriptExecutor` with payloads that contrib itself constructed.
-    # `ScriptExecutor.start` launches the supervisor, and the supervisor then
-    # launches this worker with the payload/env it prepared. Anything the
-    # supervisor is responsible for setting up can be assumed to exist here.
-    # Treat all inputs here as trusted internal runtime data.
-    # Do not add routine shape/type validation here unless a new external
-    # trust boundary is introduced.
     namespace: dict[str, Any] = {"logger": logging.getLogger("daggerml.contrib.script")}
 
     def runit(dag):
@@ -246,6 +224,11 @@ def run_payload(argv_ptr: str) -> dict[str, Any]:
         if dag.ref is None:
             dag.commit(output)
 
+    def succeeded_result(dag) -> dict[str, Any]:
+        if dag.ref is None:
+            raise DmlRepoError("Script worker succeeded without committed DAG")
+        return {"status": "succeeded", "error": None, "dag_id": dag.ref.id()}
+
     with dml.temporary() as dml_instance:
         try:
             dag = dml_instance.new(argv_ptr=argv_ptr)
@@ -255,10 +238,10 @@ def run_payload(argv_ptr: str) -> dict[str, Any]:
             try:
                 with dag:
                     runit(dag)
-                return {"status": "succeeded", "error": None}
+                return succeeded_result(dag)
             except Exception as e:
                 if dag.ref is not None:
-                    return {"status": "succeeded", "error": None}
+                    return succeeded_result(dag)
                 return {"status": "failed", "error": str(e)}
 
 

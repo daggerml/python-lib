@@ -112,7 +112,6 @@ def status() -> dict[str, object]:
             "config_dir": cfg.config_dir,
             "remote": {
                 "root": cfg.remote.root,
-                "cache": cfg.remote.cache,
             },
         },
         "runtime": {
@@ -159,8 +158,6 @@ class Dml:
             open_kwargs: dict[str, Any] = {}
             if self._config is not None and self._config.remote.root is not None:
                 open_kwargs["remote_root"] = self._config.remote.root
-            if self._config is not None and self._config.remote.cache is not None:
-                open_kwargs["remote_cache"] = self._config.remote.cache
             self._ops = DmlOps.open(self.repo, **open_kwargs)
             self._ops.__enter__()
         _ensure_default_literal_codecs(self)
@@ -498,6 +495,8 @@ class Dag:
         """
         source = dag_or_node
         if isinstance(source, str):
+            if self.ref is None and source == self.name:
+                return self.result if key == "result" else self[key]
             loaded = self.dml.load(source)
             source = loaded.result if key == "result" else loaded[key]
         source_dag = cast(Ref, source.dag.ref)
@@ -632,7 +631,7 @@ class Dag:
         self.ref = self.dml.ops.commit().describe(commit_ref)["dag"]
 
     def cache(self) -> str:
-        """Publish this committed DAG into the configured remote cache namespace."""
+        """Publish this committed DAG to the configured remote cache ref."""
         if self.ref is None:
             raise DmlRepoError("DAG must be committed before caching")
         return self.dml.cache.put(self.ref)

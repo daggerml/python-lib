@@ -170,12 +170,6 @@ class RemoteOps(BaseOps):
             self.__put(descriptor_key, descriptor_json.encode("utf-8"), ContentType="application/json")
 
     @staticmethod
-    def _validate_cache_name(cache: str) -> str:
-        if not isinstance(cache, str) or not re.match(r"^[a-z0-9][a-z0-9._-]{0,127}$", cache):
-            raise ValueError(f"Invalid cache namespace: {cache!r}")
-        return cache
-
-    @staticmethod
     def _validate_cache_key(cache_key: str) -> str:
         if not isinstance(cache_key, str) or not cache_key:
             raise ValueError("Invalid cache key: must be a non-empty string")
@@ -202,10 +196,9 @@ class RemoteOps(BaseOps):
     def _dag_ref_key(self, dag_id: str) -> str:
         return self._prefixed_key(f"refs/{self._dag_ref_path(dag_id)}")
 
-    def _cache_ref_path(self, cache: str, cache_key: str) -> str:
-        cache = self._validate_cache_name(cache)
+    def _cache_ref_path(self, cache_key: str) -> str:
         cache_key = self._validate_cache_key(cache_key)
-        return f"cache/{cache}/{cache_key}.json"
+        return f"cache/{cache_key}.json"
 
     def _cas_key(self, oid: str) -> str:
         """Generate CAS key for object ID with sharding.
@@ -275,11 +268,9 @@ class RemoteOps(BaseOps):
             if not re.match(seg_re, version):
                 raise ValueError(f"Invalid tag version: {version!r}")
         else:
-            if len(segments) != 3 or not segments[2].endswith(".json"):
-                raise ValueError("Invalid cache ref path: expected cache/<cache>/<key>.json")
-            cache = segments[1]
-            cache_key = segments[2][: -len(".json")]
-            self._validate_cache_name(cache)
+            if len(segments) != 2 or not segments[1].endswith(".json"):
+                raise ValueError("Invalid cache ref path: expected cache/<key>.json")
+            cache_key = segments[1][: -len(".json")]
             self._validate_cache_key(cache_key)
         return self._prefixed_key(f"refs/{ref_path}")
 
@@ -903,9 +894,9 @@ class RemoteOps(BaseOps):
         return root_ref
 
     @_remote_boundary("cache get")
-    def get_cache_ref(self, cache: str, cache_key: str) -> str | None:
-        """Read cache ref target manifest OID for a namespace/key."""
-        ref_path = self._cache_ref_path(cache, cache_key)
+    def get_cache_ref(self, cache_key: str) -> str | None:
+        """Read cache ref target manifest OID for a cache key."""
+        ref_path = self._cache_ref_path(cache_key)
         try:
             ref_bytes = self._remote_get_ref(ref_path)
         except RemoteError:
@@ -916,7 +907,7 @@ class RemoteOps(BaseOps):
 
     @_remote_boundary("cache put")
     def put_cache_ref(
-        self, cache: str, cache_key: str, target: str, *, overwrite: bool = False, targets: dict[str, list[str]]
+        self, cache_key: str, target: str, *, overwrite: bool = False, targets: dict[str, list[str]]
     ) -> None:
         """Create or update a cache ref.
 
@@ -926,14 +917,14 @@ class RemoteOps(BaseOps):
         """
         target = self._validate_manifest_oid(target)
         targets = self._validate_targets(targets)
-        ref_path = self._cache_ref_path(cache, cache_key)
+        ref_path = self._cache_ref_path(cache_key)
         ref_obj = {
             "kind": "ref",
             "schema": 0,
             "target": target,
             "created_at": int(time.time()),
             "targets": targets,
-            "meta": {"cache": {"name": cache}},
+            "meta": {},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
         try:
@@ -949,9 +940,9 @@ class RemoteOps(BaseOps):
             self._remote_put_ref(ref_path, ref_bytes)
 
     @_remote_boundary("cache delete")
-    def delete_cache_ref(self, cache: str, cache_key: str) -> bool:
-        """Delete cache ref by namespace/key."""
-        ref_path = self._cache_ref_path(cache, cache_key)
+    def delete_cache_ref(self, cache_key: str) -> bool:
+        """Delete cache ref by cache key."""
+        ref_path = self._cache_ref_path(cache_key)
         try:
             self._remote_get_ref(ref_path)
         except RemoteError:
@@ -960,10 +951,9 @@ class RemoteOps(BaseOps):
         return True
 
     @_remote_boundary("cache list")
-    def list_cache_refs(self, cache: str, limit: int | None = None) -> list[tuple[str, str]]:
-        """List cache refs as (cache_key, target_oid) pairs for one cache namespace."""
-        cache = self._validate_cache_name(cache)
-        refs = self.list(f"cache/{cache}")
+    def list_cache_refs(self, limit: int | None = None) -> list[tuple[str, str]]:
+        """List cache refs as (cache_key, target_oid) pairs."""
+        refs = self.list("cache")
         out: list[tuple[str, str]] = []
         for ref_obj in refs:
             ref_path = ref_obj["ref_path"]
@@ -1097,12 +1087,12 @@ class RemoteOps(BaseOps):
 
     @_remote_boundary("list")
     def list(self, prefix: str) -> list[dict]:
-        """List remote refs for a given prefix (tags, cache).
+        """List remote refs for a given prefix.
 
         Parameters
         ----------
         prefix : str
-            The prefix to list refs for (e.g., "tags", "cache", "cache/<name>")
+            The prefix to list refs for ("tags" or "cache")
 
         Returns
         -------
@@ -1110,9 +1100,8 @@ class RemoteOps(BaseOps):
             List of dictionaries containing decoded ref information including
             meta data and inferred ref_path
         """
-        allowed = prefix == "tags" or prefix == "cache" or prefix.startswith("cache/")
-        if not allowed:
-            raise ValueError(f"Invalid list prefix: {prefix!r}. Expected 'tags' or 'cache[/<name>]'.")
+        if prefix not in {"tags", "cache"}:
+            raise ValueError(f"Invalid list prefix: {prefix!r}. Expected 'tags' or 'cache'.")
 
         refs = []
 

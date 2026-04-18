@@ -31,11 +31,6 @@ def cli() -> None:
         type=str,
         help="Remote project root URI (defaults to $DML_REMOTE_ROOT)",
     )
-    parser.add_argument(
-        "--remote-cache",
-        type=str,
-        help="Remote cache namespace (defaults to $DML_REMOTE_CACHE)",
-    )
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity")
     subparsers = parser.add_subparsers(dest="op", metavar="<operation>", help="Operations")
 

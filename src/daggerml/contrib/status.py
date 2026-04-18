@@ -78,14 +78,11 @@ def _implements(kind: str, obj: Any):
             "cli": callable(getattr(obj, "cli", None)),
         }
     if kind == "executor":
-        state_class = getattr(obj, "state_class", None)
         return {
             "resolve_runnable": callable(getattr(obj, "resolve_runnable", None)),
             "start": callable(getattr(obj, "start", None)),
             "poll": callable(getattr(obj, "poll", None)),
-            "gc": callable(getattr(obj, "gc", None)),
-            "state_class": state_class is not None,
-            "state_class_lock": callable(getattr(state_class, "lock", None)) if state_class is not None else False,
+            "cleanup": callable(getattr(obj, "cleanup", None)),
         }
     return {
         "can_encode": callable(getattr(obj, "can_encode", None)),

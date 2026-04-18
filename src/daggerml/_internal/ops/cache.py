@@ -20,10 +20,9 @@ class CacheOps(BaseOps):
     """CRUD operations for managing cached computation results."""
 
     remote_root: Optional[str] = None
-    remote_cache: Optional[str] = None
 
     def _remote_ops(self):
-        if not self.remote_root or not self.remote_cache:
+        if not self.remote_root:
             raise DmlRepoError("Remote cache context required")
         from daggerml._internal.ops.remote import RemoteOps
 
@@ -34,10 +33,7 @@ class CacheOps(BaseOps):
         return RemoteOps(_db=self._db, bucket=parsed.netloc, prefix=f"{prefix}/dml" if prefix else "dml")
 
     def _require_remote_context(self):
-        remote_ops = self._remote_ops()
-        cache_name = self.remote_cache
-        assert cache_name is not None
-        return remote_ops, cache_name
+        return self._remote_ops()
 
     @staticmethod
     def _cache_key(argv_ref: Ref, txn) -> str:
@@ -50,9 +46,9 @@ class CacheOps(BaseOps):
 
     def _get(self, argv_ref: Ref, txn) -> Optional[Ref]:
         """Get cached result for `argv_ref` within a transaction."""
-        remote_ops, cache_name = self._require_remote_context()
+        remote_ops = self._require_remote_context()
         cache_key = self._cache_key(argv_ref, txn)
-        target = remote_ops.get_cache_ref(cache_name, cache_key)
+        target = remote_ops.get_cache_ref(cache_key)
         if target is None:
             return None
         return remote_ops.load_ptr_in_txn(target, txn, expected_root_ns="dag")
@@ -62,7 +58,7 @@ class CacheOps(BaseOps):
         try:
             if dag_ref.ns() != "dag":
                 raise DmlRepoError(f"Expected dag ref for cache value, got: {dag_ref}")
-            remote_ops, cache_name = self._require_remote_context()
+            remote_ops = self._require_remote_context()
             with self._tx(readonly=True) as txn:
                 dag = txn.get(dag_ref)
                 argv_ref = dag.argv
@@ -71,7 +67,7 @@ class CacheOps(BaseOps):
                 cache_key = self._cache_key(argv_ref, txn)
                 targets = remote_ops._targets_for_root(txn, dag_ref)
             target = remote_ops.put_ref_manifest(dag_ref)
-            remote_ops.put_cache_ref(cache_name, cache_key, target, overwrite=True, targets=targets)
+            remote_ops.put_cache_ref(cache_key, target, overwrite=True, targets=targets)
             return cache_key
         except Exception as e:
             raise DmlRepoError(f"Failed to put cache entry: {e}") from e
@@ -87,18 +83,18 @@ class CacheOps(BaseOps):
     def delete(self, argv_ref: Ref) -> bool:
         """Delete cache entry for `argv_ref`, returning whether it existed."""
         try:
-            remote_ops, cache_name = self._require_remote_context()
+            remote_ops = self._require_remote_context()
             with self._tx(readonly=True) as txn:
                 cache_key = self._cache_key(argv_ref, txn)
-            return remote_ops.delete_cache_ref(cache_name, cache_key)
+            return remote_ops.delete_cache_ref(cache_key)
         except Exception as e:
             raise DmlRepoError(f"Failed to delete cache entry: {e}") from e
 
     def list(self, limit: Optional[int] = None) -> Iterator[tuple[str, Ref]]:
         """List cache entries as (cache_key, result_ref) pairs."""
         try:
-            remote_ops, cache_name = self._require_remote_context()
-            refs = remote_ops.list_cache_refs(cache_name, limit=limit)
+            remote_ops = self._require_remote_context()
+            refs = remote_ops.list_cache_refs(limit=limit)
             with self._tx(readonly=False) as txn:
                 for cache_key, target in refs:
                     dag_ref = remote_ops.load_ptr_in_txn(target, txn, expected_root_ns="dag")
@@ -109,10 +105,10 @@ class CacheOps(BaseOps):
     def clear(self) -> int:
         """Delete all cache entries, returning the number removed."""
         try:
-            remote_ops, cache_name = self._require_remote_context()
+            remote_ops = self._require_remote_context()
             removed = 0
-            for cache_key, _target in remote_ops.list_cache_refs(cache_name):
-                if remote_ops.delete_cache_ref(cache_name, cache_key):
+            for cache_key, _target in remote_ops.list_cache_refs():
+                if remote_ops.delete_cache_ref(cache_key):
                     removed += 1
             return removed
         except Exception as e:

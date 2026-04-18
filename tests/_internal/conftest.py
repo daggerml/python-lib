@@ -78,7 +78,6 @@ def clear_envvars():
 
         # Set test-specific environment variables
         os.environ["DML_REMOTE_ROOT"] = "s3://test-bucket/test-prefix"
-        os.environ["DML_REMOTE_CACHE"] = "test-cache"
         os.environ["AWS_SHARED_CREDENTIALS_FILE"] = "/dev/null"
         os.environ["PYTHONPATH"] = "."  # ensure `tests` is in PYTHONPATH
         yield

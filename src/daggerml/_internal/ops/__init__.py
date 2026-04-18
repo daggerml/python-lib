@@ -43,7 +43,6 @@ class DmlOps:
 
     path: str
     remote_root: Optional[str] = None
-    remote_cache: Optional[str] = None
     _db: Optional[DmlDbEnv] = None
 
     def __enter__(self) -> Self:
@@ -88,7 +87,6 @@ class DmlOps:
         return IndexOps(
             _db=self._db,
             remote_root=self.remote_root,
-            remote_cache=self.remote_cache,
         )
 
     def dag(self) -> "DagOps":
@@ -116,7 +114,6 @@ class DmlOps:
         return CacheOps(
             _db=self._db,
             remote_root=self.remote_root,
-            remote_cache=self.remote_cache,
         )
 
     def gc(self) -> "GcOps":
@@ -165,12 +162,11 @@ class DmlOps:
         user: Optional[str] = None,
         *,
         remote_root: Optional[str] = None,
-        remote_cache: Optional[str] = None,
     ) -> Self:
         """Create new repository at path (instantiates db instance)."""
         Path(path).mkdir(parents=True, exist_ok=False)
         db = DmlDbEnv.create(path, namespaces=sorted(NAMESPACES), map_size=1024**3)
-        self = cls(_db=db, path=path, remote_root=remote_root, remote_cache=remote_cache)
+        self = cls(_db=db, path=path, remote_root=remote_root)
         self.head().create(DEFAULT_HEAD.id())
         return self
 
@@ -181,7 +177,6 @@ class DmlOps:
         map_size: int = 1024**3,
         *,
         remote_root: Optional[str] = None,
-        remote_cache: Optional[str] = None,
     ) -> Self:
         """Open existing repository (instantiates db instance).
 
@@ -202,7 +197,6 @@ class DmlOps:
             _db=db,
             path=path,
             remote_root=remote_root,
-            remote_cache=remote_cache,
         )
 
     @classmethod
@@ -211,7 +205,6 @@ class DmlOps:
         user: Optional[str] = None,
         *,
         remote_root: Optional[str] = None,
-        remote_cache: Optional[str] = None,
     ) -> ContextManager[Self]:
         """Create temporary repository for testing."""
 
@@ -222,7 +215,6 @@ class DmlOps:
                     f"{tmpdir}/db",
                     user,
                     remote_root=remote_root,
-                    remote_cache=remote_cache,
                 ) as repo:
                     yield repo
 

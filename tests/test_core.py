@@ -1,12 +1,12 @@
 import os
 from pathlib import Path
+from typing import cast
 from unittest import TestCase
-from unittest.mock import patch
 
 import pytest
 
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
-from daggerml.api import Dag, Dml, Error, Node
+from daggerml.api import Dag, DictNode, Dml, Error, ListNode, Node
 
 SUM_URI = "./tests/assets/fns/sum.py"
 ASYNC_URI = "./tests/assets/fns/async.py"
@@ -138,24 +138,22 @@ class TestSetAttrs:
 
     def test_no_caching(self):
         nums = [1, 2, 3]
-        with patch.dict(os.environ, {"DML_REMOTE_CACHE": "test-cache-a"}):
-            with Dml.temporary() as dml:
-                with dml.new("d0", "d0") as d1:
-                    n1 = d1.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums)
-                    uid = n1.load()["uuid"].value()
-        with patch.dict(os.environ, {"DML_REMOTE_CACHE": "test-cache-b"}):
-            with Dml.temporary() as dml:
-                with dml.new("d1", "d0") as d1:
-                    n1 = d1.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums)
-                    uid1 = n1.load()["uuid"].value()
-        assert uid != uid1, "Cached dag should have the same UUID"
+        with Dml.temporary() as dml:
+            with dml.new("d0", "d0") as d1:
+                n1 = d1.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums)
+                uid = n1.load()["uuid"].value()
+        with Dml.temporary() as dml:
+            with dml.new("d1", "d0") as d1:
+                n1 = d1.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums)
+                uid1 = n1.load()["uuid"].value()
+        assert uid == uid1, "Cached dag should have the same UUID"
 
     def test_nodemap(self, dml):
         dag = dml.new("d0", "d0")
         dag.a = 23
         node = dag.put(42, name="b")
         other = dag.put(420)
-        assert dag.a.value() == 23
+        assert dag["a"].value() == 23
         assert list(dag) == ["a", "b"]
         dag.commit([node, other])
 
@@ -272,16 +270,17 @@ class TestBasic(TestCase):
             self.assertEqual([x.value() for x in n0], [d0.n1.value()])
             self.assertEqual(d0.n1.value(), 42)
             d0.n2 = {"x": n0, "y": "z"}
-            self.assertNotEqual(d0.n2["x"], n0)
-            self.assertEqual(d0.n2["x"].value(), n0.value())
-            d0.n3 = list(d0.n2.items())
+            n2 = cast(DictNode, d0.load("d0", "n2"))
+            self.assertNotEqual(n2["x"], n0)
+            self.assertEqual(n2["x"].value(), n0.value())
+            d0.n3 = list(n2.items())
             self.assertIsInstance([x for x in d0.n3], list)
             self.assertDictEqual(
-                {k: v.value() for k, v in d0.n2.items()},
+                {k: v.value() for k, v in n2.items()},
                 {"x": n0.value(), "y": "z"},
             )
             d0.n4 = [1, 2, 3, 4, 5]
-            d0.n5 = d0.n4[1:]
+            d0.n5 = cast(ListNode, d0.load("d0", "n4"))[1:]
             self.assertListEqual([x.value() for x in d0.n5], [2, 3, 4, 5])
             d0.commit(n0)
             commit_ref = dml.head.describe(dml.head_ref)["commit"]

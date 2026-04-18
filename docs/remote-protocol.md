@@ -107,8 +107,8 @@ Rules:
 
 - `<cache_key>` MUST use execution cache-key identity defined in [adapter-execution-contract.md](adapter-execution-contract.md).
 - `<cache>` namespace constraints are defined in [remote-data-model.md](remote-data-model.md).
-- protocol implementations MUST support cache-ref enumeration per cache namespace.
-- protocol implementations MUST support cache-ref read/write/delete by cache namespace/key.
+- protocol implementations MUST support cache-ref enumeration over `refs/cache/`.
+- protocol implementations MUST support cache-ref read/write/delete by cache key.
 - cache-ref writes MUST create when absent.
 - cache-ref writes MUST be no-op success when existing `target` matches.
 - cache-ref writes MUST fail deterministically on target conflict unless explicit overwrite behavior is requested by caller.

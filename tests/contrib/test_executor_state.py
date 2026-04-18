@@ -220,6 +220,21 @@ class TestUpdateMetadata:
 
 
 class TestTransitions:
+    def test_claim_running_from_pending(self):
+        ExecutionState.upsert("tr-claim-1", "ptr")
+        es = ExecutionState("tr-claim-1")
+        assert es.claim_running() is True
+        rec = es.get()
+        assert rec is not None
+        assert rec["status"] == "running"
+
+    def test_claim_running_fails_after_already_claimed(self):
+        ExecutionState.upsert("tr-claim-2", "ptr")
+        es1 = ExecutionState("tr-claim-2")
+        es2 = ExecutionState("tr-claim-2")
+        assert es1.claim_running() is True
+        assert es2.claim_running() is False
+
     def test_mark_running_from_pending(self):
         ExecutionState.upsert("tr-1", "ptr")
         es = ExecutionState("tr-1")

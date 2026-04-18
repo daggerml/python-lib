@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from contextlib import contextmanager
 
-from daggerml import Dml, Error
-from daggerml.contrib.executor_state import LocalState
+from daggerml import Dml
+from daggerml._internal.types import Runnable
+from daggerml.contrib.executor_state import ExecutionRecord, ExecutionState
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.util import get_client
 
@@ -19,24 +20,20 @@ TERMINAL_FAILED_STATUSES = {
 TERMINAL_SUCCESS_STATUSES = {"CREATE_COMPLETE", "UPDATE_COMPLETE"}
 
 
-@dataclass
 class CfnExecutor(ExecutorBase):
     name = "cfn"
     adapter = "local"
-    state_class = LocalState
 
     @staticmethod
     def _client():
         return get_client("cloudformation")
 
     @classmethod
+    @contextmanager
     def _tmpdag(cls, argv_ptr):
-        try:
-            with Dml.temporary() as dml:
-                with dml.new(argv_ptr=argv_ptr) as dag:
-                    yield dag
-        except Exception:
-            pass
+        with Dml.temporary() as dml:
+            with dml.new(argv_ptr=argv_ptr) as dag:
+                yield dag
 
     @classmethod
     def _commit_dag(cls, metadata, stack, outputs):
@@ -48,20 +45,19 @@ class CfnExecutor(ExecutorBase):
             dag.stack_name = metadata["stack_name"]
             dag.outputs = outputs
             dag.commit(dag.outputs)
+            return dag.ref.id()
 
-    @classmethod
-    def _fail_dag(cls, argv_ptr, message):
-        with cls._tmpdag(argv_ptr) as dag:
-            dag.commit(Error(message, origin="cfn-executor", type="runtimeerror"))
-
-    @classmethod
-    def start(cls, *, runnable, argv_ptr, cache_key, remote, state):
-        with Dml.temporary() as dml:
-            with dml.new(argv_ptr=argv_ptr) as dag:
+    def start(
+        self, *, cache_key: str, state: ExecutionRecord, runnable: Runnable, argv_ptr: str, remote: dict[str, str]
+    ) -> None:
+        es = ExecutionState(cache_key)
+        with Dml.temporary() as dml_inst:
+            with dml_inst.new(argv_ptr=argv_ptr) as dag:
                 name, template, params = dag.argv[1:4].value()
-        state.put_if_absent(state.init_record(status="pending"))
-        client = cls._client()
+
+        client = self._client()
         old_stack_id = None
+        stack_id = None
         return_poll = False
         try:
             stacks = client.describe_stacks(StackName=name)["Stacks"]
@@ -76,6 +72,7 @@ class CfnExecutor(ExecutorBase):
                     Parameters=[{"ParameterKey": k, "ParameterValue": v} for k, v in params.items()],
                     Capabilities=["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM"],
                 )
+                stack_id = resp["StackId"]
             else:
                 resp = client.update_stack(
                     StackName=name,
@@ -83,50 +80,71 @@ class CfnExecutor(ExecutorBase):
                     Parameters=[{"ParameterKey": k, "ParameterValue": v} for k, v in params.items()],
                     Capabilities=["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM"],
                 )
+                stack_id = resp["StackId"]
         except Exception as e:
             if "No updates are to be performed" not in str(e):
                 raise
+            stack_id = old_stack_id
             return_poll = True
-        stack_id = resp["StackId"]
-        state.update(
-            state.set_executor_metadata(cls.name, data={"stack_name": name, "stack_id": stack_id, "argv_ptr": argv_ptr})
-        )
-        if return_poll:
-            return cls.poll(state)
-        return {"status": "pending", "error": None}
 
-    @classmethod
-    def poll(cls, state):
-        metadata = state.get_executor_metadata(cls.name)
-        stack_name = metadata["stack_name"]
+        assert es.lock()
         try:
-            stacks = cls._client().describe_stacks(StackName=stack_name)["Stacks"]
+            es.update_metadata(
+                {
+                    self.name: {"stack_name": name, "stack_id": stack_id, "argv_ptr": argv_ptr},
+                }
+            )
+        finally:
+            es.unlock()
+
+        if return_poll:
+            self.poll(cache_key=cache_key, state=es.get() or state)
+
+    def poll(self, *, cache_key: str, state: ExecutionRecord) -> None:
+        meta = (state.get("metadata") or {}).get(self.name, {})
+        stack_name = meta.get("stack_name")
+        if not stack_name:
+            return
+        try:
+            stacks = self._client().describe_stacks(StackName=stack_name)["Stacks"]
         except Exception:
-            return {"status": "running", "error": None}
+            return
         if not stacks:
             error = f"Stack not found: {stack_name}"
-            cls._fail_dag(metadata["argv_ptr"], error)
-            return {"status": "failed", "error": error}
+            es = ExecutionState(cache_key)
+            if es.lock():
+                try:
+                    es.mark_failed(error)
+                finally:
+                    es.unlock()
+            return
         stack = stacks[0]
         raw_status = stack["StackStatus"]
         if raw_status in TERMINAL_SUCCESS_STATUSES:
             outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
-            metadata["outputs"] = outputs
-            cls._commit_dag(metadata, stack, outputs)
-            return {"status": "succeeded", "error": None}
+            dag_id = self._commit_dag(meta, stack, outputs)
+            es = ExecutionState(cache_key)
+            if es.lock():
+                try:
+                    es.mark_succeeded(dag_id)
+                finally:
+                    es.unlock()
+            return
         if raw_status in TERMINAL_FAILED_STATUSES:
             error = f"Stack {stack_name} failed: {raw_status}"
             try:
-                events = cls._client().describe_stack_events(StackName=stack_name)["StackEvents"]
+                events = self._client().describe_stack_events(StackName=stack_name)["StackEvents"]
                 reasons = [e["ResourceStatusReason"] for e in events if "ResourceStatusReason" in e]
                 if reasons:
                     error = f"{error}\n{chr(10).join(reasons)}"
             except Exception:
                 pass
-            cls._fail_dag(metadata["argv_ptr"], error)
-            return {"status": "failed", "error": error}
-        return {"status": "running", "error": None}
+            es = ExecutionState(cache_key)
+            if es.lock():
+                try:
+                    es.mark_failed(error)
+                finally:
+                    es.unlock()
 
-    @classmethod
-    def gc(cls, state):
-        state.delete()
+    def cleanup(self, *, cache_key: str, state: ExecutionRecord) -> None:
+        pass  # CFN stacks are not cleaned up on completion

@@ -7,7 +7,6 @@ defaults < environment variables < explicit values
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import asdict, dataclass, field, replace
 from getpass import getuser
 from socket import gethostname
@@ -20,10 +19,7 @@ _ENV_KEYS: dict[str, tuple[str, ...]] = {
     "user": ("DML_USER",),
     "config_dir": ("DML_CONFIG_DIR",),
     "remote.root": ("DML_REMOTE_ROOT",),
-    "remote.cache": ("DML_REMOTE_CACHE",),
 }
-
-_REMOTE_CACHE_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 
 
 def _default_user(env_map: Mapping[str, str]) -> Optional[str]:
@@ -67,20 +63,11 @@ def _validate_remote_root(value: str) -> str:
     return value
 
 
-def _validate_remote_cache(value: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError("remote.cache must be a string")
-    if not _REMOTE_CACHE_RE.match(value):
-        raise ValueError("remote.cache must match [a-z0-9][a-z0-9._-]{0,127}")
-    return value
-
-
 @dataclass(frozen=True)
 class DmlRemoteConfig:
     """Resolved remote configuration."""
 
     root: Optional[str] = None
-    cache: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -149,7 +136,6 @@ class DmlConfig:
             "DML_USER": self.user,
             "DML_CONFIG_DIR": self.config_dir,
             "DML_REMOTE_ROOT": self.remote.root,
-            "DML_REMOTE_CACHE": self.remote.cache,
         }
 
     @staticmethod
@@ -171,19 +157,12 @@ class DmlConfig:
             if not isinstance(value, dict):
                 return
             DmlConfig._set(data, "remote.root", value.get("root"))
-            DmlConfig._set(data, "remote.cache", value.get("cache"))
             return
         if key == "remote.root":
             if isinstance(value, str):
                 value = _validate_remote_root(value)
             remote = cast(dict[str, object], data["remote"])
             remote["root"] = value
-            return
-        if key == "remote.cache":
-            if isinstance(value, str):
-                value = _validate_remote_cache(value)
-            remote = cast(dict[str, object], data["remote"])
-            remote["cache"] = value
             return
         if key not in data:
             return

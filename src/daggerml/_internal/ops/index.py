@@ -11,7 +11,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from subprocess import run
-from typing import Any, Iterator, Optional, cast
+from typing import Any, Iterator, Mapping, Optional, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -62,7 +62,6 @@ class _PreparedAdapterCall:
 @dataclass
 class IndexOps(BaseOps):
     remote_root: Optional[str] = None
-    remote_cache: Optional[str] = None
 
     def _remote_ops(self):
         if not self.remote_root:
@@ -115,20 +114,38 @@ class IndexOps(BaseOps):
             dag_ref = self._run_builtin(argv_ref, txn)
             if dag_ref is not None:
                 return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
-            cops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
+            cops = CacheOps(_db=self._db, remote_root=self.remote_root)
             dag_ref = cops._get(argv_ref, txn)
             if dag_ref is not None:
                 return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
             prepared = self._prepare_adapter_call(argv_ref, txn)
-        status = self._call_adapter(prepared, index_ref)
-        if status in {"pending", "running"}:
+        argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
+        from daggerml.contrib.executor_state import ExecutionState
+
+        state = ExecutionState.upsert(prepared.cache_key, argv_ptr)
+        if state["status"] == "done":
             return None
+
+        self._call_adapter(prepared, argv_ptr)
+        state = ExecutionState(prepared.cache_key).get()
+        if state is None:
+            raise DmlRepoError(f"Execution state missing for cache key: {prepared.cache_key}")
+
+        if state["status"] in {"succeeded", "failed"}:
+            self._publish_terminal_state(prepared.argv_ref, state)
+            self._mark_execution_done(ExecutionState(prepared.cache_key))
+
         with self._tx(readonly=False) as txn:
-            cops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
+            cops = CacheOps(_db=self._db, remote_root=self.remote_root)
             dag_ref = cops._get(prepared.argv_ref, txn)
-            if dag_ref is None:
-                raise DmlRepoError("Adapter reported success but no cached DAG was published")
-            return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+            if dag_ref is not None:
+                return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+
+        if state["status"] == "failed":
+            raise DmlRepoError(state.get("error") or "Adapter reported failure")
+        if state["status"] == "succeeded":
+            raise DmlRepoError("Adapter reported success but no cached DAG was published")
+        return None
 
     def delete(self, index_ref: Ref) -> None:
         """Delete an index object from db."""
@@ -300,7 +317,7 @@ class IndexOps(BaseOps):
             txn.delete(index_ref)
         if ctx.dag.argv is not None:
             # automatically cache the DAG if it has an argv (i.e. is runnable)
-            cops = CacheOps(_db=self._db, remote_root=self.remote_root, remote_cache=self.remote_cache)
+            cops = CacheOps(_db=self._db, remote_root=self.remote_root)
             cops.put(ctx.commit.dag)
         return commit_ref
 
@@ -583,7 +600,7 @@ class IndexOps(BaseOps):
         return payload
 
     def _prepare_adapter_call(self, argv_ref: Ref, txn) -> _PreparedAdapterCall:
-        if self.remote_root is None or self.remote_cache is None:
+        if self.remote_root is None:
             raise DmlRepoError("Remote context required for adapter invocation")
         argv_node: ArgvNode = txn.get(argv_ref)
         argv_datum: ListDatum = txn.get(argv_node.datum_ref(txn))
@@ -605,17 +622,60 @@ class IndexOps(BaseOps):
             runnable=self._runnable_envelope(fn_runnable_ref, txn, node_ops),
         )
 
-    def _call_adapter(self, prepared: _PreparedAdapterCall, parent_index_ref: Ref) -> str:
-        if self.remote_root is None or self.remote_cache is None:
-            raise DmlRepoError("Remote context required for adapter invocation")
+    def _load_remote_dag(self, dag_id: str) -> Ref:
         remote_ops = self._remote_ops()
+        dag_ref = remote_ops._decode_ref(remote_ops._remote_get_dag_ref(dag_id))
+        return remote_ops.load_ptr(dag_ref["target"], expected_root_ns="dag")
+
+    def _build_failed_execution_dag(self, argv_ref: Ref, error_message: str) -> Ref:
+        with self._tx(readonly=False) as txn:
+            fn_index_ref = self._create(argv=argv_ref, txn=txn)
+            idx_ctx = txn.get_ctx(fn_index_ref)
+            if idx_ctx.dag is None:
+                raise DmlRepoError("Function index has no DAG.")
+            idx_ctx.dag.error = txn.put(Error.from_ex(DmlRepoError(error_message)))
+            idx_ctx.commit.dag = txn.put(idx_ctx.dag)
+            idx_ctx.commit.modified = now()
+            commit_ref = txn.put(idx_ctx.commit)
+            commit_obj: Commit = txn.get(commit_ref)
+            if commit_obj.dag is None:
+                raise DmlRepoError("Function commit has no DAG.")
+            txn.delete(fn_index_ref)
+            return commit_obj.dag
+
+    def _publish_terminal_state(self, argv_ref: Ref, state: Mapping[str, Any]) -> None:
+        cops = CacheOps(_db=self._db, remote_root=self.remote_root)
+        if state["status"] == "succeeded":
+            dag_id = state.get("dag_id")
+            if not isinstance(dag_id, str) or not dag_id:
+                raise DmlRepoError("Execution state succeeded but dag_id is missing")
+            dag_ref = self._load_remote_dag(dag_id)
+        elif state["status"] == "failed":
+            dag_ref = self._build_failed_execution_dag(argv_ref, state.get("error") or "Adapter reported failure")
+        else:
+            raise DmlRepoError(f"Cannot publish non-terminal execution state: {state['status']}")
+        cops.put(dag_ref)
+
+    def _mark_execution_done(self, es) -> None:
+        if not es.lock():
+            raise DmlRepoError(f"Could not lock execution state for cache key: {es.cache_key}")
+        try:
+            current = es.get()
+            if current is None:
+                raise DmlRepoError(f"Execution state missing for cache key: {es.cache_key}")
+            if current["status"] in {"succeeded", "failed"} and not es.mark_done():
+                raise DmlRepoError(f"Could not mark execution done for cache key: {es.cache_key}")
+        finally:
+            es.unlock()
+
+    def _call_adapter(self, prepared: _PreparedAdapterCall, argv_ptr: str) -> dict[str, Any]:
+        if self.remote_root is None:
+            raise DmlRepoError("Remote context required for adapter invocation")
         envelope = {
-            "argv_ptr": remote_ops.put_ref_manifest(prepared.argv_ref),
+            "argv_ptr": argv_ptr,
             "cache_key": prepared.cache_key,
-            "parent_id": parent_index_ref.id(),
             "remote": {
                 "root": self.remote_root,
-                "cache": self.remote_cache,
             },
             "runnable": prepared.runnable,
         }
@@ -634,16 +694,7 @@ class IndexOps(BaseOps):
             stdout = json.loads(result_data.stdout)
         except json.JSONDecodeError as e:
             raise DmlRepoError("Adapter output must be JSON") from e
-        stdout = self._validate_adapter_output(stdout)
-        status = stdout["status"]
-        if status == "failed":
-            err = stdout.get("error")
-            if isinstance(err, dict):
-                msg = err.get("message", "")
-            else:
-                msg = str(err)
-            raise DmlRepoError(msg or "Adapter reported failure")
-        return status
+        return self._validate_adapter_output(stdout)
 
     def _finish_fn_result(self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_ref: Ref) -> Ref:
         dag_obj: Dag = txn.get(dag_ref)

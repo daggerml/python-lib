@@ -32,18 +32,27 @@ def _validate_executor_spec(spec: Any) -> tuple[str, str, Any]:
     if not isinstance(name, str) or not name:
         raise DmlRepoError("Executor spec missing required attribute: name")
     if hasattr(spec, "resolve_runnable") and callable(spec.resolve_runnable):
+        # Front-end only (resolve_runnable without lifecycle) is valid,
+        # but if lifecycle callables are present they must be valid.
+        has_start = hasattr(spec, "start")
+        has_cleanup = hasattr(spec, "cleanup")
+        if has_start or has_cleanup:
+            if not has_start or not has_cleanup:
+                raise DmlRepoError(
+                    "Executor spec with resolve_runnable has partial lifecycle: needs both start and cleanup"
+                )
+            if not callable(spec.start) or not callable(spec.cleanup):
+                raise DmlRepoError("Executor attributes: start, cleanup must be callable")
+            if hasattr(spec, "poll") and not callable(spec.poll):
+                raise DmlRepoError("Executor defines poll attribute but it is not callable")
         return adapter, name, spec
-    # back-end only executor spec must have start, poll, gc callables and state_class with lock contextmanager
-    if not hasattr(spec, "start") or not hasattr(spec, "gc"):
-        raise DmlRepoError("Executor spec missing required callables: start, gc")
-    if not callable(spec.start) or not callable(spec.gc):
-        raise DmlRepoError("Executor attributes: start, gc must be callable")
+    # back-end only executor spec must have start and cleanup callables
+    if not hasattr(spec, "start") or not hasattr(spec, "cleanup"):
+        raise DmlRepoError("Executor spec missing required callables: start, cleanup")
+    if not callable(spec.start) or not callable(spec.cleanup):
+        raise DmlRepoError("Executor attributes: start, cleanup must be callable")
     if hasattr(spec, "poll") and not callable(spec.poll):
         raise DmlRepoError("Executor defines poll attribute but it is not callable")
-    if not hasattr(spec, "state_class"):
-        raise DmlRepoError("Executor spec missing required state_class lock contextmanager")
-    if spec.state_class is None or not hasattr(spec.state_class, "lock"):
-        raise DmlRepoError("Executor spec missing required state_class lock contextmanager")
     return adapter, name, spec
 
 

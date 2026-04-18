@@ -118,8 +118,7 @@ Registration Record rules:
   - `resolve_runnable`: `bool`,
   - `start`: `bool`,
   - `poll`: `bool`,
-  - `state_class`: `bool`,
-  - `state_class_lock`: `bool`.
+  - `cleanup`: `bool`.
 - For records in `codecs`, `implements` MUST contain exactly:
   - `can_encode`: `bool`,
   - `encode`: `bool`.
