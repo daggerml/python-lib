@@ -1,25 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from daggerml import Uri
+from daggerml._internal.exec_state import ExecutionState
 from daggerml._internal.types import DmlRepoError, Runnable
-from daggerml.contrib.executors.batch import BatchExecutor
-
-
-class _FakeStore:
-    def __init__(self):
-        self.writes: dict[str, bytes] = {}
-
-    def put(self, data=None, filepath=None, *, suffix=""):
-        assert filepath is None
-        assert isinstance(data, bytes)
-        uri = f"s3://bucket/input{suffix}"
-        self.writes[uri] = data
-        return Uri(uri)
-
-    def _name2uri(self, name):
-        return Uri(f"s3://bucket/{name}")
+from daggerml.contrib.executors.batch import BatchExecutor, _ADAPTER_IO_NAME
 
 
 class _FakeBatchClient:
@@ -64,7 +52,7 @@ def _sub() -> Runnable:
     return Runnable(target=Uri("script"), adapter="dml-local-adapter", kwargs={"x": 1})
 
 
-_REMOTE = {"root": "s3://bucket/root"}
+_REMOTE = {"root": "s3://test-bucket/test-prefix"}
 
 
 def test_batch_executor_resolve_runnable_shape():
@@ -90,9 +78,7 @@ def test_batch_executor_resolve_runnable_rejects_bad_input():
 
 
 def test_batch_executor_start_submits_job_and_writes_state(monkeypatch):
-    fake_store = _FakeStore()
     fake_client = _FakeBatchClient()
-    monkeypatch.setattr(BatchExecutor, "_store", staticmethod(lambda remote: fake_store))
     monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
 
     runnable = BatchExecutor.resolve_runnable(
@@ -100,6 +86,7 @@ def test_batch_executor_start_submits_job_and_writes_state(monkeypatch):
     )
 
     cache_key = "batch-start"
+    execution_id = "exec-batch-start"
     argv_ptr = "argv://ptr"
 
     executor = BatchExecutor()
@@ -107,7 +94,7 @@ def test_batch_executor_start_submits_job_and_writes_state(monkeypatch):
         runnable=runnable,
         argv_ptr=argv_ptr,
         cache_key=cache_key,
-        execution_id="exec-batch-start",
+        execution_id=execution_id,
         remote=_REMOTE,
     )
 
@@ -119,6 +106,64 @@ def test_batch_executor_start_submits_job_and_writes_state(monkeypatch):
     ]
     assert written_state["job_id"] == "job-123"
     assert written_state["job_definition"] == "arn:batch:def/123"
+    # input_uri and output_uri must NOT be in state (derived from AdapterIO)
+    assert "input_uri" not in written_state
+    assert "output_uri" not in written_state
+
+
+def test_batch_executor_start_writes_input_payload_to_s3(monkeypatch):
+    fake_client = _FakeBatchClient()
+    monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
+
+    runnable = BatchExecutor.resolve_runnable(
+        "batch", {"lambda_uri": "lambda-fn", "image": Uri("repo/image:tag")}, _sub()
+    )
+
+    cache_key = "batch-payload"
+    execution_id = "exec-payload"
+    remote = _REMOTE
+
+    BatchExecutor().start(
+        runnable=runnable,
+        argv_ptr="argv://ptr",
+        cache_key=cache_key,
+        execution_id=execution_id,
+        remote=remote,
+    )
+
+    exec_state = ExecutionState(cache_key, remote_root=remote["root"])
+    io = exec_state.adapter_io(execution_id, _ADAPTER_IO_NAME)
+    raw = exec_state._get_object_bytes(io._input_key)
+    assert raw is not None
+    payload = json.loads(raw[0])
+    assert payload["cache_key"] == cache_key
+    assert payload["execution_id"] == execution_id
+
+
+def test_batch_executor_start_passes_s3_uris_to_container_command(monkeypatch):
+    fake_client = _FakeBatchClient()
+    monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
+
+    runnable = BatchExecutor.resolve_runnable(
+        "batch", {"lambda_uri": "lambda-fn", "image": Uri("repo/image:tag")}, _sub()
+    )
+
+    BatchExecutor().start(
+        runnable=runnable,
+        argv_ptr="argv://ptr",
+        cache_key="batch-cmd",
+        execution_id="exec-cmd",
+        remote=_REMOTE,
+    )
+
+    container_props = fake_client.registered[0]["containerProperties"]
+    cmd = container_props["command"]
+    # Command must include --poll, -i <s3://...>, -o <s3://...>
+    assert "--poll" in cmd
+    i_idx = cmd.index("-i")
+    o_idx = cmd.index("-o")
+    assert cmd[i_idx + 1].startswith("s3://")
+    assert cmd[o_idx + 1].startswith("s3://")
 
 
 def test_batch_executor_poll_returns_running_while_batch_running(monkeypatch):
@@ -129,43 +174,54 @@ def test_batch_executor_poll_returns_running_while_batch_running(monkeypatch):
     result = executor.poll(
         cache_key="batch-poll",
         execution_id="exec-batch-poll",
-        state={"job_id": "job-123", "output_uri": "s3://bucket/out.json"},
+        state={"job_id": "job-123"},
         remote=_REMOTE,
     )
 
-    assert result == {
-        "status": "running",
-        "error": None,
-        "state": {"job_id": "job-123", "output_uri": "s3://bucket/out.json"},
-    }
+    assert result["status"] == "running"
+    assert result["state"]["job_id"] == "job-123"
 
 
 def test_batch_executor_poll_returns_succeeded_when_batch_succeeded(monkeypatch):
-    import json as _json
-
     fake_client = _FakeBatchClient(jobs=[{"status": "SUCCEEDED"}])
     monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
+
+    cache_key = "batch-poll-ok"
+    execution_id = "exec-batch-ok"
+    remote = _REMOTE
     dag_id = "a" * 64
     sub_result = {"status": "succeeded", "error": None, "dag_id": dag_id}
 
-    class _FakeS3Store:
-        def get(self, uri):
-            return _json.dumps(sub_result).encode()
-
-    from daggerml.contrib import s3 as s3_mod
-
-    monkeypatch.setattr(s3_mod.S3Store, "from_remote_root", staticmethod(lambda root: _FakeS3Store()))
+    # Pre-write result to S3 via AdapterIO
+    exec_state = ExecutionState(cache_key, remote_root=remote["root"])
+    io = exec_state.adapter_io(execution_id, _ADAPTER_IO_NAME)
+    exec_state._put_object(io._output_key, json.dumps(sub_result).encode())
 
     executor = BatchExecutor()
     result = executor.poll(
-        cache_key="batch-poll-ok",
-        execution_id="exec-batch-ok",
-        state={"job_id": "job-123", "output_uri": "s3://bucket/out.json"},
-        remote=_REMOTE,
+        cache_key=cache_key,
+        execution_id=execution_id,
+        state={"job_id": "job-123"},
+        remote=remote,
     )
 
     assert result["status"] == "succeeded"
     assert result["dag_id"] == dag_id
+
+
+def test_batch_executor_poll_returns_failed_when_output_absent(monkeypatch):
+    fake_client = _FakeBatchClient(jobs=[{"status": "SUCCEEDED"}])
+    monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
+
+    result = BatchExecutor().poll(
+        cache_key="batch-no-out",
+        execution_id="exec-no-out",
+        state={"job_id": "job-123"},
+        remote=_REMOTE,
+    )
+
+    assert result["status"] == "failed"
+    assert "output not yet written" in result["error"]
 
 
 def test_batch_executor_poll_reads_batch_failure_reason(monkeypatch):
@@ -175,7 +231,7 @@ def test_batch_executor_poll_reads_batch_failure_reason(monkeypatch):
     result = executor.poll(
         cache_key="batch-fail",
         execution_id="exec-batch-fail",
-        state={"job_id": "job-123", "output_uri": "s3://bucket/out.json"},
+        state={"job_id": "job-123"},
         remote=_REMOTE,
     )
 

@@ -78,7 +78,7 @@ Define concise runtime contracts for each contrib executor.
 
 **Invocation Surfaces**
 
-- Container invocation MUST call the nested adapter executable directly with mounted input/output file arguments and adapter CLI polling enabled.
+- Container invocation MUST call the nested adapter executable directly with S3 input/output URIs derived from `AdapterIO` and adapter CLI polling enabled.
 - Container invocation MUST pass `DML_REMOTE_ROOT` and required AWS environment variables to the container.
 - Container invocation MUST NOT pass `DML_DYNAMODB_TABLE`.
 
@@ -88,13 +88,14 @@ Define concise runtime contracts for each contrib executor.
 - Runtime behavior is stateful contrib executor kickoff/poll against a locally managed Docker container.
 - `start` MUST require nested sub-runnable adapter `dml-local-adapter`.
 - `start` MUST pass through the current `execution_id` in the nested adapter payload executed in the container.
-- `start` MUST write nested adapter input/output paths into a temporary work directory, start `docker run` with that directory mounted, and return launch-time durable state containing container id and output path in the first `running` result.
+- `start` MUST write the nested adapter payload to S3 via `AdapterIO.write_input()`, start `docker run` passing `io.input_uri` and `io.output_uri` as CLI arguments, and return launch-time durable state containing only the container id in the first `running` result.
+- `workdir` and `output_path` MUST NOT be stored in executor state; the `_prepare_image` tmpdir is ephemeral and removed within `start()`.
 - When `image` is an S3 tar `Uri`, `start` MUST load that tar into the local Docker daemon before container launch.
-- `poll` MUST read the immutable launch-time state supplied by runtime, inspect the container status via `docker inspect`, and when the container has exited, read the output JSON file from the workdir and return it as the terminal result dict.
+- `poll` MUST read the immutable launch-time state supplied by runtime, inspect the container status via `docker inspect`, and when the container has exited, reconstruct `AdapterIO` from `(cache_key, execution_id, "local:docker")`, call `io.read_output()`, and return the terminal result dict.
 - `poll` MUST report `running` while the container status is `running`, `created`, `paused`, or `restarting`.
-- `poll` operates from adapter-owned S3 job state; it does not require `argv_ptr` or `runnable` inputs.
+- `poll` operates from executor state and S3 via `AdapterIO`; it does not require `argv_ptr` or `runnable` inputs.
 - `cleanup` MUST be idempotent.
-- `cleanup` MUST remove the container and temporary directory.
+- `cleanup` MUST remove the container.
 - `cleanup` MUST also remove any temporary image loaded from an S3 tar artifact.
 
 #### `batch` executor
@@ -111,10 +112,10 @@ Define concise runtime contracts for each contrib executor.
 - Because the executor runs inside Lambda, Batch state handoff MUST return all durable launch-time state in the first `running` result rather than rely on mutable executor-owned S3 state.
 - `resolve_runnable` MUST lower to `Runnable(target=<lambda_uri>, adapter="dml-lambda-adapter", ...)` and preserve the nested `sub` runnable chain.
 - `start` MUST require nested sub-runnable adapter `dml-local-adapter`.
-- `start` MUST upload the nested adapter payload to S3 under the configured remote root, register a Batch job definition for the configured container image, and submit the job to `CPU_QUEUE` or `GPU_QUEUE` based on requested GPU count.
-- `start` MUST return Batch job identifiers and output locations in the first `running` result.
-- Batch container execution MUST invoke the nested adapter as `<sub-adapter> --poll -i <s3-input-uri> -o <s3-output-uri>`, writing the terminal result to S3.
-- `poll` MUST inspect Batch job status and, on terminal success, read the sub-adapter result from the S3 output URI and return it.
+- `start` MUST write the nested adapter payload to S3 via `AdapterIO.write_input()`, register a Batch job definition for the configured container image, and submit the job to `CPU_QUEUE` or `GPU_QUEUE` based on requested GPU count.
+- `start` MUST return only Batch job identifiers (`job_id`, `job_definition`) in the first `running` result; `input_uri` and `output_uri` MUST NOT be stored in executor state.
+- Batch container execution MUST invoke the nested adapter as `<sub-adapter> --poll -i <io.input_uri> -o <io.output_uri>`, writing the terminal result to S3.
+- `poll` MUST inspect Batch job status and, on terminal success, reconstruct `AdapterIO` from `(cache_key, execution_id, "lambda:batch")`, call `io.read_output()`, and return the terminal result dict.
 - `cleanup` MUST be idempotent and SHOULD terminate or cancel the recorded Batch job and deregister the temporary Batch job definition.
 
 #### `cfn` executor
@@ -173,6 +174,7 @@ Define concise runtime contracts for each contrib executor.
 - `resolve_runnable` MUST reject unknown kwargs.
 - `resolve_runnable` MUST preserve the nested `sub` runnable chain and runtime container flags.
 - `resolve_runnable` MUST return runnable target `docker` with adapter `dml-local-adapter`.
+- Executor state MUST contain only `container_id` and `cleanup_image`; `workdir` and `output_path` are not stored.
 
 #### `cfn` executor
 
@@ -184,6 +186,7 @@ Define concise runtime contracts for each contrib executor.
 - `resolve_runnable(uri, kwargs, sub)` MUST require `sub != None`, `lambda_uri`, and Batch container resource metadata.
 - `resolve_runnable` MUST preserve the nested `sub` runnable chain.
 - `resolve_runnable` MUST return runnable target `<lambda_uri>` with adapter `dml-lambda-adapter`.
+- Executor state MUST contain only `job_id` and `job_definition`; `input_uri` and `output_uri` MUST NOT be stored — they are derived via `AdapterIO`.
 
 #### `ssh` executor
 
@@ -237,7 +240,7 @@ None identified in this spec. Handled by generic execution environment assumptio
 ### Observability
 
 - Stateful executor status is observable via the runtime-owned immutable execution record plus executor-specific external handles.
-- `batch` executor observability includes recorded Batch job id, job-definition arn, and S3 result/error object locations in launch-time state.
+- `batch` executor observability includes recorded Batch job id and job-definition arn in launch-time state; input/output S3 locations are derived from `AdapterIO` and not stored in state.
 - `ssh` executor observability includes the execution-scoped nested payload forwarded over SSH.
 
 ### Authority Handoffs

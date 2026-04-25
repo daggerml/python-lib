@@ -9,7 +9,7 @@ from unittest.mock import patch
 import boto3
 import pytest
 
-from daggerml._internal.exec_state import LOCK_TTL, ExecutionState
+from daggerml._internal.exec_state import LOCK_TTL, AdapterIO, ExecutionState
 from daggerml._internal.types import DmlRepoError
 
 BUCKET = "test-exec-state-bucket"
@@ -296,3 +296,74 @@ def test_call_edge_indexes_are_sorted_and_deduped():
 
     assert calls_from_index == ["callee"]
     assert calls_to_cache == {"indexes": ["idx-a", "idx-b"], "cache_keys": ["ck-a", "ck-b"]}
+
+
+# ---------------------------------------------------------------------------
+# AdapterIO
+# ---------------------------------------------------------------------------
+
+
+class TestAdapterIO:
+    def test_input_uri_derived_correctly(self):
+        es = _es("io-ck")
+        io = es.adapter_io("exec-uuid", "local:docker")
+        assert io.input_uri == f"s3://{BUCKET}/test-prefix/fn-exec/io/io-ck/exec-uuid/local:docker/input.json"
+
+    def test_output_uri_derived_correctly(self):
+        es = _es("io-ck")
+        io = es.adapter_io("exec-uuid", "local:docker")
+        assert io.output_uri == f"s3://{BUCKET}/test-prefix/fn-exec/io/io-ck/exec-uuid/local:docker/output.json"
+
+    def test_uri_properties_make_no_s3_call(self, monkeypatch):
+        calls = []
+        es = _es("io-no-s3")
+        monkeypatch.setattr(es, "_put_object", lambda *a, **kw: calls.append(("put", a, kw)))
+        monkeypatch.setattr(es, "_get_object_bytes", lambda *a, **kw: calls.append(("get", a, kw)) or None)
+        io = es.adapter_io("exec-uuid", "local:docker")
+        _ = io.input_uri
+        _ = io.output_uri
+        assert calls == []
+
+    def test_write_input_stores_data_and_returns_input_uri(self):
+        es = _es("io-write")
+        io = es.adapter_io("exec-id-write", "lambda:batch")
+        uri = io.write_input(b'{"payload": 1}')
+        assert uri == io.input_uri
+        # Read back via raw S3 to confirm
+        result = es._get_object_bytes(io._input_key)
+        assert result is not None
+        assert result[0] == b'{"payload": 1}'
+
+    def test_read_output_returns_none_when_absent(self):
+        es = _es("io-read-absent")
+        io = es.adapter_io("exec-id-absent", "lambda:batch")
+        assert io.read_output() is None
+
+    def test_read_output_returns_bytes_when_present(self):
+        es = _es("io-read-present")
+        io = es.adapter_io("exec-id-present", "lambda:batch")
+        es._put_object(io._output_key, b'{"status":"succeeded"}')
+        assert io.read_output() == b'{"status":"succeeded"}'
+
+    def test_adapter_io_factory_returns_adapter_io_instance(self):
+        es = _es("io-factory")
+        io = es.adapter_io("exec-x", "local:docker")
+        assert isinstance(io, AdapterIO)
+
+    def test_paths_scoped_within_fn_exec_io(self):
+        es = _es("io-scope")
+        io = es.adapter_io("exec-y", "local:docker")
+        assert "fn-exec/io/" in io.input_uri
+        assert "fn-exec/io/" in io.output_uri
+
+    def test_different_names_produce_different_paths(self):
+        es = _es("io-names")
+        io1 = es.adapter_io("exec-z", "local:docker")
+        io2 = es.adapter_io("exec-z", "lambda:batch")
+        assert io1.input_uri != io2.input_uri
+        assert io1.output_uri != io2.output_uri
+
+    def test_no_prefix_remote_root(self):
+        es = ExecutionState("io-np", remote_root=f"s3://{BUCKET}")
+        io = es.adapter_io("exec-np", "local:docker")
+        assert io.input_uri == f"s3://{BUCKET}/fn-exec/io/io-np/exec-np/local:docker/input.json"

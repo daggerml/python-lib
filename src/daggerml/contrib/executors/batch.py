@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
 from daggerml import Uri
+from daggerml._internal.exec_state import ExecutionState
 from daggerml._internal.types import DmlRepoError, Runnable
 from daggerml.contrib.adapters import AdapterBase
 from daggerml.contrib.executors._lambda import LambdaExecutorBase
-from daggerml.contrib.s3 import S3Store
 from daggerml.util import get_client
 
 PENDING_BATCH_STATUSES = {"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"}
 DEFAULT_VCPU = 1
 DEFAULT_MEMORY = 16 * 1024
 DEFAULT_GPU = 0
+
+_ADAPTER_IO_NAME = "lambda:batch"
 
 
 class BatchExecutor(LambdaExecutorBase):
@@ -62,11 +65,6 @@ class BatchExecutor(LambdaExecutorBase):
     def _client():
         return get_client("batch")
 
-    @staticmethod
-    def _store(remote: dict[str, str]) -> S3Store:
-        store = S3Store.from_remote_root(remote["root"])
-        return store.cd("jobs")
-
     @classmethod
     def _resource_requirements(cls, kwargs: dict[str, Any]) -> tuple[list[dict[str, str]], str]:
         cpu = cls._int("cpu", kwargs.get("cpu"), default=DEFAULT_VCPU, min_value=1)
@@ -93,50 +91,42 @@ class BatchExecutor(LambdaExecutorBase):
     ) -> dict[str, Any]:
         if runnable is None or runnable.sub is None:
             raise DmlRepoError("batch executor start requires runnable with sub runnable")
-        store = self._store(remote)
-        input_uri = store.put(
-            data=AdapterBase._dump_payload(
-                runnable=runnable.sub,
-                argv_ptr=argv_ptr,
-                cache_key=cache_key,
-                execution_id=execution_id,
-                remote=remote,
-                state=None,
-            ),
-            suffix=".json",
-        ).uri
-        # Derive a deterministic output URI for the sub-adapter result
-        output_uri = store.put(b"", suffix=".json-output").uri
-
+        exec_state = ExecutionState(cache_key, remote_root=remote["root"])
+        io = exec_state.adapter_io(execution_id, _ADAPTER_IO_NAME)
+        payload = AdapterBase._dump_payload(
+            runnable=runnable.sub,
+            argv_ptr=argv_ptr,
+            cache_key=cache_key,
+            execution_id=execution_id,
+            remote=remote,
+            state=None,
+        )
+        io.write_input(payload)
         client = self._client()
         reqs, job_queue = self._resource_requirements(runnable.kwargs)
         image = self._image_uri(runnable.kwargs.get("image"))
         job_name = f"dml-batch-{cache_key}"
-
-        docker_env = [
-            {"name": "DML_REMOTE_ROOT", "value": remote["root"]},
-        ]
-
+        docker_env = [{"name": "DML_REMOTE_ROOT", "value": remote["root"]}]
         job_def = client.register_job_definition(
             jobDefinitionName=job_name,
             type="container",
             containerProperties={
                 "image": image,
-                # Run the sub-adapter in --poll mode; write result to output_uri in S3
-                "command": [runnable.sub.adapter, "--poll", "-i", input_uri, "-o", output_uri],
+                "command": [runnable.sub.adapter, "--poll", "-i", io.input_uri, "-o", io.output_uri],
                 "environment": docker_env,
                 "jobRoleArn": self._string("BATCH_TASK_ROLE_ARN", os.environ.get("BATCH_TASK_ROLE_ARN")),
                 "resourceRequirements": reqs,
             },
         )["jobDefinitionArn"]
         job_id = client.submit_job(jobName=job_name, jobQueue=job_queue, jobDefinition=job_def)["jobId"]
-
-        return {"status": "running", "error": None, "state": {
-            "job_id": job_id,
-            "job_definition": job_def,
-            "input_uri": input_uri,
-            "output_uri": output_uri,
-        }}
+        return {
+            "status": "running",
+            "error": None,
+            "state": {
+                "job_id": job_id,
+                "job_definition": job_def,
+            },
+        }
 
     def poll(
         self,
@@ -146,9 +136,7 @@ class BatchExecutor(LambdaExecutorBase):
         state: dict[str, Any],
         remote: dict[str, str],
     ) -> dict[str, Any]:
-        del cache_key, execution_id
         job_id = state.get("job_id")
-        output_uri = state.get("output_uri")
         if not isinstance(job_id, str) or not job_id:
             return {"status": "failed", "error": "batch poll: missing job_id in job state"}
         try:
@@ -164,12 +152,13 @@ class BatchExecutor(LambdaExecutorBase):
             return {"status": "running", "error": None, "state": state}
 
         if job_status == "SUCCEEDED":
-            if not isinstance(output_uri, str) or not output_uri:
-                return {"status": "failed", "error": "batch poll: missing output_uri in job state"}
+            exec_state = ExecutionState(cache_key, remote_root=remote["root"])
+            io = exec_state.adapter_io(execution_id, _ADAPTER_IO_NAME)
             try:
-                store = S3Store.from_remote_root(remote["root"])
-                raw = store.get(output_uri)
-                result = __import__("json").loads(raw)
+                raw = io.read_output()
+                if raw is None:
+                    return {"status": "failed", "error": "batch poll: sub-adapter output not yet written to S3"}
+                result = json.loads(raw)
             except Exception as e:
                 return {"status": "failed", "error": f"batch poll: could not read sub-adapter result: {e}"}
             if not isinstance(result, dict) or result.get("status") not in {"succeeded", "failed"}:

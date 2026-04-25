@@ -1,6 +1,7 @@
 """S3-backed execution coordination and lineage helpers.
 
 Public API:
+    AdapterIO       - Scoped S3 stdin/stdout surrogate for fire-and-monitor executors
     ExecutionState  - S3-backed lock + execution metadata helper
     ExecutionRecord - TypedDict for immutable execution records
     LockRecord      - TypedDict for the lock file contents
@@ -33,6 +34,57 @@ class ExecutionRecord(TypedDict):
     state: dict[str, Any]
 
 
+class AdapterIO:
+    """Scoped S3 stdin/stdout surrogate for fire-and-monitor executors.
+
+    Used by executors that launch a sub-adapter as a detached process (e.g.
+    Docker container, AWS Batch job) where direct stdin/stdout piping is not
+    possible.  Paths are derived deterministically from ``(cache_key, exec_id,
+    name)`` so both ``start()`` and ``poll()`` can access the same objects
+    without storing URIs in executor state.
+
+    All keys live under ``{fn-exec-prefix}/io/{cache_key}/{exec_id}/{name}/``.
+
+    Obtain via ``ExecutionState.adapter_io(exec_id, name)`` — do not construct
+    directly.
+
+    Parameters
+    ----------
+    exec_id:
+        UUID identifying the current execution attempt.
+    name:
+        Caller-chosen identifier, conventionally ``"{adapter}:{executor}"``
+        (e.g. ``"local:docker"``, ``"lambda:batch"``).
+    """
+
+    def __init__(self, state: "ExecutionState", exec_id: str, name: str) -> None:
+        prefix = f"{state._exec_prefix}/io/{state.cache_key}/{exec_id}/{name}"
+        self._state = state
+        self._input_key = f"{prefix}/input.json"
+        self._output_key = f"{prefix}/output.json"
+
+    @property
+    def input_uri(self) -> str:
+        """S3 URI for the sub-adapter input payload (no S3 call made)."""
+        return f"s3://{self._state._bucket}/{self._input_key}"
+
+    @property
+    def output_uri(self) -> str:
+        """S3 URI for the sub-adapter output result (no S3 call made)."""
+        return f"s3://{self._state._bucket}/{self._output_key}"
+
+    def write_input(self, data: bytes) -> str:
+        """Write ``data`` to the input S3 key and return ``input_uri``."""
+        self._state._put_object(self._input_key, data)
+        return self.input_uri
+
+    def read_output(self) -> bytes | None:
+        """Read the output S3 key.  Returns ``None`` if not yet written."""
+        result = self._state._get_object_bytes(self._output_key)
+        return result[0] if result is not None else None
+
+
+
 class ExecutionState:
     """S3-backed advisory mutex for function execution.
 
@@ -41,7 +93,8 @@ class ExecutionState:
     - ``locks/{cache_key}.json`` for the advisory mutex,
     - ``active/{cache_key}`` for the active execution number,
     - ``records/{cache_key}/{execution_number}.json`` for immutable execution records,
-    - ``calls/...`` for caller/callee lineage.
+    - ``calls/...`` for caller/callee lineage,
+    - ``io/{cache_key}/{exec_id}/{name}/`` for adapter I/O (see :class:`AdapterIO`).
 
     Lock lifecycle is create-only (``If-None-Match: *``) then delete — no
     updates.
@@ -176,6 +229,19 @@ class ExecutionState:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def adapter_io(self, exec_id: str, name: str) -> AdapterIO:
+        """Return a scoped :class:`AdapterIO` for the given execution attempt.
+
+        Parameters
+        ----------
+        exec_id:
+            UUID identifying the current execution attempt.
+        name:
+            Caller-chosen identifier, conventionally ``"{adapter}:{executor}"``
+            (e.g. ``"local:docker"``, ``"lambda:batch"``).
+        """
+        return AdapterIO(self, exec_id, name)
 
     def lock(self, ttl: float = LOCK_TTL) -> bool:
         """Acquire the advisory lock.

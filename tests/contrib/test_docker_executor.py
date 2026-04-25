@@ -6,12 +6,14 @@ import shutil
 from typing import Any
 from unittest.mock import patch
 
+import boto3
 import pytest
 
+from daggerml._internal.exec_state import ExecutionState
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import executor_registry as ereg
-from daggerml.contrib.adapters import LocalAdapter
+from daggerml.contrib.adapters import AdapterBase, LocalAdapter
 from daggerml.contrib.executors import DockerExecutor, ScriptExecutor
 
 
@@ -65,8 +67,8 @@ def test_local_adapter_docker_resolve_runnable_rejects_invalid_inputs():
 
 
 def test_docker_executor_start_launches_container_and_returns_running(monkeypatch):
-    """start() should run docker and return launch state."""
-    runnable = _docker_runnable(image=Uri("s3://bucket/image.tar"), flags=["--rm"])
+    """start() should run docker and return launch state (no workdir/output_path in state)."""
+    runnable = _docker_runnable(image="repo/name:tag", flags=["--rm"])
     docker_calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(DockerExecutor, "_prepare_image", staticmethod(lambda *args, **_: ("repo/name:tag", None)))
@@ -77,44 +79,82 @@ def test_docker_executor_start_launches_container_and_returns_running(monkeypatc
     )
 
     cache_key = "ck-docker-start"
-    argv_ptr = "s3://bucket/argv"
+    execution_id = "exec-docker-start"
+    argv_ptr = "s3://test-bucket/argv"
 
     executor = DockerExecutor()
     result = executor.start(
         runnable=runnable,
         argv_ptr=argv_ptr,
         cache_key=cache_key,
-        execution_id="exec-docker-start",
+        execution_id=execution_id,
         remote=_remote(),
     )
 
     assert result["status"] == "running"
     written_state = result["state"]
     assert written_state["container_id"] == "cid-123"
-    assert "workdir" in written_state
-    assert "output_path" in written_state
+    # workdir and output_path must NOT be stored in state
+    assert "workdir" not in written_state
+    assert "output_path" not in written_state
 
     # Check docker run args
-    assert docker_calls[0][0] == "run"
-    assert "dml-local-adapter" in docker_calls[0]
-    assert "--poll" in docker_calls[0]
+    run_args = docker_calls[0]
+    assert run_args[0] == "run"
+    assert "dml-local-adapter" in run_args
+    assert "--poll" in run_args
+
+    # input_uri and output_uri passed as S3 URIs
+    run_args_str = " ".join(run_args)
+    assert "s3://" in run_args_str
 
 
-def test_docker_executor_poll_returns_succeeded_when_container_exited_with_result(tmp_path, monkeypatch):
-    """poll() reads output.json from workdir when container has exited."""
+def test_docker_executor_start_writes_input_payload_to_s3(monkeypatch):
+    """start() must write the sub-adapter payload to S3 via AdapterIO."""
+    runnable = _docker_runnable(image="repo/name:tag")
+
+    monkeypatch.setattr(DockerExecutor, "_prepare_image", staticmethod(lambda *args, **_: ("repo/name:tag", None)))
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: "cid-payload"))
+
+    cache_key = "ck-payload"
+    execution_id = "exec-payload"
+    remote = _remote()
+
+    DockerExecutor().start(
+        runnable=runnable,
+        argv_ptr="s3://test-bucket/argv",
+        cache_key=cache_key,
+        execution_id=execution_id,
+        remote=remote,
+    )
+
+    # Verify the input payload was written to S3 via AdapterIO
+    exec_state = ExecutionState(cache_key, remote_root=remote["root"])
+    io = exec_state.adapter_io(execution_id, "local:docker")
+    raw = exec_state._get_object_bytes(io._input_key)
+    assert raw is not None
+    payload = json.loads(raw[0])
+    assert payload["cache_key"] == cache_key
+    assert payload["execution_id"] == execution_id
+    assert payload["argv_ptr"] == "s3://test-bucket/argv"
+
+
+def test_docker_executor_poll_returns_succeeded_when_container_exited_with_s3_result(monkeypatch):
+    """poll() reads output from S3 via AdapterIO when container has exited."""
     import subprocess
 
-    output_path = tmp_path / "output.json"
-    output_path.write_text(json.dumps({"status": "succeeded", "error": None, "dag_id": "a" * 64}))
+    cache_key = "ck-poll-ok"
+    execution_id = "exec-ok"
+    remote = _remote()
 
-    job_state = {
-        "container_id": "cid-ok",
-        "workdir": str(tmp_path),
-        "output_path": str(output_path),
-        "cleanup_image": None,
-    }
+    # Pre-write output to S3
+    dag_id = "a" * 64
+    exec_state = ExecutionState(cache_key, remote_root=remote["root"])
+    io = exec_state.adapter_io(execution_id, "local:docker")
+    exec_state._put_object(io._output_key, json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}).encode())
 
-    # Mock docker inspect to return "exited"
+    job_state = {"container_id": "cid-ok", "cleanup_image": None}
+
     def fake_run(cmd, **kwargs):
         class FakeProc:
             returncode = 0
@@ -124,20 +164,15 @@ def test_docker_executor_poll_returns_succeeded_when_container_exited_with_resul
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = DockerExecutor().poll(cache_key="ck-poll-ok", execution_id="exec-ok", state=job_state, remote=_remote())
+    result = DockerExecutor().poll(cache_key=cache_key, execution_id=execution_id, state=job_state, remote=remote)
     assert result["status"] == "succeeded"
-    assert result["dag_id"] == "a" * 64
+    assert result["dag_id"] == dag_id
 
 
 def test_docker_executor_poll_returns_running_when_container_still_running(monkeypatch):
     import subprocess
 
-    job_state = {
-        "container_id": "cid-running",
-        "workdir": "/tmp/fake",
-        "output_path": "/tmp/fake/output.json",
-        "cleanup_image": None,
-    }
+    job_state = {"container_id": "cid-running", "cleanup_image": None}
 
     def fake_run(cmd, **kwargs):
         class FakeProc:
@@ -154,15 +189,10 @@ def test_docker_executor_poll_returns_running_when_container_still_running(monke
     assert result["status"] == "running"
 
 
-def test_docker_executor_poll_returns_failed_when_no_output(tmp_path, monkeypatch):
+def test_docker_executor_poll_returns_failed_when_no_s3_output(monkeypatch):
     import subprocess
 
-    job_state = {
-        "container_id": "cid-no-output",
-        "workdir": str(tmp_path),
-        "output_path": str(tmp_path / "output.json"),
-        "cleanup_image": None,
-    }
+    job_state = {"container_id": "cid-no-output", "cleanup_image": None}
 
     def fake_run(cmd, **kwargs):
         class FakeProc:
@@ -178,3 +208,46 @@ def test_docker_executor_poll_returns_failed_when_no_output(tmp_path, monkeypatc
     )
     assert result["status"] == "failed"
     assert "without output" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# AdapterBase._write_output S3 support
+# ---------------------------------------------------------------------------
+
+
+def test_write_output_writes_to_local_file(tmp_path):
+    out = tmp_path / "result.json"
+    AdapterBase._write_output(str(out), '{"status":"succeeded"}')
+    assert out.read_text() == '{"status":"succeeded"}'
+
+
+def test_write_output_writes_to_s3_uri():
+    bucket = "test-bucket"
+    key = "test-prefix/write-output-test.json"
+    data = '{"status":"succeeded","dag_id":"' + "a" * 64 + '"}'
+    AdapterBase._write_output(f"s3://{bucket}/{key}", data)
+
+    s3 = boto3.client("s3")
+    body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    assert body == data.encode("utf-8")
+
+
+def test_write_output_s3_content_type_is_json():
+    bucket = "test-bucket"
+    key = "test-prefix/write-output-ct.json"
+    AdapterBase._write_output(f"s3://{bucket}/{key}", '{}')
+
+    head = boto3.client("s3").head_object(Bucket=bucket, Key=key)
+    assert head["ContentType"] == "application/json"
+
+
+def test_write_output_stdout(capsys):
+    AdapterBase._write_output("-", '{"status":"running"}')
+    captured = capsys.readouterr()
+    assert '{"status":"running"}' in captured.out
+
+
+def test_write_output_stdout_appends_newline_if_missing(capsys):
+    AdapterBase._write_output("-", "no-newline")
+    captured = capsys.readouterr()
+    assert captured.out.endswith("\n")

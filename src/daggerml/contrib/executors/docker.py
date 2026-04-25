@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from daggerml import Uri
+from daggerml._internal.exec_state import ExecutionState
 from daggerml._internal.types import DmlRepoError, Runnable
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store, is_s3_uri
@@ -108,30 +109,6 @@ class DockerExecutor(ExecutorBase):
         DockerExecutor._run_docker("load", "-i", str(tar_path))
         return image_ref, image_ref
 
-    @staticmethod
-    def _worker_payload(
-        runnable: Runnable,
-        workdir: Path,
-        *,
-        argv_ptr: str,
-        cache_key: str,
-        execution_id: str,
-        remote: dict[str, Any],
-    ) -> Path:
-        if runnable.sub is None:
-            raise DmlRepoError("docker executor requires sub runnable")
-        payload: dict[str, Any] = {
-            "runnable": DockerExecutor._encode_runnable(runnable.sub),
-            "argv_ptr": argv_ptr,
-            "cache_key": cache_key,
-            "execution_id": execution_id,
-            "remote": remote,
-            "state": None,
-        }
-        input_path = workdir / "input.json"
-        input_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
-        return input_path
-
     def start(
         self,
         *,
@@ -141,22 +118,30 @@ class DockerExecutor(ExecutorBase):
         argv_ptr: str,
         remote: dict[str, str],
     ) -> dict[str, Any]:
+        if runnable.sub is None:
+            raise DmlRepoError("docker executor requires sub runnable")
+        exec_state = ExecutionState(cache_key, remote_root=remote["root"])
+        io = exec_state.adapter_io(execution_id, "local:docker")
+
         workdir = Path(tempfile.mkdtemp(prefix=f"dml-docker-{execution_id}-"))
-        image_ref, cleanup_image = self._prepare_image(runnable, workdir, remote)
-        input_path = self._worker_payload(
-            runnable,
-            workdir,
-            argv_ptr=argv_ptr,
-            cache_key=cache_key,
-            execution_id=execution_id,
-            remote=remote,
-        )
-        output_path = workdir / "output.json"
+        try:
+            image_ref, cleanup_image = self._prepare_image(runnable, workdir, remote)
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+        payload: dict[str, Any] = {
+            "runnable": self._encode_runnable(runnable.sub),
+            "argv_ptr": argv_ptr,
+            "cache_key": cache_key,
+            "execution_id": execution_id,
+            "remote": remote,
+            "state": None,
+        }
+        input_uri = io.write_input(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+
         container_id = self._run_docker(
             "run",
             "-d",
-            "-v",
-            f"{workdir}:{workdir}",
             *cast(list[str], runnable.kwargs.get("flags", [])),
             "-e",
             f"DML_REMOTE_ROOT={remote['root']}",
@@ -164,9 +149,9 @@ class DockerExecutor(ExecutorBase):
             runnable.sub.adapter,
             "--poll",
             "-i",
-            str(input_path),
+            input_uri,
             "-o",
-            str(output_path),
+            io.output_uri,
         )
 
         return {
@@ -174,8 +159,6 @@ class DockerExecutor(ExecutorBase):
             "error": None,
             "state": {
                 "container_id": container_id,
-                "workdir": str(workdir),
-                "output_path": str(output_path),
                 "cleanup_image": cleanup_image,
             },
         }
@@ -188,10 +171,7 @@ class DockerExecutor(ExecutorBase):
         state: dict[str, Any],
         remote: dict[str, str],
     ) -> dict[str, Any]:
-        del cache_key, execution_id, remote
         container_id = state.get("container_id")
-        output_path_str = state.get("output_path")
-        workdir = state.get("workdir")
 
         if not isinstance(container_id, str) or not container_id:
             return {"status": "failed", "error": "docker poll: missing container_id in job state"}
@@ -200,7 +180,6 @@ class DockerExecutor(ExecutorBase):
         if docker_bin is None:
             return {"status": "failed", "error": "docker poll: docker executable not found"}
 
-        # Inspect container status
         proc = subprocess.run(
             [docker_bin, "inspect", "--format", "{{.State.Status}}", container_id],
             check=False,
@@ -208,7 +187,6 @@ class DockerExecutor(ExecutorBase):
             text=True,
         )
         if proc.returncode != 0:
-            # Container gone — check output file
             container_status = "exited"
         else:
             container_status = proc.stdout.strip()
@@ -216,28 +194,20 @@ class DockerExecutor(ExecutorBase):
         if container_status in ("created", "running", "paused", "restarting"):
             return {"status": "running", "error": None, "state": state}
 
-        # Container exited (or is removing/exited/dead)
+        # Container exited
         _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
-        if isinstance(workdir, str) and workdir:
-            # Don't clean workdir yet — we need output_path
-            pass
 
-        if isinstance(output_path_str, str) and output_path_str:
-            output_path = Path(output_path_str)
-            if output_path.exists():
-                try:
-                    result = json.loads(output_path.read_text())
-                    if isinstance(result, dict) and result.get("status") in {"succeeded", "failed"}:
-                        if isinstance(workdir, str) and workdir:
-                            shutil.rmtree(workdir, ignore_errors=True)
-                        return result
-                except Exception as e:
-                    if isinstance(workdir, str) and workdir:
-                        shutil.rmtree(workdir, ignore_errors=True)
-                    return {"status": "failed", "error": f"docker poll: could not read output: {e}"}
+        exec_state = ExecutionState(cache_key, remote_root=remote["root"])
+        io = exec_state.adapter_io(execution_id, "local:docker")
+        raw = io.read_output()
+        if raw is not None:
+            try:
+                result = json.loads(raw)
+                if isinstance(result, dict) and result.get("status") in {"succeeded", "failed"}:
+                    return result
+            except Exception as e:
+                return {"status": "failed", "error": f"docker poll: could not read output: {e}"}
 
-        if isinstance(workdir, str) and workdir:
-            shutil.rmtree(workdir, ignore_errors=True)
         return {"status": "failed", "error": f"docker container {container_id} exited without output"}
 
 
