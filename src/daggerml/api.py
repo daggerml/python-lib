@@ -155,13 +155,17 @@ class Dml:
         if self._ops is None:
             if not self.repo:
                 raise DmlRepoError("Repository path is required")
-            open_kwargs: dict[str, Any] = {}
-            if self._config is not None and self._config.remote.root is not None:
-                open_kwargs["remote_root"] = self._config.remote.root
-            self._ops = DmlOps.open(self.repo, **open_kwargs)
+            remote_root = self._require_remote_root()
+            self._ops = DmlOps.open(self.repo, remote_root=remote_root)
             self._ops.__enter__()
         _ensure_default_literal_codecs(self)
         return self._ops
+
+    def _require_remote_root(self) -> str:
+        remote_root = self._config.remote.root if self._config is not None else None
+        if remote_root is None:
+            raise DmlRepoError("Remote root is required")
+        return remote_root
 
     @property
     def head_ref(self) -> Ref:
@@ -234,9 +238,12 @@ class Dml:
         # Create temporary directory
         tmpdir = TemporaryDirectory(prefix="dml-")
         repo_path = os.path.join(tmpdir.name, repo)
+        remote_root = DmlConfig.resolve().remote.root
+        if remote_root is None:
+            raise DmlRepoError("Remote root is required")
 
         # Create repository and initialize
-        with DmlOps.create(repo_path, user=user) as ops:
+        with DmlOps.create(repo_path, user=user, remote_root=remote_root) as ops:
             # DmlOps.create initializes the default head; only add a new branch when requested.
             if branch != DEFAULT_HEAD.id():
                 head_ops = ops.head()

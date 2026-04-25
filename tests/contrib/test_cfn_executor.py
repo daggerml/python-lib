@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import cast
 
 import pytest
 
 from daggerml import Runnable, Uri
-from daggerml.contrib.executor_state import ExecutionRecord
 from daggerml.contrib.executors.cfn import CfnExecutor
 
 
@@ -31,6 +29,9 @@ class _FakeDml:
     def new(self, *, argv_ptr):
         self._calls.append(("new", argv_ptr))
         yield self._dag
+
+
+_REMOTE = {"root": "s3://bucket/root"}
 
 
 def test_cfn_tmpdag_is_context_manager(monkeypatch):
@@ -94,50 +95,6 @@ class _StartDml:
         yield self._dag
 
 
-class _FakeExecutionState:
-    record = {"status": "pending", "metadata": {}}
-    instances = []
-
-    def __init__(self, cache_key):
-        self.cache_key = cache_key
-        self.locked = False
-        type(self).instances.append(self)
-
-    @classmethod
-    def reset(cls):
-        cls.record = {"status": "pending", "metadata": {}}
-        cls.instances = []
-
-    def lock(self):
-        self.locked = True
-        return True
-
-    def unlock(self):
-        self.locked = False
-        return True
-
-    def claim_running(self):
-        type(self).record["status"] = "running"
-        return True
-
-    def mark_succeeded(self, dag_id):
-        type(self).record["status"] = "succeeded"
-        type(self).record["dag_id"] = dag_id
-        return True
-
-    def mark_failed(self, error):
-        type(self).record["status"] = "failed"
-        type(self).record["error"] = error
-        return True
-
-    def update_metadata(self, data):
-        type(self).record["metadata"].update(data)
-        return True
-
-    def get(self):
-        return {"status": type(self).record["status"], "metadata": dict(type(self).record["metadata"])}
-
-
 def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
     dag = _ArgvDag((None, "stack-name", {"Resources": {}}, {"Param": "Value"}))
 
@@ -157,53 +114,28 @@ def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
             assert kwargs["StackName"] == "stack-name"
             raise Exception("No updates are to be performed")
 
-    _FakeExecutionState.reset()
-    _FakeExecutionState.claim_running(_FakeExecutionState("cache-key"))
     poll_calls = []
 
-    def _poll(self, *, cache_key, state):
-        poll_calls.append({"cache_key": cache_key, "state": state})
+    def _poll(self, *, cache_key, execution_id, state, remote):
+        poll_calls.append({"cache_key": cache_key, "execution_id": execution_id, "state": state})
+        return {"status": "running", "error": None, "state": state}
 
     monkeypatch.setattr("daggerml.contrib.executors.cfn.Dml", _FakeDmlApi)
-    monkeypatch.setattr("daggerml.contrib.executors.cfn.ExecutionState", _FakeExecutionState)
     monkeypatch.setattr(CfnExecutor, "_client", staticmethod(lambda: _FakeClient()))
     monkeypatch.setattr(CfnExecutor, "poll", _poll)
 
     CfnExecutor().start(
         cache_key="cache-key",
-        state=cast(
-            ExecutionRecord,
-            {
-                "cache_key": "cache-key",
-                "argv_ptr": "argv://ptr",
-                "status": "running",
-                "lock_token": None,
-                "lock_expires_ts": None,
-                "dag_id": None,
-                "error": None,
-                "heartbeat_ts": None,
-                "metadata": {},
-                "updated_ts": 0.0,
-            },
-        ),
+        execution_id="exec-cfn-start",
         runnable=Runnable(target=Uri("cfn"), kwargs={}, adapter="local"),
         argv_ptr="argv://ptr",
-        remote={},
+        remote=_REMOTE,
     )
 
-    assert _FakeExecutionState.record == {
-        "status": "running",
-        "metadata": {"cfn": {"stack_name": "stack-name", "stack_id": "stack-123", "argv_ptr": "argv://ptr"}},
-    }
-    assert poll_calls == [
-        {
-            "cache_key": "cache-key",
-            "state": {
-                "status": "running",
-                "metadata": {"cfn": {"stack_name": "stack-name", "stack_id": "stack-123", "argv_ptr": "argv://ptr"}},
-            },
-        }
-    ]
+    assert len(poll_calls) == 1
+    assert poll_calls[0]["cache_key"] == "cache-key"
+    assert poll_calls[0]["execution_id"] == "exec-cfn-start"
+    assert poll_calls[0]["state"] == {"stack_name": "stack-name", "stack_id": "stack-123", "argv_ptr": "argv://ptr"}
 
 
 def test_cfn_commit_dag_returns_committed_dag_id(monkeypatch):
@@ -258,36 +190,23 @@ def test_cfn_poll_marks_success_with_committed_dag_id(monkeypatch):
                 ]
             }
 
-    _FakeExecutionState.reset()
     commit_calls = []
 
     def _commit_dag(cls, metadata, stack, outputs):
         commit_calls.append((metadata, stack, outputs))
         return "dag-cfn-success"
 
-    monkeypatch.setattr("daggerml.contrib.executors.cfn.ExecutionState", _FakeExecutionState)
     monkeypatch.setattr(CfnExecutor, "_client", staticmethod(lambda: _FakeClient()))
     monkeypatch.setattr(CfnExecutor, "_commit_dag", classmethod(_commit_dag))
-
-    CfnExecutor().poll(
+    result = CfnExecutor().poll(
         cache_key="cache-key",
-        state=cast(
-            ExecutionRecord,
-            {
-                "cache_key": "cache-key",
-                "argv_ptr": "argv://ptr",
-                "status": "running",
-                "lock_token": None,
-                "lock_expires_ts": None,
-                "dag_id": None,
-                "error": None,
-                "heartbeat_ts": None,
-                "metadata": {"cfn": {"stack_name": "stack-name", "argv_ptr": "argv://ptr"}},
-                "updated_ts": 0.0,
-            },
-        ),
+        execution_id="exec-cfn-success",
+        state={"stack_name": "stack-name", "argv_ptr": "argv://ptr"},
+        remote=_REMOTE,
     )
 
+    assert result["status"] == "succeeded"
+    assert result["dag_id"] == "dag-cfn-success"
     assert commit_calls == [
         (
             {"stack_name": "stack-name", "argv_ptr": "argv://ptr"},
@@ -299,8 +218,6 @@ def test_cfn_poll_marks_success_with_committed_dag_id(monkeypatch):
             {"OutputA": "value-a"},
         )
     ]
-    assert _FakeExecutionState.record["status"] == "succeeded"
-    assert _FakeExecutionState.record["dag_id"] == "dag-cfn-success"
 
 
 def test_cfn_poll_marks_failed_when_stack_is_missing(monkeypatch):
@@ -309,32 +226,16 @@ def test_cfn_poll_marks_failed_when_stack_is_missing(monkeypatch):
             assert StackName == "stack-name"
             return {"Stacks": []}
 
-    _FakeExecutionState.reset()
-
-    monkeypatch.setattr("daggerml.contrib.executors.cfn.ExecutionState", _FakeExecutionState)
     monkeypatch.setattr(CfnExecutor, "_client", staticmethod(lambda: _FakeClient()))
-
-    CfnExecutor().poll(
+    result = CfnExecutor().poll(
         cache_key="cache-key",
-        state=cast(
-            ExecutionRecord,
-            {
-                "cache_key": "cache-key",
-                "argv_ptr": "argv://ptr",
-                "status": "running",
-                "lock_token": None,
-                "lock_expires_ts": None,
-                "dag_id": None,
-                "error": None,
-                "heartbeat_ts": None,
-                "metadata": {"cfn": {"stack_name": "stack-name", "argv_ptr": "argv://ptr"}},
-                "updated_ts": 0.0,
-            },
-        ),
+        execution_id="exec-cfn-missing",
+        state={"stack_name": "stack-name", "argv_ptr": "argv://ptr"},
+        remote=_REMOTE,
     )
 
-    assert _FakeExecutionState.record["status"] == "failed"
-    assert _FakeExecutionState.record["error"] == "Stack not found: stack-name"
+    assert result["status"] == "failed"
+    assert result["error"] == "Stack not found: stack-name"
 
 
 def test_cfn_poll_marks_failed_with_stack_event_reasons(monkeypatch):
@@ -353,32 +254,13 @@ def test_cfn_poll_marks_failed_with_stack_event_reasons(monkeypatch):
                 ]
             }
 
-    _FakeExecutionState.reset()
-
-    monkeypatch.setattr("daggerml.contrib.executors.cfn.ExecutionState", _FakeExecutionState)
     monkeypatch.setattr(CfnExecutor, "_client", staticmethod(lambda: _FakeClient()))
-
-    CfnExecutor().poll(
+    result = CfnExecutor().poll(
         cache_key="cache-key",
-        state=cast(
-            ExecutionRecord,
-            {
-                "cache_key": "cache-key",
-                "argv_ptr": "argv://ptr",
-                "status": "running",
-                "lock_token": None,
-                "lock_expires_ts": None,
-                "dag_id": None,
-                "error": None,
-                "heartbeat_ts": None,
-                "metadata": {"cfn": {"stack_name": "stack-name", "argv_ptr": "argv://ptr"}},
-                "updated_ts": 0.0,
-            },
-        ),
+        execution_id="exec-cfn-failed",
+        state={"stack_name": "stack-name", "argv_ptr": "argv://ptr"},
+        remote=_REMOTE,
     )
 
-    assert _FakeExecutionState.record["status"] == "failed"
-    assert (
-        _FakeExecutionState.record["error"]
-        == "Stack stack-name failed: ROLLBACK_COMPLETE\nFirst failure\nSecond failure"
-    )
+    assert result["status"] == "failed"
+    assert result["error"] == "Stack stack-name failed: ROLLBACK_COMPLETE\nFirst failure\nSecond failure"

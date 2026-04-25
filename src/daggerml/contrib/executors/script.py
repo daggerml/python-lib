@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -19,7 +18,6 @@ from typing import Any, cast
 
 import daggerml as dml
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
-from daggerml.contrib.executor_state import ExecutionRecord, ExecutionState
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store
 
@@ -27,8 +25,6 @@ logger = logging.getLogger(__name__)
 
 
 META_KEY = "__dml_script_exec__"
-
-HEARTBEAT_STALENESS = 60.0
 
 
 class ScriptExecutor(ExecutorBase):
@@ -123,10 +119,15 @@ class ScriptExecutor(ExecutorBase):
         )
 
     def start(
-        self, *, cache_key: str, state: ExecutionRecord, runnable: Runnable, argv_ptr: str, remote: dict[str, str]
-    ) -> None:
-        es = ExecutionState(cache_key)
-        workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{cache_key[:8]}-"))
+        self,
+        *,
+        cache_key: str,
+        execution_id: str,
+        runnable: Runnable,
+        argv_ptr: str,
+        remote: dict[str, str],
+    ) -> dict[str, Any]:
+        workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{execution_id[:8]}-"))
         payload_path = workdir / "supervisor-input.json"
         result_path = workdir / "result.json"
         stdout_path = workdir / "stdout.log"
@@ -134,7 +135,8 @@ class ScriptExecutor(ExecutorBase):
         payload = {
             "version": 2,
             "cache_key": cache_key,
-            "cmd": ["python", "-m", "daggerml.contrib.executors.script", argv_ptr],
+            "execution_id": execution_id,
+            "cmd": [sys.executable, "-m", "daggerml.contrib.executors.script", argv_ptr],
             "remote": remote,
             "env": {
                 "DML_REMOTE_ROOT": remote["root"],
@@ -144,7 +146,7 @@ class ScriptExecutor(ExecutorBase):
         with stdout_path.open("w") as stdout_f, stderr_path.open("w") as stderr_f:
             proc = subprocess.Popen(
                 [
-                    "python",
+                    sys.executable,
                     "-m",
                     "daggerml.contrib.supervisor",
                     "-i",
@@ -158,43 +160,63 @@ class ScriptExecutor(ExecutorBase):
                 close_fds=True,
                 env={**os.environ, "PYTHONUNBUFFERED": "1", **payload["env"]},
             )
-        assert es.lock()
-        try:
-            es.update_metadata(
-                {
-                    self.name: {
-                        "pid": proc.pid,
-                        "workdir": str(workdir),
-                        "result_path": str(result_path),
-                        "stdout_path": str(stdout_path),
-                        "stderr_path": str(stderr_path),
-                    },
-                }
-            )
-        finally:
-            es.unlock()
+        launch_state = {
+            "pid": proc.pid,
+            "workdir": str(workdir),
+            "result_path": str(result_path),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+        }
+        return {"status": "running", "error": None, "state": launch_state}
 
-    def poll(self, *, cache_key: str, state: ExecutionRecord) -> None:
-        import time
+    def poll(
+        self,
+        *,
+        cache_key: str,
+        execution_id: str,
+        state: dict[str, Any],
+        remote: dict[str, str],
+    ) -> dict[str, Any]:
+        del cache_key, execution_id, remote
+        result_path = Path(state.get("result_path", ""))
+        pid = state.get("pid")
 
-        if state["heartbeat_ts"] is not None:
-            if state["heartbeat_ts"] + HEARTBEAT_STALENESS < time.time():
-                es = ExecutionState(cache_key)
-                if es.lock():
-                    try:
-                        es.mark_failed("Script supervisor heartbeat stale")
-                    finally:
-                        es.unlock()
-
-    def cleanup(self, *, cache_key: str, state: ExecutionRecord) -> None:
-        meta = (state.get("metadata") or {}).get(self.name, {})
-        if "pid" in meta:
+        # Polls may run either in the launching adapter process or in a later
+        # process. Reap children when we can; otherwise fall back to a direct
+        # PID probe for cross-process polling.
+        if isinstance(pid, int):
             try:
-                os.killpg(meta["pid"], signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
-        if "workdir" in meta:
-            shutil.rmtree(meta["workdir"], ignore_errors=True)
+                done_pid, _ = os.waitpid(pid, os.WNOHANG)
+                if done_pid == 0:
+                    return {"status": "running", "error": None, "state": state}
+            except ChildProcessError:
+                try:
+                    os.kill(pid, 0)
+                    return {"status": "running", "error": None, "state": state}
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    return {"status": "running", "error": None, "state": state}
+
+        # Process exited — read result
+        if result_path.exists():
+            try:
+                parsed = json.loads(result_path.read_text())
+                if isinstance(parsed, dict) and parsed.get("status") in {"succeeded", "failed"}:
+                    _cleanup_workdir(state)
+                    return parsed
+            except Exception as e:
+                _cleanup_workdir(state)
+                return {"status": "failed", "error": f"Could not read supervisor result: {e}"}
+
+        _cleanup_workdir(state)
+        return {"status": "failed", "error": "Script supervisor exited without result"}
+
+
+def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
+    workdir = launch_state.get("workdir")
+    if isinstance(workdir, str) and workdir:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def _terminal_runnable(root: Runnable) -> Runnable:

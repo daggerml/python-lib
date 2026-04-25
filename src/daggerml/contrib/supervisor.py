@@ -7,19 +7,17 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from daggerml._internal import DmlOps
 from daggerml._internal.types import DmlRepoError
-from daggerml.contrib.executor_state import ExecutionState
 
 
 def _parse_cmd_payload(
     payload: dict[str, Any],
-) -> tuple[str, list[str], dict[str, str], dict[str, str]]:
-    allowed = {"version", "cache_key", "cmd", "remote", "env"}
+) -> tuple[str, str, list[str], dict[str, str], dict[str, str]]:
+    allowed = {"version", "cache_key", "execution_id", "cmd", "remote", "env"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise DmlRepoError(f"Supervisor payload has unknown fields: {', '.join(unknown)}")
@@ -31,6 +29,10 @@ def _parse_cmd_payload(
     cache_key = payload.get("cache_key")
     if not isinstance(cache_key, str) or not cache_key:
         raise DmlRepoError("Supervisor payload cache_key must be a non-empty string")
+
+    execution_id = payload.get("execution_id")
+    if not isinstance(execution_id, str) or not execution_id:
+        raise DmlRepoError("Supervisor payload execution_id must be a non-empty string")
 
     cmd = payload.get("cmd")
     if not isinstance(cmd, list) or not cmd or not all(isinstance(x, str) and x for x in cmd):
@@ -51,40 +53,7 @@ def _parse_cmd_payload(
 
     merged_env = os.environ.copy()
     merged_env.update(env)
-    return cache_key, cmd, merged_env, {"root": remote["root"]}
-
-
-def _launch(payload: dict[str, Any]) -> dict[str, Any]:
-    cache_key, cmd, env, remote = _parse_cmd_payload(payload)
-    workdir = tempfile.mkdtemp(prefix=f"dml-supervisor-{cache_key[:8]}-")
-    repo_dir = Path(workdir) / "repo"
-    with DmlOps.create(str(repo_dir), user="worker"):
-        pass
-    env = dict(env)
-    env["DML_REMOTE_ROOT"] = remote["root"]
-    env["DML_REPO"] = str(repo_dir)
-    stdout_path = Path(workdir) / "stdout.log"
-    stderr_path = Path(workdir) / "stderr.log"
-    with stdout_path.open("w") as stdout_f, stderr_path.open("w") as stderr_f:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workdir,
-            env=env,
-            stdout=stdout_f,
-            stderr=stderr_f,
-            start_new_session=False,
-            close_fds=True,
-        )
-    return {
-        "status": "running",
-        "error": None,
-        "pid": proc.pid,
-        "workdir": workdir,
-        "repo_dir": str(repo_dir),
-        "result_path": str(Path(workdir) / "result.json"),
-        "stdout_path": str(stdout_path),
-        "stderr_path": str(stderr_path),
-    }
+    return cache_key, execution_id, cmd, merged_env, {"root": remote["root"]}
 
 
 def _validate_output(result: Any) -> dict[str, Any]:
@@ -114,86 +83,50 @@ def _validate_output(result: Any) -> dict[str, Any]:
     return result
 
 
-def _record_terminal_result(record: Mapping[str, Any]) -> dict[str, Any] | None:
-    status = record.get("status")
-    if status == "succeeded":
-        dag_id = record.get("dag_id")
-        return {"status": "succeeded", "error": None, "dag_id": dag_id}
-    if status == "failed":
-        return {"status": "failed", "error": record.get("error")}
-    if status == "done":
-        dag_id = record.get("dag_id")
-        if dag_id is not None:
-            return {"status": "succeeded", "error": None, "dag_id": dag_id}
-        return {"status": "failed", "error": record.get("error")}
-    return None
+def run(payload: dict[str, Any]) -> dict[str, Any]:
+    """Launch a worker subprocess, wait for it to exit, and return the terminal result."""
+    cache_key, execution_id, cmd, env, remote = _parse_cmd_payload(payload)
+    workdir = tempfile.mkdtemp(prefix=f"dml-supervisor-{execution_id[:8]}-")
+    repo_dir = Path(workdir) / "repo"
+    with DmlOps.create(str(repo_dir), user="worker", remote_root=remote["root"]):
+        pass
+    env = dict(env)
+    env["DML_REMOTE_ROOT"] = remote["root"]
+    env["DML_REPO"] = str(repo_dir)
+    result_path = Path(workdir) / "result.json"
+    stdout_path = Path(workdir) / "stdout.log"
+    stderr_path = Path(workdir) / "stderr.log"
+    with stdout_path.open("w") as stdout_f, stderr_path.open("w") as stderr_f:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=workdir,
+            env=env,
+            stdout=stdout_f,
+            stderr=stderr_f,
+            start_new_session=False,
+            close_fds=True,
+        )
+    # Wait synchronously for the worker to finish
+    proc.wait()
 
-
-def _persist_terminal(cache_key: str, terminal: dict[str, Any], *, retry_s: float) -> dict[str, Any]:
-    while True:
-        es = ExecutionState(cache_key)
-        record = es.get()
-        if record is not None:
-            observed = _record_terminal_result(record)
-            if observed is not None:
-                return observed
-        if not es.lock():
-            time.sleep(retry_s)
-            continue
+    if result_path.exists():
         try:
-            record = es.get()
-            if record is not None:
-                observed = _record_terminal_result(record)
-                if observed is not None:
-                    return observed
-            if terminal["status"] == "succeeded":
-                if es.mark_succeeded(terminal["dag_id"]):
-                    return terminal
-            elif terminal["status"] == "failed":
-                if es.mark_failed(terminal["error"]):
-                    return terminal
-        finally:
-            es.unlock()
-        time.sleep(retry_s)
+            parsed = json.loads(result_path.read_text())
+            return _validate_output(parsed)
+        except Exception as e:
+            return {"status": "failed", "error": f"Supervisor could not read worker result: {e}"}
 
-
-def run(payload: dict[str, Any], *, heartbeat_s: float = 0.25) -> dict[str, Any]:
-    launched = _launch(payload)
-    cache_key = payload["cache_key"]
-    pid = launched["pid"]
-    result_path = Path(launched["result_path"])
-
-    while True:
+    if proc.returncode is not None and proc.returncode < 0:
+        import signal as _signal
+        sig = -proc.returncode
         try:
-            done_pid, status = os.waitpid(pid, os.WNOHANG)
-        except ChildProcessError:
-            done_pid, status = pid, 0
+            sig_name = _signal.Signals(sig).name
+        except ValueError:
+            sig_name = str(sig)
+        return {"status": "failed", "error": f"Worker killed by signal {sig_name}"}
 
-        if done_pid == 0:
-            # Worker still running — refresh heartbeat
-            es = ExecutionState(cache_key)
-            if es.lock():
-                try:
-                    es.heartbeat()
-                finally:
-                    es.unlock()
-            time.sleep(heartbeat_s)
-            continue
-
-        # Worker exited
-        if result_path.exists():
-            try:
-                parsed = json.loads(result_path.read_text())
-                terminal = _validate_output(parsed)
-            except Exception as e:
-                terminal = {"status": "failed", "error": f"Supervisor could not read worker result: {e}"}
-        elif os.WIFSIGNALED(status):
-            terminal = {"status": "failed", "error": f"Worker exited on signal {os.WTERMSIG(status)}"}
-        else:
-            code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -1
-            terminal = {"status": "failed", "error": f"Worker exited without result (code={code})"}
-
-        return _persist_terminal(cache_key, terminal, retry_s=heartbeat_s)
+    code = proc.returncode if proc.returncode is not None else -1
+    return {"status": "failed", "error": f"Worker exited without result (code={code})"}
 
 
 def _read(path: str) -> str:

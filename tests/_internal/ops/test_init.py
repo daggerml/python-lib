@@ -8,13 +8,14 @@ from tests._internal.test_types import STR_ALPHABET, _refs
 # Simple strategy for user and refs
 user_strategy = st.text(alphabet=STR_ALPHABET, min_size=1, max_size=8)
 ref_strategy = st.builds(Ref, st.text(alphabet=STR_ALPHABET, min_size=1, max_size=16))
+REMOTE_ROOT = "s3://test-bucket/test-prefix"
 
 
 class TestDml:
     @given(user_strategy)
     @settings(max_examples=3)
     def test_temporary_context_manager(self, user):
-        with DmlOps.temporary(user) as repo:
+        with DmlOps.temporary(user, remote_root=REMOTE_ROOT) as repo:
             assert isinstance(repo, DmlOps)
             assert repo._db is not None
             assert hasattr(repo, "dag")
@@ -23,7 +24,7 @@ class TestDml:
     @given(user_strategy, _refs("head"))
     @settings(max_examples=3)
     def test_init_and_properties(self, user, ref):
-        with DmlOps.temporary(user) as repo:
+        with DmlOps.temporary(user, remote_root=REMOTE_ROOT) as repo:
             # Properties should return correct types
             assert hasattr(repo, "dag")
             assert hasattr(repo, "gc")

@@ -18,6 +18,7 @@ from uuid import uuid4
 from daggerml._internal._db import Ref
 from daggerml._internal.builtins import BUILTIN_FNS
 from daggerml._internal.codec import CodecContext, apply_codec
+from daggerml._internal.exec_state import ExecutionState
 from daggerml._internal.ops.base_ops import BaseOps, with_retry
 from daggerml._internal.ops.cache import CacheOps
 from daggerml._internal.ops.dag import DagOps
@@ -57,6 +58,9 @@ class _PreparedAdapterCall:
     adapter_path: str
     cache_key: str
     runnable: dict[str, Any]
+    adapter_cmd: tuple[str, ...] | None = None
+    caller_index_id: str | None = None
+    caller_cache_key: str | None = None
 
 
 @dataclass
@@ -118,34 +122,88 @@ class IndexOps(BaseOps):
             dag_ref = cops._get(argv_ref, txn)
             if dag_ref is not None:
                 return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
-            prepared = self._prepare_adapter_call(argv_ref, txn)
+            prepared = self._prepare_adapter_call(index_ref, argv_ref, txn)
         argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
-        from daggerml.contrib.executor_state import ExecutionState
+        remote_root = cast(str, self.remote_root)
+        es = ExecutionState(prepared.cache_key, remote_root=remote_root)
 
-        state = ExecutionState.upsert(prepared.cache_key, argv_ptr)
-        if state["status"] == "done":
+        # Step 1: try to acquire the mutex
+        if not es.lock():
+            # Another process is driving this cycle
             return None
 
-        self._call_adapter(prepared, argv_ptr)
-        state = ExecutionState(prepared.cache_key).get()
-        if state is None:
-            raise DmlRepoError(f"Execution state missing for cache key: {prepared.cache_key}")
-
-        if state["status"] in {"succeeded", "failed"}:
-            self._publish_terminal_state(prepared.argv_ref, state)
-            self._mark_execution_done(ExecutionState(prepared.cache_key))
-
+        # Step 2: post-lock cache check
         with self._tx(readonly=False) as txn:
             cops = CacheOps(_db=self._db, remote_root=self.remote_root)
             dag_ref = cops._get(prepared.argv_ref, txn)
             if dag_ref is not None:
+                es.unlock()
                 return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
 
-        if state["status"] == "failed":
-            raise DmlRepoError(state.get("error") or "Adapter reported failure")
-        if state["status"] == "succeeded":
+        execution_number = es.read_active_execution_number()
+        execution_record = None
+        if execution_number is not None:
+            execution_record = es.read_execution_record(execution_number)
+            if execution_record is None:
+                es.delete_active_execution()
+                execution_number = None
+
+        if execution_number is None:
+            self._record_call_edges(prepared, es)
+            execution_number = es.next_execution_number()
+            execution_id = f"{prepared.cache_key}-{execution_number}"
+            state = None
+        else:
+            execution_id = cast(str, execution_record["execution_id"])
+            state = cast(dict[str, Any], execution_record["state"])
+
+        # Step 3: call adapter (holding the lock)
+        try:
+            result = self._call_adapter(prepared, argv_ptr, execution_id=execution_id, state=state)
+        except Exception:
+            es.unlock()
+            raise
+
+        # Step 4: handle adapter result
+        status = result["status"]
+        if status == "succeeded":
+            self._publish_terminal_state(prepared.argv_ref, result)
+            es.delete_active_execution()
+            es.unlock()
+            with self._tx(readonly=False) as txn:
+                cops = CacheOps(_db=self._db, remote_root=self.remote_root)
+                dag_ref = cops._get(prepared.argv_ref, txn)
+                if dag_ref is not None:
+                    return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
             raise DmlRepoError("Adapter reported success but no cached DAG was published")
-        return None
+        elif status == "failed":
+            self._publish_terminal_state(prepared.argv_ref, result)
+            es.delete_active_execution()
+            es.unlock()
+            with self._tx(readonly=False) as txn:
+                cops = CacheOps(_db=self._db, remote_root=self.remote_root)
+                dag_ref = cops._get(prepared.argv_ref, txn)
+                if dag_ref is not None:
+                    return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+            raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
+        else:
+            if state is None:
+                record = {
+                    "execution_number": execution_number,
+                    "execution_id": execution_id,
+                    "cache_key": prepared.cache_key,
+                    "status": "running",
+                    "state": result["state"],
+                }
+                if not es.create_execution_record(execution_number, record):
+                    es.unlock()
+                    raise DmlRepoError(f"Execution record already exists: {prepared.cache_key}/{execution_number}")
+                if not es.create_active_execution(execution_number):
+                    es.unlock()
+                    raise DmlRepoError(f"Active execution already exists for cache key: {prepared.cache_key}")
+            # running — adapter is still working asynchronously
+            es.unlock()
+            return None
 
     def delete(self, index_ref: Ref) -> None:
         """Delete an index object from db."""
@@ -586,20 +644,41 @@ class IndexOps(BaseOps):
         if not isinstance(payload, dict):
             raise DmlRepoError("Adapter output schema invalid")
         status = payload.get("status")
-        if status not in {"pending", "running", "succeeded", "failed"}:
+        if status not in {"running", "succeeded", "failed"}:
             raise DmlRepoError("Adapter output schema invalid")
-        if set(payload.keys()) != {"status", "error"}:
-            raise DmlRepoError("Adapter output schema invalid")
-        has_error = payload.get("error") is not None
-        if status == "failed":
-            if not has_error:
+        if status == "succeeded":
+            allowed = {"status", "error", "dag_id"}
+            if not set(payload.keys()).issubset(allowed):
+                raise DmlRepoError("Adapter output schema invalid")
+            dag_id = payload.get("dag_id")
+            if not isinstance(dag_id, str) or not dag_id:
+                raise DmlRepoError("Adapter output schema invalid: succeeded requires dag_id")
+            if payload.get("error") is not None:
+                raise DmlRepoError("Adapter output schema invalid")
+        elif status == "failed":
+            if set(payload.keys()) != {"status", "error"}:
+                raise DmlRepoError("Adapter output schema invalid")
+            if payload.get("error") is None:
                 raise DmlRepoError("Adapter output schema invalid")
         else:
-            if has_error:
+            if set(payload.keys()) != {"status", "error", "state"}:
                 raise DmlRepoError("Adapter output schema invalid")
+            if payload.get("error") is not None:
+                raise DmlRepoError("Adapter output schema invalid")
+            if not isinstance(payload.get("state"), dict):
+                raise DmlRepoError("Adapter output schema invalid: running requires state")
         return payload
 
-    def _prepare_adapter_call(self, argv_ref: Ref, txn) -> _PreparedAdapterCall:
+    @staticmethod
+    def _caller_identity(index_ref: Ref, txn) -> tuple[str | None, str | None]:
+        ctx = txn.get_ctx(index_ref)
+        if ctx.dag is None:
+            raise DmlRepoError("Index commit has no DAG.")
+        if ctx.dag.argv is None:
+            return index_ref.id(), None
+        return None, ctx.dag.argv.id()
+
+    def _prepare_adapter_call(self, index_ref: Ref, argv_ref: Ref, txn) -> _PreparedAdapterCall:
         if self.remote_root is None:
             raise DmlRepoError("Remote context required for adapter invocation")
         argv_node: ArgvNode = txn.get(argv_ref)
@@ -612,14 +691,44 @@ class IndexOps(BaseOps):
             raise DmlRepoError("First arg must resolve to a Runnable datum")
         adapter = fn_runnable.adapter
         adapter_path = shutil.which(adapter) if "/" not in adapter else adapter
+        adapter_cmd: tuple[str, ...] | None = None
         if not adapter_path:
-            raise DmlRepoError(f"No such adapter: {fn_runnable.adapter}")
+            from daggerml.contrib.adapter_registry import get_adapter, list_adapters
+
+            adapter_spec = None
+            for adapter_name in list_adapters():
+                candidate = get_adapter(adapter_name)
+                if getattr(candidate, "executable", None) == fn_runnable.adapter:
+                    adapter_spec = candidate
+                    break
+            if adapter_spec is None:
+                raise DmlRepoError(f"No such adapter: {fn_runnable.adapter}")
+            module_name = getattr(adapter_spec, "__module__", None)
+            qualname = getattr(adapter_spec, "__qualname__", None)
+            if not isinstance(module_name, str) or not isinstance(qualname, str):
+                raise DmlRepoError(f"No such adapter: {fn_runnable.adapter}")
+            adapter_path = adapter
+            adapter_cmd = (
+                sys.executable,
+                "-c",
+                (
+                    "import importlib, sys\n"
+                    f"obj = importlib.import_module({module_name!r})\n"
+                    f"for part in {qualname.split('.')!r}:\n"
+                    "    obj = getattr(obj, part)\n"
+                    "raise SystemExit(obj.cli())\n"
+                ),
+            )
         node_ops = NodeOps(_db=self._db)
+        caller_index_id, caller_cache_key = self._caller_identity(index_ref=index_ref, txn=txn)
         return _PreparedAdapterCall(
             argv_ref=argv_ref,
             adapter_path=adapter_path,
+            adapter_cmd=adapter_cmd,
             cache_key=argv_ref.id(),
             runnable=self._runnable_envelope(fn_runnable_ref, txn, node_ops),
+            caller_index_id=caller_index_id,
+            caller_cache_key=caller_cache_key,
         )
 
     def _load_remote_dag(self, dag_id: str) -> Ref:
@@ -656,31 +765,36 @@ class IndexOps(BaseOps):
             raise DmlRepoError(f"Cannot publish non-terminal execution state: {state['status']}")
         cops.put(dag_ref)
 
-    def _mark_execution_done(self, es) -> None:
-        if not es.lock():
-            raise DmlRepoError(f"Could not lock execution state for cache key: {es.cache_key}")
-        try:
-            current = es.get()
-            if current is None:
-                raise DmlRepoError(f"Execution state missing for cache key: {es.cache_key}")
-            if current["status"] in {"succeeded", "failed"} and not es.mark_done():
-                raise DmlRepoError(f"Could not mark execution done for cache key: {es.cache_key}")
-        finally:
-            es.unlock()
+    @staticmethod
+    def _record_call_edges(prepared: _PreparedAdapterCall, state: ExecutionState) -> None:
+        if prepared.caller_index_id is not None:
+            state.record_index_call(index_id=prepared.caller_index_id, callee_cache_key=prepared.cache_key)
+            return
+        if prepared.caller_cache_key is not None:
+            state.record_fn_call(caller_cache_key=prepared.caller_cache_key, callee_cache_key=prepared.cache_key)
 
-    def _call_adapter(self, prepared: _PreparedAdapterCall, argv_ptr: str) -> dict[str, Any]:
+    def _call_adapter(
+        self,
+        prepared: _PreparedAdapterCall,
+        argv_ptr: str,
+        *,
+        execution_id: str,
+        state: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         if self.remote_root is None:
             raise DmlRepoError("Remote context required for adapter invocation")
         envelope = {
             "argv_ptr": argv_ptr,
             "cache_key": prepared.cache_key,
+            "execution_id": execution_id,
             "remote": {
                 "root": self.remote_root,
             },
             "runnable": prepared.runnable,
+            "state": state,
         }
-        cmd = [prepared.adapter_path]
-        if prepared.adapter_path.endswith(".py"):
+        cmd = list(prepared.adapter_cmd) if prepared.adapter_cmd is not None else [prepared.adapter_path]
+        if prepared.adapter_cmd is None and prepared.adapter_path.endswith(".py"):
             cmd = [sys.executable, prepared.adapter_path]
         result_data = run(
             cmd,

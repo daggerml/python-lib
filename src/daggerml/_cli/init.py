@@ -52,7 +52,11 @@ def execute_init(args) -> dict[str, str | None]:
             raise ValueError("Repository NAME must not contain path separators")
         repo_path = config_dir / repo_name
 
-    with DmlOps.create(str(repo_path)):
+    remote_root = cfg.remote.root
+    if remote_root is None:
+        raise ValueError("Remote root is required")
+
+    with DmlOps.create(str(repo_path), remote_root=remote_root):
         pass
 
     return {

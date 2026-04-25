@@ -29,7 +29,12 @@ if __name__ == "__main__":
     completion_file = Path(tmp_dir) / "completion.flag"
     if not completion_file.exists():
         completion_file.touch()
-        print(json.dumps({"status": "pending", "error": None}, separators=(",", ":")))
+        print(
+            json.dumps(
+                {"status": "running", "error": None, "state": {"completion_file": str(completion_file)}},
+                separators=(",", ":"),
+            )
+        )
         raise SystemExit(0)
 
     with tempfile.TemporaryDirectory(prefix="dml-fn-") as tmprepo:
@@ -51,8 +56,11 @@ if __name__ == "__main__":
             except Exception as e:
                 result = Error.from_ex(e)
 
-            ops.commit(index_ref, result, message="delayed sum function result")
-            print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
+            commit_ref = ops.commit(index_ref, result, message="delayed sum function result")
+            with ops._tx(readonly=True) as txn:
+                commit_obj = txn.get(commit_ref)
+            dag_id = commit_obj.dag.id()
+            print(json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}, separators=(",", ":")))
         finally:
             db.close()
     completion_file.unlink()

@@ -1,4 +1,4 @@
-# Executor State
+# Executor State (Mutex)
 
 ## Status
 
@@ -6,104 +6,76 @@ specified
 
 ## Authority
 
-This document is authoritative for the contrib `ExecutionRecord` shape and `ExecutionState` API.
+This document is authoritative for the contrib `ExecutionState` mutex API.
 
 Lifecycle ownership is authoritative in [runtime-contract.md](runtime-contract.md).
 
 ## Purpose
 
-Define the single execution-state record used by built-in contrib runtimes.
+Define the S3-backed advisory mutex used by built-in contrib runtimes to coordinate concurrent execution of the same `cache_key`.
 
 ## Scope
 
 This document defines:
 
-- the `ExecutionRecord` shape,
+- the lock record shape,
 - the `ExecutionState` public API,
-- lock and transition rules,
-- ownership of terminal `done` writes.
+- lock acquire and release rules.
 
-This document does not define adapter payloads, executor-specific behavior, or cache publication rules.
+This document does not define adapter payloads, execution-record payloads, call-edge indexes, or cache publication rules.
 
-## Execution Record
+## Lock Record
 
-Built-in contrib runtimes use one DynamoDB-backed record per `cache_key`.
+The mutex stores a minimal JSON object at `{remote_root_prefix}/fn-exec/locks/{cache_key}.json`:
 
 ```python
-class ExecutionRecord(TypedDict):
-    cache_key: str
-    argv_ptr: str
-    status: Literal["pending", "running", "succeeded", "failed", "done"]
-    lock_token: str | None
-    lock_expires_ts: float | None
-    dag_id: str | None
-    error: str | None
-    heartbeat_ts: float | None
-    metadata: dict[str, Any]
-    updated_ts: float
+class LockRecord(TypedDict):
+    lock_token: str          # random UUID identifying the current lock holder
+    lock_expires_ts: float   # unix timestamp after which the lock may be stolen
 ```
 
 Rules:
 
-- `cache_key` is the execution identity.
-- `argv_ptr` is the remote manifest pointer for the invocation argv.
-- `status` is the canonical lifecycle field.
-- `dag_id` is required for `succeeded` records published by built-in runtimes.
-- `error` is populated for `failed` records.
-- `metadata` stores executor-owned runtime handles and debug data.
-- `updated_ts` is refreshed on every successful mutation.
-- `heartbeat_ts` is refreshed by heartbeats and terminal transitions.
+- The lock file is created with `If-None-Match: *` (conditional PUT) so only one caller succeeds when two race.
+- The lock file is released with a plain DELETE.
+- No updates are ever written — the file is created once and deleted once per lock cycle.
+- `lock_expires_ts` is a crash-safety TTL only; it is not polled continuously.
 
 ## Public API
 
 ```python
-LOCK_TTL = 15.0
+LOCK_TTL = 300.0
 
 class ExecutionState:
-    cache_key: str
-    lock_token: str | None
+    def __init__(self, cache_key: str, *, remote_root: str | None = None) -> None: ...
 
-    def __init__(self, cache_key: str, *, table_name: str | None = None) -> None: ...
+    def lock(self, ttl: float = LOCK_TTL) -> bool:
+        """Acquire the mutex.
 
-    @classmethod
-    def upsert(cls, cache_key: str, argv_ptr: str, *, table_name: str | None = None) -> ExecutionRecord: ...
+        Returns True on success. Returns False (does not raise) when:
+        - lock is already held by another caller (non-expired),
+        - S3 conditional PUT returns 412 PreconditionFailed.
 
-    def get(self) -> ExecutionRecord | None: ...
-    def claim_running(self) -> bool: ...
-    def lock(self, ttl: float = LOCK_TTL) -> bool: ...
-    def unlock(self) -> bool: ...
-    def heartbeat(self, duration: float = LOCK_TTL) -> bool: ...
-    def update_metadata(self, data: dict[str, Any]) -> bool: ...
-    def mark_running(self) -> bool: ...
-    def mark_succeeded(self, dag_id: str) -> bool: ...
-    def mark_failed(self, error: str) -> bool: ...
-    def mark_done(self) -> bool: ...
+        Steals an expired lock (DELETE + re-PUT) in a single call.
+        """
+
+    def unlock(self) -> None:
+        """Release the mutex. No-op if not currently held."""
 ```
 
 Rules:
 
-- `upsert(...)` creates the initial `pending` record and returns the existing record unchanged on conflicts.
-- `claim_running()` atomically transitions only `pending -> running` and is the built-in launch-claim primitive.
-- all mutating instance methods require a currently held, unexpired lock.
-- `update_metadata(...)` merges keys into `metadata`.
-- `mark_running()` transitions only `pending -> running`.
-- `mark_succeeded(...)` transitions only `running -> succeeded`.
-- `mark_failed(...)` transitions only `running -> failed`.
-- `mark_done()` transitions only `succeeded|failed -> done`.
-
-## Locking
-
-- locks are advisory and identified by `lock_token`.
-- `lock(ttl=...)` succeeds only when the record is unlocked or the stored lock has expired.
-- `unlock()` succeeds only for the caller that still holds the valid lock.
-- `heartbeat(duration=...)` extends `lock_expires_ts` and refreshes `heartbeat_ts`.
+- `lock()` returns `True` when the mutex is successfully acquired.
+- `lock()` returns `False` when the lock is held by another caller or a concurrent PUT raced and lost.
+- `lock()` steals expired locks (DELETE + re-PUT) rather than forcing the caller to retry on the next cycle.
+- `unlock()` is idempotent — safe to call even if the lock file is already absent.
+- The mutex protects runtime mutation of the active execution for a `cache_key`; it does not define execution-record or lineage payloads.
 
 ## Ownership
 
-- adapters and executors own only in-flight transitions and metadata updates.
-- `IndexOps.start_fn` owns cache publication for terminal states.
-- `done` is a terminal tombstone written only by `start_fn` after cache publication or failed-result materialization.
-- built-in runtimes do not define legacy per-backend state classes or parent-comms state mirroring.
+- `IndexOps.start_fn` owns the mutex lifecycle: it acquires before inspecting or mutating the active execution and releases after the adapter returns.
+- Runtime owns `fn-exec/active/<cache_key>` and `fn-exec/records/<cache_key>/<execution_number>.json`; adapters and executors no longer own a mutable S3 execution-state prefix.
+- `done` tombstone semantics are removed; terminal result flows back via adapter stdout and cache publication.
 
 ## References
 

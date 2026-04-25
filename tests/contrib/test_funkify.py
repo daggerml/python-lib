@@ -13,7 +13,6 @@ from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib.adapters import LocalAdapter
-from daggerml.contrib.executor_state import ExecutionState
 from daggerml.contrib.executors import ScriptExecutor
 from daggerml.contrib.executors.script import run_payload
 from daggerml.contrib.testing import defunkify
@@ -23,7 +22,7 @@ from daggerml.contrib.testing import defunkify
 def _reset_registry(tmp_path, monkeypatch):
     areg._reset_for_tests()
     ereg._reset_for_tests()
-    monkeypatch.setenv("DML_FN_CACHE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("DML_TEST_FN_STATE_DIR", str(tmp_path / "state"))
     areg.register_adapter(LocalAdapter)
 
     class InnerExecutor:
@@ -35,8 +34,8 @@ def _reset_registry(tmp_path, monkeypatch):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @classmethod
-        def handle(cls, *, cache_key, runnable, argv_ptr, remote):
-            return {"status": "running", "error": None}
+        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     class CustomExecutor:
         name = "custom"
@@ -47,8 +46,8 @@ def _reset_registry(tmp_path, monkeypatch):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @classmethod
-        def handle(cls, *, cache_key, runnable, argv_ptr, remote):
-            return {"status": "running", "error": None}
+        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     ereg.register_executor(ScriptExecutor)
     ereg.register_executor(InnerExecutor)
@@ -74,9 +73,22 @@ def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
         return dml.index._remote_ops().put_ref_manifest(argv_ref)
 
 
-def _poll_until_terminal(*, runnable: Runnable, argv_ptr: str, cache_key: str) -> dict[str, Any]:
+def _poll_until_terminal(
+    *, runnable: Runnable, argv_ptr: str, cache_key: str, initial_state: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    execution_id = f"exec-{cache_key}"
+    state: dict[str, Any] | None = initial_state
     for _ in range(200):
-        result = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
+        result = LocalAdapter.send(
+            runnable=runnable,
+            argv_ptr=argv_ptr,
+            cache_key=cache_key,
+            execution_id=execution_id,
+            remote=_remote(),
+            state=state,
+        )
+        if state is None and result.get("status") == "running":
+            state = cast(dict[str, Any], result.get("state"))
         if result["status"] in {"succeeded", "failed"}:
             return cast(dict[str, Any], result)
         time.sleep(0.01)
@@ -178,16 +190,21 @@ def test_funkify_script_integration_runs_to_completion_with_decorator():
         argv_ptr = _mk_argv_ptr(4, argv0=runnable)
         cache_key = "ck-funkify-int-1"
 
-        # Seed state for ExecutorBase.handle()
-        ExecutionState.upsert(cache_key, argv_ptr)
-
-        kickoff = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
+        kickoff = LocalAdapter.send(
+            runnable=runnable,
+            argv_ptr=argv_ptr,
+            cache_key=cache_key,
+            execution_id=f"exec-{cache_key}",
+            remote=_remote(),
+            state=None,
+        )
         assert kickoff["status"] == "running"
 
         result = _poll_until_terminal(
             runnable=runnable,
             argv_ptr=argv_ptr,
             cache_key=cache_key,
+            initial_state=cast(dict[str, Any], kickoff["state"]),
         )
         assert result["status"] == "succeeded", result
 
@@ -219,9 +236,6 @@ def test_funkify_script_integration_runs_with_prepop_from_subchain_using_decorat
         outer = Runnable(target=Uri("outer"), adapter="dml-local-adapter", kwargs={}, sub=inner)
         argv_ptr = _mk_argv_ptr(argv0=outer)
         cache_key = "ck-funkify-int-2"
-
-        # Seed state for ExecutorBase.handle()
-        ExecutionState.upsert(cache_key, argv_ptr)
 
         result = _poll_until_terminal(
             runnable=runnable,
@@ -284,8 +298,8 @@ def test_funkify_resolve_runnable_requires_runnable_return():
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, remote):
-            return {"status": "running", "error": None}
+        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
         def cli(argv=None):

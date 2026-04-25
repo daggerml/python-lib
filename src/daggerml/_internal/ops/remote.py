@@ -736,6 +736,22 @@ class RemoteOps(BaseOps):
         manifest_id = hashlib.sha256(manifest_bytes).hexdigest()
         if not self._remote_has_cas(manifest_id):
             self._remote_put_cas(manifest_id, manifest_bytes)
+        # If the root ref is a dag, also write its dag ref pointer file so that
+        # _load_remote_dag can resolve it by dag_id.
+        if root_ref.ns() == "dag":
+            dag_id = self._validate_dag_id(root_ref.id())
+            ref_obj = {
+                "kind": "ref",
+                "schema": 0,
+                "target": manifest_id,
+                "created_at": int(time.time()),
+                "meta": {"dag": {"id": dag_id}},
+            }
+            ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            try:
+                self._remote_put_dag_ref(dag_id, ref_bytes)
+            except RefAlreadyExists:
+                pass
         return manifest_id
 
     def _ensure_dag_ref_in_txn(self, dag_ref: Ref, txn, stack: tuple[str, ...]) -> bool:

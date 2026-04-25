@@ -15,7 +15,7 @@ if __name__ == "__main__":
     argv_ptr = envelope["argv_ptr"]
     remote_root = remote["root"]
     cache_key = hashlib.sha256(argv_ptr.encode()).hexdigest()
-    cache_dir = os.getenv("DML_FN_CACHE_DIR", "")
+    cache_dir = os.getenv("DML_TEST_FN_STATE_DIR", "")
     cache_file = os.path.join(cache_dir, cache_key)
     debug_file = os.path.join(cache_dir, "debug")
 
@@ -24,7 +24,12 @@ if __name__ == "__main__":
 
     if not os.path.isfile(cache_file):
         open(cache_file, "w", encoding="utf-8").close()
-        print(json.dumps({"status": "running", "error": None}, separators=(",", ":")))
+        print(
+            json.dumps(
+                {"status": "running", "error": None, "state": {"cache_file": cache_file}},
+                separators=(",", ":"),
+            )
+        )
         raise SystemExit(0)
 
     with tempfile.TemporaryDirectory(prefix="dml-fn-") as tmpdir:
@@ -38,7 +43,10 @@ if __name__ == "__main__":
                 result = ops.put_literal(index_ref, sum(argv[1:]))
             except Exception as e:
                 result = Error.from_ex(e)
-            ops.commit(index_ref, result, message="async")
-            print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
+            commit_ref = ops.commit(index_ref, result, message="async")
+            with ops._tx(readonly=True) as txn:
+                commit_obj = txn.get(commit_ref)
+            dag_id = commit_obj.dag.id()
+            print(json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}, separators=(",", ":")))
         finally:
             db.close()

@@ -2,95 +2,98 @@ from __future__ import annotations
 
 from typing import Any
 
-from daggerml._internal.types import DmlRepoError, Runnable
-from daggerml.contrib.executor_state import ExecutionRecord, ExecutionState
+from daggerml._internal.types import Runnable
 
 
 class ExecutorBase:
     """Base class for all executors.
 
-    Subclasses must set ``name`` and ``adapter`` class attributes and implement
-    ``start``, ``poll``, and ``cleanup``.
+    The runtime owns durable resumable state. Executors receive ``state=None``
+    on first launch and the immutable persisted state on later polls. Executors
+    return terminal or in-progress result dicts via stdout/return value:
+
+        {"status": "running",    "error": null,  "state": {...}}
+        {"status": "succeeded",  "error": null,  "dag_id": "<hex>"}
+        {"status": "failed",     "error": "<msg>"}
     """
 
     name: str = ""
     adapter: str = ""
 
+    # ------------------------------------------------------------------
+    # Subclass interface
+    # ------------------------------------------------------------------
+
     def start(
         self,
         *,
         cache_key: str,
-        state: ExecutionRecord,
+        execution_id: str,
         runnable: Runnable,
         argv_ptr: str,
         remote: dict[str, str],
-    ) -> None:
-        """Launch execution.  Called when status is ``pending``."""
+    ) -> dict[str, Any]:
+        """Launch execution and return a result dict.
+
+        For synchronous executors this should return the terminal result
+        immediately. For async executors, return the durable resume state in the
+        initial ``running`` result.
+        """
         raise NotImplementedError
 
-    def poll(self, *, cache_key: str, state: ExecutionRecord) -> None:
-        """Check in-flight execution.  Called when status is ``running``.
+    def poll(
+        self,
+        *,
+        cache_key: str,
+        execution_id: str,
+        state: dict[str, Any],
+        remote: dict[str, str],
+    ) -> dict[str, Any]:
+        """Check an in-flight job and return a result dict.
 
-        Default is no-op (suitable for supervisor-backed executors).
+        ``state`` is the immutable launch-time state returned by ``start()``.
+        Return a terminal result when done, or ``{"status": "running",
+        "error": None, "state": ...}`` while still running. Later returned
+        state may be ignored by the runtime.
+        """
+        raise NotImplementedError
+
+    def cleanup(self, *, cache_key: str, execution_id: str, remote: dict[str, str], state: dict[str, Any]) -> None:
+        """Optional cleanup hook called after terminal result is handled.
+
+        Default is a no-op.  Subclasses may override to terminate external
+        resources (containers, batch jobs, etc.) if needed after the executor
+        is known to be done.
         """
 
-    def cleanup(self, *, cache_key: str, state: ExecutionRecord) -> None:
-        """Release resources.  Called when status is ``succeeded`` or ``failed``."""
-        raise NotImplementedError
+    # ------------------------------------------------------------------
+    # Main dispatch
+    # ------------------------------------------------------------------
 
     @classmethod
     def handle(
         cls,
         *,
         cache_key: str,
+        execution_id: str,
+        state: dict[str, Any] | None,
         runnable: Runnable,
         argv_ptr: str,
         remote: dict[str, str],
     ) -> dict[str, Any]:
-        """Read state, dispatch one bounded lifecycle step, return ``{status, error}``."""
-        es = ExecutionState(cache_key)
-        record = es.get()
-        if record is None:
-            raise DmlRepoError(f"ExecutorBase.handle: no state record for cache_key={cache_key!r}")
-
+        """Call start or poll depending on whether immutable state exists."""
         executor = cls()
-        status = record["status"]
-
-        if status == "pending":
-            if not es.claim_running():
-                record = es.get() or record
-                if record["status"] == "running":
-                    return _result(record)
-                if record["status"] in ("succeeded", "failed"):
-                    executor.cleanup(cache_key=cache_key, state=record)
-                    return _result(record)
-                raise DmlRepoError(f"ExecutorBase.handle: unexpected execution status {record['status']!r}")
-            record = es.get() or record
-            executor.start(
+        if state is None:
+            return executor.start(
                 cache_key=cache_key,
-                state=record,
+                execution_id=execution_id,
                 runnable=runnable,
                 argv_ptr=argv_ptr,
                 remote=remote,
             )
-            record = es.get() or record
-            if record["status"] in ("succeeded", "failed"):
-                executor.cleanup(cache_key=cache_key, state=record)
-            return _result(record)
-
-        if status == "running":
-            executor.poll(cache_key=cache_key, state=record)
-            record = es.get() or record
-            if record["status"] in ("succeeded", "failed"):
-                executor.cleanup(cache_key=cache_key, state=record)
-            return _result(record)
-
-        if status in ("succeeded", "failed"):
-            executor.cleanup(cache_key=cache_key, state=record)
-            return _result(record)
-
-        raise DmlRepoError(f"ExecutorBase.handle: unexpected execution status {status!r}")
-
-
-def _result(record: ExecutionRecord) -> dict[str, Any]:
-    return {"status": record["status"], "error": record.get("error")}
+        return executor.poll(
+            cache_key=cache_key,
+            execution_id=execution_id,
+            state=state,
+            remote=remote,
+        )

@@ -20,20 +20,36 @@ Explain the current execution-state redesign without restating lower-level contr
 
 ## Overview
 
-Built-in contrib runtimes no longer maintain a separate SQLite execution-graph model.
+Built-in contrib runtimes no longer maintain a separate SQLite execution-graph model or a DynamoDB-backed state machine.
 
-Instead, live execution coordination is centered on one DynamoDB-backed `ExecutionState` record per `cache_key`.
+Instead, live execution coordination uses runtime-owned S3 objects around each `cache_key`:
 
-At a high level:
+- `fn-exec/locks/<cache_key>.json` is the advisory mutex.
+- `fn-exec/active/<cache_key>` is the current in-flight execution-number pointer.
+- `fn-exec/records/<cache_key>/<execution_number>.json` is the immutable launch-time execution record created on the first `running` result.
+- `IndexOps.start_fn` checks the cache, acquires the mutex, rechecks the cache, resumes or launches the active execution, and releases the mutex.
+- The adapter returns `{status, state?, dag_id?, error?}` where only `running|succeeded|failed` are valid statuses.
+- Failed executions are materialized into failed DAGs and published to cache just like successful executions.
 
-- an invocation creates or reuses the execution record with `ExecutionState.upsert(...)`,
-- launch coordination atomically claims `pending -> running` so duplicate callers do not start duplicate work,
-- executors store in-flight handles and debug data in `state["metadata"]`,
-- heartbeats and bounded polling update the same record while work is active,
-- terminal executor outcomes move through `succeeded` or `failed`,
-- `IndexOps.start_fn` publishes results and writes the final `done` tombstone.
+The execution identity is split:
 
-The execution identity is `cache_key`. There is no separate live graph schema, no `parent_id`-based graph contract, and no `canceled` lifecycle state in the built-in runtime model.
+- `cache_key` identifies the computation and cache entry.
+- `execution_number` is the monotonically increasing attempt number for that cache key, starting at `0`.
+- `execution_id` is the adapter-facing execution identifier derived as `<cache_key>-<execution_number>`.
+
+Call lineage is also stored in S3:
+
+- `fn-exec/calls/from/index/<index_id>.json`
+- `fn-exec/calls/from/cache/<caller_ck>.json`
+- `fn-exec/calls/to/cache/<callee_ck>.json`
+
+This allows reverse and forward queries across user-dags and fn-dags.
+
+## Required Environment Variables
+
+- `DML_REMOTE_ROOT` — S3 URI prefix used for all remote operations, including lock, active execution, immutable execution records, and call-edge lineage.
+
+`DML_DYNAMODB_TABLE` is no longer used or required.
 
 ## Boundaries
 

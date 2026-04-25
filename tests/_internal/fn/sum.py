@@ -28,7 +28,10 @@ if __name__ == "__main__":
                 result = ops.put_literal(index_ref, float(sum(args)))
             except Exception as e:
                 result = Error.from_ex(e)
-            ops.commit(index_ref, result, message="sum function result")
-            print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
+            commit_ref = ops.commit(index_ref, result, message="sum function result")
+            with ops._tx(readonly=True) as txn:
+                commit_obj = txn.get(commit_ref)
+            dag_id = commit_obj.dag.id()
+            print(json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}, separators=(",", ":")))
         finally:
             db.close()

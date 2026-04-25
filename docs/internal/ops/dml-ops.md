@@ -22,6 +22,7 @@ This document defines the `DmlOps` facade surface and subsystem accessor contrac
 - enforce that subsystem access only happens while the DB is open,
 - provide a single root for internal callers: `commit()`, `head()`, `index()`, `dag()`, `node()`, `cache()`, `gc()`, `remote(...)`,
 - expose runtime configuration naming compatible with [../../configuration.md](../../configuration.md),
+- require `remote_root` for all `DmlOps` instances,
 - expose `cache()` with cache context derived from `remote_root`,
 - expose `remote(client=None)` with remote context derived from `remote_root`.
 
@@ -30,6 +31,7 @@ This document defines the `DmlOps` facade surface and subsystem accessor contrac
 - `self._db is None` means subsystem access is invalid and raises `RuntimeError`.
 - every ops instance created by `DmlOps` references the same DB handle.
 - `create(...)` initializes the default head through `HeadOps`.
+- `remote_root` is always a configured remote-root string when a `DmlOps` instance exists.
 - `cache()` forwards remote-root context without redefining cache semantics.
 - `remote(...)` forwards remote context without redefining remote semantics.
 - runtime callers are responsible for mapping config key `remote.root` onto `DmlOps.remote_root` consistently with [../../configuration.md](../../configuration.md).

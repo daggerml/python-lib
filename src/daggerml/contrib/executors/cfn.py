@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
+from typing import Any
 
 from daggerml import Dml
 from daggerml._internal.types import Runnable
-from daggerml.contrib.executor_state import ExecutionRecord, ExecutionState
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.util import get_client
 
@@ -48,9 +48,15 @@ class CfnExecutor(ExecutorBase):
             return dag.ref.id()
 
     def start(
-        self, *, cache_key: str, state: ExecutionRecord, runnable: Runnable, argv_ptr: str, remote: dict[str, str]
-    ) -> None:
-        es = ExecutionState(cache_key)
+        self,
+        *,
+        cache_key: str,
+        execution_id: str,
+        runnable: Runnable,
+        argv_ptr: str,
+        remote: dict[str, str],
+    ) -> dict[str, Any]:
+        del runnable
         with Dml.temporary() as dml_inst:
             with dml_inst.new(argv_ptr=argv_ptr) as dag:
                 name, template, params = dag.argv[1:4].value()
@@ -87,49 +93,36 @@ class CfnExecutor(ExecutorBase):
             stack_id = old_stack_id
             return_poll = True
 
-        assert es.lock()
-        try:
-            es.update_metadata(
-                {
-                    self.name: {"stack_name": name, "stack_id": stack_id, "argv_ptr": argv_ptr},
-                }
-            )
-        finally:
-            es.unlock()
+        job_state = {"stack_name": name, "stack_id": stack_id, "argv_ptr": argv_ptr}
 
         if return_poll:
-            self.poll(cache_key=cache_key, state=es.get() or state)
+            return self.poll(cache_key=cache_key, execution_id=execution_id, state=job_state, remote=remote)
+        return {"status": "running", "error": None, "state": job_state}
 
-    def poll(self, *, cache_key: str, state: ExecutionRecord) -> None:
-        meta = (state.get("metadata") or {}).get(self.name, {})
-        stack_name = meta.get("stack_name")
+    def poll(
+        self,
+        *,
+        cache_key: str,
+        execution_id: str,
+        state: dict[str, Any],
+        remote: dict[str, str],
+    ) -> dict[str, Any]:
+        del cache_key, execution_id, remote
+        stack_name = state.get("stack_name")
         if not stack_name:
-            return
+            return {"status": "failed", "error": "cfn poll: missing stack_name in job state"}
         try:
             stacks = self._client().describe_stacks(StackName=stack_name)["Stacks"]
         except Exception:
-            return
+            return {"status": "running", "error": None, "state": state}
         if not stacks:
-            error = f"Stack not found: {stack_name}"
-            es = ExecutionState(cache_key)
-            if es.lock():
-                try:
-                    es.mark_failed(error)
-                finally:
-                    es.unlock()
-            return
+            return {"status": "failed", "error": f"Stack not found: {stack_name}"}
         stack = stacks[0]
         raw_status = stack["StackStatus"]
         if raw_status in TERMINAL_SUCCESS_STATUSES:
             outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
-            dag_id = self._commit_dag(meta, stack, outputs)
-            es = ExecutionState(cache_key)
-            if es.lock():
-                try:
-                    es.mark_succeeded(dag_id)
-                finally:
-                    es.unlock()
-            return
+            dag_id = self._commit_dag(state, stack, outputs)
+            return {"status": "succeeded", "error": None, "dag_id": dag_id}
         if raw_status in TERMINAL_FAILED_STATUSES:
             error = f"Stack {stack_name} failed: {raw_status}"
             try:
@@ -139,12 +132,5 @@ class CfnExecutor(ExecutorBase):
                     error = f"{error}\n{chr(10).join(reasons)}"
             except Exception:
                 pass
-            es = ExecutionState(cache_key)
-            if es.lock():
-                try:
-                    es.mark_failed(error)
-                finally:
-                    es.unlock()
-
-    def cleanup(self, *, cache_key: str, state: ExecutionRecord) -> None:
-        pass  # CFN stacks are not cleaned up on completion
+            return {"status": "failed", "error": error}
+        return {"status": "running", "error": None, "state": state}

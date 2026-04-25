@@ -21,7 +21,6 @@ from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib.adapters import LocalAdapter
-from daggerml.contrib.executor_state import ExecutionState
 from daggerml.contrib.executors import ScriptExecutor, SshExecutor
 
 
@@ -35,7 +34,7 @@ def _require_ssh_tools() -> None:
 def _reset_registries(tmp_path, monkeypatch):
     areg._reset_for_tests()
     ereg._reset_for_tests()
-    monkeypatch.setenv("DML_FN_CACHE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("DML_TEST_FN_STATE_DIR", str(tmp_path / "state"))
     areg.register_adapter(LocalAdapter)
     ereg.register_executor(ScriptExecutor)
     ereg.register_executor(SshExecutor)
@@ -145,12 +144,10 @@ def ssh_resource_data(local_sshd, tmp_path):
     aws_exports = "\n".join(
         f"export {name}={shlex.quote(value)}" for name, value in sorted(os.environ.items()) if name.startswith("AWS_")
     )
-    dynamodb_table = os.environ.get("DML_DYNAMODB_TABLE")
     env_file.write_text(
         dedent(
             f"""
-            export DML_FN_CACHE_DIR={shlex.quote(str(remote_state_dir))}
-            {f"export DML_DYNAMODB_TABLE={shlex.quote(dynamodb_table)}" if dynamodb_table else ""}
+            export DML_TEST_FN_STATE_DIR={shlex.quote(str(remote_state_dir))}
             export PATH={shlex.quote(str(Path(sys.executable).parent))}:$PATH
             export DML_TEST_SSH_VALUE=ssh-ok
             {aws_exports}
@@ -178,8 +175,19 @@ def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
 
 
 def _poll_until_terminal(*, runnable: Runnable, argv_ptr: str, cache_key: str) -> dict[str, Any]:
+    execution_id = f"exec-{cache_key}"
+    state: dict[str, Any] | None = None
     for _ in range(200):
-        result = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
+        result = LocalAdapter.send(
+            runnable=runnable,
+            argv_ptr=argv_ptr,
+            cache_key=cache_key,
+            execution_id=execution_id,
+            remote=_remote(),
+            state=state,
+        )
+        if state is None and result.get("status") == "running":
+            state = cast(dict[str, Any], result.get("state"))
         if result["status"] in {"succeeded", "failed"}:
             return cast(dict[str, Any], result)
         time.sleep(0.05)
@@ -201,6 +209,7 @@ def test_ssh_executor_integration_runs_script_over_local_sshd(ssh_resource_data)
         runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
 
         argv_ptr = _mk_argv_ptr(argv0=runnable)
-        ExecutionState.upsert("ck-ssh-int-success", argv_ptr)
         result = _poll_until_terminal(runnable=runnable, argv_ptr=argv_ptr, cache_key="ck-ssh-int-success")
-    assert result == {"status": "succeeded", "error": None}
+    assert result["status"] == "succeeded"
+    assert result["error"] is None
+    assert isinstance(result.get("dag_id"), str)

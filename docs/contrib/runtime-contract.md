@@ -34,7 +34,7 @@ This document does not define:
   - executors own execution behavior and execution-state transitions.
 - Required contrib adapter class surface:
   - `name`,
-  - `send(*, runnable, argv_ptr, cache_key, remote)`,
+  - `send(*, runnable, argv_ptr, cache_key, execution_id, remote, state)`,
   - `resolve_runnable(uri, kwargs, sub)`,
   - `cli(argv)`.
 - Adapter behavior:
@@ -49,25 +49,25 @@ This document does not define:
   - `name`,
   - `adapter`,
   - `resolve_runnable(uri, kwargs, sub)`,
-  - `start(*, cache_key, state, runnable, argv_ptr, remote)`,
-  - `poll(*, cache_key, state)`,
-  - `cleanup(*, cache_key, state)`.
+  - `start(*, cache_key, execution_id, runnable, argv_ptr, remote)`,
+  - `poll(*, cache_key, execution_id, state, remote)`,
+  - `cleanup(*, cache_key, execution_id, state, remote)`.
 - Shared executor lifecycle:
-  - runtime coordination MUST read `ExecutionState` and dispatch by current status,
-  - `pending` dispatch MUST first atomically claim the execution in `ExecutionState` before calling `start(...)`,
-  - `running` dispatches to `poll(...)`,
-  - `succeeded` and `failed` dispatch to `cleanup(...)`,
-  - `done` is terminal; `IndexOps.start_fn` MUST short-circuit it before executor dispatch and MUST NOT relaunch,
+  - runtime coordination MUST acquire the `cache_key` mutex, inspect `fn-exec/active/<cache_key>`, and dispatch either a first `start(...)` call or a resumed `poll(...)` call,
+  - first launch uses `state = null`,
+  - resumed execution dispatches to `poll(...)` with the immutable stored launch-time `state`,
   - kickoff and poll invocations MUST be bounded,
-  - stateful executors MUST resume existing work for the same `cache_key` and MUST NOT relaunch duplicate jobs,
+  - stateful executors MUST resume existing work for the same active `execution_id` and MUST NOT relaunch duplicate jobs,
   - `poll(...)` MAY be a no-op for supervisor-backed executors,
   - `cleanup(...)` MUST be idempotent.
 - Shared state handling:
-  - executors MUST use `ExecutionState` for in-flight transitions and metadata,
-  - built-in launch coordination MUST use the atomic pending-to-running claim so concurrent callers do not launch duplicate work,
-  - executors MAY write executor-specific metadata only under `state["metadata"]`,
+  - runtime owns `fn-exec/active/<cache_key>` and immutable `fn-exec/records/<cache_key>/<execution_number>.json` records,
+  - active execution pointers identify the current `execution_number` for the cache key,
+  - built-in launch coordination MUST use the active pointer plus mutex so concurrent callers do not launch duplicate work,
+  - executors MUST return all durable resume handles in the first `running` result,
+  - later executor `running` results MAY include `state`, but runtime MAY ignore replacement state after creating the immutable execution record,
   - built-in adapters and executors MUST NOT publish cache refs directly,
-  - built-in adapters and executors MUST NOT write terminal `done`; `start_fn` owns that write.
+  - built-in adapters and executors MUST NOT write terminal `done`; `start_fn` owns terminal cache publication.
 - Result publication:
   - `IndexOps.start_fn` MUST publish cache entries after it observes `succeeded` or `failed`,
   - `cache_key` is a deduplication and correlation helper and MUST NOT override canonical argv-derived cache identity.
@@ -75,21 +75,21 @@ This document does not define:
   - canonical payload version is `2`,
   - `Supervisor.run(payload)` MUST accept:
     - `version`: `2`,
-    - `cache_key`: non-empty string,
-    - `cmd`: non-empty `list[str]`,
+  - `cache_key`: non-empty string,
+  - `execution_id`: non-empty string,
+  - `cmd`: non-empty `list[str]`,
     - `remote`: object with `root` string,
     - `env`: optional `dict[str, str]`,
   - unknown top-level fields MUST be rejected,
   - `python -m daggerml.contrib.supervisor` MUST accept the same payload from stdin or a file,
   - worker success reporting MUST include `dag_id` in `result.json` as `{status,error,dag_id}` so the supervisor can mark success,
   - worker failure reporting MUST remain `{status,error}`,
-  - `pending` and `running` worker results MUST be rejected once the worker process has exited,
-  - the supervisor MUST refresh heartbeats while the worker is running.
+  - non-terminal worker results MUST be rejected once the worker process has exited.
 
 ### Invariants
 
-- built-in runtime state machine is `pending -> running -> succeeded|failed -> done`.
-- `done` means cleanup and cache publication are already complete for that execution identity.
+- built-in runtime state machine is `running -> succeeded|failed` at the adapter boundary.
+- runtime coordination state is `no active execution` or `active execution_id` for a `cache_key`.
 - state-record shape and field ownership MUST remain consistent with [executor-state.md](executor-state.md).
 - built-in executor definitions MUST remain consistent with [executor-catalog.md](executor-catalog.md).
 - backward compatibility with legacy `commit_ptr` success payloads is not supported.
@@ -103,8 +103,7 @@ This document does not define:
 
 ### Observability
 
-- While `Supervisor.run(payload)` is active, the supervisor MUST update heartbeat state through `ExecutionState`.
-- Executors SHOULD preserve enough metadata to identify runtime handles needed for polling, cleanup, and debugging.
+- Executors SHOULD preserve enough launch-time metadata to identify runtime handles needed for polling, cleanup, and debugging.
 - Runtime status and plugin discovery remain authoritative in [status.md](status.md).
 
 ### Authority Handoffs

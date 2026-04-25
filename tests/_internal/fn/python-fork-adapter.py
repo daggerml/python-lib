@@ -36,7 +36,9 @@ def main() -> None:
         forwarded = {
             "argv_ptr": payload.get("argv_ptr"),
             "cache_key": payload.get("cache_key"),
+            "execution_id": payload.get("execution_id"),
             "remote": payload.get("remote"),
+            "state": None,
             "runnable": sub,
         }
         code = _run_adapter(sub.get("adapter", ""), forwarded)

@@ -12,7 +12,6 @@ from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib.adapters import AdapterBase, LocalAdapter
-from daggerml.contrib.executor_state import ExecutionState
 from daggerml.contrib.executors import ScriptExecutor
 from daggerml.contrib.s3 import S3Store
 
@@ -21,7 +20,7 @@ from daggerml.contrib.s3 import S3Store
 def _reset_registries(tmp_path, monkeypatch):
     areg._reset_for_tests()
     ereg._reset_for_tests()
-    monkeypatch.setenv("DML_FN_CACHE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("DML_TEST_FN_STATE_DIR", str(tmp_path / "state"))
 
     class EchoExecutor:
         name = "echo"
@@ -32,8 +31,8 @@ def _reset_registries(tmp_path, monkeypatch):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @classmethod
-        def handle(cls, *, cache_key, runnable, argv_ptr, remote):
-            return {"status": "succeeded", "error": None}
+        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
+            return {"status": "succeeded", "error": None, "dag_id": "a" * 64}
 
     ereg.register_executor(EchoExecutor)
     ereg.register_executor(ScriptExecutor)
@@ -61,8 +60,19 @@ def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
 
 
 def _poll_until_terminal(*, runnable: Runnable, argv_ptr: str, cache_key: str) -> dict[str, Any]:
+    execution_id = f"exec-{cache_key}"
+    state: dict[str, Any] | None = None
     for _ in range(200):
-        result = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
+        result = LocalAdapter.send(
+            runnable=runnable,
+            argv_ptr=argv_ptr,
+            cache_key=cache_key,
+            execution_id=execution_id,
+            remote=_remote(),
+            state=state,
+        )
+        if state is None and result.get("status") == "running":
+            state = cast(dict[str, Any], result.get("state"))
         if result["status"] in {"succeeded", "failed"}:
             return cast(dict[str, Any], result)
         time.sleep(0.01)
@@ -156,8 +166,14 @@ def test_script_executor_run_executes_script_and_reaches_success():
     runnable = _mk_script_runnable(script, call_kwargs={"y": 2})
     argv_ptr = _mk_argv_ptr(3, argv0=runnable)
     cache_key = "ck-run"
-    ExecutionState.upsert(cache_key, argv_ptr)
-    kickoff = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
+    kickoff = LocalAdapter.send(
+        runnable=runnable,
+        argv_ptr=argv_ptr,
+        cache_key=cache_key,
+        execution_id=f"exec-{cache_key}",
+        remote=_remote(),
+        state=None,
+    )
     assert kickoff["status"] == "running"
     result = _poll_until_terminal(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key)
     assert result["status"] == "succeeded"
@@ -183,56 +199,38 @@ def test_script_executor_run_extracts_innermost_prepop():
     outer = Runnable(target=Uri("outer"), adapter="dml-local-adapter", kwargs={}, sub=inner)
     argv_ptr = _mk_argv_ptr(argv0=outer)
     cache_key = "ck-prepop"
-    ExecutionState.upsert(cache_key, argv_ptr)
     result = _poll_until_terminal(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key)
     assert result["status"] == "succeeded"
 
 
-def test_script_executor_start_returns_running_with_handle():
+def test_script_executor_start_returns_running_with_job_state():
     script = "\n".join(["import time", "def fn(dag):", "    time.sleep(0.2)", "    return 1", ""])
     runnable = _mk_script_runnable(script)
     cache_key = "ck-start-handle"
     argv_ptr = _mk_argv_ptr(argv0=runnable)
-    ExecutionState.upsert(cache_key, argv_ptr)
-    assert ExecutionState(cache_key).claim_running()
+    remote = _remote()
 
     executor = ScriptExecutor()
-    record = ExecutionState(cache_key).get()
-    assert record is not None
-    executor.start(cache_key=cache_key, state=record, runnable=runnable, argv_ptr=argv_ptr, remote=_remote())
+    result = executor.start(
+        cache_key=cache_key,
+        execution_id="exec-start-handle",
+        runnable=runnable,
+        argv_ptr=argv_ptr,
+        remote=remote,
+    )
+    assert result["status"] == "running"
 
-    record = ExecutionState(cache_key).get()
-    assert record is not None
-    assert record["status"] == "running"
-    script_meta = cast(dict[str, Any], record.get("metadata", {}).get("script", {}))
-    assert isinstance(script_meta.get("pid"), int)
-    assert isinstance(script_meta.get("result_path"), str)
-    assert isinstance(script_meta.get("stdout_path"), str)
-    assert isinstance(script_meta.get("stderr_path"), str)
-    assert Path(cast(str, script_meta["stdout_path"])).exists()
-    assert Path(cast(str, script_meta["stderr_path"])).exists()
+    job_state = cast(dict[str, Any], result["state"])
+    assert isinstance(job_state.get("pid"), int)
+    assert isinstance(job_state.get("result_path"), str)
+    assert isinstance(job_state.get("stdout_path"), str)
+    assert isinstance(job_state.get("stderr_path"), str)
+    assert Path(cast(str, job_state["stdout_path"])).exists()
+    assert Path(cast(str, job_state["stderr_path"])).exists()
 
-    # Cleanup
-    executor.cleanup(cache_key=cache_key, state=record)
+    from daggerml.contrib.executors.script import _cleanup_workdir
 
-
-def test_script_executor_cleanup_kills_running():
-    script = "\n".join(["import time", "def fn(dag):", "    time.sleep(1.0)", "    return 1", ""])
-    runnable = _mk_script_runnable(script)
-    cache_key = "ck-gc-cancel"
-    argv_ptr = _mk_argv_ptr(argv0=runnable)
-    ExecutionState.upsert(cache_key, argv_ptr)
-    assert ExecutionState(cache_key).claim_running()
-
-    executor = ScriptExecutor()
-    record = ExecutionState(cache_key).get()
-    assert record is not None
-    executor.start(cache_key=cache_key, state=record, runnable=runnable, argv_ptr=argv_ptr, remote=_remote())
-
-    record = ExecutionState(cache_key).get()
-    assert record is not None
-    assert record["status"] == "running"
-    executor.cleanup(cache_key=cache_key, state=record)
+    _cleanup_workdir(job_state)
 
 
 def test_script_executor_run_returns_running_during_inflight_poll():
@@ -240,9 +238,22 @@ def test_script_executor_run_returns_running_during_inflight_poll():
     runnable = _mk_script_runnable(script)
     argv_ptr = _mk_argv_ptr(argv0=runnable)
     cache_key = "ck-inflight"
-    ExecutionState.upsert(cache_key, argv_ptr)
-    first = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
-    second = LocalAdapter.send(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key, remote=_remote())
+    first = LocalAdapter.send(
+        runnable=runnable,
+        argv_ptr=argv_ptr,
+        cache_key=cache_key,
+        execution_id=f"exec-{cache_key}",
+        remote=_remote(),
+        state=None,
+    )
+    second = LocalAdapter.send(
+        runnable=runnable,
+        argv_ptr=argv_ptr,
+        cache_key=cache_key,
+        execution_id=f"exec-{cache_key}",
+        remote=_remote(),
+        state=cast(dict[str, Any], first["state"]),
+    )
     assert first["status"] == "running"
     assert second["status"] == "running"
     terminal = _poll_until_terminal(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key)
@@ -254,7 +265,6 @@ def test_script_executor_run_records_good_state_on_runtime_exception():
     runnable = _mk_script_runnable(script)
     argv_ptr = _mk_argv_ptr(argv0=runnable)
     cache_key = "ck-fail"
-    ExecutionState.upsert(cache_key, argv_ptr)
     result = _poll_until_terminal(runnable=runnable, argv_ptr=argv_ptr, cache_key=cache_key)
     assert result["status"] == "succeeded"
 
@@ -268,17 +278,9 @@ def test_local_adapter_resolve_runnable_rejects_executor_for_other_adapter():
         def resolve_runnable(uri, kwargs, sub):
             return Runnable(target=Uri("foreign"), adapter="x", kwargs={}, sub=None)
 
-        @staticmethod
-        def start(*, runnable, argv_ptr, cache_key, remote, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def poll(*, state=None):
-            return {"status": "running", "error": None}
-
-        @staticmethod
-        def cleanup(*, state=None):
-            return None
+        @classmethod
+        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     ereg.register_executor(ForeignExecutor)
     with pytest.raises(DmlRepoError, match="is not registered for adapter 'local'"):
@@ -297,18 +299,27 @@ def test_local_adapter_dispatches_to_executor_lifecycle():
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @classmethod
-        def handle(cls, *, cache_key, runnable, argv_ptr, remote):
+        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
             seen["runnable"] = runnable
             seen["argv_ptr"] = argv_ptr
             seen["cache_key"] = cache_key
+            seen["execution_id"] = execution_id
+            seen["state"] = state
             seen["remote"] = remote
-            return {"status": "succeeded", "error": None}
+            return {"status": "succeeded", "error": None, "dag_id": "a" * 64}
 
     ereg.register_executor(DispatchExecutorForTest)
     runnable = Runnable(target=Uri("dispatch-test"), adapter="dml-local-adapter", kwargs={})
-    payload = LocalAdapter.send(runnable=runnable, argv_ptr=_mk_argv_ptr("a"), cache_key="ck", remote=_remote())
+    payload = LocalAdapter.send(
+        runnable=runnable,
+        argv_ptr=_mk_argv_ptr("a"),
+        cache_key="ck",
+        execution_id="exec-ck",
+        remote=_remote(),
+        state=None,
+    )
     payload = cast(dict[str, Any], payload)
-    assert payload == {"status": "succeeded", "error": None}
+    assert payload == {"status": "succeeded", "error": None, "dag_id": "a" * 64}
     assert isinstance(seen["argv_ptr"], str)
     assert seen["cache_key"] == "ck"
 
@@ -316,14 +327,28 @@ def test_local_adapter_dispatches_to_executor_lifecycle():
 def test_local_adapter_unknown_executor_fails_deterministically():
     runnable = Runnable(target=Uri("missing"), adapter="dml-local-adapter", kwargs={})
     with pytest.raises(DmlRepoError, match="Executor 'missing' is not registered for adapter 'local'"):
-        LocalAdapter.send(runnable=runnable, argv_ptr=_mk_argv_ptr(), cache_key="ck", remote=_remote())
+        LocalAdapter.send(
+            runnable=runnable,
+            argv_ptr=_mk_argv_ptr(),
+            cache_key="ck",
+            execution_id="exec-ck",
+            remote=_remote(),
+            state=None,
+        )
 
 
 def test_registered_executor_minimal_run_contract():
     runnable = Runnable(target=Uri("echo"), adapter="dml-local-adapter", kwargs={})
-    result = LocalAdapter.send(runnable=runnable, argv_ptr=_mk_argv_ptr(1), cache_key="ck", remote=_remote())
+    result = LocalAdapter.send(
+        runnable=runnable,
+        argv_ptr=_mk_argv_ptr(1),
+        cache_key="ck",
+        execution_id="exec-ck",
+        remote=_remote(),
+        state=None,
+    )
     result = cast(dict[str, Any], result)
-    assert result == {"status": "succeeded", "error": None}
+    assert result == {"status": "succeeded", "error": None, "dag_id": "a" * 64}
 
 
 def test_local_adapter_send_returns_executor_payload_as_emitted():
@@ -336,14 +361,21 @@ def test_local_adapter_send_returns_executor_payload_as_emitted():
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @classmethod
-        def handle(cls, *, cache_key, runnable, argv_ptr, remote):
-            return {"status": "running", "error": None}
+        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     ereg.register_executor(RunningExecutor)
     runnable = Runnable(target=Uri("running"), adapter="dml-local-adapter", kwargs={})
-    result = LocalAdapter.send(runnable=runnable, argv_ptr=_mk_argv_ptr(), cache_key="ck", remote=_remote())
+    result = LocalAdapter.send(
+        runnable=runnable,
+        argv_ptr=_mk_argv_ptr(),
+        cache_key="ck",
+        execution_id="exec-ck",
+        remote=_remote(),
+        state=None,
+    )
     result = cast(dict[str, Any], result)
-    assert result == {"status": "running", "error": None}
+    assert result == {"status": "running", "error": None, "state": {"token": "exec-ck"}}
 
 
 def test_local_adapter_send_rejects_non_contract_payload():
@@ -356,20 +388,27 @@ def test_local_adapter_send_rejects_non_contract_payload():
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @classmethod
-        def handle(cls, *, cache_key, runnable, argv_ptr, remote):
-            return {"status": "running", "error": None, "extra": 1}
+        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
+            return {"status": "running", "error": None, "state": {"token": execution_id}, "extra": 1}
 
     ereg.register_executor(BadExecutor)
     runnable = Runnable(target=Uri("bad"), adapter="dml-local-adapter", kwargs={})
-    with pytest.raises(DmlRepoError, match="Adapter output keys must be exactly"):
-        LocalAdapter.send(runnable=runnable, argv_ptr=_mk_argv_ptr(), cache_key="ck", remote=_remote())
+    with pytest.raises(DmlRepoError, match="Adapter output"):
+        LocalAdapter.send(
+            runnable=runnable,
+            argv_ptr=_mk_argv_ptr(),
+            cache_key="ck",
+            execution_id="exec-ck",
+            remote=_remote(),
+            state=None,
+        )
 
 
 def test_adapter_base_cli_reads_stdin_and_writes_stdout(capsys):
     class DummyAdapter(AdapterBase):
         @classmethod
-        def send(cls, *, runnable, argv_ptr, cache_key, remote):
-            return {"status": "succeeded", "error": None}
+        def send(cls, *, runnable, argv_ptr, cache_key, execution_id, remote, state):
+            return {"status": "succeeded", "error": None, "dag_id": "a" * 64}
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
@@ -378,20 +417,22 @@ def test_adapter_base_cli_reads_stdin_and_writes_stdout(capsys):
                 runnable=Runnable(target=Uri("x"), adapter="dummy", kwargs={}),
                 argv_ptr="ptr",
                 cache_key="ck",
+                execution_id="exec-ck",
                 remote=_remote(),
+                state=None,
             ).decode("utf-8"),
         )
         exit_code = DummyAdapter.cli([])
 
     assert exit_code == 0
-    assert json.loads(capsys.readouterr().out.strip()) == {"status": "succeeded", "error": None}
+    assert json.loads(capsys.readouterr().out.strip()) == {"status": "succeeded", "error": None, "dag_id": "a" * 64}
 
 
 def test_adapter_base_cli_reads_and_writes_files(tmp_path):
     class DummyAdapter(AdapterBase):
         @classmethod
-        def send(cls, *, runnable, argv_ptr, cache_key, remote):
-            return {"status": "succeeded", "error": None}
+        def send(cls, *, runnable, argv_ptr, cache_key, execution_id, remote, state):
+            return {"status": "succeeded", "error": None, "dag_id": "a" * 64}
 
     in_file = tmp_path / "in.json"
     out_file = tmp_path / "out.json"
@@ -400,10 +441,12 @@ def test_adapter_base_cli_reads_and_writes_files(tmp_path):
             runnable=Runnable(target=Uri("x"), adapter="dummy", kwargs={}),
             argv_ptr="ptr",
             cache_key="ck",
+            execution_id="exec-ck",
             remote=_remote(),
+            state=None,
         )
     )
 
     exit_code = DummyAdapter.cli(["-i", str(in_file), "-o", str(out_file)])
     assert exit_code == 0
-    assert json.loads(out_file.read_text()) == {"status": "succeeded", "error": None}
+    assert json.loads(out_file.read_text()) == {"status": "succeeded", "error": None, "dag_id": "a" * 64}

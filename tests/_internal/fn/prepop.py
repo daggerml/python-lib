@@ -21,7 +21,10 @@ if __name__ == "__main__":
             argv: list[float] = node_ops.unroll(ops.get_argv(index_ref))
             kwargv: dict = node_ops.unroll(ops.get_kwargv(index_ref))
             result = ops.put_literal(index_ref, float(sum(argv[1:]) * kwargv["x"]))
-            ops.commit(index_ref, result, message="prepop function result")
-            print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
+            commit_ref = ops.commit(index_ref, result, message="prepop function result")
+            with ops._tx(readonly=True) as txn:
+                commit_obj = txn.get(commit_ref)
+            dag_id = commit_obj.dag.id()
+            print(json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}, separators=(",", ":")))
         finally:
             db.close()

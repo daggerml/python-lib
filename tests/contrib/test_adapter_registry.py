@@ -19,8 +19,8 @@ class AdapterSpec:
         return (uri, kwargs, sub)
 
     @staticmethod
-    def send(*, runnable, argv_ptr, cache_key, remote):
-        return {"status": "running", "error": None}
+    def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+        return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     @staticmethod
     def cli(argv=None):
@@ -51,8 +51,8 @@ def test_register_adapter_accepts_class_object():
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, remote):
-            return {"status": "running", "error": None}
+        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
         def cli(argv=None):
@@ -115,7 +115,7 @@ def test_lambda_adapter_invokes_runnable_target(monkeypatch):
 
     class _Payload:
         def read(self):
-            return b'{"status":"succeeded","error":null}'
+            return b'{"status":"succeeded","error":null,"dag_id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}'
 
     class _Client:
         def invoke(self, **kwargs):
@@ -128,10 +128,12 @@ def test_lambda_adapter_invokes_runnable_target(monkeypatch):
         runnable=Runnable(target=Uri("lambda-fn"), adapter="dml-lambda-adapter", kwargs={}),
         argv_ptr="ptr",
         cache_key="ck",
+        execution_id="exec-ck",
         remote={},
+        state=None,
     )
 
-    assert result == {"status": "succeeded", "error": None}
+    assert result == {"status": "succeeded", "error": None, "dag_id": "d" * 64}
     assert seen["FunctionName"] == "lambda-fn"
 
 

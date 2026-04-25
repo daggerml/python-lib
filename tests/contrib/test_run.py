@@ -25,8 +25,8 @@ def _runtime_setup():
             return Runnable(target=Uri(uri), kwargs=kwargs, sub=sub, adapter="")
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, remote):
-            return {"status": "running", "error": None}
+        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
         def cli(argv=None):

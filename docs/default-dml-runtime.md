@@ -33,7 +33,8 @@ Rules:
 
 - scoped override takes precedence over process default,
 - implicit default creation occurs only when no scoped or process default is set,
-- the implicit default is cached as the process default after first creation.
+- the implicit default is cached as the process default after first creation,
+- constructing `DmlOps` from the default runtime requires `remote.root` to be configured.
 
 ## Runtime API
 

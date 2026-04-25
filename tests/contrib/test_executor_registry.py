@@ -19,12 +19,12 @@ class ExecutorSpec:
         return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
     @staticmethod
-    def start(*, runnable, argv_ptr, cache_key, remote, state=None):
-        return {"status": "running", "error": None}
+    def start(*, runnable, argv_ptr, cache_key, execution_id, remote, state=None):
+        return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     @staticmethod
-    def poll(*, state=None):
-        return {"status": "running", "error": None}
+    def poll(*, state=None, cache_key=None, execution_id=None, remote=None):
+        return {"status": "running", "error": None, "state": state or {}}
 
     @staticmethod
     def cleanup(*, state=None):
@@ -56,12 +56,12 @@ def test_register_executor_accepts_class_object():
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @staticmethod
-        def start(*, runnable, argv_ptr, cache_key, remote, state=None):
-            return {"status": "running", "error": None}
+        def start(*, runnable, argv_ptr, cache_key, execution_id, remote, state=None):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
-        def poll(*, state=None):
-            return {"status": "running", "error": None}
+        def poll(*, state=None, cache_key=None, execution_id=None, remote=None):
+            return {"status": "running", "error": None, "state": state or {}}
 
         @staticmethod
         def cleanup(*, state=None):
@@ -87,7 +87,7 @@ def test_register_executor_missing_required_lifecycle_callable_fails():
 
         @staticmethod
         def poll(*, state):
-            return {"status": "running", "error": None}
+            return {"status": "running", "error": None, "state": state}
 
     with pytest.raises(DmlRepoError, match="missing required callables: start, cleanup"):
         reg.register_executor(MissingStartExecutor)

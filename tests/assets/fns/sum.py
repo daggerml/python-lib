@@ -26,7 +26,10 @@ if __name__ == "__main__":
             ops.put_literal(index_ref, len(argv[1:]), name="num_args")
             result = ops.put_literal(index_ref, sum(argv[1:]), name="n0")
             ops.put_literal(index_ref, str(uuid4()), name="uuid")
-            ops.commit(index_ref, result, message="sum")
-            print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
+            commit_ref = ops.commit(index_ref, result, message="sum")
+            with ops._tx(readonly=True) as txn:
+                commit_obj = txn.get(commit_ref)
+            dag_id = commit_obj.dag.id()
+            print(json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}, separators=(",", ":")))
         finally:
             db.close()

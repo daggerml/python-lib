@@ -128,11 +128,11 @@ def main() -> None:
         pass
     try:
         with Dml.temporary() as dml:
-            with dml.new("examples/00-docker-dataset") as dag:
+            with dml.new("examples/01-docker-dataset") as dag:
                 dag.dkr_build = docker_build
                 s3 = S3Store()
                 print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
-                dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS)
+                dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS, symlinks="ignore")
                 dag.put(flags, name="dkr-flags")
                 print("Building Docker image (this may take a moment)...")
                 t0 = time()

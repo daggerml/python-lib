@@ -58,8 +58,8 @@ def test_status_reports_runtime_registrations(monkeypatch):
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, remote):
-            return {"status": "running", "error": None}
+        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
         def cli(argv=None):
@@ -74,12 +74,12 @@ def test_status_reports_runtime_registrations(monkeypatch):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @staticmethod
-        def start(*, runnable, argv_ptr, cache_key, remote, state=None):
-            return {"status": "running", "error": None}
+        def start(*, runnable, argv_ptr, cache_key, execution_id, remote, state=None):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
-        def poll(*, state=None):
-            return {"status": "running", "error": None}
+        def poll(*, state=None, cache_key=None, execution_id=None, remote=None):
+            return {"status": "running", "error": None, "state": state or {}}
 
         @staticmethod
         def cleanup(*, state=None):
@@ -140,8 +140,8 @@ def test_status_reports_best_effort_plugin_failures(monkeypatch):
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, remote):
-            return {"status": "running", "error": None}
+        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
         def cli(argv=None):
@@ -156,12 +156,12 @@ def test_status_reports_best_effort_plugin_failures(monkeypatch):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @staticmethod
-        def start(*, runnable, argv_ptr, cache_key, remote, state=None):
-            return {"status": "running", "error": None}
+        def start(*, runnable, argv_ptr, cache_key, execution_id, remote, state=None):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
-        def poll(*, state=None):
-            return {"status": "running", "error": None}
+        def poll(*, state=None, cache_key=None, execution_id=None, remote=None):
+            return {"status": "running", "error": None, "state": state or {}}
 
         @staticmethod
         def cleanup(*, state=None):

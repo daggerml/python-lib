@@ -42,7 +42,7 @@ class DmlOps:
     """
 
     path: str
-    remote_root: Optional[str] = None
+    remote_root: str
     _db: Optional[DmlDbEnv] = None
 
     def __enter__(self) -> Self:
@@ -144,8 +144,6 @@ class DmlOps:
         """Return remote operations."""
         if self._db is None:
             raise RuntimeError("Database is not open.")
-        if self.remote_root is None:
-            raise DmlRepoError("Remote root required")
         from daggerml._internal.ops.remote import RemoteOps
 
         bucket, prefix = self._split_remote_root(self.remote_root)
@@ -161,7 +159,7 @@ class DmlOps:
         path: str,
         user: Optional[str] = None,
         *,
-        remote_root: Optional[str] = None,
+        remote_root: str,
     ) -> Self:
         """Create new repository at path (instantiates db instance)."""
         Path(path).mkdir(parents=True, exist_ok=False)
@@ -176,7 +174,7 @@ class DmlOps:
         path: str,
         map_size: int = 1024**3,
         *,
-        remote_root: Optional[str] = None,
+        remote_root: str,
     ) -> Self:
         """Open existing repository (instantiates db instance).
 
@@ -204,7 +202,7 @@ class DmlOps:
         cls,
         user: Optional[str] = None,
         *,
-        remote_root: Optional[str] = None,
+        remote_root: str,
     ) -> ContextManager[Self]:
         """Create temporary repository for testing."""
 

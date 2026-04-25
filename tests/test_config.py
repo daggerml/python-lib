@@ -1,7 +1,10 @@
 import os
 from unittest.mock import Mock, patch
 
+import pytest
+
 from daggerml import Dml
+from daggerml._internal.types import DmlRepoError
 from daggerml._config import DmlConfig
 
 
@@ -71,3 +74,11 @@ def test_dml_ops_receives_remote_context(mock_open, monkeypatch):
         "/tmp/test-repo",
         remote_root="s3://bucket/project",
     )
+
+
+def test_dml_ops_requires_remote_root(monkeypatch):
+    monkeypatch.delenv("DML_REMOTE_ROOT", raising=False)
+    dml = Dml(repo="/tmp/test-repo")
+
+    with pytest.raises(DmlRepoError, match="Remote root is required"):
+        _ = dml.ops

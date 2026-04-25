@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import tarfile
@@ -11,20 +10,13 @@ from typing import Any, cast
 
 from daggerml import Uri
 from daggerml._internal.types import DmlRepoError, Runnable
-from daggerml.contrib.executor_state import ExecutionRecord, ExecutionState
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store, is_s3_uri
-
-HEARTBEAT_STALENESS = 60.0
 
 
 class DockerExecutor(ExecutorBase):
     name = "docker"
     adapter = "local"
-
-    @staticmethod
-    def _child_cache_key(cache_key: str) -> str:
-        return f"{cache_key}:docker-child"
 
     @classmethod
     def resolve_runnable(cls, uri, kwargs, sub):
@@ -118,160 +110,138 @@ class DockerExecutor(ExecutorBase):
 
     @staticmethod
     def _worker_payload(
-        runnable: Runnable, workdir: Path, *, argv_ptr: str, child_cache_key: str, remote: dict[str, Any]
+        runnable: Runnable,
+        workdir: Path,
+        *,
+        argv_ptr: str,
+        cache_key: str,
+        execution_id: str,
+        remote: dict[str, Any],
     ) -> Path:
         if runnable.sub is None:
             raise DmlRepoError("docker executor requires sub runnable")
         payload: dict[str, Any] = {
             "runnable": DockerExecutor._encode_runnable(runnable.sub),
             "argv_ptr": argv_ptr,
-            "cache_key": child_cache_key,
+            "cache_key": cache_key,
+            "execution_id": execution_id,
             "remote": remote,
+            "state": None,
         }
         input_path = workdir / "input.json"
         input_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         return input_path
 
-    @staticmethod
-    def _terminal_child_state(child_cache_key: str) -> ExecutionRecord:
-        child = ExecutionState(child_cache_key).get()
-        if child is None:
-            raise DmlRepoError(f"Docker nested execution missing child state for cache_key={child_cache_key!r}")
-        if child["status"] not in {"succeeded", "failed"}:
-            raise DmlRepoError(
-                f"Docker nested execution reached terminal container status but child state is {child['status']!r}"
-            )
-        return child
-
-    @staticmethod
-    def _project_child_terminal(*, cache_key: str, child_cache_key: str) -> None:
-        parent = ExecutionState(cache_key)
-        child = DockerExecutor._terminal_child_state(child_cache_key)
-        if not parent.lock():
-            return
-        try:
-            if child["status"] == "succeeded":
-                dag_id = child.get("dag_id")
-                if not isinstance(dag_id, str) or not dag_id:
-                    raise DmlRepoError("Docker nested execution succeeded without dag_id")
-                parent.mark_succeeded(dag_id)
-                return
-            error = child.get("error")
-            if not isinstance(error, str) or not error:
-                error = "Docker nested execution failed without error"
-            parent.mark_failed(error)
-        finally:
-            parent.unlock()
-
-    @staticmethod
-    def _docker_env(remote: dict[str, str]) -> list[str]:
-        dynamodb_table = os.environ.get("DML_DYNAMODB_TABLE")
-        if not dynamodb_table:
-            raise DmlRepoError("docker executor requires DML_DYNAMODB_TABLE for nested execution state")
-        env = {
-            "DML_DYNAMODB_TABLE": dynamodb_table,
-            "DML_REMOTE_ROOT": remote["root"],
-        }
-        for name in sorted(os.environ):
-            if name.startswith("AWS_") and os.environ[name]:
-                env[name] = os.environ[name]
-        docker_env: list[str] = []
-        for name, value in env.items():
-            if value:
-                docker_env.extend(["-e", f"{name}={value}"])
-        return docker_env
-
     def start(
-        self, *, cache_key: str, state: ExecutionRecord, runnable: Runnable, argv_ptr: str, remote: dict[str, str]
-    ) -> None:
-        es = ExecutionState(cache_key)
-        child_cache_key = self._child_cache_key(cache_key)
-        ExecutionState.upsert(child_cache_key, argv_ptr)
-        workdir = Path(tempfile.mkdtemp(prefix=f"dml-docker-{cache_key}-"))
+        self,
+        *,
+        cache_key: str,
+        execution_id: str,
+        runnable: Runnable,
+        argv_ptr: str,
+        remote: dict[str, str],
+    ) -> dict[str, Any]:
+        workdir = Path(tempfile.mkdtemp(prefix=f"dml-docker-{execution_id}-"))
         image_ref, cleanup_image = self._prepare_image(runnable, workdir, remote)
         input_path = self._worker_payload(
             runnable,
             workdir,
             argv_ptr=argv_ptr,
-            child_cache_key=child_cache_key,
+            cache_key=cache_key,
+            execution_id=execution_id,
             remote=remote,
         )
-
-        docker_env = self._docker_env(remote)
-
+        output_path = workdir / "output.json"
         container_id = self._run_docker(
             "run",
             "-d",
             "-v",
             f"{workdir}:{workdir}",
             *cast(list[str], runnable.kwargs.get("flags", [])),
-            *docker_env,
+            "-e",
+            f"DML_REMOTE_ROOT={remote['root']}",
             image_ref,
             runnable.sub.adapter,
             "--poll",
             "-i",
             str(input_path),
             "-o",
-            str(workdir / "output.json"),
+            str(output_path),
         )
 
-        assert es.lock()
-        try:
-            es.update_metadata(
-                {
-                    self.name: {
-                        "child_cache_key": child_cache_key,
-                        "container_id": container_id,
-                        "workdir": str(workdir),
-                        "cleanup_image": cleanup_image,
-                    },
-                }
-            )
-        finally:
-            es.unlock()
+        return {
+            "status": "running",
+            "error": None,
+            "state": {
+                "container_id": container_id,
+                "workdir": str(workdir),
+                "output_path": str(output_path),
+                "cleanup_image": cleanup_image,
+            },
+        }
 
-    def poll(self, *, cache_key: str, state: ExecutionRecord) -> None:
-        import time
+    def poll(
+        self,
+        *,
+        cache_key: str,
+        execution_id: str,
+        state: dict[str, Any],
+        remote: dict[str, str],
+    ) -> dict[str, Any]:
+        del cache_key, execution_id, remote
+        container_id = state.get("container_id")
+        output_path_str = state.get("output_path")
+        workdir = state.get("workdir")
 
-        meta = (state.get("metadata") or {}).get(self.name, {})
-        child_cache_key = meta.get("child_cache_key")
-        if not isinstance(child_cache_key, str) or not child_cache_key:
-            return
-        child = ExecutionState(child_cache_key).get()
-        if child is None:
-            return
-        if child["status"] in {"succeeded", "failed"}:
-            try:
-                self._project_child_terminal(cache_key=cache_key, child_cache_key=child_cache_key)
-            except DmlRepoError as e:
-                es = ExecutionState(cache_key)
-                if es.lock():
-                    try:
-                        es.mark_failed(str(e))
-                    finally:
-                        es.unlock()
-            return
-        if child["heartbeat_ts"] is not None and child["heartbeat_ts"] + HEARTBEAT_STALENESS < time.time():
-            msg = f"stale docker heartbeat (container ID: {meta.get('container_id')})"
-            es = ExecutionState(cache_key)
-            if es.lock():
-                try:
-                    es.mark_failed(msg)
-                finally:
-                    es.unlock()
+        if not isinstance(container_id, str) or not container_id:
+            return {"status": "failed", "error": "docker poll: missing container_id in job state"}
 
-    def cleanup(self, *, cache_key: str, state: ExecutionRecord) -> None:
-        meta = (state.get("metadata") or {}).get(self.name, {})
         docker_bin = shutil.which("docker")
-        if docker_bin is not None:
-            container_id = meta.get("container_id")
-            if isinstance(container_id, str) and container_id:
-                subprocess.run([docker_bin, "rm", "-f", container_id], check=False, capture_output=True, text=True)
-            cleanup_image = meta.get("cleanup_image")
-            if isinstance(cleanup_image, str) and cleanup_image:
-                subprocess.run(
-                    [docker_bin, "image", "rm", "-f", cleanup_image], check=False, capture_output=True, text=True
-                )
-        workdir = meta.get("workdir")
+        if docker_bin is None:
+            return {"status": "failed", "error": "docker poll: docker executable not found"}
+
+        # Inspect container status
+        proc = subprocess.run(
+            [docker_bin, "inspect", "--format", "{{.State.Status}}", container_id],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            # Container gone — check output file
+            container_status = "exited"
+        else:
+            container_status = proc.stdout.strip()
+
+        if container_status in ("created", "running", "paused", "restarting"):
+            return {"status": "running", "error": None, "state": state}
+
+        # Container exited (or is removing/exited/dead)
+        _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
+        if isinstance(workdir, str) and workdir:
+            # Don't clean workdir yet — we need output_path
+            pass
+
+        if isinstance(output_path_str, str) and output_path_str:
+            output_path = Path(output_path_str)
+            if output_path.exists():
+                try:
+                    result = json.loads(output_path.read_text())
+                    if isinstance(result, dict) and result.get("status") in {"succeeded", "failed"}:
+                        if isinstance(workdir, str) and workdir:
+                            shutil.rmtree(workdir, ignore_errors=True)
+                        return result
+                except Exception as e:
+                    if isinstance(workdir, str) and workdir:
+                        shutil.rmtree(workdir, ignore_errors=True)
+                    return {"status": "failed", "error": f"docker poll: could not read output: {e}"}
+
         if isinstance(workdir, str) and workdir:
             shutil.rmtree(workdir, ignore_errors=True)
+        return {"status": "failed", "error": f"docker container {container_id} exited without output"}
+
+
+def _cleanup_docker(container_id: str, cleanup_image: str | None, docker_bin: str) -> None:
+    subprocess.run([docker_bin, "rm", "-f", container_id], check=False, capture_output=True, text=True)
+    if isinstance(cleanup_image, str) and cleanup_image:
+        subprocess.run([docker_bin, "image", "rm", "-f", cleanup_image], check=False, capture_output=True, text=True)

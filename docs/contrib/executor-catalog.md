@@ -61,11 +61,10 @@ Define concise runtime contracts for each contrib executor.
 - Script execution invokes user function as `fn(dag, *argv[1:], **call_kwargs)` where `call_kwargs` are derived from script runnable metadata.
 - Script worker MUST instantiate DAG execution in a context-manager scope so DAG error handling is applied.
 - Script worker computes `val = fn(...)` and, when the DAG is still uncommitted, commits `val` before calling `dag.cache()`.
-- Script executor lifecycle is stateful kickoff/poll (`start/poll`) keyed by `cache_key`.
-- Script executor `start` initializes canonical state records via executor-state APIs before background runtime handoff.
-- Supervisor `run` loop performs heartbeat state updates through executor-state APIs while script execution is running.
-- Script executor `poll` is read-only over state and only performs stale process-group termination safety checks.
-- Script executor `cleanup` removes supervisor-owned residue after terminal execution.
+- Script executor lifecycle is stateful kickoff/poll keyed by `cache_key` with runtime-owned immutable execution state.
+- Script executor `start` MUST return launch-time durable state (pid, workdir, result path) in the first `running` result.
+- Supervisor `run` runs the script worker synchronously and writes the terminal result to a local file.
+- Script executor `poll` reads the immutable launch-time state passed by runtime, checks whether the supervisor process has exited, reads the result file, and returns the terminal result dict `{status, dag_id?, error?}`.
 
 #### `docker` executor
 
@@ -80,22 +79,20 @@ Define concise runtime contracts for each contrib executor.
 **Invocation Surfaces**
 
 - Container invocation MUST call the nested adapter executable directly with mounted input/output file arguments and adapter CLI polling enabled.
-- Container invocation MUST pass a child execution `cache_key` distinct from the parent executor `cache_key` to the nested adapter payload.
-- Container invocation MUST provide the environment needed for nested `ExecutionState` access under the DynamoDB-backed design, including `DML_DYNAMODB_TABLE`, `DML_REMOTE_ROOT`, and required AWS environment.
+- Container invocation MUST pass `DML_REMOTE_ROOT` and required AWS environment variables to the container.
+- Container invocation MUST NOT pass `DML_DYNAMODB_TABLE`.
 
 **Behavior/Semantics**
 
 - Implemented in `daggerml.contrib.executors.docker` for adapter `local`.
 - Runtime behavior is stateful contrib executor kickoff/poll against a locally managed Docker container.
 - `start` MUST require nested sub-runnable adapter `dml-local-adapter`.
-- `start` MUST derive a child execution `cache_key` distinct from the parent executor `cache_key` and use that child key for the nested adapter payload executed in the container.
-- `start` MUST write nested adapter input/output paths into a temporary work directory, start `docker run` with that directory mounted, and record container id plus temp-path state.
+- `start` MUST pass through the current `execution_id` in the nested adapter payload executed in the container.
+- `start` MUST write nested adapter input/output paths into a temporary work directory, start `docker run` with that directory mounted, and return launch-time durable state containing container id and output path in the first `running` result.
 - When `image` is an S3 tar `Uri`, `start` MUST load that tar into the local Docker daemon before container launch.
-- Docker executor state MUST store enough metadata to reopen that nested child State record in later poll invocations.
-- `poll` MUST reopen that nested adapter-reported State record from stored metadata and read nested state to determine whether the nested execution is running or terminal.
-- `poll` MUST project terminal child `ExecutionState` `dag_id` or `error` onto the parent state once the child reaches a terminal state.
-- `poll` MUST report `running` while nested state is non-terminal and heartbeat is fresh.
-- `poll` operates from executor-owned state metadata only; it does not require `argv_ptr`, `remote`, or `runnable` inputs.
+- `poll` MUST read the immutable launch-time state supplied by runtime, inspect the container status via `docker inspect`, and when the container has exited, read the output JSON file from the workdir and return it as the terminal result dict.
+- `poll` MUST report `running` while the container status is `running`, `created`, `paused`, or `restarting`.
+- `poll` operates from adapter-owned S3 job state; it does not require `argv_ptr` or `runnable` inputs.
 - `cleanup` MUST be idempotent.
 - `cleanup` MUST remove the container and temporary directory.
 - `cleanup` MUST also remove any temporary image loaded from an S3 tar artifact.
@@ -111,14 +108,13 @@ Define concise runtime contracts for each contrib executor.
 
 - Implemented in `daggerml.contrib.executors.batch` for adapter `lambda`.
 - Runtime behavior is stateful kickoff/poll against AWS Batch, with the executor handler itself running inside Lambda.
-- Because the executor runs inside Lambda, Batch state handoff MUST use `ExecutionState` rather than process-local state.
+- Because the executor runs inside Lambda, Batch state handoff MUST return all durable launch-time state in the first `running` result rather than rely on mutable executor-owned S3 state.
 - `resolve_runnable` MUST lower to `Runnable(target=<lambda_uri>, adapter="dml-lambda-adapter", ...)` and preserve the nested `sub` runnable chain.
 - `start` MUST require nested sub-runnable adapter `dml-local-adapter`.
-- `start` MUST derive a child execution `cache_key` distinct from the parent executor `cache_key` and use that child key for the nested adapter payload submitted to Batch.
 - `start` MUST upload the nested adapter payload to S3 under the configured remote root, register a Batch job definition for the configured container image, and submit the job to `CPU_QUEUE` or `GPU_QUEUE` based on requested GPU count.
-- `start` MUST persist the child execution identity and Batch job identifiers in executor metadata.
-- Batch container execution MUST invoke the nested adapter directly as `<sub-adapter> --poll -i <s3-input-uri> -o /dev/null`.
-- `poll` MUST inspect Batch job status and project terminal child `ExecutionState` `dag_id` or `error` onto the parent state once the Batch job reaches a terminal status.
+- `start` MUST return Batch job identifiers and output locations in the first `running` result.
+- Batch container execution MUST invoke the nested adapter as `<sub-adapter> --poll -i <s3-input-uri> -o <s3-output-uri>`, writing the terminal result to S3.
+- `poll` MUST inspect Batch job status and, on terminal success, read the sub-adapter result from the S3 output URI and return it.
 - `cleanup` MUST be idempotent and SHOULD terminate or cancel the recorded Batch job and deregister the temporary Batch job definition.
 
 #### `cfn` executor
@@ -130,8 +126,8 @@ Define concise runtime contracts for each contrib executor.
 **Behavior/Semantics**
 
 - Implemented in `daggerml.contrib.executors.cfn` for adapter `local`.
-- Runtime behavior is stateful contrib executor kickoff/poll against AWS CloudFormation.
-- `start` MUST inspect current stack state, choose create or update, submit the stack operation, and record stack identifiers in executor state.
+- Runtime behavior is stateful contrib executor kickoff/poll against AWS CloudFormation using immutable launch-time state.
+- `start` MUST inspect current stack state, choose create or update, submit the stack operation, and return stack identifiers in the first `running` result.
 - `poll` MUST inspect stack status until it reaches a terminal success or failure state.
 - On terminal success, runtime MUST materialize stack outputs into DAG-visible values and return those outputs as the execution result.
 
@@ -143,16 +139,12 @@ Define concise runtime contracts for each contrib executor.
 
 **Behavior/Semantics**
 
-- Runtime behavior is stateful SSH transport around a nested child execution identity.
+- Runtime behavior is synchronous SSH transport — `start` runs the sub-adapter synchronously over SSH and returns the result dict directly.
 - `start` MUST require nested sub-runnable adapter `dml-local-adapter`.
-- `start` MUST derive a child execution `cache_key` distinct from the parent executor `cache_key` and use that child key for nested remote adapter invocations.
-- `start` MUST persist enough parent metadata to let later `poll` invocations reissue the same SSH transport step with the same child execution identity.
-- `start` MUST open one SSH session to `host`, forward the nested adapter payload on stdin, and return the nested adapter's canonical `{status, error}` output.
+- `start` MUST open one SSH session to `host`, forward the nested adapter payload on stdin (with `--poll`), and return the nested adapter's result dict `{status, dag_id?, error?}`.
 - `start` MUST source each `env_file` in order before invoking the nested adapter command.
 - `start` MUST invoke the nested adapter as a direct command over SSH; it MUST NOT set contrib-specific environment variables, write remote wrapper scripts, or create remote working directories.
-- `poll` MUST reissue the SSH transport step using the persisted child execution identity until the child reaches a terminal state.
-- On nested terminal success or failure, the parent execution MUST project the child `ExecutionState` terminal `dag_id` or `error` onto the parent state.
-- `cleanup` is a no-op lifecycle hook because the executor retains no external runtime handle beyond executor-state metadata.
+- Because SSH transport is synchronous, `poll` is not normally called and no execution record state is needed.
 
 ### Invariants
 
@@ -244,9 +236,9 @@ None identified in this spec. Handled by generic execution environment assumptio
 
 ### Observability
 
-- Stateful executor status is observable via executor state logs and heartbeat files as outlined in the runtime behaviors.
-- `batch` executor observability includes recorded Batch job id, job-definition arn, and S3 result/error object locations in executor metadata.
-- `ssh` executor observability includes the persisted child execution identity and SSH transport metadata needed to resume polling.
+- Stateful executor status is observable via the runtime-owned immutable execution record plus executor-specific external handles.
+- `batch` executor observability includes recorded Batch job id, job-definition arn, and S3 result/error object locations in launch-time state.
+- `ssh` executor observability includes the execution-scoped nested payload forwarded over SSH.
 
 ### Authority Handoffs
 

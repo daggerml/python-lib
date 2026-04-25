@@ -27,7 +27,10 @@ if __name__ == "__main__":
             ops = IndexOps(db, remote_root=remote_root)
             index_ref = ops.create(argv_ptr=argv_ptr)
             result = ops.put_literal(index_ref, str(uuid4()))
-            ops.commit(index_ref, result, message="rand function result")
-            print(json.dumps({"status": "succeeded", "error": None}, separators=(",", ":")))
+            commit_ref = ops.commit(index_ref, result, message="rand function result")
+            with ops._tx(readonly=True) as txn:
+                commit_obj = txn.get(commit_ref)
+            dag_id = commit_obj.dag.id()
+            print(json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}, separators=(",", ":")))
         finally:
             db.close()

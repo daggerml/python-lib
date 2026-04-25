@@ -450,6 +450,11 @@ class DelayedActionCodec:
         return ctx.index_ops.put_import(ctx.index_ref, dag_ref, node=node_ref, name=None)
 
 
+def is_node_like(x: object) -> bool:
+    """Return True if x is a Node or any Delayed* type (DelayedRef, DelayedLoad, DelayedRunnable)."""
+    return isinstance(x, (core_api.Node, DelayedRef, DelayedLoad, DelayedRunnable))
+
+
 def _ensure_contrib_codecs() -> None:
     global _CONTRIB_CODECS_REGISTERED
     with _LOCK:
