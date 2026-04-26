@@ -89,7 +89,7 @@ def test_list_limit_and_clear_remote(temp_bo, s3):
 
 
 def test_requires_remote_context(temp_bo):
-    ops = CacheOps(temp_bo._db)
+    ops = CacheOps(temp_bo._db, remote_root="")
     datum_ref = _put_datum_hashed(temp_bo, "value")
     argv_ref = _put_argv_node_hashed(temp_bo, datum_ref)
     dag_ref = _put_dag_hashed(temp_bo, argv_ref)

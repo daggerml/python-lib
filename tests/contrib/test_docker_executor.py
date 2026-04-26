@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 from typing import Any
-from unittest.mock import patch
 
 import boto3
 import pytest
@@ -151,7 +150,10 @@ def test_docker_executor_poll_returns_succeeded_when_container_exited_with_s3_re
     dag_id = "a" * 64
     exec_state = ExecutionState(cache_key, remote_root=remote["root"])
     io = exec_state.adapter_io(execution_id, "local:docker")
-    exec_state._put_object(io._output_key, json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}).encode())
+    exec_state._put_object(
+        io._output_key,
+        json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}).encode(),
+    )
 
     job_state = {"container_id": "cid-ok", "cleanup_image": None}
 

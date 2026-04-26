@@ -4,8 +4,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 from daggerml import Dml
-from daggerml._internal.types import DmlRepoError
 from daggerml._config import DmlConfig
+from daggerml._internal.types import DmlRepoError
 
 
 def test_config_waterfall_defaults_env_explicit():
@@ -24,11 +24,6 @@ def test_repo_env_resolution():
     assert cfg.repo == "/repo/new"
 
 
-def test_xdg_default_config_dir():
-    cfg = DmlConfig.resolve(env={"XDG_CONFIG_HOME": "/tmp/xdg"})
-    assert cfg.config_dir == "/tmp/xdg/dml"
-
-
 def test_default_user_uses_env_user_and_hostname_shape():
     cfg = DmlConfig.resolve(env={"USER": "alice"})
     assert cfg.user is not None
@@ -39,10 +34,9 @@ def test_default_user_uses_env_user_and_hostname_shape():
 def test_path_values_expand_user():
     home = os.path.expanduser("~")
     cfg = DmlConfig.resolve(
-        explicit={"repo": "~/repo", "config_dir": "~/cfg"},
+        explicit={"repo": "~/repo"},
     )
     assert cfg.repo == f"{home}/repo"
-    assert cfg.config_dir == f"{home}/cfg"
 
 
 def test_dml_uses_config_resolution_from_env(monkeypatch):
@@ -60,6 +54,11 @@ def test_remote_config_from_canonical_env():
         }
     )
     assert cfg.remote.root == "s3://bucket/project"
+
+
+def test_remote_config_defaults_to_empty_string():
+    cfg = DmlConfig.resolve(env={})
+    assert cfg.remote.root == ""
 
 
 @patch("daggerml.api.DmlOps.open")

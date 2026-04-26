@@ -115,7 +115,10 @@ def test_lambda_adapter_invokes_runnable_target(monkeypatch):
 
     class _Payload:
         def read(self):
-            return b'{"status":"succeeded","error":null,"dag_id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}'
+            return (
+                b'{"status":"succeeded","error":null,'
+                b'"dag_id":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}'
+            )
 
     class _Client:
         def invoke(self, **kwargs):

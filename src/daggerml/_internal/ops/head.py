@@ -137,3 +137,16 @@ class HeadOps(BaseOps):
                 "ref": head_ref,
                 "commit": head.commit,
             }
+
+    def advance(self, head_ref: Ref, commit_ref: Ref) -> Ref:
+        """Move a head to an existing commit ref."""
+        if head_ref.ns() != "head":
+            raise DmlRepoError(f"Expected head ref, got: {head_ref}")
+        if commit_ref.ns() != "commit":
+            raise DmlRepoError(f"Expected commit ref, got: {commit_ref}")
+        with self._tx(readonly=False) as txn:
+            if not txn.exists(head_ref):
+                raise DmlRepoError(f"Head does not exist: {head_ref}")
+            if not txn.exists(commit_ref):
+                raise DmlRepoError(f"Commit does not exist: {commit_ref}")
+            return txn.put(Head(commit=commit_ref), to=head_ref)

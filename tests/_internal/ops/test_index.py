@@ -87,7 +87,7 @@ def _mk_repo_state(temp_bo, *, with_argv: bool = False) -> tuple[IndexOps, Ref, 
             to=index_commit_ref,
         )
         txn.put(Index(commit=index_commit_ref), to=index_ref)
-    return IndexOps(_db=temp_bo._db), head_ref, index_ref
+    return IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env()), head_ref, index_ref
 
 
 def _mk_remote_index_ops(temp_bo) -> IndexOps:
@@ -185,7 +185,7 @@ class TestIndexOps:
     @settings(max_examples=10)
     def test_list(self, temp_bo, idx):
         """List returns existing refs; delete removes them."""
-        ops = IndexOps(_db=temp_bo._db)
+        ops = IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env())
         with temp_bo._tx(readonly=False) as txn:
             ref = txn.put(idx)
         try:
@@ -1464,7 +1464,7 @@ class TestIndexOps:
                 txn.delete(head_ref)
 
     def test_create_argv_ptr_requires_remote_context(self, temp_bo):
-        ops = IndexOps(_db=temp_bo._db)
+        ops = IndexOps(_db=temp_bo._db, remote_root="")
         with pytest.raises(DmlRepoError, match="Remote context required for argv_ptr"):
             ops.create(argv_ptr="a" * 64)
 

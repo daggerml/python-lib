@@ -169,11 +169,17 @@ class AdapterBase:
             return
         if is_s3_uri(output_path):
             from urllib.parse import urlparse
+
             import boto3
             parsed = urlparse(output_path)
             bucket = parsed.netloc
             key = parsed.path.lstrip("/")
-            boto3.client("s3").put_object(Bucket=bucket, Key=key, Body=data.encode("utf-8"), ContentType="application/json")
+            boto3.client("s3").put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=data.encode("utf-8"),
+                ContentType="application/json",
+            )
             return
         Path(output_path).write_text(data)
 

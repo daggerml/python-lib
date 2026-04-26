@@ -10,6 +10,7 @@ from .head import setup_head_parser
 from .index import setup_index_parser
 from .init import setup_init_parser
 from .node import setup_node_parser
+from .project import setup_clone_parser, setup_project_alias_parser
 from .remote import setup_remote_parser
 
 
@@ -37,6 +38,13 @@ def cli() -> None:
     # Init subcommand
     init_parser = subparsers.add_parser("init", help="Create a named repository in config dir")
     setup_init_parser(init_parser)
+
+    # Commit subcommand
+    clone_parser = subparsers.add_parser("clone", help="Clone a remote DML project")
+    setup_clone_parser(clone_parser)
+
+    for alias in ("fetch", "pull", "push", "merge", "revert"):
+        setup_project_alias_parser(subparsers.add_parser(alias, help=f"Git-like {alias}"), alias)
 
     # Commit subcommand
     commit_parser = subparsers.add_parser("commit", help="Work with commits")

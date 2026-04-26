@@ -60,7 +60,7 @@ class S3Store:
         if bucket is None and prefix is None:
             cfg = DmlConfig.resolve()
             remote_root = cfg.remote.root
-            if not isinstance(remote_root, str):
+            if not remote_root:
                 raise DmlRepoError(
                     "S3Store requires configured remote.root (set DML_REMOTE_ROOT or pass bucket/prefix)"
                 )

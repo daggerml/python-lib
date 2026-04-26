@@ -18,7 +18,7 @@ from uuid import uuid4
 from daggerml._internal._db import Ref
 from daggerml._internal.builtins import BUILTIN_FNS
 from daggerml._internal.codec import CodecContext, apply_codec
-from daggerml._internal.exec_state import ExecutionState
+from daggerml._internal.exec_state import ExecutionRecord, ExecutionState
 from daggerml._internal.ops.base_ops import BaseOps, with_retry
 from daggerml._internal.ops.cache import CacheOps
 from daggerml._internal.ops.dag import DagOps
@@ -65,7 +65,7 @@ class _PreparedAdapterCall:
 
 @dataclass
 class IndexOps(BaseOps):
-    remote_root: Optional[str] = None
+    remote_root: str
 
     def _remote_ops(self):
         if not self.remote_root:
@@ -124,8 +124,7 @@ class IndexOps(BaseOps):
                 return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
             prepared = self._prepare_adapter_call(index_ref, argv_ref, txn)
         argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
-        remote_root = cast(str, self.remote_root)
-        es = ExecutionState(prepared.cache_key, remote_root=remote_root)
+        es = ExecutionState(prepared.cache_key, remote_root=self.remote_root)
 
         # Step 1: try to acquire the mutex
         if not es.lock():
@@ -143,17 +142,21 @@ class IndexOps(BaseOps):
         execution_number = es.read_active_execution_number()
         execution_record = None
         if execution_number is not None:
+            # get execution record
             execution_record = es.read_execution_record(execution_number)
+            # start over if record is missing
             if execution_record is None:
                 es.delete_active_execution()
                 execution_number = None
-
+        # submit new or check existing?
         if execution_number is None:
+            assert execution_record is None
             self._record_call_edges(prepared, es)
             execution_number = es.next_execution_number()
             execution_id = f"{prepared.cache_key}-{execution_number}"
             state = None
         else:
+            assert execution_record is not None
             execution_id = cast(str, execution_record["execution_id"])
             state = cast(dict[str, Any], execution_record["state"])
 
@@ -188,7 +191,7 @@ class IndexOps(BaseOps):
             raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
         else:
             if state is None:
-                record = {
+                record: ExecutionRecord = {
                     "execution_number": execution_number,
                     "execution_id": execution_id,
                     "cache_key": prepared.cache_key,
@@ -679,8 +682,6 @@ class IndexOps(BaseOps):
         return None, ctx.dag.argv.id()
 
     def _prepare_adapter_call(self, index_ref: Ref, argv_ref: Ref, txn) -> _PreparedAdapterCall:
-        if self.remote_root is None:
-            raise DmlRepoError("Remote context required for adapter invocation")
         argv_node: ArgvNode = txn.get(argv_ref)
         argv_datum: ListDatum = txn.get(argv_node.datum_ref(txn))
         if len(argv_datum.data) == 0:
@@ -781,8 +782,6 @@ class IndexOps(BaseOps):
         execution_id: str,
         state: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        if self.remote_root is None:
-            raise DmlRepoError("Remote context required for adapter invocation")
         envelope = {
             "argv_ptr": argv_ptr,
             "cache_key": prepared.cache_key,

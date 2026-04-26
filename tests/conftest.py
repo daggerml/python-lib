@@ -73,8 +73,8 @@ def debug(clear_envvars):
 @pytest.fixture
 def dml():
     with Dml.temporary() as _dml:
-        # Set function cache dir to config_dir so tests can find debug files
-        with patch.dict(os.environ, DML_TEST_FN_STATE_DIR=_dml.config_dir):
+        # Set function cache dir to repo so tests can find debug files
+        with patch.dict(os.environ, DML_TEST_FN_STATE_DIR=_dml.repo):
             yield _dml
 
 

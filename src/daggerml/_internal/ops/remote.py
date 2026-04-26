@@ -13,6 +13,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, fields, is_dataclass
 from functools import wraps
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
@@ -38,6 +39,12 @@ class RemoteError(Exception):
 
 class RefAlreadyExists(Exception):
     """Raised when attempting to create a ref that already exists."""
+
+    pass
+
+
+class RefUpdateConflict(Exception):
+    """Raised when a conditional mutable ref update loses a race."""
 
     pass
 
@@ -89,6 +96,32 @@ class _CasFetchResult:
     ns: str
     oid: str
     raw_bytes: bytes
+
+
+@dataclass(frozen=True)
+class RemoteRefRead:
+    """Decoded remote ref with its object ETag for conditional updates."""
+
+    ref: dict
+    etag: str | None
+
+
+@dataclass(frozen=True)
+class DmlProjectUri:
+    """Canonical DML project URI plus optional branch/tag identifier."""
+
+    owner: str
+    project: str
+    branch: str | None = None
+    tag: str | None = None
+
+    def canonical(self) -> str:
+        uri = f"dml://{self.owner}/{self.project}"
+        if self.branch is not None:
+            return f"{uri}#{self.branch}"
+        if self.tag is not None:
+            return f"{uri}@{self.tag}"
+        return uri
 
 
 _REMOTE_FETCH_WORKERS = 32
@@ -178,6 +211,83 @@ class RemoteOps(BaseOps):
         return cache_key
 
     @staticmethod
+    def _validate_project_segment(label: str, value: str) -> str:
+        if not isinstance(value, str) or not re.match(r"^[a-z0-9][a-z0-9._-]{0,127}$", value):
+            raise ValueError(f"Invalid project {label}: {value!r}")
+        return value
+
+    @staticmethod
+    def _validate_ref_name(label: str, value: str) -> str:
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"Invalid {label}: must be a non-empty string")
+        if value in {".", ".."} or "\\" in value:
+            raise ValueError(f"Invalid {label}: {value!r}")
+        parts = value.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            raise ValueError(f"Invalid {label}: {value!r}")
+        seg_re = r"^[a-z0-9][a-z0-9._-]{0,127}$"
+        for part in parts:
+            if not re.match(seg_re, part):
+                raise ValueError(f"Invalid {label} segment: {part!r}")
+        return value
+
+    @classmethod
+    def parse_dml_uri(cls, uri: str, *, require_identifier: bool = False) -> DmlProjectUri:
+        if not isinstance(uri, str) or not uri.startswith("dml://"):
+            raise ValueError(f"Invalid DML URI: {uri!r}")
+        tag: str | None = None
+        branch: str | None = None
+        base = uri
+        if "#" in uri and "@" in uri:
+            raise ValueError(f"Invalid DML URI: cannot include both branch and tag: {uri!r}")
+        if "#" in uri:
+            base, branch = uri.split("#", 1)
+        elif "@" in uri:
+            base, tag = uri.split("@", 1)
+        parsed = urlsplit(base)
+        if parsed.scheme != "dml" or parsed.netloc == "" or parsed.query or parsed.fragment:
+            raise ValueError(f"Invalid DML URI: {uri!r}")
+        project = parsed.path.strip("/")
+        if "/" in project or not project:
+            raise ValueError(f"Invalid DML URI project path: {uri!r}")
+        parsed_uri = DmlProjectUri(
+            owner=cls._validate_project_segment("owner", parsed.netloc),
+            project=cls._validate_project_segment("name", project),
+            branch=cls._validate_ref_name("branch", branch) if branch is not None else None,
+            tag=cls._validate_ref_name("tag", tag) if tag is not None else None,
+        )
+        if require_identifier and parsed_uri.branch is None and parsed_uri.tag is None:
+            raise ValueError(f"DML URI must include a branch or tag: {uri!r}")
+        return parsed_uri
+
+    @classmethod
+    def canonical_dml_uri(cls, uri: str, *, require_identifier: bool = False) -> str:
+        canonical = cls.parse_dml_uri(uri, require_identifier=require_identifier).canonical()
+        if len(canonical.encode("utf-8")) > 64:
+            raise ValueError("Canonical DML URI exceeds 64-byte ref limit")
+        return canonical
+
+    def _project_branch_ref_path(self, owner: str, project: str, branch: str) -> str:
+        owner = self._validate_project_segment("owner", owner)
+        project = self._validate_project_segment("name", project)
+        branch = self._validate_ref_name("branch", branch)
+        return f"projects/{owner}/{project}/heads/{branch}.json"
+
+    def _project_tag_ref_path(self, owner: str, project: str, tag: str) -> str:
+        owner = self._validate_project_segment("owner", owner)
+        project = self._validate_project_segment("name", project)
+        tag = self._validate_ref_name("tag", tag)
+        return f"projects/{owner}/{project}/tags/{tag}.json"
+
+    def _dml_uri_ref_path(self, uri: str) -> str:
+        parsed = self.parse_dml_uri(uri, require_identifier=True)
+        if parsed.branch is not None:
+            return self._project_branch_ref_path(parsed.owner, parsed.project, parsed.branch)
+        if parsed.tag is not None:
+            return self._project_tag_ref_path(parsed.owner, parsed.project, parsed.tag)
+        raise ValueError(f"DML URI must include a branch or tag: {uri!r}")
+
+    @staticmethod
     def _validate_manifest_oid(manifest_oid: str) -> str:
         if not isinstance(manifest_oid, str) or not re.match(r"^[0-9a-f]{64}$", manifest_oid):
             raise InvalidOid(f"Invalid OID: must be 64 lowercase hex characters, got {manifest_oid!r}")
@@ -252,10 +362,10 @@ class RemoteOps(BaseOps):
         if any("\\" in seg for seg in segments):
             raise ValueError(f"Invalid ref path: path segments must not contain '\\\\': {ref_path!r}")
 
-        # Only tags/cache refs are valid protocol refs.
+        # Only tags/cache/project refs are valid protocol refs.
         root = segments[0]
-        if root not in {"tags", "cache"}:
-            raise ValueError(f"Invalid ref path root: expected 'tags' or 'cache', got {root!r}")
+        if root not in {"tags", "cache", "projects"}:
+            raise ValueError(f"Invalid ref path root: expected 'tags' or 'cache' or 'projects', got {root!r}")
 
         if root == "tags":
             if len(segments) != 3 or not segments[2].endswith(".json"):
@@ -267,11 +377,24 @@ class RemoteOps(BaseOps):
                 raise ValueError(f"Invalid tag name: {name!r}")
             if not re.match(seg_re, version):
                 raise ValueError(f"Invalid tag version: {version!r}")
-        else:
+        elif root == "cache":
             if len(segments) != 2 or not segments[1].endswith(".json"):
                 raise ValueError("Invalid cache ref path: expected cache/<key>.json")
             cache_key = segments[1][: -len(".json")]
             self._validate_cache_key(cache_key)
+        else:
+            if len(segments) < 6 or segments[1] == "" or segments[2] == "" or segments[3] not in {"heads", "tags"}:
+                raise ValueError(
+                    "Invalid project ref path: expected projects/<owner>/<project>/{heads,tags}/<name>.json"
+                )
+            if not segments[-1].endswith(".json"):
+                raise ValueError("Invalid project ref path: expected .json filename")
+            owner = segments[1]
+            project = segments[2]
+            name = "/".join([*segments[4:-1], segments[-1][: -len(".json")]])
+            self._validate_project_segment("owner", owner)
+            self._validate_project_segment("name", project)
+            self._validate_ref_name("branch" if segments[3] == "heads" else "tag", name)
         return self._prefixed_key(f"refs/{ref_path}")
 
     def _remote_has_cas(self, oid: str) -> bool:
@@ -362,6 +485,16 @@ class RemoteOps(BaseOps):
                 raise RemoteError(f"Ref {ref_path} not found") from None
             raise
 
+    def _remote_get_ref_with_etag(self, ref_path: str) -> RemoteRefRead:
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=self._ref_key(ref_path))
+            return RemoteRefRead(self._decode_ref(response["Body"].read()), response.get("ETag"))
+        except self.client.exceptions.ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            if error_code in ("NoSuchKey", "404"):
+                raise RemoteError(f"Ref {ref_path} not found") from None
+            raise
+
     def _remote_get_dag_ref(self, dag_id: str) -> bytes:
         dag_id = self._validate_dag_id(dag_id)
         ref_path = self._dag_ref_path(dag_id)
@@ -400,6 +533,22 @@ class RemoteOps(BaseOps):
 
         self.__put(self._ref_key(ref_path), data, ContentType="application/json")
 
+    def _remote_put_ref_if_match(self, ref_path: str, data: bytes, etag: str) -> None:
+        try:
+            self.__put(self._ref_key(ref_path), data, ContentType="application/json", IfMatch=etag)
+        except self.client.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+                raise RefUpdateConflict(f"Ref {ref_path} changed during update") from None
+            raise
+
+    def _remote_put_ref_if_absent(self, ref_path: str, data: bytes) -> None:
+        try:
+            self.__put(self._ref_key(ref_path), data, ContentType="application/json", IfNoneMatch="*")
+        except self.client.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+                raise RefAlreadyExists(f"Ref {ref_path} already exists") from None
+            raise
+
     def _remote_put_dag_ref(self, dag_id: str, data: bytes) -> None:
         dag_id = self._validate_dag_id(dag_id)
         ref_path = self._dag_ref_path(dag_id)
@@ -422,6 +571,71 @@ class RemoteOps(BaseOps):
             Reference path
         """
         self.client.delete_object(Bucket=self.bucket, Key=self._ref_key(ref_path))
+
+    def _local_put_head(self, txn, remote_name: str, ref_path: str, commit_id: str) -> None:
+        txn.put(Head(commit=Ref(f"commit:{commit_id}")), to=Ref(f"head:{remote_name}/{ref_path}"))
+
+    def _local_put_tracking_head(self, txn, uri: str, commit_id: str) -> None:
+        canonical = self.canonical_dml_uri(uri, require_identifier=True)
+        txn.put(Head(commit=Ref(f"commit:{commit_id}")), to=Ref(f"head:{canonical}"))
+
+    def _ref_payload(self, manifest_id: str, targets: dict[str, list[str]], meta: dict | None = None) -> bytes:
+        ref_obj = {
+            "kind": "ref",
+            "schema": 0,
+            "target": self._validate_manifest_oid(manifest_id),
+            "created_at": int(time.time()),
+            "targets": self._validate_targets(targets),
+            "meta": meta or {},
+        }
+        return json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+    def _validate_project_ref_target(self, manifest_id: str, targets: dict[str, list[str]]) -> None:
+        manifest = self._decode_manifest(self._remote_get_cas(manifest_id))
+        if manifest.get("root-ns") != "commit":
+            raise InvalidManifest("Project refs must point to commit manifests")
+        expected_targets = {"dag": sorted(set(manifest.get("closure", {}).get("dag", [])))}
+        if self._validate_targets(targets) != expected_targets:
+            raise InvalidRef(f"Project ref targets mismatch: expected {expected_targets}, got {targets}")
+
+    def get_project_branch_ref(self, owner: str, project: str, branch: str) -> RemoteRefRead:
+        return self._remote_get_ref_with_etag(self._project_branch_ref_path(owner, project, branch))
+
+    def put_project_branch_ref(
+        self,
+        owner: str,
+        project: str,
+        branch: str,
+        manifest_id: str,
+        *,
+        targets: dict[str, list[str]],
+        etag: str | None,
+        create: bool = False,
+    ) -> str:
+        ref_path = self._project_branch_ref_path(owner, project, branch)
+        self._validate_project_ref_target(manifest_id, targets)
+        ref_bytes = self._ref_payload(manifest_id, targets)
+        if create:
+            self._remote_put_ref_if_absent(ref_path, ref_bytes)
+        elif etag is not None:
+            self._remote_put_ref_if_match(ref_path, ref_bytes, etag)
+        else:
+            self._remote_put_ref(ref_path, ref_bytes)
+        return ref_path
+
+    def put_project_tag_ref(
+        self,
+        owner: str,
+        project: str,
+        tag: str,
+        manifest_id: str,
+        *,
+        targets: dict[str, list[str]],
+    ) -> str:
+        ref_path = self._project_tag_ref_path(owner, project, tag)
+        self._validate_project_ref_target(manifest_id, targets)
+        self._remote_put_ref_if_absent(ref_path, self._ref_payload(manifest_id, targets))
+        return ref_path
 
     def _decode_ref(self, data: bytes) -> dict:
         """Decode and validate ref data from bytes.
@@ -799,7 +1013,7 @@ class RemoteOps(BaseOps):
 
     @_remote_boundary("manifest upload")
     def put_ref_manifest(self, root_ref: Ref) -> str:
-        with self._tx(readonly=True) as txn:
+        with self._tx(readonly=False) as txn:
             local_manifest = self._local_dump_dict(txn, root_ref)
             return self._put_ref_manifest_from_local_manifest(local_manifest, root_ref, txn)
 
@@ -1046,7 +1260,7 @@ class RemoteOps(BaseOps):
         """
         root_ref, ref_path = self._resolve_push_target(ref)
 
-        with self._tx(readonly=True) as txn:
+        with self._tx(readonly=False) as txn:
             lm = self._local_dump_dict(txn, root_ref)
             targets = self._targets_for_root(txn, root_ref)
             manifest_dict, _manifest_bytes = self._build_remote_manifest(
@@ -1101,6 +1315,70 @@ class RemoteOps(BaseOps):
             root_ref = self.load_ptr_in_txn(ref_obj["target"], txn, expected_root_ns="commit")
             self._local_put_head(txn, remote_name, ref_path, root_ref.id())
 
+    @_remote_boundary("fetch")
+    def fetch_uri(self, uri: str) -> Ref:
+        canonical = self.canonical_dml_uri(uri, require_identifier=True)
+        ref_path = self._dml_uri_ref_path(canonical)
+        ref_obj = self._decode_ref(self._remote_get_ref(ref_path))
+        self._require_manifest_ref_targets(ref_obj, ref_path)
+        with self._tx(readonly=False) as txn:
+            root_ref = self.load_ptr_in_txn(ref_obj["target"], txn, expected_root_ns="commit")
+            self._local_put_tracking_head(txn, canonical, root_ref.id())
+            return root_ref
+
+    @_remote_boundary("push branch")
+    def push_project_branch(self, uri: str, head: Ref, *, create: bool = False, force: bool = False) -> str:
+        parsed = self.parse_dml_uri(uri, require_identifier=True)
+        if parsed.branch is None:
+            raise ValueError("Project branch push requires a branch URI")
+        ref_path = self._project_branch_ref_path(parsed.owner, parsed.project, parsed.branch)
+        root_ref, _legacy_ref_path = self._resolve_push_target(head)
+
+        observed: RemoteRefRead | None = None
+        try:
+            observed = self._remote_get_ref_with_etag(ref_path)
+        except RemoteError:
+            if not create:
+                raise
+
+        with self._tx(readonly=True) as txn:
+            lm = self._local_dump_dict(txn, root_ref)
+            targets = self._targets_for_root(txn, root_ref)
+            manifest_dict, _manifest_bytes = self._build_remote_manifest(
+                lm, require_commit_root=True, direct_dag_ids=targets["dag"]
+            )
+            expected_targets = {"dag": sorted(set(manifest_dict["closure"].get("dag", [])))}
+            if targets != expected_targets:
+                raise ValueError(f"Manifest targets mismatch: expected {expected_targets}, got {targets}")
+            if observed is not None and not force:
+                remote_commit = self.load_ptr_in_txn(observed.ref["target"], txn, expected_root_ns="commit")
+                from daggerml._internal.ops.commit import CommitOps
+
+                if not CommitOps(_db=self._db)._is_ancestor_in_txn(remote_commit, root_ref, txn):
+                    raise DmlRepoError("Non-fast-forward push rejected; use --force to override")
+            manifest_id = self._put_ref_manifest_from_local_manifest(lm, root_ref, txn)
+
+        if observed is None:
+            return self.put_project_branch_ref(
+                parsed.owner, parsed.project, parsed.branch, manifest_id, targets=targets, etag=None, create=True
+            )
+        return self.put_project_branch_ref(
+            parsed.owner,
+            parsed.project,
+            parsed.branch,
+            manifest_id,
+            targets=targets,
+            etag=observed.etag,
+            create=False,
+        )
+
+    @_remote_boundary("pull branch")
+    def pull_uri_into_head(self, uri: str, head: Ref, *, user: str) -> Ref:
+        fetched = self.fetch_uri(uri)
+        from daggerml._internal.ops.commit import CommitOps
+
+        return CommitOps(_db=self._db).merge_into_head(head, fetched, user)
+
     @_remote_boundary("list")
     def list(self, prefix: str) -> list[dict]:
         """List remote refs for a given prefix.
@@ -1116,8 +1394,8 @@ class RemoteOps(BaseOps):
             List of dictionaries containing decoded ref information including
             meta data and inferred ref_path
         """
-        if prefix not in {"tags", "cache"}:
-            raise ValueError(f"Invalid list prefix: {prefix!r}. Expected 'tags' or 'cache'.")
+        if prefix not in {"tags", "cache", "projects"}:
+            raise ValueError(f"Invalid list prefix: {prefix!r}. Expected 'tags' or 'cache' or 'projects'.")
 
         refs = []
 
@@ -1235,7 +1513,7 @@ class RemoteOps(BaseOps):
             live_oids.add(manifest_oid)
             worklist.append(manifest_oid)
 
-        for prefix in ("tags", "cache"):
+        for prefix in ("tags", "cache", "projects"):
             prefix_key = f"{self.prefix}/refs/{prefix}/" if self.prefix else f"refs/{prefix}/"
             paginator = self.client.get_paginator("list_objects_v2")
             for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix_key):
@@ -1411,19 +1689,3 @@ class RemoteOps(BaseOps):
 
         # Sweep phase: delete unreferenced objects older than safety window
         return self._gc_sweep(live_oids, min_age_seconds)
-
-    def _local_put_head(self, txn, remote_name: str, ref_path: str, commit_id: str) -> None:
-        """Store head pointer for a remote ref path.
-
-        Parameters
-        ----------
-        txn : TxnContext
-            Transaction context
-        remote_name : str
-            Remote name (e.g., "s3://bucket/prefix")
-        ref_path : str
-            Reference path
-        commit_id : str
-            Commit ID to point to
-        """
-        txn.put(Head(commit=Ref(f"commit:{commit_id}")), to=Ref(f"head:{remote_name}/{ref_path}"))

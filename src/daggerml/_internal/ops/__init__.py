@@ -16,7 +16,7 @@ except ImportError:
     from typing_extensions import Self
 
 from daggerml._internal._db import DmlDbEnv
-from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
+from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES
 
 if TYPE_CHECKING:
     from daggerml._internal.ops.cache import CacheOps
@@ -48,7 +48,7 @@ class DmlOps:
     def __enter__(self) -> Self:
         """Enter context manager - open database connection."""
         if self._db is None:
-            self._db = DmlDbEnv.open(self.path, namespaces=sorted(NAMESPACES), map_size=1024**3)
+            self._db = DmlDbEnv.open(self._db_path(self.path), namespaces=sorted(NAMESPACES), map_size=1024**3)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -153,6 +153,12 @@ class DmlOps:
 
         return RemoteOps(_db=self._db, **remote_kwargs)
 
+    @staticmethod
+    def _db_path(path: str) -> str:
+        root = Path(path)
+        dml_db = root / ".dml" / "db"
+        return str(dml_db)
+
     @classmethod
     def create(
         cls,
@@ -160,12 +166,15 @@ class DmlOps:
         user: Optional[str] = None,
         *,
         remote_root: str,
+        branch: str | None = None,
     ) -> Self:
         """Create new repository at path (instantiates db instance)."""
-        Path(path).mkdir(parents=True, exist_ok=False)
-        db = DmlDbEnv.create(path, namespaces=sorted(NAMESPACES), map_size=1024**3)
+        branch = branch or DEFAULT_HEAD.id()
+        db_path = cls._db_path(path)
+        Path(db_path).mkdir(parents=True, exist_ok=True)
+        db = DmlDbEnv.create(db_path, namespaces=sorted(NAMESPACES), map_size=1024**3)
         self = cls(_db=db, path=path, remote_root=remote_root)
-        self.head().create(DEFAULT_HEAD.id())
+        self.head().create(branch)
         return self
 
     @classmethod
@@ -190,7 +199,7 @@ class DmlOps:
         Self
             Opened repository instance.
         """
-        db = DmlDbEnv.open(path, namespaces=sorted(NAMESPACES), map_size=map_size)
+        db = DmlDbEnv.open(cls._db_path(path), namespaces=sorted(NAMESPACES), map_size=map_size)
         return cls(
             _db=db,
             path=path,

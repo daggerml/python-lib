@@ -7,7 +7,7 @@ import pytest
 from daggerml import Uri
 from daggerml._internal.exec_state import ExecutionState
 from daggerml._internal.types import DmlRepoError, Runnable
-from daggerml.contrib.executors.batch import BatchExecutor, _ADAPTER_IO_NAME
+from daggerml.contrib.executors.batch import _ADAPTER_IO_NAME, BatchExecutor
 
 
 class _FakeBatchClient:

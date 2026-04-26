@@ -4,12 +4,13 @@ import tempfile
 from uuid import uuid4
 
 from daggerml._internal._db import DmlDbEnv
+from daggerml._internal.ops.base_ops import BaseOps
 from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, Commit, Head, Tree
 
 
 def _init_repo(db: DmlDbEnv) -> None:
-    with IndexOps(db)._tx(readonly=False) as txn:
+    with BaseOps(db)._tx(readonly=False) as txn:
         tree_ref = txn.put(Tree(dags={}))
         commit_ref = txn.put(Commit(parents=[], tree=tree_ref, author="test", message="initial"))
         txn.put(Head(commit=commit_ref), to=DEFAULT_HEAD)

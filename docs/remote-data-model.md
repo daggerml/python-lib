@@ -41,6 +41,9 @@ Project root: `s3://<bucket>/<project-prefix>/`
     dml.json
 
     refs/
+      projects/
+        <owner>/<project>/heads/<branch>.json
+        <owner>/<project>/tags/<tag>.json
       tags/
         <name>/<version>.json
       cache/
@@ -62,12 +65,15 @@ Rules:
 - DML remote protocol data MUST live under `<project-root>/dml/`.
 - OIDs and manifest-ref targets MUST be strict lowercase 64-char hex.
 - cache refs live at `refs/cache/<cache_key>.json`.
+- project branch refs live at `refs/projects/<owner>/<project>/heads/<branch>.json` and are mutable.
+- project tag refs live at `refs/projects/<owner>/<project>/tags/<tag>.json` and are write-once.
 - legacy `refs/cache/<name>/<cache_key>.json` paths are invalid.
 - transport blobs under `io/**` are adapter-transport payload objects, not refs and not CAS objects.
 
 ## Ref Namespace Roles
 
 - `refs/tags/**`: named publication paths for branch and tag style discovery.
+- `refs/projects/**`: project-scoped branch heads and tags for git-like remote operations.
 - `refs/cache/**`: mutable cache-key pointers for function-result memoization.
 - `refs/dags/**`: per-DAG indirection entries mapping logical DAG ids to DAG manifest OIDs.
 
@@ -89,6 +95,8 @@ Rules:
 - ref path segments MUST NOT be `.` or `..`.
 - ref path segments MUST NOT contain `/` or `\\`.
 - tag `<name>` and `<version>` MUST match `[a-z0-9][a-z0-9._-]{0,127}`.
+- project `<owner>` and `<project>` MUST match `[a-z0-9][a-z0-9._-]{0,127}`.
+- project branch and tag names MAY contain slash-separated segments; every segment MUST match `[a-z0-9][a-z0-9._-]{0,127}`.
 - dag `<dag_id>` MUST be a lowercase 64-char SHA-256 hex string.
 
 ## Descriptor Schema (`dml.json`)
@@ -153,9 +161,12 @@ Invariants:
 - `kind == "ref"` and `schema == 0`.
 - `target` is a manifest OID.
 - refs in `refs/tags/**` and `refs/cache/**` MUST include `targets`.
+- refs in `refs/projects/**` MUST include `targets` and MUST point at commit manifests.
 - `targets["dag"]` MUST be a sorted unique list of direct logical DAG ids for the referenced manifest.
 - `refs/tags/**` entries are write-once per path.
 - `refs/cache/**` entries are mutable.
+- `refs/projects/**/heads/**` entries are mutable only through conditional update operations.
+- `refs/projects/**/tags/**` entries are write-once per path.
 - `refs/dags/**` entries are write-once per DAG id path.
 
 ## Cache Ref Constraints

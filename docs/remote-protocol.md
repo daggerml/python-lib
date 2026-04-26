@@ -65,6 +65,10 @@ Rules:
 - if `refs/dags/<dag_id>.json` already exists, publication MUST treat that DAG as already published and MUST NOT inspect descendants of that DAG.
 - if a direct DAG ref is missing, publication MUST inspect only that missing DAG's direct child DAG ids and recurse only for those missing direct children.
 - push to an existing tag-ref path MUST fail deterministically (no in-place overwrite).
+- project branch push MAY update `refs/projects/<owner>/<project>/heads/<branch>.json` only by conditional ETag match.
+- project branch push MUST reject non-fast-forward updates unless force is requested; force still requires the ETag condition.
+- project branch creation MUST use create-if-absent semantics and fail if another writer creates the ref first.
+- project tag publication under `refs/projects/<owner>/<project>/tags/<tag>.json` MUST be immutable.
 - destination ref paths MUST satisfy segment/path constraints defined in [remote-data-model.md](remote-data-model.md).
 - push sync operations MUST NOT write transport blobs under `io/**`.
 - concurrent DAG-ref creation races MUST be resolved by handling `RefAlreadyExists`, reading back the existing ref, and accepting that as the canonical result.
@@ -92,6 +96,7 @@ Rules:
 - pull/load MUST deduplicate recursive DAG manifest loads within one top-level materialization.
 - pull/load MUST stop scheduling a manifest or CAS object once it is already present locally or already scheduled within the active materialization.
 - pull/load local materialization MAY recursively load child DAG manifests only through `closure["dag"]` resolution via `refs/dags/**`; it MUST NOT infer child DAG closure from raw DAG CAS presence alone.
+- project fetch MUST materialize the addressed branch or tag and update a local tracking head named by canonical `dml://<owner>/<project>#<branch>` or `dml://<owner>/<project>@<tag>`.
 - pull/load MAY fetch independent manifest refs and CAS objects concurrently.
 - pull sync operations MUST NOT require transport blobs under `io/**`.
 

@@ -29,7 +29,6 @@ This document defines canonical config keys and shape, resolution precedence, an
   "repo": "string-or-null",
   "branch": "string",
   "user": "string-or-null",
-  "config_dir": "string-or-null",
   "remote": {
     "root": "string-or-null"
   }
@@ -38,7 +37,7 @@ This document defines canonical config keys and shape, resolution precedence, an
 
 Rules:
 
-- top-level keys are `repo`, `branch`, `user`, `config_dir`, and `remote`.
+- top-level keys are `repo`, `branch`, `user`, and `remote`.
 - `remote` contains key `root`.
 - config key names MUST remain stable across API, runtime, and ops boundaries.
 
@@ -60,7 +59,6 @@ Rules:
 - `repo`: `DML_REPO`
 - `branch`: `DML_BRANCH`
 - `user`: `DML_USER`
-- `config_dir`: `DML_CONFIG_DIR`
 - `remote.root`: `DML_REMOTE_ROOT`
 
 Rules:
@@ -72,6 +70,20 @@ Rules:
 
 - `branch` default MUST be `main` unless explicitly overridden.
 - `remote.root`, when present, MUST be an `s3://bucket` or `s3://bucket/prefix` URI designating the project root.
+
+## Project Config
+
+Git-like project commands store local state under `<project>/.dml/`:
+
+- `.dml/config.toml` contains `[project]`, `[branch]`, and `[remotes.<name>]` tables.
+- `.dml/db/` contains the local object database.
+- `.dml/.gitignore` contains `*`.
+
+Global project config is loaded from `$DML_CONFIG_HOME/config.toml`, `$XDG_CONFIG_HOME/dml/config.toml`, or `~/.config/dml/config.toml`. It may define `[user].name`, `[defaults].branch`, and ordered `[hooks]` lists for `post-init` and `post-clone`.
+
+The global config home is referred to as `config_home` in CLI and internal project-config APIs.
+
+Project command resolution uses explicit CLI/API values, then `DML_*` environment variables such as `DML_BRANCH`, `DML_REMOTE_BUCKET`, and `DML_REMOTE_PREFIX`, then config-file values.
 
 ## Derived Defaults
 

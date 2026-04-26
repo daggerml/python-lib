@@ -18,48 +18,55 @@ class TestSetupInitParser:
         setup_init_parser(parser)
         args = parser.parse_args(["my-repo"])
         assert args.name == "my-repo"
-        assert args.config_dir is None
 
 
 class TestExecuteInit:
     """Test init command execution helper."""
 
-    def test_execute_init_creates_repo_at_config_dir(self):
+    def test_execute_init_creates_repo_in_cwd(self, monkeypatch):
         with tempfile.TemporaryDirectory() as temp_dir:
-            args = Namespace(name="my-repo", config_dir=temp_dir, repo=None)
+            monkeypatch.chdir(temp_dir)
+            args = Namespace(name="my-repo", config_home=temp_dir, repo=None)
             result = execute_init(args)
             expected_repo = Path(temp_dir) / "my-repo"
-            assert result["repo_path"] == str(expected_repo)
+            repo_path = result["repo_path"]
+            assert repo_path is not None
+            # macOS may report the cwd through /private/var even when tempfile returned /var.
+            assert Path(repo_path).resolve() == expected_repo.resolve()
             assert result["name"] == "my-repo"
             assert result["head"] == "head:main"
             assert expected_repo.exists()
 
     def test_execute_init_rejects_path_separators(self):
-        args = Namespace(name="bad/name", config_dir="~/.config/dml/", repo=None)
+        args = Namespace(name="bad/name", config_home="~/.config/dml/", repo=None)
         with pytest.raises(ValueError, match="must not contain path separators"):
             execute_init(args)
 
     def test_execute_init_requires_name_without_repo(self):
-        args = Namespace(name=None, config_dir="~/.config/dml/", repo=None)
+        args = Namespace(name=None, config_home="~/.config/dml/", repo=None)
         with pytest.raises(ValueError, match="NAME is required when --repo is not provided"):
             execute_init(args)
 
     def test_execute_init_uses_repo_flag_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             explicit = Path(temp_dir) / "repo-from-flag"
-            args = Namespace(name=None, config_dir="~/.config/dml/", repo=str(explicit))
+            args = Namespace(name=None, config_home="~/.config/dml/", repo=str(explicit))
             result = execute_init(args)
             assert result["repo_path"] == str(explicit)
             assert result["name"] is None
             assert explicit.exists()
 
-    def test_execute_init_uses_env_config_dir_when_flag_missing(self, monkeypatch):
+    def test_execute_init_uses_env_when_flag_missing(self, monkeypatch):
         with tempfile.TemporaryDirectory() as temp_dir:
-            monkeypatch.setenv("DML_CONFIG_DIR", temp_dir)
-            args = Namespace(name="from-env", config_dir=None, repo=None)
+            monkeypatch.setenv("DML_CONFIG_HOME", temp_dir)
+            monkeypatch.chdir(temp_dir)
+            args = Namespace(name="from-env", config_home=None, repo=None)
             result = execute_init(args)
             expected_repo = Path(temp_dir) / "from-env"
-            assert result["repo_path"] == str(expected_repo)
+            repo_path = result["repo_path"]
+            assert repo_path is not None
+            # macOS may report the cwd through /private/var even when tempfile returned /var.
+            assert Path(repo_path).resolve() == expected_repo.resolve()
             assert expected_repo.exists()
 
 
@@ -92,13 +99,17 @@ class TestInitCLIIntegration:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
-    def test_init_creates_repo(self):
+    def test_init_creates_repo(self, monkeypatch):
         with tempfile.TemporaryDirectory() as temp_dir:
-            stdout, stderr = self.run_cli_command(["init", "--config-dir", temp_dir, "named-repo"])
+            monkeypatch.chdir(temp_dir)
+            stdout, stderr = self.run_cli_command(["init", "--config-home", temp_dir, "named-repo"])
             assert not stderr
             payload = json.loads(stdout.strip())
             expected_repo = Path(temp_dir) / "named-repo"
-            assert payload["repo_path"] == str(expected_repo)
+            repo_path = payload["repo_path"]
+            assert repo_path is not None
+            # macOS may report the cwd through /private/var even when tempfile returned /var.
+            assert Path(repo_path).resolve() == expected_repo.resolve()
             assert payload["head"] == "head:main"
             assert expected_repo.exists()
 

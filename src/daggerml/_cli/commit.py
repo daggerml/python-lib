@@ -44,6 +44,24 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
     merge_parser.add_argument("--user", required=True, help="Commit author username")
     merge_parser.set_defaults(func=execute_commit_merge)
 
+    merge_head_parser = subparsers.add_parser("merge-head", help="Merge into and advance a head")
+    apply_help_config(
+        merge_head_parser,
+        description="Merge another commit into a branch head, fast-forwarding when possible.",
+        examples=["dml commit merge-head head:main commit:abc --user alice"],
+    )
+    merge_head_parser.add_argument("head", help="Head ref (head:<name>)")
+    merge_head_parser.add_argument("other", help="Commit ref (commit:<id>)")
+    merge_head_parser.add_argument("--user", required=True, help="Commit author username")
+    merge_head_parser.set_defaults(func=execute_commit_merge_head)
+
+    revert_parser = subparsers.add_parser("revert", help="Revert a commit on a head")
+    apply_help_config(revert_parser, description="Apply the inverse of a commit to a head.")
+    revert_parser.add_argument("head", help="Head ref (head:<name>)")
+    revert_parser.add_argument("commit", help="Commit ref (commit:<id>)")
+    revert_parser.add_argument("--user", required=True, help="Commit author username")
+    revert_parser.set_defaults(func=execute_commit_revert)
+
     # rebase subcommand
     rebase_parser = subparsers.add_parser("rebase", help="Rebase source commit onto target")
     apply_help_config(
@@ -102,6 +120,16 @@ def execute_commit_merge(ops_obj, args) -> str:
     commit1 = parse_ref(args.commit1)
     commit2 = parse_ref(args.commit2)
     result = ops_obj.merge(commit1, commit2, args.user)
+    return str(result)
+
+
+def execute_commit_merge_head(ops_obj, args) -> str:
+    result = ops_obj.merge_into_head(parse_ref(args.head), parse_ref(args.other), args.user)
+    return str(result)
+
+
+def execute_commit_revert(ops_obj, args) -> str:
+    result = ops_obj.revert(parse_ref(args.head), parse_ref(args.commit), args.user)
     return str(result)
 
 

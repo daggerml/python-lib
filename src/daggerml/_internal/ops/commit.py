@@ -16,9 +16,10 @@ try:
 except ImportError:
     from typing_extensions import Self
 
+from daggerml._config import DmlProjectConfig
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
-from daggerml._internal.types import Commit, DmlRepoError, Tree
+from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 from daggerml._internal.util import now
 
 
@@ -139,6 +140,51 @@ class CommitOps(BaseOps):
                 dags[k] = v
         return txn.put(Tree(dags))
 
+    def _is_ancestor_in_txn(self, ancestor: Ref, descendant: Ref, txn) -> bool:
+        stack = [descendant]
+        seen = set()
+        while stack:
+            current = stack.pop()
+            if current == ancestor:
+                return True
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(txn.get(current).parents)
+        return False
+
+    def is_ancestor(self, ancestor: Ref, descendant: Ref) -> bool:
+        with self._tx(readonly=True) as txn:
+            return self._is_ancestor_in_txn(ancestor, descendant, txn)
+
+    def resolve_commitish(self, value: str, *, current_branch: str = "main", project_dir: str = ".") -> Ref:
+        base, sep, steps_s = value.partition("~")
+        if base == "HEAD":
+            base = current_branch
+        with self._tx(readonly=True) as txn:
+            if base.startswith("commit:"):
+                ref = Ref(base)
+            elif base.startswith("dml://"):
+                ref = txn.get(Ref(f"head:{base}")).commit
+            elif "/" in base and not base.startswith("head:"):
+                remote_name, branch = base.split("/", 1)
+                project = DmlProjectConfig.load(project_dir)
+                remote = project.remotes.get(remote_name)
+                if remote is None:
+                    raise DmlRepoError(f"Unknown remote: {remote_name}")
+                ref = txn.get(Ref(f"head:{remote.uri}#{branch}")).commit
+            else:
+                ref = txn.get(Ref(base if base.startswith("head:") else f"head:{base}")).commit
+            if ref.ns() != "commit":
+                raise DmlRepoError(f"Resolved non-commit ref: {ref}")
+            steps = int(steps_s) if sep else 0
+            for _ in range(steps):
+                commit = txn.get(ref)
+                if not commit.parents:
+                    raise DmlRepoError(f"Commit-ish {value!r} walks past root commit")
+                ref = commit.parents[0]
+            return ref
+
     def list(self, head: Ref, limit: Optional[int] = None) -> Iterator[Ref]:
         """Get commit history starting from head.
 
@@ -209,13 +255,15 @@ class CommitOps(BaseOps):
         def merge_trees(base, a, b, txn):
             diff_a = self._diff(base, a, txn)
             diff_b = self._diff(base, b, txn)
-            # Check for conflicts
+            conflicts = []
             for name in set(diff_a["add"].keys()).intersection(diff_b["add"].keys()):
                 if diff_a["add"][name] != diff_b["add"][name]:
-                    raise DmlRepoError(f"Merge conflict in DAG '{name}'")
+                    conflicts.append(name)
             for name in set(diff_a["rem"].keys()).intersection(diff_b["rem"].keys()):
                 if diff_a["rem"][name] != diff_b["rem"][name]:
-                    raise DmlRepoError(f"Merge conflict in DAG '{name}' (removal)")
+                    conflicts.append(name)
+            if conflicts:
+                raise DmlRepoError(f"Merge conflicts: {sorted(conflicts)}")
             # Apply both diffs
             return self._patch(base, diff_a, diff_b, txn=txn)
 
@@ -229,6 +277,91 @@ class CommitOps(BaseOps):
                     message=f"Merge {commit1.id()[:8]} into {commit2.id()[:8]}",
                 )
             )
+
+    def merge_into_head(self, head: Ref, other: Ref, user: str) -> Ref:
+        if head.ns() != "head":
+            raise DmlRepoError(f"Expected head ref, got: {head}")
+        with self._tx(readonly=False) as txn:
+            current = txn.get(head).commit
+            if self._is_ancestor_in_txn(current, other, txn):
+                txn.put(Head(commit=other), to=head)
+                return other
+            if self._is_ancestor_in_txn(other, current, txn):
+                return current
+        merged = self.merge(current, other, user)
+        with self._tx(readonly=False) as txn:
+            txn.put(Head(commit=merged), to=head)
+        return merged
+
+    def revert(self, head: Ref, commit: Ref, user: str) -> Ref:
+        if head.ns() != "head" or commit.ns() != "commit":
+            raise DmlRepoError("Revert expects head and commit refs")
+        with self._tx(readonly=False) as txn:
+            current_head = txn.get(head).commit
+            target = txn.get(commit)
+            if len(target.parents) != 1:
+                raise DmlRepoError("Can only revert commits with exactly one parent")
+            before_tree = txn.get(txn.get(target.parents[0]).tree)
+            after_tree = txn.get(target.tree)
+            current_tree = txn.get(txn.get(current_head).tree)
+            dags = dict(current_tree.dags)
+            conflicts = []
+            for name in set(before_tree.dags) | set(after_tree.dags):
+                before_ref = before_tree.dags.get(name)
+                after_ref = after_tree.dags.get(name)
+                if before_ref == after_ref:
+                    continue
+                if dags.get(name) != after_ref:
+                    conflicts.append(name)
+                    continue
+                if before_ref is None:
+                    dags.pop(name, None)
+                else:
+                    dags[name] = before_ref
+            if conflicts:
+                raise DmlRepoError(f"Revert conflicts: {sorted(set(conflicts))}")
+            new_tree = txn.put(Tree(dags=dags))
+            new_commit = txn.put(
+                Commit(parents=[current_head], tree=new_tree, author=user, message=f"Revert {commit.id()[:8]}")
+            )
+            txn.put(Head(commit=new_commit), to=head)
+            return new_commit
+
+    def checkout_dag(
+        self,
+        head: Ref,
+        source_commit: Ref,
+        source_name: str,
+        *,
+        target_name: str | None = None,
+        replace: bool = False,
+        user: str,
+    ) -> Ref:
+        target_name = target_name or source_name
+        with self._tx(readonly=False) as txn:
+            head_obj = txn.get(head)
+            current_commit = txn.get(head_obj.commit)
+            source_tree = txn.get(txn.get(source_commit).tree)
+            if source_name not in source_tree.dags:
+                raise DmlRepoError(f"DAG '{source_name}' not found in source commit")
+            dag_ref = source_tree.dags[source_name]
+            current_tree = txn.get(current_commit.tree)
+            if target_name in current_tree.dags and current_tree.dags[target_name] != dag_ref and not replace:
+                raise DmlRepoError(f"DAG '{target_name}' already exists; use --replace")
+            dags = dict(current_tree.dags)
+            dags[target_name] = dag_ref
+            new_tree = txn.put(Tree(dags=dags))
+            new_commit = txn.put(
+                Commit(
+                    parents=[head_obj.commit],
+                    tree=new_tree,
+                    author=user,
+                    message=f"Checkout DAG '{source_name}' from {source_commit.id()[:8]}",
+                    dag=dag_ref,
+                )
+            )
+            txn.put(Head(commit=new_commit), to=head)
+            return new_commit
 
     def rebase(self, source, target, user: str):
         """Rebase source commit onto target.

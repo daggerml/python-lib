@@ -19,7 +19,7 @@ from daggerml._internal.types import DmlRepoError
 class CacheOps(BaseOps):
     """CRUD operations for managing cached computation results."""
 
-    remote_root: Optional[str] = None
+    remote_root: str
 
     def _remote_ops(self):
         if not self.remote_root:

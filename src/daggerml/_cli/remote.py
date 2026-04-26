@@ -22,6 +22,9 @@ def setup_remote_parser(parser: ArgumentParser) -> None:
     subparsers = parser.add_subparsers(dest="method", metavar="<method>", help="Methods", required=True)
 
     setup_remote_push_parser(subparsers.add_parser("push", help="Push a commit/head ref to remote"))
+    setup_remote_fetch_parser(subparsers.add_parser("fetch", help="Fetch a project URI into local tracking refs"))
+    setup_remote_pull_branch_parser(subparsers.add_parser("pull-branch", help="Fetch and merge a project branch"))
+    setup_remote_push_branch_parser(subparsers.add_parser("push-branch", help="Push a local head to a project branch"))
     setup_remote_pull_parser(subparsers.add_parser("pull", help="Pull a ref path from remote"))
     setup_remote_list_parser(subparsers.add_parser("list", help="List remote refs under a prefix"))
     setup_remote_prune_parser(subparsers.add_parser("prune", help="Prune remote io/invoke transport blobs"))
@@ -50,6 +53,29 @@ def setup_remote_pull_parser(parser: ArgumentParser) -> None:
     )
     parser.add_argument("ref_path", help="Remote ref path (e.g. tags/<name>/<version>.json)")
     parser.set_defaults(method="pull", func=execute_remote_pull)
+
+
+def setup_remote_fetch_parser(parser: ArgumentParser) -> None:
+    apply_help_config(parser, description="Fetch dml://<owner>/<project>#<branch-or-tag> into local tracking refs.")
+    parser.add_argument("uri")
+    parser.set_defaults(method="fetch", func=execute_remote_fetch)
+
+
+def setup_remote_pull_branch_parser(parser: ArgumentParser) -> None:
+    apply_help_config(parser, description="Fetch a DML URI and merge it into the selected local head.")
+    parser.add_argument("uri")
+    parser.add_argument("--head", default="head:main")
+    parser.add_argument("--user", required=True)
+    parser.set_defaults(method="pull-branch", func=execute_remote_pull_branch)
+
+
+def setup_remote_push_branch_parser(parser: ArgumentParser) -> None:
+    apply_help_config(parser, description="Push a local head to dml://<owner>/<project>#<branch>.")
+    parser.add_argument("uri")
+    parser.add_argument("--head", default="head:main")
+    parser.add_argument("--create", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    parser.set_defaults(method="push-branch", func=execute_remote_push_branch)
 
 
 def setup_remote_list_parser(parser: ArgumentParser) -> None:
@@ -124,6 +150,27 @@ def execute_remote_pull(ops, args) -> None:
     remote_ops = get_remote_ops(ops, s3_client)
     remote_ops.pull(args.ref_path)
     return None
+
+
+def execute_remote_fetch(ops, args) -> str:
+    boto3 = require_boto3()
+    s3_client = create_s3_client(boto3)
+    remote_ops = get_remote_ops(ops, s3_client)
+    return str(remote_ops.fetch_uri(args.uri))
+
+
+def execute_remote_pull_branch(ops, args) -> str:
+    boto3 = require_boto3()
+    s3_client = create_s3_client(boto3)
+    remote_ops = get_remote_ops(ops, s3_client)
+    return str(remote_ops.pull_uri_into_head(args.uri, parse_ref(args.head), user=args.user))
+
+
+def execute_remote_push_branch(ops, args) -> str:
+    boto3 = require_boto3()
+    s3_client = create_s3_client(boto3)
+    remote_ops = get_remote_ops(ops, s3_client)
+    return remote_ops.push_project_branch(args.uri, parse_ref(args.head), create=args.create, force=args.force)
 
 
 def execute_remote_list(ops, args) -> list[dict]:

@@ -57,7 +57,7 @@ def get_ops_object(ops: DmlOps, op_name: str) -> Any:
     Special case: remote returns the DmlOps instance so the command handler can
     provide runtime remote context/client and then call `ops.remote(...)`.
     """
-    if op_name == "remote":
+    if op_name in {"remote", "fetch", "pull", "push", "merge", "revert"}:
         return ops
     subsystem = getattr(ops, op_name)
     if callable(subsystem):
@@ -196,7 +196,7 @@ def execute_command(args) -> None:
     try:
         if not getattr(args, "func", None):
             raise ValueError("Missing command method; run with --help for available methods")
-        if args.op in {"init", "contrib"}:
+        if args.op in {"init", "clone", "contrib"}:
             result = args.func(args)
             if isinstance(result, str):
                 sys.stdout.write(result)
@@ -211,11 +211,8 @@ def execute_command(args) -> None:
                 "repo": repo_path,
                 "remote.root": getattr(args, "remote_root", None),
             }
-        ).with_repo_defaults()
-        open_kwargs: dict[str, Any] = {}
-        if cfg.remote.root is not None:
-            open_kwargs["remote_root"] = cfg.remote.root
-        with DmlOps.open(repo_path, **open_kwargs) as ops:
+        )
+        with DmlOps.open(repo_path, remote_root=cfg.remote.root) as ops:
             ops_obj = get_ops_object(ops, args.op)
             result = args.func(ops_obj, args)
             output_json(result)

@@ -191,7 +191,7 @@ class TestSetAttrs:
         assert isinstance(fn_dag.cache(), str)
 
     def test_async_fn_ok(self, dml):
-        debug_file = os.path.join(dml.config_dir, "debug")
+        debug_file = os.path.join(dml.repo, "debug")
         with dml.new("d0", "d0") as dag:
             n1 = dag.call(self._mk_runnable(dml, ASYNC_URI, FN_ADAPTER), 1, 2, 3)
             dag.commit(n1)

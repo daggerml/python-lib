@@ -95,9 +95,8 @@ def status() -> dict[str, object]:
                 "repo": dml.repo,
                 "user": dml.user,
                 "branch": dml.branch,
-                "config_dir": dml.repo,
             }
-        ).with_repo_defaults()
+        )
     )
     return {
         "default": {
@@ -109,7 +108,6 @@ def status() -> dict[str, object]:
             "repo": cfg.repo,
             "branch": cfg.branch,
             "user": cfg.user,
-            "config_dir": cfg.config_dir,
             "remote": {
                 "root": cfg.remote.root,
             },
@@ -141,9 +139,8 @@ class Dml:
                 "repo": self.repo,
                 "user": self.user,
                 "branch": self.branch,
-                "config_dir": self.repo,
             }
-        ).with_repo_defaults()
+        )
         self._config = resolved
         self.repo = resolved.repo
         self.user = resolved.user
@@ -162,8 +159,8 @@ class Dml:
         return self._ops
 
     def _require_remote_root(self) -> str:
-        remote_root = self._config.remote.root if self._config is not None else None
-        if remote_root is None:
+        remote_root = self._config.remote.root if self._config is not None else ""
+        if not remote_root:
             raise DmlRepoError("Remote root is required")
         return remote_root
 
@@ -171,11 +168,6 @@ class Dml:
     def head_ref(self) -> Ref:
         """Get the current head reference."""
         return Ref(f"head:{self.branch}")
-
-    @property
-    def config_dir(self) -> Optional[str]:
-        """Get the resolved config directory."""
-        return self._config.config_dir if self._config else self.repo
 
     @property
     def commit(self):
@@ -239,7 +231,7 @@ class Dml:
         tmpdir = TemporaryDirectory(prefix="dml-")
         repo_path = os.path.join(tmpdir.name, repo)
         remote_root = DmlConfig.resolve().remote.root
-        if remote_root is None:
+        if not remote_root:
             raise DmlRepoError("Remote root is required")
 
         # Create repository and initialize

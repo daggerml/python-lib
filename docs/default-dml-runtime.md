@@ -66,7 +66,6 @@ These delegate to `get_default_dml()`.
   - `repo`
   - `branch`
   - `user`
-  - `config_dir`
   - `remote` with `root`
 - `runtime`:
   - `ops_initialized`: `bool`

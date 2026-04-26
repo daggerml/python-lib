@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +17,10 @@ from daggerml._internal.ops.node import NodeOps
 from daggerml._internal.types import DictDatum, ListDatum, Runnable, RunnableDatum, ScalarDatum, Uri
 
 TEST_FN_ADAPTER = str(Path(__file__).resolve().parent / "fn" / "python-fork-adapter.py")
+
+
+def _remote_root_from_env() -> str:
+    return os.environ["DML_REMOTE_ROOT"]
 
 
 @dataclass(frozen=True)
@@ -158,7 +163,7 @@ def _canonical_value(txn, value):
 @settings(max_examples=30, deadline=None)
 def test_put_literal_unroll_roundtrip_with_nested_runnables(temp_bo, payload):
     head_ops = HeadOps(_db=temp_bo._db)
-    index_ops = IndexOps(_db=temp_bo._db)
+    index_ops = IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env())
     node_ops = NodeOps(_db=temp_bo._db)
 
     head_ref = head_ops.create(f"rt-{uuid4().hex}")

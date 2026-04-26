@@ -21,6 +21,7 @@ If related docs conflict on this scope, this document is the source of truth.
 - Pull remote objects/refs into local store.
 - Maintain remote cache refs.
 - Publish and resolve per-DAG refs under `refs/dags/**`.
+- Publish, fetch, and conditionally update project branch/tag refs under `refs/projects/**`.
 - Build `local-manifest` transport payloads for publication handoff.
 - Validate content integrity (SHA-256).
 - Apply malformed-object policy during remote GC.
@@ -47,6 +48,8 @@ If related docs conflict on this scope, this document is the source of truth.
 - Publication handoff payloads use `local-manifest` with raw dump closure entries; remote protocol storage does not.
 - Local closure collection for remote publication is direct-only across DAG boundaries: child DAG refs are recorded as direct DAG ids, not expanded inline into the parent closure.
 - Tag/cache manifest refs always carry direct-DAG `targets` metadata.
+- Project branch/tag manifest refs always carry direct-DAG `targets` metadata and point at commit manifests.
+- Project branch ref updates preserve lost-update safety with ETag conditions; force bypasses ancestry checks only.
 - DAG publication and manifest `closure["dag"]` are direct-only per manifest layer.
 - Recursive DAG publication is limited to the explicit publish-on-miss path for missing direct child DAG refs.
 - Remote read/materialization uses one centralized recursive materialization path.
