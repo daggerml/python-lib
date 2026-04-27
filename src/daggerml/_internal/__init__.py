@@ -32,11 +32,6 @@ from daggerml._internal.types import (
     Uri,
 )
 
-try:
-    from daggerml._internal.__about__ import __version__
-except ImportError:
-    __version__ = "local"
-
 # Make the main classes available at package level
 __all__ = [
     "DmlOps",
