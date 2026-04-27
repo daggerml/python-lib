@@ -47,7 +47,7 @@ def cli() -> None:
     clone_parser = subparsers.add_parser("clone", help="Clone a remote DML project")
     setup_clone_parser(clone_parser)
 
-    for alias in ("fetch", "pull", "push", "merge", "revert"):
+    for alias in ("fetch", "pull", "push", "merge", "revert", "checkout"):
         setup_project_alias_parser(subparsers.add_parser(alias, help=f"Git-like {alias}"), alias)
 
     # Commit subcommand

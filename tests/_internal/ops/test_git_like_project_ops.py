@@ -2,11 +2,13 @@ from pathlib import Path
 
 import pytest
 
+from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlProjectConfig, init_project_layout
 from daggerml._internal.ops.commit import CommitOps
 from daggerml._internal.ops.head import HeadOps
+from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.ops.remote import RemoteOps
-from daggerml._internal.types import DmlRepoError
+from daggerml._internal.types import Commit, DmlRepoError, Tree
 
 
 def test_project_ref_paths_and_dml_uri_validation(remote_ops):
@@ -37,7 +39,7 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     assert loaded.remote_uri == "s3://bucket/team/dml"
 
 
-def test_head_advance_and_commitish_resolution(temp_bo_fn):
+def test_head_advance_and_revision_resolution(temp_bo_fn):
     head_ops = HeadOps(_db=temp_bo_fn._db)
     commit_ops = CommitOps(_db=temp_bo_fn._db)
     head = head_ops.create("feature")
@@ -45,9 +47,9 @@ def test_head_advance_and_commitish_resolution(temp_bo_fn):
     new_head = head_ops.create("copy", from_head=commit)
 
     head_ops.advance(new_head, commit)
-    assert commit_ops.resolve_commitish("copy") == commit
+    assert commit_ops.resolve_revision_ref("copy") == commit
     with pytest.raises(DmlRepoError, match="walks past root"):
-        commit_ops.resolve_commitish("copy~1")
+        commit_ops.resolve_revision_ref("copy~1")
 
 
 def test_checkout_absent_dag_does_not_advance_head(temp_bo_fn):
@@ -58,3 +60,102 @@ def test_checkout_absent_dag_does_not_advance_head(temp_bo_fn):
     with pytest.raises(DmlRepoError, match="not found"):
         commit_ops.checkout_dag(head, commit, "missing", user="alice")
     assert head_ops.describe(head)["commit"] == commit
+
+
+def test_revision_resolution_classifies_branch_tag_and_revision_forms(temp_bo_fn, tmp_path: Path):
+    project = DmlProjectConfig(name="demo", owner="alice", branch="main", remote_uri="s3://bucket/prefix")
+    init_project_layout(tmp_path, project)
+    head_ops = HeadOps(_db=temp_bo_fn._db)
+    commit_ops = CommitOps(_db=temp_bo_fn._db)
+
+    main_head = head_ops.create("main")
+    initial = head_ops.describe(main_head)["commit"]
+    with commit_ops._tx(readonly=False) as txn:
+        tree = txn.get(txn.get(initial).tree)
+        next_tree = txn.put(Tree(dags=dict(tree.dags)))
+        next_commit = txn.put(Commit(parents=[initial], tree=next_tree, author="alice", message="next"))
+        txn.put(type(txn.get(main_head))(commit=next_commit), to=main_head)
+        txn.put(type(txn.get(main_head))(commit=initial), to=Ref("head:dml://alice/demo@v1.0"))
+
+    branch = commit_ops.resolve_revision("main", project_dir=str(tmp_path))
+    assert branch.kind == "branch"
+    assert branch.branch == "main"
+
+    tag = commit_ops.resolve_revision("v1.0", project_dir=str(tmp_path))
+    assert tag.kind == "tag"
+    assert tag.commit == initial
+
+    expr = commit_ops.resolve_revision("HEAD~1", current_branch="main", project_dir=str(tmp_path))
+    assert expr.kind == "commit"
+    assert expr.commit == initial
+
+    direct = commit_ops.resolve_revision(initial.id(), project_dir=str(tmp_path))
+    assert direct.kind == "commit"
+    assert direct.commit == initial
+
+    explicit_ref = commit_ops.resolve_revision(f"commit:{initial.id()}", project_dir=str(tmp_path))
+    assert explicit_ref.kind == "commit"
+    assert explicit_ref.commit == initial
+
+
+def test_checkout_unfetched_remote_uri_fails_locally(temp_bo_fn, tmp_path: Path):
+    project = DmlProjectConfig(name="demo", owner="alice", branch="main", remote_uri="s3://bucket/prefix")
+    init_project_layout(tmp_path, project)
+    head_ops = HeadOps(_db=temp_bo_fn._db)
+    commit_ops = CommitOps(_db=temp_bo_fn._db)
+    head_ops.create("main")
+
+    with pytest.raises(DmlRepoError, match="cannot be resolved locally"):
+        commit_ops.resolve_revision("dml://alice/demo#main", project_dir=str(tmp_path))
+
+
+def test_detached_commit_does_not_advance_branch_head_and_reattach_resumes(temp_bo_fn):
+    head_ops = HeadOps(_db=temp_bo_fn._db)
+    index_ops = IndexOps(_db=temp_bo_fn._db, remote_root="")
+    main_head = head_ops.create("main")
+    start = head_ops.describe(main_head)["commit"]
+
+    detached_index = index_ops.create(head=main_head)
+    node = index_ops.put_literal(detached_index, 42)
+    detached_commit = index_ops.commit(detached_index, node, head=None, message="detached")
+    assert head_ops.describe(main_head)["commit"] == start
+
+    attached_index = index_ops.create(head=main_head)
+    node2 = index_ops.put_literal(attached_index, 84)
+    attached_commit = index_ops.commit(attached_index, node2, head=main_head, message="attached")
+    assert head_ops.describe(main_head)["commit"] == attached_commit
+    assert attached_commit != detached_commit
+
+
+def test_commit_lifecycle_stages_attached_detached_detached_reattach(temp_bo_fn):
+    head_ops = HeadOps(_db=temp_bo_fn._db)
+    index_ops = IndexOps(_db=temp_bo_fn._db, remote_root="")
+    main_head = head_ops.create("main")
+
+    # Stage 1: attached commit advances branch head.
+    start = head_ops.describe(main_head)["commit"]
+    idx1 = index_ops.create(head=main_head)
+    n1 = index_ops.put_literal(idx1, "s1")
+    c1 = index_ops.commit(idx1, n1, head=main_head, message="stage-1-attached")
+    assert head_ops.describe(main_head)["commit"] == c1
+
+    # Stage 2: detached commit from branch snapshot does not advance head.
+    idx2 = index_ops.create(head=main_head)
+    n2 = index_ops.put_literal(idx2, "s2")
+    c2 = index_ops.commit(idx2, n2, head=None, message="stage-2-detached")
+    assert head_ops.describe(main_head)["commit"] == c1
+
+    # Stage 3: detached commit from detached commit also does not advance any head.
+    detached_head = head_ops.create("scratch", from_head=c2)
+    idx3 = index_ops.create(head=detached_head)
+    n3 = index_ops.put_literal(idx3, "s3")
+    _c3 = index_ops.commit(idx3, n3, head=None, message="stage-3-detached")
+    assert head_ops.describe(main_head)["commit"] == c1
+    assert head_ops.describe(detached_head)["commit"] == c2
+
+    # Stage 4: re-attach and commit resumes branch progression.
+    idx4 = index_ops.create(head=main_head)
+    n4 = index_ops.put_literal(idx4, "s4")
+    c4 = index_ops.commit(idx4, n4, head=main_head, message="stage-4-reattach")
+    assert head_ops.describe(main_head)["commit"] == c4
+    assert c4 != start

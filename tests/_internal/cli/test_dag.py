@@ -11,14 +11,14 @@ def test_execute_dag_checkout_uses_selected_repo_context(mock_commit_ops_cls, mo
     ops = Mock(path="/repo/from-flag", _db=Mock())
     mock_project_load.return_value = Mock(branch="feature")
     commit_ops = mock_commit_ops_cls.return_value
-    commit_ops.resolve_commitish.return_value = "commit:1"
+    commit_ops.resolve_revision_ref.return_value = "commit:1"
     commit_ops.checkout_dag.return_value = "commit:2"
     mock_parse_ref.return_value = "head:feature"
 
     result = execute_dag_checkout(
         ops,
         Namespace(
-            commitish="origin/main",
+            revision="origin/main",
             source_name="train",
             target_name=None,
             replace=False,
@@ -29,7 +29,7 @@ def test_execute_dag_checkout_uses_selected_repo_context(mock_commit_ops_cls, mo
     )
 
     mock_project_load.assert_called_once_with("/repo/from-flag")
-    commit_ops.resolve_commitish.assert_called_once_with(
+    commit_ops.resolve_revision_ref.assert_called_once_with(
         "origin/main",
         current_branch="feature",
         project_dir="/repo/from-flag",

@@ -15,19 +15,14 @@ from functools import wraps
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+import boto3
+
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
 from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 
-try:
-    import boto3
-except ImportError:
-    boto3 = None
-
 
 def _get_s3_client():
-    if boto3 is None:
-        raise ImportError("boto3 is required for RemoteOps but is not installed.")
     return boto3.client("s3")
 
 

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Iterable, Literal, cast
 from urllib.parse import urlparse
 
+import boto3
+
 from daggerml import Node, Uri
 from daggerml._internal.config import DmlConfig
 from daggerml._internal.types import DmlRepoError
@@ -22,10 +24,6 @@ def is_s3_uri(value: str) -> bool:
 
 
 def _boto3_client(service: str):
-    try:
-        import boto3
-    except Exception as e:
-        raise DmlRepoError(f"S3Store requires boto3: {e}") from e
     return boto3.client(service)
 
 

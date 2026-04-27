@@ -351,6 +351,6 @@ class TestTopLevelHelp:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
-        for op in ["init", "commit", "head", "index", "cache", "dag", "node", "remote", "gc", "contrib"]:
+        for op in ["init", "commit", "head", "index", "cache", "dag", "node", "remote", "gc", "contrib", "checkout"]:
             assert op in out
         assert "--remote-root" in out

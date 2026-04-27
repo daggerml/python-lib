@@ -27,7 +27,7 @@ def setup_dag_parser(parser: ArgumentParser) -> None:
     setup_dag_get_node_parser(subparsers.add_parser("get-node", help="Get a DAG node ref"))
     setup_dag_get_argv_parser(subparsers.add_parser("get-argv", help="Get DAG argv node"))
     setup_dag_get_kwargv_parser(subparsers.add_parser("get-kwargv", help="Get DAG kwargv node"))
-    setup_dag_checkout_parser(subparsers.add_parser("checkout", help="Checkout a DAG from a commit-ish"))
+    setup_dag_checkout_parser(subparsers.add_parser("checkout", help="Checkout a DAG from a revision"))
 
 
 def setup_dag_list_parser(parser: ArgumentParser) -> None:
@@ -97,10 +97,10 @@ def execute_dag_get_kwargv(ops_obj: Any, args) -> str:
 def setup_dag_checkout_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         parser,
-        description="Copy one DAG from a commit-ish into the current branch and commit the change.",
+        description="Copy one DAG from a revision into the current branch and commit the change.",
         examples=["dml dag checkout HEAD~1 train --as baseline_train"],
     )
-    parser.add_argument("commitish")
+    parser.add_argument("revision")
     parser.add_argument("source_name")
     parser.add_argument("--as", dest="target_name")
     parser.add_argument("--replace", action="store_true")
@@ -117,7 +117,7 @@ def execute_dag_checkout(_ops_obj: Any, args) -> str:
     project = DmlProjectConfig.load(_ops_obj.path)
     branch = args.branch or project.branch
     head = args.head or f"head:{branch}"
-    source_commit = commit_ops.resolve_commitish(args.commitish, current_branch=branch, project_dir=_ops_obj.path)
+    source_commit = commit_ops.resolve_revision_ref(args.revision, current_branch=branch, project_dir=_ops_obj.path)
     result = commit_ops.checkout_dag(
         parse_ref(head),
         source_commit,

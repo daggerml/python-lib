@@ -344,7 +344,7 @@ The system SHALL clone a remote project branch by initializing local state from 
 - **THEN** local config contains an `origin` remote for `dml://alice/demo` and local branch state is initialized from the selected remote branch
 
 #### Scenario: Clone default branch
-- **WHEN** `dml clone dml://alice/demo` omits an explicit branch commit-ish
+- **WHEN** `dml clone dml://alice/demo` omits an explicit branch revision
 - **THEN** clone fetches and initializes the configured default branch, falling back to `main`
 
 #### Scenario: Clone explicit branch

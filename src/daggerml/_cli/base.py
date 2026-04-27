@@ -57,7 +57,7 @@ def get_ops_object(ops: DmlOps, op_name: str) -> Any:
     Special case: remote returns the DmlOps instance so the command handler can
     provide runtime remote context/client and then call `ops.remote(...)`.
     """
-    if op_name in {"remote", "fetch", "pull", "push", "merge", "revert"}:
+    if op_name in {"remote", "fetch", "pull", "push", "merge", "revert", "checkout"}:
         return ops
     subsystem = getattr(ops, op_name)
     if callable(subsystem):

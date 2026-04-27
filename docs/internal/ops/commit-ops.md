@@ -21,7 +21,7 @@ If related docs conflict on this scope, this document is the source of truth.
 - Merge commits with DAG-name conflict detection.
 - Merge commits into a branch head, fast-forwarding when possible.
 - Revert a commit by applying the inverse tree diff as a new branch commit.
-- Resolve commit-ish syntax including heads, fetched DML URI tracking heads, and first-parent `~N` walks.
+- Resolve revision syntax including heads, fetched DML URI tracking heads, and first-parent `~N` walks.
 - Checkout one DAG from a resolved commit into the current branch tree.
 - Rebase commit ancestry onto a target.
 - Describe commits and resolve DAGs from commit tree state.

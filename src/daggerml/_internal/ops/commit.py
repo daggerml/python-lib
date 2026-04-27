@@ -23,6 +23,13 @@ from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 from daggerml._internal.util import now
 
 
+@dataclass(frozen=True)
+class RevisionResolution:
+    commit: Ref
+    kind: str
+    branch: str | None = None
+
+
 @dataclass
 class CommitOps(BaseOps):
     """Git-like commit operations for version control.
@@ -157,32 +164,68 @@ class CommitOps(BaseOps):
         with self._tx(readonly=True) as txn:
             return self._is_ancestor_in_txn(ancestor, descendant, txn)
 
-    def resolve_commitish(self, value: str, *, current_branch: str = "main", project_dir: str = ".") -> Ref:
+    @staticmethod
+    def _looks_like_commit_id(value: str) -> bool:
+        return len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
+
+    def _resolve_base(self, base: str, *, project_dir: str, txn) -> tuple[Ref, str, str | None]:
+        if base.startswith("commit:"):
+            ref = Ref(base)
+            return ref, "commit", None
+        if self._looks_like_commit_id(base):
+            return Ref(f"commit:{base}"), "commit", None
+        if base.startswith("dml://"):
+            tracking = Ref(f"head:{base}")
+            if not txn.exists(tracking):
+                raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first")
+            return txn.get(tracking).commit, ("tag" if "@" in base else "remote-branch"), None
+        if "/" in base and not base.startswith("head:"):
+            remote_name, branch = base.split("/", 1)
+            if remote_name != "origin":
+                raise DmlRepoError(f"Unknown remote: {remote_name}")
+            project = DmlProjectConfig.load(project_dir)
+            tracking_uri = f"{project.uri}#{branch}"
+            tracking = Ref(f"head:{tracking_uri}")
+            if not txn.exists(tracking):
+                raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first")
+            return txn.get(tracking).commit, "remote-branch", None
+        head_ref = Ref(base if base.startswith("head:") else f"head:{base}")
+        if txn.exists(head_ref):
+            return txn.get(head_ref).commit, "branch", head_ref.id()
+        project = DmlProjectConfig.load(project_dir)
+        tag_tracking = Ref(f"head:{project.uri}@{base}")
+        if txn.exists(tag_tracking):
+            return txn.get(tag_tracking).commit, "tag", None
+        raise DmlRepoError(f"Revision {base!r} cannot be resolved locally")
+
+    def resolve_revision(
+        self,
+        value: str,
+        *,
+        current_branch: str = "main",
+        project_dir: str = ".",
+    ) -> RevisionResolution:
         base, sep, steps_s = value.partition("~")
         if base == "HEAD":
             base = current_branch
         with self._tx(readonly=True) as txn:
-            if base.startswith("commit:"):
-                ref = Ref(base)
-            elif base.startswith("dml://"):
-                ref = txn.get(Ref(f"head:{base}")).commit
-            elif "/" in base and not base.startswith("head:"):
-                remote_name, branch = base.split("/", 1)
-                if remote_name != "origin":
-                    raise DmlRepoError(f"Unknown remote: {remote_name}")
-                project = DmlProjectConfig.load(project_dir)
-                ref = txn.get(Ref(f"head:{project.uri}#{branch}")).commit
-            else:
-                ref = txn.get(Ref(base if base.startswith("head:") else f"head:{base}")).commit
+            ref, kind, branch = self._resolve_base(base, project_dir=project_dir, txn=txn)
             if ref.ns() != "commit":
                 raise DmlRepoError(f"Resolved non-commit ref: {ref}")
             steps = int(steps_s) if sep else 0
             for _ in range(steps):
                 commit = txn.get(ref)
                 if not commit.parents:
-                    raise DmlRepoError(f"Commit-ish {value!r} walks past root commit")
+                    raise DmlRepoError(f"Revision {value!r} walks past root commit")
                 ref = commit.parents[0]
-            return ref
+            if steps:
+                return RevisionResolution(commit=ref, kind="commit", branch=None)
+            if kind == "branch":
+                return RevisionResolution(commit=ref, kind="branch", branch=branch)
+            return RevisionResolution(commit=ref, kind=kind, branch=None)
+
+    def resolve_revision_ref(self, value: str, *, current_branch: str = "main", project_dir: str = ".") -> Ref:
+        return self.resolve_revision(value, current_branch=current_branch, project_dir=project_dir).commit
 
     def list(self, head: Ref, limit: Optional[int] = None) -> Iterator[Ref]:
         """Get commit history starting from head.

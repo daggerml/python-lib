@@ -144,6 +144,7 @@ dev = [
     "hypothesis>=6.141.1",
     "moto[all,server]>=5.1.20",
     "polars>=1.39.0",
+    "pyright>=1.1.409",
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.14.10",

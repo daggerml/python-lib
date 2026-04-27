@@ -6,6 +6,9 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+import boto3
 
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib.executor_registry import get_executor
@@ -168,9 +171,6 @@ class AdapterBase:
             sys.stdout.flush()
             return
         if is_s3_uri(output_path):
-            from urllib.parse import urlparse
-
-            import boto3
             parsed = urlparse(output_path)
             bucket = parsed.netloc
             key = parsed.path.lstrip("/")

@@ -16,6 +16,8 @@ from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import boto3
+
 from daggerml._internal.types import DmlRepoError
 
 LOCK_TTL: float = 300.0
@@ -132,8 +134,6 @@ class ExecutionState:
 
     @staticmethod
     def _s3():
-        import boto3
-
         return boto3.client("s3")
 
     def _execution_records_prefix(self) -> str:
