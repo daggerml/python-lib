@@ -1,10 +1,10 @@
 """Run an end-to-end Docker-backed dataset pipeline.
 
-The example builds a Docker image from this repository, starts a local moto S3
-server when no remote URI is configured, loads the iris dataset in one
-Docker-executed funk, and trains a small classifier in another. It exercises
-the contrib runtime end to end: script funkification, Docker execution, remote
-cache publication, and S3-backed artifact exchange between DAG nodes.
+The example builds a Docker image from this repository, loads the iris dataset
+in one Docker-executed funk, and trains a small classifier in another. It
+exercises the contrib runtime end to end: script funkification, Docker
+execution, remote cache publication, and S3-backed artifact exchange between
+DAG nodes.
 """
 
 from __future__ import annotations
@@ -12,10 +12,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from time import time
-from typing import Any
 from urllib.parse import urlparse
 
-import boto3
 import polars as pl
 
 from daggerml import Dml
@@ -35,29 +33,12 @@ EXCLUDE_PATTERNS = (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _start_local_moto_if_needed() -> Any | None:
+def _require_remote_uri() -> None:
     if os.environ.get("DML_REMOTE_URI"):
-        return None
-    try:
-        for key in list(os.environ.keys()):
-            if key.startswith("AWS_"):
-                del os.environ[key]
-        os.environ.setdefault("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
-        from moto.server import ThreadedMotoServer
-    except ModuleNotFoundError as e:
-        raise RuntimeError("Set DML_REMOTE_URI for a real S3 bucket, or install moto[server] for local dev.") from e
-    server = ThreadedMotoServer(port=0, verbose=False)
-    server.start()
-    host, port = server.get_host_and_port()
-    endpoint = f"http://{host}:{port}"
-    os.environ.setdefault("AWS_ACCESS_KEY_ID", "test")
-    os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test")
-    os.environ.setdefault("AWS_REGION", "us-east-1")
-    os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-    os.environ["AWS_ENDPOINT_URL"] = endpoint
-    os.environ["DML_REMOTE_URI"] = "s3://daggerml-example/artifacts"
-    boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket="daggerml-example")
-    return server
+        return
+    raise RuntimeError(
+        "DML_REMOTE_URI is required. Set remote env vars first (for local moto, run examples/moto_server_env.py)."
+    )
 
 
 @api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
@@ -116,7 +97,7 @@ def _docker_run_flags() -> list[str]:
 
 
 def main() -> None:
-    moto_server = _start_local_moto_if_needed()
+    _require_remote_uri()
     flags = _docker_run_flags()
     try:
         import pandas  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -124,36 +105,32 @@ def main() -> None:
         raise RuntimeError("pandas should not be installed in the local environment for this example to work")
     except ModuleNotFoundError:
         pass
-    try:
-        with Dml.temporary() as dml:
-            with dml.new("examples/01-docker-dataset") as dag:
-                dag.dkr_build = docker_build
-                s3 = S3Store()
-                print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
-                dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS, symlinks="ignore")
-                dag.put(flags, name="dkr-flags")
-                print("Building Docker image (this may take a moment)...")
-                t0 = time()
-                dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
-                t1 = time()
-                print("Re-building Docker image to demonstrate caching...")
-                t2 = time()
-                dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
-                t3 = time()
-                dag.download = download_dataset
-                print("Loading dataset within Docker...")
-                dataset = dag.download(name="dataset")
-                print("Training model and generating predictions within Docker...")
-                predictions = dag.call(predict_target, dataset, name="predictions")
-                print("Committing DAG to persist artifacts...")
-                dag.commit(predictions)
-            print("Reading predictions parquet from S3...")
-            df = pl.read_parquet(predictions.value().uri)
-            print(f"Dataset parquet URI: {dataset.value()}")
-            print(f"\nPredictions parquet URI: {predictions.value().uri}")
-    finally:
-        if moto_server is not None:
-            moto_server.stop()
+    with Dml.temporary() as dml:
+        with dml.new("examples/01-docker-dataset") as dag:
+            dag.dkr_build = docker_build
+            s3 = S3Store()
+            print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
+            dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS, symlinks="ignore")
+            dag.put(flags, name="dkr-flags")
+            print("Building Docker image (this may take a moment)...")
+            t0 = time()
+            dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
+            t1 = time()
+            print("Re-building Docker image to demonstrate caching...")
+            t2 = time()
+            dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
+            t3 = time()
+            dag.download = download_dataset
+            print("Loading dataset within Docker...")
+            dataset = dag.download(name="dataset")
+            print("Training model and generating predictions within Docker...")
+            predictions = dag.call(predict_target, dataset, name="predictions")
+            print("Committing DAG to persist artifacts...")
+            dag.commit(predictions)
+        print("Reading predictions parquet from S3...")
+        df = pl.read_parquet(predictions.value().uri)
+        print(f"Dataset parquet URI: {dataset.value()}")
+        print(f"\nPredictions parquet URI: {predictions.value().uri}")
     print("\nPredictions:")
     print(df.head())
     print(f"\nBuild times: {t1 - t0:.2f}s (cached: {t3 - t2:.2f}s)")

@@ -1,9 +1,9 @@
 """Run the Docker dataset pipeline through SSH.
 
 This example is the SSH-backed sibling of ``01-docker_dataset.py``. It starts a
-local moto S3 server and a local sshd that points back to the current machine,
-writes an env file for the remote SSH session, builds the same Docker image from
-this repository, and then executes the Docker-backed funks over SSH.
+local sshd that points back to the current machine, writes an env file for the
+remote SSH session, builds the same Docker image from this repository, and then
+executes the Docker-backed funks over SSH.
 """
 
 from __future__ import annotations
@@ -19,10 +19,8 @@ import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
-from typing import Any
 from urllib.parse import urlparse
 
-import boto3
 import polars as pl
 
 from daggerml import Dml
@@ -47,27 +45,12 @@ def _require_local_tools() -> None:
         raise RuntimeError(f"Missing required local tools: {', '.join(missing)}")
 
 
-def _start_local_moto() -> Any:
-    try:
-        for key in list(os.environ.keys()):
-            if key.startswith("AWS_"):
-                del os.environ[key]
-        os.environ.setdefault("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
-        from moto.server import ThreadedMotoServer
-    except ModuleNotFoundError as e:
-        raise RuntimeError("Install moto[server] to run the SSH Docker example locally.") from e
-    server = ThreadedMotoServer(port=0, verbose=False)
-    server.start()
-    host, port = server.get_host_and_port()
-    endpoint = f"http://{host}:{port}"
-    os.environ["AWS_ACCESS_KEY_ID"] = "test"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "test"
-    os.environ["AWS_REGION"] = "us-east-1"
-    os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
-    os.environ["AWS_ENDPOINT_URL"] = endpoint
-    os.environ["DML_REMOTE_URI"] = "s3://daggerml-example/ssh-artifacts"
-    boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket="daggerml-example")
-    return server
+def _require_remote_uri() -> None:
+    if os.environ.get("DML_REMOTE_URI"):
+        return
+    raise RuntimeError(
+        "DML_REMOTE_URI is required. Set remote env vars first (for local moto, run examples/moto_server_env.py)."
+    )
 
 
 def _docker_run_flags() -> list[str]:
@@ -181,6 +164,7 @@ def _write_ssh_env_file(tmpdir: str) -> str:
     exports = {
         "PATH": f"{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
         "UV_PROJECT": str(REPO_ROOT),
+        "DML_REMOTE_URI": os.environ["DML_REMOTE_URI"],
         **{k: v for k, v in os.environ.items() if k.startswith("AWS_")},
     }
     env_file.write_text(
@@ -234,7 +218,7 @@ def predict_target(dag, dataset_uri):
 
 def main() -> None:
     _require_local_tools()
-    moto_server = _start_local_moto()
+    _require_remote_uri()
     sshd_proc = None
     try:
         import pandas  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -284,7 +268,6 @@ def main() -> None:
                 sshd_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 sshd_proc.kill()
-        moto_server.stop()
     print("\nPredictions:")
     print(df.head())
     print(f"\nBuild times: {t1 - t0:.2f}s (cached: {t3 - t2:.2f}s)")
