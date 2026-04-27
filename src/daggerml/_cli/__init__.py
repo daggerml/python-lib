@@ -19,7 +19,12 @@ def cli() -> None:
     parser = ArgumentParser(prog="dml")
     base.apply_help_config(
         parser,
-        description="DaggerML CLI",
+        description=(
+            "DaggerML CLI\n\n"
+            "Command groups:\n"
+            "  Core operations: init, commit, head, index, cache, dag, node, remote, gc, contrib\n"
+            "  Git-like project operations: clone, fetch, pull, push, merge, revert, checkout"
+        ),
         examples=[
             "dml --help",
             "dml --repo /path/to/repo head list",
