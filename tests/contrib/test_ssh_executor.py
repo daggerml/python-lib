@@ -28,7 +28,7 @@ def _reset_registries(tmp_path, monkeypatch):
 
 
 def _remote() -> dict[str, str]:
-    return {"root": os.environ["DML_REMOTE_ROOT"]}
+    return {"root": os.environ["DML_REMOTE_URI"]}
 
 
 def _sub_runnable() -> Runnable:
@@ -107,7 +107,7 @@ def test_ssh_executor_handle_runs_nested_adapter_over_ssh(monkeypatch):
     assert seen["cmd"][:4] == ["ssh", "-p", "2222", "worker.example"]
     assert seen["cmd"][4].startswith("set -e; . /etc/dml.env; exec dml-local-adapter")
     assert ". /etc/dml.env" in seen["cmd"][4]
-    assert "DML_REMOTE_ROOT" not in seen["cmd"][4]
+    assert "DML_REMOTE_URI" not in seen["cmd"][4]
     assert "--poll" in seen["cmd"][4]
     assert seen["payload"]["runnable"]["target"] == "script"
     assert seen["payload"]["cache_key"] == cache_key

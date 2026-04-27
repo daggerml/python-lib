@@ -106,7 +106,7 @@ class BatchExecutor(LambdaExecutorBase):
         reqs, job_queue = self._resource_requirements(runnable.kwargs)
         image = self._image_uri(runnable.kwargs.get("image"))
         job_name = f"dml-batch-{cache_key}"
-        docker_env = [{"name": "DML_REMOTE_ROOT", "value": remote["root"]}]
+        docker_env = [{"name": "DML_REMOTE_URI", "value": remote["root"]}]
         job_def = client.register_job_definition(
             jobDefinitionName=job_name,
             type="container",

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from daggerml._config import DmlProjectConfig, DmlRemoteProjectConfig, init_project_layout
+from daggerml._internal.config import DmlProjectConfig, init_project_layout
 from daggerml._internal.ops.commit import CommitOps
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.remote import RemoteOps
@@ -25,7 +25,7 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
         name="demo",
         owner="alice",
         branch="main",
-        remotes={"origin": DmlRemoteProjectConfig(uri="dml://alice/demo", bucket="bucket", prefix="team/dml")},
+        remote_uri="s3://bucket/team/dml",
     )
     db_path = init_project_layout(tmp_path, cfg)
 
@@ -34,7 +34,7 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     loaded = DmlProjectConfig.load(tmp_path)
     assert loaded.name == "demo"
     assert loaded.owner == "alice"
-    assert loaded.remotes["origin"].bucket == "bucket"
+    assert loaded.remote_uri == "s3://bucket/team/dml"
 
 
 def test_head_advance_and_commitish_resolution(temp_bo_fn):

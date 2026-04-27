@@ -51,7 +51,7 @@ def remote_env(clear_envvars, _aws_server):
     import boto3
 
     os.environ.update(_aws_server["envvars"])
-    os.environ["DML_REMOTE_ROOT"] = "s3://test-bucket/test-prefix"
+    os.environ["DML_REMOTE_URI"] = "s3://test-bucket/test-prefix"
     boto3.setup_default_session()
     endpoint = _aws_server["endpoint"]
     s3 = boto3.client("s3", endpoint_url=endpoint)

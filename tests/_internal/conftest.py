@@ -30,7 +30,7 @@ def split_remote_root(remote_root: str) -> tuple[str, str]:
 
 
 def remote_bucket_and_prefix_from_env() -> tuple[str, str]:
-    return split_remote_root(os.environ["DML_REMOTE_ROOT"])
+    return split_remote_root(os.environ["DML_REMOTE_URI"])
 
 
 def remote_protocol_prefix_from_env() -> str:
@@ -77,7 +77,7 @@ def clear_envvars():
                 del os.environ[k]
 
         # Set test-specific environment variables
-        os.environ["DML_REMOTE_ROOT"] = "s3://test-bucket/test-prefix"
+        os.environ["DML_REMOTE_URI"] = "s3://test-bucket/test-prefix"
         os.environ["AWS_SHARED_CREDENTIALS_FILE"] = "/dev/null"
         os.environ["PYTHONPATH"] = "."  # ensure `tests` is in PYTHONPATH
         yield

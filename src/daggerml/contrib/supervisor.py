@@ -91,8 +91,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     with DmlOps.create(str(repo_dir), user="worker", remote_root=remote["root"]):
         pass
     env = dict(env)
-    env["DML_REMOTE_ROOT"] = remote["root"]
-    env["DML_REPO"] = str(repo_dir)
+    env["DML_REMOTE_URI"] = remote["root"]
+    env["DML_PROJECT_HOME"] = str(repo_dir)
     result_path = Path(workdir) / "result.json"
     stdout_path = Path(workdir) / "stdout.log"
     stderr_path = Path(workdir) / "stderr.log"

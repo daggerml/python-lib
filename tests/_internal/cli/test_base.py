@@ -33,14 +33,14 @@ class TestGetRepoPath:
         """Test --repo flag takes priority."""
         assert get_repo_path("/path/from/arg") == "/path/from/arg"
 
-    @patch.dict(os.environ, {"DML_REPO": "/env/path"})
+    @patch.dict(os.environ, {"DML_PROJECT_HOME": "/env/path"})
     def test_env_var_fallback(self):
-        """Test DML_REPO env var when no --repo."""
+        """Test DML_PROJECT_HOME env var when no --repo."""
         assert get_repo_path(None) == "/env/path"
 
-    @patch.dict(os.environ, {"DML_REPO": "/env/repo"})
+    @patch.dict(os.environ, {"DML_PROJECT_HOME": "/env/repo"})
     def test_dml_repo_resolution(self):
-        """Test DML_REPO resolution."""
+        """Test DML_PROJECT_HOME resolution."""
         assert get_repo_path(None) == "/env/repo"
 
     @patch.dict(os.environ, {}, clear=True)
@@ -219,7 +219,7 @@ class TestErrorNormalization:
 
     def test_normalize_error_message_repo_path_has_recovery_hint(self):
         msg = normalize_error_message(FileNotFoundError("/nope"), command="head list")
-        assert "--repo" in msg or "DML_REPO" in msg
+        assert "--repo" in msg or "DML_PROJECT_HOME" in msg
 
     def test_build_error_payload_preserves_schema_fields(self):
         payload = build_error_payload(ValueError("Invalid Ref format"), command="node get")
@@ -262,7 +262,7 @@ class TestExecuteCommand:
 
     @patch("daggerml._cli.base.DmlOps.open")
     @patch("daggerml._cli.base.get_repo_path")
-    @patch.dict(os.environ, {"DML_REMOTE_ROOT": "s3://bucket/project"})
+    @patch.dict(os.environ, {"DML_REMOTE_URI": "s3://bucket/project"})
     def test_execution_passes_remote_context_to_dmlops(self, mock_get_path, mock_open):
         """Test execute_command forwards resolved remote context into DmlOps."""
         mock_get_path.return_value = "/repo/path"
@@ -281,6 +281,23 @@ class TestExecuteCommand:
             "/repo/path",
             remote_root="s3://bucket/project",
         )
+
+    @patch("daggerml._cli.base.DmlOps.open")
+    @patch("daggerml._cli.base.get_repo_path")
+    @patch.dict(os.environ, {}, clear=True)
+    def test_execution_allows_empty_remote_context(self, mock_get_path, mock_open):
+        mock_get_path.return_value = "/repo/path"
+        mock_ops = Mock()
+        mock_ops.commit = Mock()
+        mock_open.return_value.__enter__.return_value = mock_ops
+        mock_open.return_value.__exit__.return_value = None
+
+        args = Namespace(repo=None, op="commit", func=Mock(return_value={"result": "ok"}))
+
+        with patch("daggerml._cli.base.output_json"):
+            execute_command(args)
+
+        mock_open.assert_called_once_with("/repo/path", remote_root="")
 
     @patch("daggerml._cli.base.get_repo_path")
     @patch("daggerml._cli.base.DmlOps.open")

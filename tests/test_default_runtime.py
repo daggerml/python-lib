@@ -31,8 +31,10 @@ def test_status_implicit_default_creation():
     assert info["has_process_default"] is True
 
     cfg = _config_info(status)
-    assert set(cfg.keys()) == {"repo", "branch", "user", "remote"}
-    assert set(cfg["remote"].keys()) == {"root"}
+    assert set(cfg.keys()) == {"project", "db", "remote", "user", "default_branch", "hooks", "config_home"}
+    assert set(cfg["project"].keys()) == {"home", "uri", "branch"}
+    assert set(cfg["db"].keys()) == {"path"}
+    assert set(cfg["remote"].keys()) == {"uri"}
 
     runtime = _runtime_info(status)
     assert runtime["ops_initialized"] is False

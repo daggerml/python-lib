@@ -34,7 +34,7 @@ Rules:
 - scoped override takes precedence over process default,
 - implicit default creation occurs only when no scoped or process default is set,
 - the implicit default is cached as the process default after first creation,
-- constructing `DmlOps` from the default runtime requires `remote.root` to be configured.
+- constructing `DmlOps` from the default runtime requires `remote.uri` to be configured.
 
 ## Runtime API
 
@@ -63,10 +63,13 @@ These delegate to `get_default_dml()`.
   - `has_scoped_override`: `bool`
   - `has_process_default`: `bool`
 - `config`:
-  - `repo`
-  - `branch`
+  - `project` with `home`, `uri`, and derived `branch`
+  - `db` with `path`
+  - `remote` with `uri`
   - `user`
-  - `remote` with `root`
+  - `default_branch`
+  - `hooks` with `post-init` and `post-clone`
+  - `config_home`
 - `runtime`:
   - `ops_initialized`: `bool`
   - `head_ref`: `str`

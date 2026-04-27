@@ -16,8 +16,8 @@ try:
 except ImportError:
     from typing_extensions import Self
 
-from daggerml._config import DmlProjectConfig
 from daggerml._internal._db import Ref
+from daggerml._internal.config import DmlProjectConfig
 from daggerml._internal.ops.base_ops import BaseOps
 from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 from daggerml._internal.util import now
@@ -168,11 +168,10 @@ class CommitOps(BaseOps):
                 ref = txn.get(Ref(f"head:{base}")).commit
             elif "/" in base and not base.startswith("head:"):
                 remote_name, branch = base.split("/", 1)
-                project = DmlProjectConfig.load(project_dir)
-                remote = project.remotes.get(remote_name)
-                if remote is None:
+                if remote_name != "origin":
                     raise DmlRepoError(f"Unknown remote: {remote_name}")
-                ref = txn.get(Ref(f"head:{remote.uri}#{branch}")).commit
+                project = DmlProjectConfig.load(project_dir)
+                ref = txn.get(Ref(f"head:{project.uri}#{branch}")).commit
             else:
                 ref = txn.get(Ref(base if base.startswith("head:") else f"head:{base}")).commit
             if ref.ns() != "commit":

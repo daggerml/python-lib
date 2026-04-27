@@ -58,7 +58,7 @@ def _reset_registry(tmp_path, monkeypatch):
 
 
 def _remote() -> dict[str, str]:
-    return {"root": os.environ["DML_REMOTE_ROOT"]}
+    return {"root": os.environ["DML_REMOTE_URI"]}
 
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
@@ -275,11 +275,11 @@ def test_funkify_script_runtime_executes_generated_source_with_args_and_kwargs(t
     with Dml.temporary() as dml:
         dag = dml.new("dst-worker", "dst-worker")
         runnable = cast(Runnable, dag.put(cast(Any, delayed)).value())
-        os.environ["DML_REPO"] = cast(str, dml.repo)
+        os.environ["DML_PROJECT_HOME"] = cast(str, dml.repo)
         try:
             result = run_payload(_mk_argv_ptr(4, argv0=runnable))
         finally:
-            os.environ.pop("DML_REPO", None)
+            os.environ.pop("DML_PROJECT_HOME", None)
 
     assert result["status"] == "succeeded"
     assert result["error"] is None

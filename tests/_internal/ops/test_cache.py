@@ -16,7 +16,7 @@ from daggerml._internal.types import (
 
 
 def _remote_root_from_env() -> str:
-    return os.environ["DML_REMOTE_ROOT"]
+    return os.environ["DML_REMOTE_URI"]
 
 
 def _put_datum_hashed(temp_bo, data) -> Ref:
@@ -68,6 +68,7 @@ def test_put_get_delete_roundtrip_remote(temp_bo, s3):
 
 def test_list_limit_and_clear_remote(temp_bo, s3):
     ops = _new_ops(temp_bo)
+    ops.clear()
     entries: list[tuple[str, Ref]] = []
     for i in range(3):
         datum_ref = _put_datum_hashed(temp_bo, f"value-{i}")

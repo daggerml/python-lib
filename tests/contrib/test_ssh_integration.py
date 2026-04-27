@@ -159,7 +159,7 @@ def ssh_resource_data(local_sshd, tmp_path):
 
 
 def _remote() -> dict[str, str]:
-    return {"root": os.environ["DML_REMOTE_ROOT"]}
+    return {"root": os.environ["DML_REMOTE_URI"]}
 
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:

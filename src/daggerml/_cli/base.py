@@ -10,9 +10,9 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from daggerml._config import DmlConfig
 from daggerml._internal import DmlOps
 from daggerml._internal._db import DmlDbInvalidPathError, DmlDbInvalidRefError, Ref
+from daggerml._internal.config import DmlConfig
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 
 
@@ -41,10 +41,10 @@ class DmlJsonEncoder(json.JSONEncoder):
 def get_repo_path(repo_arg: str | None) -> str:
     """Resolve repository path from args and environment."""
     cfg = DmlConfig.resolve(
-        explicit={"repo": repo_arg},
-        defaults={"repo": os.getcwd()},
+        explicit={"project.home": repo_arg},
+        defaults={"project.home": os.getcwd()},
     )
-    return str(cfg.repo)
+    return str(cfg.project.home)
 
 
 def get_ops_object(ops: DmlOps, op_name: str) -> Any:
@@ -149,12 +149,12 @@ def normalize_error_message(error: Exception, *, command: str | None) -> str:
 
     # Repository path errors should include recovery hints.
     if isinstance(error, (DmlDbInvalidPathError, FileNotFoundError, NotADirectoryError, PermissionError)):
-        message = _with_hint(message, "pass --repo PATH or set DML_REPO")
+        message = _with_hint(message, "pass --repo PATH or set DML_PROJECT_HOME")
 
     # Config errors are generally surfaced via DmlRepoError.
     if isinstance(error, DmlRepoError):
         lowered = message.lower()
-        if "remote root" in lowered or "dml_remote_root" in lowered or "boto3" in lowered:
+        if "remote root" in lowered or "remote uri" in lowered or "dml_remote_uri" in lowered or "boto3" in lowered:
             message = _with_hint(message, "check required flags/env vars")
 
     if command:
@@ -208,11 +208,11 @@ def execute_command(args) -> None:
         repo_path = get_repo_path(args.repo)
         cfg = DmlConfig.resolve(
             explicit={
-                "repo": repo_path,
-                "remote.root": getattr(args, "remote_root", None),
+                "project.home": repo_path,
+                "remote.uri": getattr(args, "remote_root", None),
             }
         )
-        with DmlOps.open(repo_path, remote_root=cfg.remote.root) as ops:
+        with DmlOps.open(repo_path, remote_root=cfg.remote.uri) as ops:
             ops_obj = get_ops_object(ops, args.op)
             result = args.func(ops_obj, args)
             output_json(result)

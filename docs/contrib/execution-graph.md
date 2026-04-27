@@ -47,7 +47,7 @@ This allows reverse and forward queries across user-dags and fn-dags.
 
 ## Required Environment Variables
 
-- `DML_REMOTE_ROOT` — S3 URI prefix used for all remote operations, including lock, active execution, immutable execution records, and call-edge lineage.
+- `DML_REMOTE_URI` — S3 URI prefix used for all remote operations, including lock, active execution, immutable execution records, and call-edge lineage.
 
 `DML_DYNAMODB_TABLE` is no longer used or required.
 

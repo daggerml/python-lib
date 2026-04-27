@@ -1,7 +1,7 @@
 """Run an end-to-end Docker-backed dataset pipeline.
 
 The example builds a Docker image from this repository, starts a local moto S3
-server when no remote root is configured, loads the iris dataset in one
+server when no remote URI is configured, loads the iris dataset in one
 Docker-executed funk, and trains a small classifier in another. It exercises
 the contrib runtime end to end: script funkification, Docker execution, remote
 cache publication, and S3-backed artifact exchange between DAG nodes.
@@ -36,7 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _start_local_moto_if_needed() -> Any | None:
-    if os.environ.get("DML_REMOTE_ROOT"):
+    if os.environ.get("DML_REMOTE_URI"):
         return None
     try:
         for key in list(os.environ.keys()):
@@ -45,7 +45,7 @@ def _start_local_moto_if_needed() -> Any | None:
         os.environ.setdefault("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
         from moto.server import ThreadedMotoServer
     except ModuleNotFoundError as e:
-        raise RuntimeError("Set DML_REMOTE_ROOT for a real S3 bucket, or install moto[server] for local dev.") from e
+        raise RuntimeError("Set DML_REMOTE_URI for a real S3 bucket, or install moto[server] for local dev.") from e
     server = ThreadedMotoServer(port=0, verbose=False)
     server.start()
     host, port = server.get_host_and_port()
@@ -55,8 +55,7 @@ def _start_local_moto_if_needed() -> Any | None:
     os.environ.setdefault("AWS_REGION", "us-east-1")
     os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
     os.environ["AWS_ENDPOINT_URL"] = endpoint
-    os.environ["DML_REMOTE_ROOT"] = "s3://daggerml-example/artifacts"
-    os.environ.setdefault("DML_REMOTE_CACHE", "docker-dataset-example")
+    os.environ["DML_REMOTE_URI"] = "s3://daggerml-example/artifacts"
     boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket="daggerml-example")
     return server
 
@@ -118,7 +117,6 @@ def _docker_run_flags() -> list[str]:
 
 def main() -> None:
     moto_server = _start_local_moto_if_needed()
-    os.environ.setdefault("DML_REMOTE_CACHE", "docker-dataset-example")
     flags = _docker_run_flags()
     try:
         import pandas  # pyright:ignore[reportMissingImports] # noqa:F401

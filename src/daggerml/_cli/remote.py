@@ -131,7 +131,7 @@ def create_s3_client(boto3_module: Any) -> Any:
 def get_remote_ops(ops: DmlOps, s3_client: Any) -> Any:
     """Get remote operations from DmlOps instance."""
     if not ops.remote_root:
-        raise DmlRepoError("Remote root required; pass --remote-root or set DML_REMOTE_ROOT")
+        raise DmlRepoError("Remote URI required; pass --remote-root or set DML_REMOTE_URI")
     return ops.remote(client=s3_client)
 
 

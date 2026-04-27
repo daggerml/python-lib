@@ -20,7 +20,7 @@ TEST_FN_ADAPTER = str(Path(__file__).resolve().parent / "fn" / "python-fork-adap
 
 
 def _remote_root_from_env() -> str:
-    return os.environ["DML_REMOTE_ROOT"]
+    return os.environ["DML_REMOTE_URI"]
 
 
 @dataclass(frozen=True)

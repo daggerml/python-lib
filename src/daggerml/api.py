@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from tempfile import TemporaryDirectory
 from typing import Any, Iterator, Optional, Union, cast, overload
 
-from daggerml._config import DmlConfig
 from daggerml._internal import (
     DEFAULT_HEAD,
     DmlOps,
@@ -18,6 +17,7 @@ from daggerml._internal import (
     Uri,
 )
 from daggerml._internal.codec import CodecContext, register_codec
+from daggerml._internal.config import DmlConfig
 from daggerml.util import BackoffWithJitter, current_time_millis
 
 log = logging.getLogger(__name__)
@@ -92,9 +92,9 @@ def status() -> dict[str, object]:
         dml._config
         or DmlConfig.resolve(
             explicit={
-                "repo": dml.repo,
+                "project.home": dml.repo,
                 "user": dml.user,
-                "branch": dml.branch,
+                "project.branch": dml.branch,
             }
         )
     )
@@ -104,14 +104,7 @@ def status() -> dict[str, object]:
             "has_scoped_override": _SCOPED_DEFAULT_DML.get() is not _NO_DEFAULT_DML,
             "has_process_default": _PROCESS_DEFAULT_DML is not None,
         },
-        "config": {
-            "repo": cfg.repo,
-            "branch": cfg.branch,
-            "user": cfg.user,
-            "remote": {
-                "root": cfg.remote.root,
-            },
-        },
+        "config": cfg.to_dict(),
         "runtime": {
             "ops_initialized": dml._ops is not None,
             "head_ref": dml.head_ref.to,
@@ -136,13 +129,13 @@ class Dml:
     def __post_init__(self):
         resolved = DmlConfig.resolve(
             explicit={
-                "repo": self.repo,
+                "project.home": self.repo,
                 "user": self.user,
-                "branch": self.branch,
+                "project.branch": self.branch,
             }
         )
         self._config = resolved
-        self.repo = resolved.repo
+        self.repo = resolved.project.home
         self.user = resolved.user
         self.branch = resolved.branch
 
@@ -152,17 +145,11 @@ class Dml:
         if self._ops is None:
             if not self.repo:
                 raise DmlRepoError("Repository path is required")
-            remote_root = self._require_remote_root()
+            remote_root = self._config.remote.uri if self._config is not None else ""
             self._ops = DmlOps.open(self.repo, remote_root=remote_root)
             self._ops.__enter__()
         _ensure_default_literal_codecs(self)
         return self._ops
-
-    def _require_remote_root(self) -> str:
-        remote_root = self._config.remote.root if self._config is not None else ""
-        if not remote_root:
-            raise DmlRepoError("Remote root is required")
-        return remote_root
 
     @property
     def head_ref(self) -> Ref:
@@ -230,12 +217,9 @@ class Dml:
         # Create temporary directory
         tmpdir = TemporaryDirectory(prefix="dml-")
         repo_path = os.path.join(tmpdir.name, repo)
-        remote_root = DmlConfig.resolve().remote.root
-        if not remote_root:
-            raise DmlRepoError("Remote root is required")
 
         # Create repository and initialize
-        with DmlOps.create(repo_path, user=user, remote_root=remote_root) as ops:
+        with DmlOps.create(repo_path, user=user, remote_root="") as ops:
             # DmlOps.create initializes the default head; only add a new branch when requested.
             if branch != DEFAULT_HEAD.id():
                 head_ops = ops.head()

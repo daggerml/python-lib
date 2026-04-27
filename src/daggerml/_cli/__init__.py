@@ -26,11 +26,15 @@ def cli() -> None:
             "dml commit list HEAD --limit 10",
         ],
     )
-    parser.add_argument("--repo", type=str, help="Repository path (defaults to $DML_REPO or cwd)")
+    parser.add_argument(
+        "--repo",
+        type=str,
+        help="Repository path (defaults to $DML_PROJECT_HOME or cwd)",
+    )
     parser.add_argument(
         "--remote-root",
         type=str,
-        help="Remote project root URI (defaults to $DML_REMOTE_ROOT)",
+        help="Remote project root URI (defaults to $DML_REMOTE_URI)",
     )
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity")
     subparsers = parser.add_subparsers(dest="op", metavar="<operation>", help="Operations")

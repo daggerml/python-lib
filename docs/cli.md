@@ -14,7 +14,7 @@ Define the minimal command wrapper around `DmlOps` with automatic configuration 
 
 ## Scope
 
-CLI is an operational interface over `_internal` ops. It owns argument parsing, config resolution, and output normalization; operation semantics are delegated to `DmlOps` subsystems.
+CLI is an operational interface over `_internal` ops. It owns argument parsing and output normalization; shared configuration precedence, validation, and derivation are delegated to `daggerml._internal.config.DmlConfig`.
 
 ## Routing Model
 
@@ -27,8 +27,8 @@ CLI is an operational interface over `_internal` ops. It owns argument parsing, 
 ## Behavior Contracts
 
 - default output is compact JSON,
-- repo path resolution order is `--repo` -> `DML_REPO` -> cwd,
-- remote root resolution order is `--remote-root` -> `DML_REMOTE_ROOT`,
+- repo-path resolution is delegated to the shared internal resolver,
+- remote project-root resolution is delegated to the shared internal resolver,
 - verbosity controls logging level only,
 - expected domain errors MUST NOT emit unstructured tracebacks,
 - `remote` commands use remote operation methods,
@@ -37,7 +37,14 @@ CLI is an operational interface over `_internal` ops. It owns argument parsing, 
 - `dag checkout <commit-ish> <dag-name> [--as <name>] [--replace]` copies one DAG from history into the current branch as a new commit,
 - `contrib status` emits the structured contrib status report as compact JSON,
 - `cache` supports `list|get|put|delete|clear`,
-- runtime config naming follows [configuration.md](configuration.md): `remote.root`.
+- runtime config naming follows [configuration.md](configuration.md): `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`.
+
+## Serialization-Limited Gaps
+
+- The CLI does not expose API-only flows that depend on Python object or function serialization.
+- There is no CLI equivalent for `@api.funkify`, passing in-process Python callables, or staging arbitrary live Python objects as execution inputs.
+- Features built around decorator-driven runtime helpers or direct in-process object transport remain API-only by design.
+- Supported CLI inputs are the explicit command arguments the parser can serialize directly, such as strings, numbers, booleans, `namespace:id` ref strings, and other JSON-serializable values accepted by that command.
 
 ## Encoding and Decoding
 

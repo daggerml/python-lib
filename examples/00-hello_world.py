@@ -1,7 +1,7 @@
 """Run a minimal local-script hello world through `@api.funkify`.
 
 This example executes a simple funkified Python function with the local script
-runtime. If `DML_REMOTE_ROOT` is not already configured, it starts a local moto
+runtime. If `DML_REMOTE_URI` is not already configured, it starts a local moto
 S3 server so the example can run end to end without external infrastructure.
 """
 
@@ -17,7 +17,7 @@ from daggerml.contrib import api
 
 
 def _start_local_moto_if_needed() -> Any | None:
-    if os.environ.get("DML_REMOTE_ROOT"):
+    if os.environ.get("DML_REMOTE_URI"):
         return None
     try:
         for key in list(os.environ.keys()):
@@ -26,7 +26,7 @@ def _start_local_moto_if_needed() -> Any | None:
         os.environ.setdefault("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
         from moto.server import ThreadedMotoServer
     except ModuleNotFoundError as e:
-        raise RuntimeError("Set DML_REMOTE_ROOT for a real S3 bucket, or install moto[server] for local dev.") from e
+        raise RuntimeError("Set DML_REMOTE_URI for a real S3 bucket, or install moto[server] for local dev.") from e
     server = ThreadedMotoServer(port=0, verbose=False)
     server.start()
     host, port = server.get_host_and_port()
@@ -36,7 +36,7 @@ def _start_local_moto_if_needed() -> Any | None:
     os.environ.setdefault("AWS_REGION", "us-east-1")
     os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
     os.environ["AWS_ENDPOINT_URL"] = endpoint
-    os.environ["DML_REMOTE_ROOT"] = "s3://daggerml-example/hello-world"
+    os.environ["DML_REMOTE_URI"] = "s3://daggerml-example/hello-world"
     boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket="daggerml-example")
     return server
 

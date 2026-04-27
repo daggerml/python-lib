@@ -65,8 +65,7 @@ def _start_local_moto() -> Any:
     os.environ["AWS_REGION"] = "us-east-1"
     os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
     os.environ["AWS_ENDPOINT_URL"] = endpoint
-    os.environ["DML_REMOTE_ROOT"] = "s3://daggerml-example/ssh-artifacts"
-    os.environ["DML_REMOTE_CACHE"] = "ssh-docker-dataset-example"
+    os.environ["DML_REMOTE_URI"] = "s3://daggerml-example/ssh-artifacts"
     boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket="daggerml-example")
     return server
 

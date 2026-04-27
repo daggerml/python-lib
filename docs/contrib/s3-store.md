@@ -21,7 +21,7 @@ This document is not authoritative for:
 
 - `Uri` lifecycle semantics,
 - runtime configuration key definitions,
-- remote protocol-root layout under `<remote.root>/dml/`,
+- remote protocol-root layout under `<remote.uri>/dml/`,
 - contrib adapter/executor orchestration semantics,
 - provider-specific S3 API semantics outside the interface behavior defined here.
 
@@ -40,7 +40,7 @@ This document defines:
 This document does not define:
 
 - repository CAS, refs, or transport object layout,
-- `remote.root` configuration ownership,
+- `remote.uri` configuration ownership,
 - external artifact GC or `Deletable` ownership,
 - contrib runtime payload schemas that happen to reference S3-backed artifacts.
 
@@ -61,8 +61,8 @@ This document does not define:
 - Name: a non-`s3://` string passed to `S3Store` that is resolved relative to the current `bucket` and `prefix`.
 - Node: a value exposing `.value()` and accepted by `S3Store.parse_uri(...)` for normalization.
 - POSIX Path Semantics: slash-delimited path normalization that collapses `.` and `..` segments using a synthetic root at `/`.
-- Project Root: defined in [../configuration.md](../configuration.md) as the configured `remote.root` S3 location.
-- Protocol Root: defined in [../remote-data-model.md](../remote-data-model.md) as the repository-managed namespace rooted at `<remote.root>/dml/`.
+- Project Root: defined in [../configuration.md](../configuration.md) as the configured `remote.uri` S3 location.
+- Protocol Root: defined in [../remote-data-model.md](../remote-data-model.md) as the repository-managed namespace rooted at `<remote.uri>/dml/`.
 - S3 URI: a string of the form `s3://<bucket>/<key>`.
 - S3Store: the dataclass utility in `daggerml.contrib.s3` that performs S3-backed external object operations.
 - Unsafe Extraction: `S3Store.untar(..., unsafe=True)`, which disables the default path-containment validation.
@@ -81,11 +81,11 @@ This document does not define:
   - returns `False` for non-S3 schemes, missing bucket, or missing key path,
   - has no side effects.
 - `S3Store(bucket: str | None = None, prefix: str | None = None, client: Any = None)`:
-  - when both `bucket` and `prefix` are `None`, construction MUST resolve runtime config through `DmlConfig.resolve()` and use `remote.root` as the Project Root,
-  - when resolved `remote.root` is absent, construction MUST fail with `DmlRepoError`,
-  - when resolved `remote.root` is present but is not an `s3://` URI with a bucket, construction MUST fail with `DmlRepoError`,
-  - when `remote.root` is `s3://<bucket>/<base>`, the default Data Root MUST be `<base>/data`,
-  - when `remote.root` is `s3://<bucket>`, the default Data Root MUST be `data`,
+- when both `bucket` and `prefix` are `None`, construction MUST resolve runtime config through `DmlConfig.resolve()` and use `remote.uri` as the Project Root,
+- when resolved `remote.uri` is absent, construction MUST fail with `DmlRepoError`,
+- when resolved `remote.uri` is present but is not an `s3://` URI with a bucket, construction MUST fail with `DmlRepoError`,
+- when `remote.uri` is `s3://<bucket>/<base>`, the default Data Root MUST be `<base>/data`,
+- when `remote.uri` is `s3://<bucket>`, the default Data Root MUST be `data`,
   - when `bucket` is still `None` after default resolution, construction MUST fail with `DmlRepoError`,
   - when `prefix` is `None`, it MUST normalize to the empty string,
   - stored `prefix` MUST be normalized by stripping leading and trailing `/`,
@@ -190,7 +190,7 @@ This document does not define:
 ### Invariants
 
 - `S3Store.put(...)`, `S3Store.put_js(...)`, and `S3Store.tar(...)` MUST all use the same content-addressed naming rule: SHA-256 of the exact uploaded bytes plus the caller-supplied suffix.
-- The default Data Root MUST remain separate from the Protocol Root; deriving the Data Root from `remote.root` MUST produce `<remote.root>/data` semantics, not `<remote.root>/dml` semantics.
+- The default Data Root MUST remain separate from the Protocol Root; deriving the Data Root from `remote.uri` MUST produce `<remote.uri>/data` semantics, not `<remote.uri>/dml` semantics.
 - Stored `prefix` values on constructed or rebased `S3Store` instances MUST never retain leading or trailing `/` characters.
 - `S3Store.cd(...)` MUST preserve the original store's bucket and client identity.
 - `S3Store.cd(...)` rebasing MUST remain consistent with the `Path.resolve().as_posix().lstrip("/")` normalization rule defined for that interface.
@@ -202,7 +202,7 @@ This document does not define:
 - Configuration resolution failures:
   - non-retryable until configuration or constructor arguments are corrected,
   - terminal for the current call,
-  - caller behavior: pass explicit `bucket`/`prefix` or correct `remote.root`,
+- caller behavior: pass explicit `bucket`/`prefix` or correct `remote.uri`,
   - operator action: fix environment or runtime configuration.
 - Local dependency failures during client creation:
   - covers boto3 import failures during default client creation,
@@ -252,7 +252,7 @@ This document does not define:
 ### Authority Handoffs
 
 - `Uri` lifecycle and external-data ownership are authoritative in [../storing-and-retrieving-external-data.md](../storing-and-retrieving-external-data.md).
-- Configuration key names and `remote.root` syntax are authoritative in [../configuration.md](../configuration.md).
+- Configuration key names and `remote.uri` syntax are authoritative in [../configuration.md](../configuration.md).
 - Repository-managed Protocol Root layout, transport namespaces, CAS layout, and refs layout are authoritative in [../remote-data-model.md](../remote-data-model.md).
 - Remote push/pull and other repository protocol behavior are authoritative in [../remote-protocol.md](../remote-protocol.md).
 - Contrib adapter/executor runtime behavior that uses `S3Store` artifacts is authoritative in [runtime-contract.md](runtime-contract.md) and [executor-catalog.md](executor-catalog.md).
@@ -264,7 +264,7 @@ This document does not define:
 - Backward-compatible changes MAY add new utility interfaces or broaden accepted inputs only when existing call signatures and normative behaviors in this document remain unchanged.
 - Forward compatibility is not guaranteed for unknown callable arguments, unknown provider error shapes, or undocumented helper behavior; callers MUST rely only on the interfaces and semantics stated in this document.
 - This specification uses document revision, not an in-band runtime version field; any change that would alter the stable commitments above is a breaking spec revision and requires an explicit compatibility update to this section.
-- Changing the hash algorithm, changing default-root derivation from `<remote.root>/data`, or routing default `S3Store` writes into the Protocol Root would be a compatibility-breaking change.
+- Changing the hash algorithm, changing default-root derivation from `<remote.uri>/data`, or routing default `S3Store` writes into the Protocol Root would be a compatibility-breaking change.
 - `S3Store.ls(...)` compatibility guarantees cover object-entry enumeration only; callers MUST NOT rely on synthetic directory entries because the interface does not return them.
 - `Unsafe Extraction` is opt-in and intentionally weakens safety checks; preserving the default `unsafe=False` behavior is a compatibility requirement.
 - Forward compatibility is limited to additive changes that preserve existing callable names and current argument semantics; callers MUST NOT assume future interfaces will accept unknown parameters, preserve unknown data, or surface richer delete-status payloads through current return values.

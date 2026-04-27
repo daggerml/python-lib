@@ -139,7 +139,7 @@ class ScriptExecutor(ExecutorBase):
             "cmd": [sys.executable, "-m", "daggerml.contrib.executors.script", argv_ptr],
             "remote": remote,
             "env": {
-                "DML_REMOTE_ROOT": remote["root"],
+                "DML_REMOTE_URI": remote["root"],
             },
         }
         payload_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
