@@ -12,7 +12,6 @@ jobs:
   test:
     strategy:
       matrix:
-        # py: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         py: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-latest, macos-latest]
         exclude:
@@ -38,7 +37,7 @@ jobs:
       - name: Sync dependencies
         run: uv sync --group dev
       - name: pytest
-        run: uv run pytest -m "not slow" .
+        run: uv run pytest .
   sanitize:
     runs-on: ubuntu-latest
     steps:
@@ -62,7 +61,7 @@ jobs:
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
           LIBASAN=$(gcc -print-file-name=libasan.so)
-          LD_PRELOAD="$LIBASAN" uv run pytest -m "not slow" .
+          LD_PRELOAD="$LIBASAN" uv run pytest .
   lint:
     runs-on: ubuntu-latest
     steps:
