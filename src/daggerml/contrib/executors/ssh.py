@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shlex
 import subprocess
 from typing import Any, TypedDict, cast
@@ -12,6 +13,8 @@ from daggerml.contrib.api import is_node_like
 from daggerml.contrib.executors._base import ExecutorBase
 
 SshExecKwargs = TypedDict("SshExecutorKwargs", {"host": str, "flags": list[str], "env_files": list[str]})
+
+logger = logging.getLogger(__name__)
 
 
 def _is_node_string_list(value: Any) -> bool:
@@ -50,22 +53,53 @@ class SshExecutor(ExecutorBase):
             remote=remote,
             state=state,
         )
+        logger.debug(
+            "ssh executor launch host=%s flags=%s env_files=%s adapter=%s cache_key=%s execution_id=%s has_state=%s",
+            kw["host"],
+            kw["flags"],
+            kw["env_files"],
+            runnable.sub.adapter,
+            cache_key,
+            execution_id,
+            state is not None,
+        )
         proc = subprocess.run(cmd, input=payload, capture_output=True, check=False)
         stdout = proc.stdout.decode("utf-8", errors="replace").strip()
         stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+        logger.debug(
+            "ssh executor command returncode=%s execution_id=%s stdout=%r stderr=%r",
+            proc.returncode,
+            execution_id,
+            stdout,
+            stderr,
+        )
         if proc.returncode != 0:
             error = f"SSH command failed ({proc.returncode})"
             if stderr:
                 error = f"{error}: {stderr}"
             elif stdout:
                 error = f"{error}: {stdout}"
+            logger.debug("ssh executor transport failed execution_id=%s error=%s", execution_id, error)
             return {"status": "failed", "error": error}
         try:
             result = json.loads(stdout)
         except json.JSONDecodeError as e:
+            logger.debug(
+                "ssh executor invalid json execution_id=%s error=%s stdout=%r",
+                execution_id,
+                e,
+                stdout,
+            )
             return {"status": "failed", "error": f"SSH nested adapter returned invalid JSON: {e}"}
         if not isinstance(result, dict) or result.get("status") not in {"succeeded", "failed", "running"}:
+            logger.debug("ssh executor unexpected result execution_id=%s result=%r", execution_id, result)
             return {"status": "failed", "error": f"SSH nested adapter returned unexpected result: {result}"}
+        logger.debug(
+            "ssh executor result execution_id=%s status=%s error=%r",
+            execution_id,
+            result.get("status"),
+            result.get("error"),
+        )
         return result
 
     @staticmethod

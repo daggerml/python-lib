@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import getpass
+import logging
 import os
 import shlex
 import shutil
@@ -22,6 +23,8 @@ from daggerml.contrib import api
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib.adapters import LocalAdapter
 from daggerml.contrib.executors import ScriptExecutor, SshExecutor
+
+logger = logging.getLogger(__name__)
 
 
 def _require_ssh_tools() -> None:
@@ -106,6 +109,13 @@ def local_sshd():
             "-o",
             "IdentitiesOnly=yes",
         ]
+        logger.debug(
+            "starting local sshd tmpdir=%s port=%s host_key=%s client_key=%s",
+            tmpd,
+            port,
+            host_key_path,
+            client_key_path,
+        )
 
         deadline = time.time() + 5.0
         while time.time() < deadline:
@@ -126,6 +136,7 @@ def local_sshd():
             pytest.skip("timeout waiting for local sshd to start")
 
         try:
+            logger.debug("local sshd ready host=%s flags=%s", f"{getpass.getuser()}@127.0.0.1", flags)
             yield flags, f"{getpass.getuser()}@127.0.0.1"
         finally:
             sshd_proc.terminate()
@@ -133,6 +144,7 @@ def local_sshd():
                 sshd_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 sshd_proc.kill()
+            logger.debug("local sshd stopped")
 
 
 @pytest.fixture
@@ -144,6 +156,12 @@ def ssh_resource_data(local_sshd, tmp_path):
     aws_exports = "\n".join(
         f"export {name}={shlex.quote(value)}" for name, value in sorted(os.environ.items()) if name.startswith("AWS_")
     )
+    # required for gh actions sanitize task
+    sanitizer_exports = "\n".join(
+        f"export {name}={shlex.quote(os.environ[name])}"
+        for name in ("LD_PRELOAD", "ASAN_OPTIONS", "UBSAN_OPTIONS")
+        if name in os.environ
+    )
     env_file.write_text(
         dedent(
             f"""
@@ -151,6 +169,7 @@ def ssh_resource_data(local_sshd, tmp_path):
             export PATH={shlex.quote(str(Path(sys.executable).parent))}:$PATH
             export DML_TEST_SSH_VALUE=ssh-ok
             {aws_exports}
+            {sanitizer_exports}
             """
         ).strip()
         + "\n"
@@ -185,6 +204,14 @@ def _poll_until_terminal(*, runnable: Runnable, argv_ptr: str, cache_key: str) -
             execution_id=execution_id,
             remote=_remote(),
             state=state,
+        )
+        logger.debug(
+            "ssh integration poll cache_key=%s execution_id=%s status=%s error=%r state=%r",
+            cache_key,
+            execution_id,
+            result.get("status"),
+            result.get("error"),
+            result.get("state"),
         )
         if state is None and result.get("status") == "running":
             state = cast(dict[str, Any], result.get("state"))
