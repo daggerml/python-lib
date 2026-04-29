@@ -106,7 +106,7 @@ def execute_cache_delete(ops_obj, args) -> bool:
 def execute_cache_list(ops_obj, args):
     """Execute cache list command, return JSON-serializable result."""
     result = ops_obj.list(args.limit)
-    return [[cache_key, {"dag": dag_ref.to}] for cache_key, dag_ref in result]
+    return [{"cache_key": cache_key, "dag": dag_ref.to} for cache_key, dag_ref in result]
 
 
 def execute_cache_clear(ops_obj, args) -> int:

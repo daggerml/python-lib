@@ -44,10 +44,14 @@ class TestGetRepoPath:
         assert get_repo_path(None) == "/env/repo"
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_cwd_fallback(self, tmp_path):
-        """Test current working directory fallback."""
-        with patch("os.getcwd", return_value=str(tmp_path)):
+    def test_no_repo_defaults_to_cwd(self, tmp_path):
+        """Test repository path falls back to cwd via internal resolver."""
+        old = os.getcwd()
+        os.chdir(tmp_path)
+        try:
             assert get_repo_path(None) == str(tmp_path)
+        finally:
+            os.chdir(old)
 
 
 class TestGetOpsObject:
@@ -351,6 +355,20 @@ class TestTopLevelHelp:
             sys.stdout = old_stdout
             sys.stderr = old_stderr
 
-        for op in ["init", "commit", "head", "index", "cache", "dag", "node", "remote", "gc", "contrib", "checkout"]:
+        for op in [
+            "init",
+            "status",
+            "config",
+            "commit",
+            "head",
+            "index",
+            "cache",
+            "dag",
+            "node",
+            "remote",
+            "gc",
+            "contrib",
+            "checkout",
+        ]:
             assert op in out
         assert "--remote-root" in out

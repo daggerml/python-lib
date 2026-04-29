@@ -378,7 +378,7 @@ class RemoteOps(BaseOps):
             cache_key = segments[1][: -len(".json")]
             self._validate_cache_key(cache_key)
         else:
-            if len(segments) < 6 or segments[1] == "" or segments[2] == "" or segments[3] not in {"heads", "tags"}:
+            if len(segments) < 5 or segments[1] == "" or segments[2] == "" or segments[3] not in {"heads", "tags"}:
                 raise ValueError(
                     "Invalid project ref path: expected projects/<owner>/<project>/{heads,tags}/<name>.json"
                 )
@@ -1366,6 +1366,24 @@ class RemoteOps(BaseOps):
             etag=observed.etag,
             create=False,
         )
+
+    @_remote_boundary("push tag")
+    def push_project_tag(self, uri: str, head: Ref) -> str:
+        parsed = self.parse_dml_uri(uri, require_identifier=True)
+        if parsed.tag is None:
+            raise ValueError("Project tag push requires a tag URI")
+        root_ref, _legacy_ref_path = self._resolve_push_target(head)
+        with self._tx(readonly=True) as txn:
+            lm = self._local_dump_dict(txn, root_ref)
+            targets = self._targets_for_root(txn, root_ref)
+            manifest_dict, _manifest_bytes = self._build_remote_manifest(
+                lm, require_commit_root=True, direct_dag_ids=targets["dag"]
+            )
+            expected_targets = {"dag": sorted(set(manifest_dict["closure"].get("dag", [])))}
+            if targets != expected_targets:
+                raise ValueError(f"Manifest targets mismatch: expected {expected_targets}, got {targets}")
+            manifest_id = self._put_ref_manifest_from_local_manifest(lm, root_ref, txn)
+        return self.put_project_tag_ref(parsed.owner, parsed.project, parsed.tag, manifest_id, targets=targets)
 
     @_remote_boundary("pull branch")
     def pull_uri_into_head(self, uri: str, head: Ref, *, user: str) -> Ref:

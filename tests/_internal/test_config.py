@@ -125,9 +125,25 @@ def test_branch_override_does_not_mask_tag_project_uri():
         DmlConfig.resolve(explicit={"project.uri": "dml://alice/demo@v1", "project.branch": "main"})
 
 
-def test_remote_config_defaults_to_empty_string():
-    cfg = DmlConfig.resolve(env={})
-    assert cfg.remote.uri == ""
+def test_remote_config_defaults_to_empty_string(tmp_path):
+    old = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        cfg = DmlConfig.resolve(env={"DML_CONFIG_HOME": str(tmp_path / "cfg")})
+        assert cfg.remote.uri == ""
+    finally:
+        os.chdir(old)
+
+
+def test_project_home_defaults_to_cwd_when_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv("DML_PROJECT_HOME", raising=False)
+    old = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        cfg = DmlConfig.resolve(env={})
+        assert cfg.project.home == str(tmp_path)
+    finally:
+        os.chdir(old)
 
 
 @patch("daggerml.api.DmlOps.open")

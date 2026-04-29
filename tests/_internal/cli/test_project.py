@@ -50,7 +50,7 @@ def test_pull_alias_delegates_to_dmlops(mock_require_boto3, mock_create_s3_clien
 @patch("daggerml._cli.project.require_boto3")
 def test_push_alias_delegates_to_dmlops(mock_require_boto3, mock_create_s3_client):
     ops = Mock()
-    args = Namespace(remote_or_uri="origin", branch=None, head="head:main", create=False, force=False)
+    args = Namespace(tag=None, head="head:main", create=False, force=False)
     client = object()
     mock_require_boto3.return_value = object()
     mock_create_s3_client.return_value = client
@@ -59,7 +59,6 @@ def test_push_alias_delegates_to_dmlops(mock_require_boto3, mock_create_s3_clien
     result = ProjectAliasHandlers.push(ops, args)
 
     ops.push_project.assert_called_once_with(
-        "origin",
         None,
         head=Ref("head:main"),
         create=False,
@@ -67,6 +66,28 @@ def test_push_alias_delegates_to_dmlops(mock_require_boto3, mock_create_s3_clien
         s3_client=client,
     )
     assert result == "commit:1"
+
+
+@patch("daggerml._cli.project.create_s3_client")
+@patch("daggerml._cli.project.require_boto3")
+def test_push_alias_with_tag_delegates_to_dmlops(mock_require_boto3, mock_create_s3_client):
+    ops = Mock()
+    args = Namespace(tag="v1.0", head="head:main", create=False, force=False)
+    client = object()
+    mock_require_boto3.return_value = object()
+    mock_create_s3_client.return_value = client
+    ops.push_project.return_value = "projects/alice/demo/tags/v1.0.json"
+
+    result = ProjectAliasHandlers.push(ops, args)
+
+    ops.push_project.assert_called_once_with(
+        "v1.0",
+        head=Ref("head:main"),
+        create=False,
+        force=False,
+        s3_client=client,
+    )
+    assert result == "projects/alice/demo/tags/v1.0.json"
 
 
 def test_checkout_alias_delegates_to_dmlops():

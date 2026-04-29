@@ -23,12 +23,14 @@ from urllib.parse import urlparse
 
 import polars as pl
 
-from daggerml import Dml
+import daggerml as dml
 from daggerml.contrib import api
 from daggerml.contrib.funks import docker_build
 from daggerml.contrib.s3 import S3Store
 
 EXCLUDE_PATTERNS = (
+    # ".git",  # we need .git to install lib from the repo
+    "ignore/*",
     ".venv/*",
     ".mypy_cache/*",
     ".pytest_cache/*",
@@ -43,14 +45,6 @@ def _require_local_tools() -> None:
     missing = [name for name in ("docker", "ssh", "sshd", "ssh-keygen") if shutil.which(name) is None]
     if missing:
         raise RuntimeError(f"Missing required local tools: {', '.join(missing)}")
-
-
-def _require_remote_uri() -> None:
-    if os.environ.get("DML_REMOTE_URI"):
-        return
-    raise RuntimeError(
-        "DML_REMOTE_URI is required. Set remote env vars first (for local moto, run examples/moto_server_env.py)."
-    )
 
 
 def _docker_run_flags() -> list[str]:
@@ -218,7 +212,6 @@ def predict_target(dag, dataset_uri):
 
 def main() -> None:
     _require_local_tools()
-    _require_remote_uri()
     sshd_proc = None
     try:
         import pandas  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -232,35 +225,34 @@ def main() -> None:
             sshd_proc, ssh_flags, ssh_host = _start_local_sshd(tmpdir)
             ssh_env_file = _write_ssh_env_file(tmpdir)
             flags = _docker_run_flags()
-            with Dml.temporary() as dml:
-                with dml.new("examples/02-ssh-docker-dataset") as dag:
-                    dag.dkr_build = docker_build
-                    s3 = S3Store()
-                    print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
-                    dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS, symlinks="ignore")
-                    dag.put(flags, name="dkr-flags")
-                    dag.put(ssh_host, name="ssh-host")
-                    dag.put(ssh_flags, name="ssh-flags")
-                    dag.put([ssh_env_file], name="ssh-env-files")
-                    print("Building Docker image (this may take a moment)...")
-                    t0 = time.time()
-                    dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
-                    t1 = time.time()
-                    print("Re-building Docker image to demonstrate caching...")
-                    t2 = time.time()
-                    dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
-                    t3 = time.time()
-                    dag.download = download_dataset
-                    print("Loading dataset within Docker over SSH...")
-                    dataset = dag.download(name="dataset")
-                    print("Training model and generating predictions within Docker over SSH...")
-                    predictions = dag.call(predict_target, dataset, name="predictions")
-                    print("Committing DAG to persist artifacts...")
-                    dag.commit(predictions)
-                print("Reading predictions parquet from S3...")
-                df = pl.read_parquet(predictions.value().uri)
-                print(f"Dataset parquet URI: {dataset.value()}")
-                print(f"\nPredictions parquet URI: {predictions.value().uri}")
+            with dml.new("examples/02-ssh-docker-dataset") as dag:
+                dag.dkr_build = docker_build
+                s3 = S3Store()
+                print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
+                dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS, symlinks="ignore")
+                dag.put(flags, name="dkr-flags")
+                dag.put(ssh_host, name="ssh-host")
+                dag.put(ssh_flags, name="ssh-flags")
+                dag.put([ssh_env_file], name="ssh-env-files")
+                print("Building Docker image (this may take a moment)...")
+                t0 = time.time()
+                dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
+                t1 = time.time()
+                print("Re-building Docker image to demonstrate caching...")
+                t2 = time.time()
+                dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
+                t3 = time.time()
+                dag.download = download_dataset
+                print("Loading dataset within Docker over SSH...")
+                dataset = dag.download(name="dataset")
+                print("Training model and generating predictions within Docker over SSH...")
+                predictions = dag.call(predict_target, dataset, name="predictions")
+                print("Committing DAG to persist artifacts...")
+                dag.commit(predictions)
+            print("Reading predictions parquet from S3...")
+            df = pl.read_parquet(predictions.value().uri)
+            print(f"Dataset parquet URI: {dataset.value()}")
+            print(f"\nPredictions parquet URI: {predictions.value().uri}")
     finally:
         if sshd_proc is not None:
             sshd_proc.terminate()

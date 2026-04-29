@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -40,11 +39,10 @@ class DmlJsonEncoder(json.JSONEncoder):
 
 def get_repo_path(repo_arg: str | None) -> str:
     """Resolve repository path from args and environment."""
-    cfg = DmlConfig.resolve(
-        explicit={"project.home": repo_arg},
-        defaults={"project.home": os.getcwd()},
-    )
-    return str(cfg.project.home)
+    cfg = DmlConfig.resolve(explicit={"project.home": repo_arg})
+    if not cfg.project.home:
+        raise DmlRepoError("Local config requires project.home (--repo or DML_PROJECT_HOME)")
+    return cfg.project.home
 
 
 def get_ops_object(ops: DmlOps, op_name: str) -> Any:
@@ -196,7 +194,7 @@ def execute_command(args) -> None:
     try:
         if not getattr(args, "func", None):
             raise ValueError("Missing command method; run with --help for available methods")
-        if args.op in {"init", "clone", "contrib"}:
+        if args.op in {"init", "clone", "contrib", "status", "config"}:
             result = args.func(args)
             if isinstance(result, str):
                 sys.stdout.write(result)

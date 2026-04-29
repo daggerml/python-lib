@@ -324,12 +324,16 @@ class DmlConfig:
             explicit_layer.get("project.home") or env_layer.get("project.home") or merged.get("project.home")
         )
         project_home = _coerce_path(project_home_input)
+        if project_home is None and scope == _PROJECT_SCOPE:
+            project_home = str(Path.cwd())
         if scope == _PROJECT_SCOPE:
             merged = _overlay(merged, _load_project_layer(project_home))
         merged = _overlay(merged, env_layer)
         merged = _overlay(merged, explicit_layer)
 
         project_home = _coerce_path(merged.get("project.home"))
+        if project_home is None and scope == _PROJECT_SCOPE:
+            project_home = str(Path.cwd())
         default_branch_value = merged.get("default_branch")
         default_branch = str(default_branch_value) if default_branch_value else "main"
         _validate_ref_name("branch", default_branch)

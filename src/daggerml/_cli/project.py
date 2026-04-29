@@ -27,9 +27,11 @@ def setup_clone_parser(parser: ArgumentParser) -> None:
 
 def setup_project_alias_parser(parser: ArgumentParser, name: str) -> None:
     apply_help_config(parser, description=f"Git-like project {name} operation.")
-    if name in {"fetch", "pull", "push"}:
+    if name in {"fetch", "pull"}:
         parser.add_argument("remote_or_uri")
         parser.add_argument("branch", nargs="?")
+    if name == "push":
+        parser.add_argument("tag", nargs="?", help="Optional tag name to push")
     if name == "checkout":
         apply_help_config(
             parser,
@@ -97,8 +99,7 @@ class ProjectAliasHandlers:
     def push(ops: DmlOps, args) -> str:
         boto3 = require_boto3()
         return ops.push_project(
-            args.remote_or_uri,
-            args.branch,
+            args.tag,
             head=parse_ref(args.head),
             create=args.create,
             force=args.force,

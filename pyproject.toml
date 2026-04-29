@@ -78,7 +78,7 @@ template = "__version__ = \"${version}\"\n"
 [tool.pytest.ini_options]
 pythonpath = "tests/"
 minversion = "6.0"
-addopts = "-ra"
+addopts = "-ra --import-mode=importlib"
 testpaths = [
   "tests",
   "src/daggerml",

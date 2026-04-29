@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 from . import base
 from .cache import setup_cache_parser
 from .commit import setup_commit_parser
+from .config import setup_config_parser
 from .contrib import setup_contrib_parser
 from .dag import setup_dag_parser
 from .gc import setup_gc_parser
@@ -12,6 +13,7 @@ from .init import setup_init_parser
 from .node import setup_node_parser
 from .project import setup_clone_parser, setup_project_alias_parser
 from .remote import setup_remote_parser
+from .status import setup_status_parser
 
 
 def cli() -> None:
@@ -22,7 +24,7 @@ def cli() -> None:
         description=(
             "DaggerML CLI\n\n"
             "Command groups:\n"
-            "  Core operations: init, commit, head, index, cache, dag, node, remote, gc, contrib\n"
+            "  Core operations: init, status, config, commit, head, index, cache, dag, node, remote, gc, contrib\n"
             "  Git-like project operations: clone, fetch, pull, push, merge, revert, checkout"
         ),
         examples=[
@@ -34,7 +36,7 @@ def cli() -> None:
     parser.add_argument(
         "--repo",
         type=str,
-        help="Repository path (defaults to $DML_PROJECT_HOME or cwd)",
+        help="Repository path (defaults to $DML_PROJECT_HOME)",
     )
     parser.add_argument(
         "--remote-root",
@@ -47,6 +49,14 @@ def cli() -> None:
     # Init subcommand
     init_parser = subparsers.add_parser("init", help="Create a named repository in config dir")
     setup_init_parser(init_parser)
+
+    # Status subcommand
+    status_parser = subparsers.add_parser("status", help="Show effective runtime settings")
+    setup_status_parser(status_parser)
+
+    # Config subcommand
+    config_parser = subparsers.add_parser("config", help="Get/set supported configuration values")
+    setup_config_parser(config_parser)
 
     # Commit subcommand
     clone_parser = subparsers.add_parser("clone", help="Clone a remote DML project")

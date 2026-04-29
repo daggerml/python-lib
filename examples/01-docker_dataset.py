@@ -16,13 +16,14 @@ from urllib.parse import urlparse
 
 import polars as pl
 
-from daggerml import Dml
+import daggerml as dml
 from daggerml.contrib import api
 from daggerml.contrib.funks import docker_build
 from daggerml.contrib.s3 import S3Store
 
 EXCLUDE_PATTERNS = (
     # ".git",  # we need .git to install lib from the repo
+    "ignore/*",
     ".venv/*",
     ".mypy_cache/*",
     ".pytest_cache/*",
@@ -31,14 +32,6 @@ EXCLUDE_PATTERNS = (
     "tests/*",
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _require_remote_uri() -> None:
-    if os.environ.get("DML_REMOTE_URI"):
-        return
-    raise RuntimeError(
-        "DML_REMOTE_URI is required. Set remote env vars first (for local moto, run examples/moto_server_env.py)."
-    )
 
 
 @api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
@@ -51,7 +44,7 @@ def download_dataset(dag):
 
 @api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
 @api.funkify
-def predict_target(dag, dataset_uri):
+def predict_target(dag, dataset_uri, params):
     import io
 
     import pandas as pd  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -63,7 +56,7 @@ def predict_target(dag, dataset_uri):
     df = pd.read_parquet(io.BytesIO(payload))
     features = df.drop(columns=["target"])
     target = df["target"]
-    model = LogisticRegression(max_iter=200)
+    model = LogisticRegression(max_iter=200, **params.value())
     model.fit(features, target)
     out = df.copy()
     out["prediction"] = model.predict(features)
@@ -97,7 +90,6 @@ def _docker_run_flags() -> list[str]:
 
 
 def main() -> None:
-    _require_remote_uri()
     flags = _docker_run_flags()
     try:
         import pandas  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -105,32 +97,32 @@ def main() -> None:
         raise RuntimeError("pandas should not be installed in the local environment for this example to work")
     except ModuleNotFoundError:
         pass
-    with Dml.temporary() as dml:
-        with dml.new("examples/01-docker-dataset") as dag:
-            dag.dkr_build = docker_build
-            s3 = S3Store()
-            print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
-            dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS, symlinks="ignore")
-            dag.put(flags, name="dkr-flags")
-            print("Building Docker image (this may take a moment)...")
-            t0 = time()
-            dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
-            t1 = time()
-            print("Re-building Docker image to demonstrate caching...")
-            t2 = time()
-            dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
-            t3 = time()
-            dag.download = download_dataset
-            print("Loading dataset within Docker...")
-            dataset = dag.download(name="dataset")
-            print("Training model and generating predictions within Docker...")
-            predictions = dag.call(predict_target, dataset, name="predictions")
-            print("Committing DAG to persist artifacts...")
-            dag.commit(predictions)
-        print("Reading predictions parquet from S3...")
-        df = pl.read_parquet(predictions.value().uri)
-        print(f"Dataset parquet URI: {dataset.value()}")
-        print(f"\nPredictions parquet URI: {predictions.value().uri}")
+    with dml.new("examples/01-docker-dataset") as dag:
+        dag.dkr_build = docker_build
+        s3 = S3Store()
+        print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
+        dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS, symlinks="ignore")
+        dag.put(flags, name="dkr-flags")
+        print("Building Docker image (this may take a moment)...")
+        t0 = time()
+        dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
+        t1 = time()
+        print("Re-building Docker image to demonstrate caching...")
+        t2 = time()
+        dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
+        t3 = time()
+        dag.download = download_dataset
+        print("Loading dataset within Docker...")
+        dataset = dag.download(name="dataset")
+        print("Training model and generating predictions within Docker...")
+        dag.predict_fn = predict_target
+        predictions = dag.call(predict_target, dataset, {"l1_ratio": 0.2}, name="predictions")
+        print("Committing DAG to persist artifacts...")
+        dag.commit(predictions)
+    print("Reading predictions parquet from S3...")
+    df = pl.read_parquet(predictions.value().uri)
+    print(f"Dataset parquet URI: {dataset.value()}")
+    print(f"\nPredictions parquet URI: {predictions.value().uri}")
     print("\nPredictions:")
     print(df.head())
     print(f"\nBuild times: {t1 - t0:.2f}s (cached: {t3 - t2:.2f}s)")

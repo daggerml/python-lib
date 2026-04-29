@@ -22,6 +22,7 @@ from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
 if TYPE_CHECKING:
     from daggerml._internal.ops.cache import CacheOps
     from daggerml._internal.ops.commit import CommitOps
+    from daggerml._internal.ops.config import ConfigOps
     from daggerml._internal.ops.dag import DagOps
     from daggerml._internal.ops.gc import GcOps
     from daggerml._internal.ops.head import HeadOps
@@ -125,6 +126,13 @@ class DmlOps:
 
         return GcOps(_db=self._db)
 
+    def config(self) -> "ConfigOps":
+        """Return config operations."""
+        from daggerml._internal.ops.config import ConfigOps
+
+        cfg = DmlConfig.resolve(explicit={"project.home": self.path})
+        return ConfigOps(project_home=cfg.project.home, config_home=cfg.config_home)
+
     @staticmethod
     def _split_remote_root(remote_root: str) -> tuple[str, str]:
         if not remote_root.startswith("s3://"):
@@ -183,16 +191,19 @@ class DmlOps:
 
     def push_project(
         self,
-        remote_or_uri: str,
-        branch: str | None,
+        tag: str | None,
         *,
         head: Ref,
         create: bool,
         force: bool,
         s3_client: Any,
     ) -> str:
-        return self.remote(client=s3_client).push_project_branch(
-            self._project_remote_uri(remote_or_uri, branch),
+        project = self._load_project_config()
+        remote = self.remote(client=s3_client)
+        if tag:
+            return remote.push_project_tag(f"{project.uri}@{tag}", head)
+        return remote.push_project_branch(
+            f"{project.uri}#{project.branch}",
             head,
             create=create,
             force=force,

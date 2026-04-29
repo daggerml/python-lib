@@ -135,8 +135,8 @@ class TestExecuteCacheHandlers:
 
         mock_ops.list.assert_called_once_with(10)
         assert result == [
-            ["argv1", {"dag": "dag:dag1"}],
-            ["argv2", {"dag": "dag:dag2"}],
+            {"cache_key": "argv1", "dag": "dag:dag1"},
+            {"cache_key": "argv2", "dag": "dag:dag2"},
         ]
 
     def test_execute_cache_clear(self):
