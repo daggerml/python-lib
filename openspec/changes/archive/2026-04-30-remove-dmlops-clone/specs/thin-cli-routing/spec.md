@@ -1,8 +1,5 @@
-# thin-cli-routing Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change thin-cli-git-ops-routing. Update Purpose after archive.
-## Requirements
 ### Requirement: CLI project commands delegate to a single DmlOps method
 The `dml` CLI project command handlers SHALL remain thin adapters that parse command arguments and invoke exactly one workflow entrypoint per command path.
 
@@ -22,13 +19,6 @@ The `dml` CLI project command handlers SHALL remain thin adapters that parse com
 - **WHEN** a user runs `dml clone <remote-uri> [options]`
 - **THEN** the CLI handler parses inputs and calls one supported internal operations entrypoint for clone orchestration without invoking `DmlOps.clone`
 
-### Requirement: CLI does not own git-like project business logic
-The `_cli` layer SHALL NOT contain git-like project orchestration logic that coordinates repository state, commit resolution, or remote protocol execution.
-
-#### Scenario: Project logic relocation
-- **WHEN** git-like project command behavior requires cross-subsystem coordination
-- **THEN** the implementation resides in `DmlOps` (and internal ops it invokes), while CLI code remains argument parsing and result forwarding only
-
 ### Requirement: Clone command composes via DmlOps workflow
 The clone CLI entrypoint SHALL delegate clone workflow composition through supported internal operations after input parsing and command-level validation.
 
@@ -38,4 +28,4 @@ The clone CLI entrypoint SHALL delegate clone workflow composition through suppo
 
 #### Scenario: Clone tag flow delegation
 - **WHEN** a user runs `dml clone dml://alice/demo@v1.0 --bucket my-bucket`
-- **THEN** the CLI entrypoint delegates to one internal clone orchestration path that performs fetch and detached checkout semantics through internal ops without invoking `DmlOps.clone`
+- **THEN** the CLI entrypoint delegates to one internal clone orchestration path that performs fetch and detached checkout semantics through internal ops without `DmlOps.clone`

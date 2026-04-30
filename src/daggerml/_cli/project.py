@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
+from pathlib import Path
 
 from daggerml._cli.base import apply_help_config, parse_ref
 from daggerml._cli.remote import create_s3_client, require_boto3
 from daggerml._internal import DmlOps, DmlRepoError
+from daggerml._internal.config import DmlConfig, DmlProjectConfig, init_project_layout, run_project_hooks
 from daggerml._internal.ops.remote import RemoteOps
 
 
@@ -60,20 +62,57 @@ def _looks_like_commit_id(value: str) -> bool:
 
 
 def execute_clone(args) -> dict[str, str | None]:
+    cfg = DmlConfig.resolve(scope="global")
     parsed = RemoteOps.parse_dml_uri(args.uri, require_identifier=False)
     if parsed.tag is not None and _looks_like_commit_id(parsed.tag):
         raise DmlRepoError(
             "Clone direct-commit targets are not supported yet; fetch currently supports only branch/tag refs"
         )
-    boto3 = require_boto3()
-    return DmlOps.clone_project(
-        uri=args.uri,
-        bucket=args.bucket,
-        prefix=args.prefix,
-        branch=args.branch,
-        no_hooks=args.no_hooks,
-        s3_client=create_s3_client(boto3),
+    local_branch = args.branch or parsed.branch or cfg.default_branch
+    target = parsed.branch or parsed.tag or local_branch
+    if target is None:
+        raise DmlRepoError("Clone target could not be resolved")
+
+    project_dir = Path(parsed.project)
+    if project_dir.exists():
+        raise FileExistsError(f"Project directory exists: {project_dir}")
+
+    remote_root = f"s3://{args.bucket}/{args.prefix.strip('/')}" if args.prefix.strip("/") else f"s3://{args.bucket}"
+    project = DmlProjectConfig(
+        name=parsed.project,
+        owner=parsed.owner,
+        branch=local_branch,
+        remote_uri=remote_root,
     )
+
+    boto3 = require_boto3()
+    s3_client = create_s3_client(boto3)
+
+    project_dir.mkdir()
+    init_project_layout(project_dir, project)
+
+    with DmlOps.create(str(project_dir), remote_root=project.remote_uri, branch=local_branch) as ops:
+        remote_target = f"{project.uri}#{target}" if parsed.tag is None else f"{project.uri}@{target}"
+        ops.fetch_project(remote_target, None, s3_client=s3_client)
+        checkout_result = ops.checkout_project(target)
+
+    run_project_hooks(
+        "post-clone",
+        cfg.hooks.post_clone,
+        project_dir=project_dir,
+        project=project,
+        config_home=cfg.config_home,
+        remote_name="origin",
+        no_hooks=args.no_hooks,
+    )
+
+    return {
+        "project_dir": str(project_dir),
+        "head": checkout_result["head"],
+        "mode": str(checkout_result["mode"]),
+        "commit": str(checkout_result["commit"]),
+        "message": str(checkout_result["message"]),
+    }
 
 
 class ProjectAliasHandlers:
