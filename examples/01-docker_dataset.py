@@ -56,7 +56,7 @@ def predict_target(dag, dataset_uri, params):
     df = pd.read_parquet(io.BytesIO(payload))
     features = df.drop(columns=["target"])
     target = df["target"]
-    model = LogisticRegression(max_iter=200, **params.value())
+    model = LogisticRegression(**params.value())
     model.fit(features, target)
     out = df.copy()
     out["prediction"] = model.predict(features)
@@ -107,16 +107,17 @@ def main() -> None:
         t0 = time()
         dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
         t1 = time()
-        print("Re-building Docker image to demonstrate caching...")
-        t2 = time()
-        dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
-        t3 = time()
         dag.download = download_dataset
         print("Loading dataset within Docker...")
         dataset = dag.download(name="dataset")
         print("Training model and generating predictions within Docker...")
         dag.predict_fn = predict_target
-        predictions = dag.call(predict_target, dataset, {"l1_ratio": 0.2}, name="predictions")
+        predictions = dag.call(
+            predict_target,
+            dataset,
+            {"max_iter": 200, "solver": "saga", "penalty": "elasticnet", "l1_ratio": 0.2},
+            name="predictions",
+        )
         print("Committing DAG to persist artifacts...")
         dag.commit(predictions)
     print("Reading predictions parquet from S3...")
@@ -125,7 +126,7 @@ def main() -> None:
     print(f"\nPredictions parquet URI: {predictions.value().uri}")
     print("\nPredictions:")
     print(df.head())
-    print(f"\nBuild times: {t1 - t0:.2f}s (cached: {t3 - t2:.2f}s)")
+    print(f"\nBuild time: {t1 - t0:.2f}s")
 
 
 if __name__ == "__main__":

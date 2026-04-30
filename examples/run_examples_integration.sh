@@ -5,8 +5,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 examples_dir="${repo_root}/examples"
 ignore_dir="${repo_root}/ignore"
-scratch_dir="${examples_dir}/.integration-scratch-$(date +%s)-$$"
-moto_dir="${examples_dir}/.integration-moto-$(date +%s)-$$"
+scratch_dir="${ignore_dir}/scratch"
+moto_dir="${ignore_dir}/.integration-moto-$(date +%s)-$$"
 moto_env_file="${moto_dir}/moto.env"
 moto_log_file="${moto_dir}/moto.log"
 moto_pid=""
@@ -120,27 +120,26 @@ source "${moto_env_file}"
 log "Moto ready: ${AWS_ENDPOINT_URL}"
 log "Remote URI: ${DML_REMOTE_URI}"
 
-project_name="ignore-0"
-
 log "Setting up DML repo in ${ignore_dir}"
-mkdir "${ignore_dir}" || true
+mkdir -p "${scratch_dir}" || true
 printf '*\n' > "${ignore_dir}/.gitignore"
-cd "${ignore_dir}"
+cd "${scratch_dir}"
 
+project_name="project-0"
 log "Initializing DML repo in ${project_name}"
+# mkdir "${scratch_dir}/${project_name}"
 dml init $project_name
+cd "${scratch_dir}/${project_name}"
 
-scratch_dir="${repo_root}/ignore/${project_name}"
-if [[ ! -d "${scratch_dir}/.dml/db" ]]; then
-  log "dml init did not create ${scratch_dir}/.dml/db" >&2
+if [[ ! -d "./.dml/db" ]]; then
+  log "dml init did not create .dml/db" >&2
   exit 1
 fi
-cd "${scratch_dir}"
 
 cat .dml/config.toml
 
 log "DML repo initialized. Current status:"
-dml status
+dml status | jq .
 
 log "Running example: 00-hello_world.py"
 python "${examples_dir}/00-hello_world.py"

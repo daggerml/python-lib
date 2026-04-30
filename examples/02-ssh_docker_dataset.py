@@ -238,10 +238,6 @@ def main() -> None:
                 t0 = time.time()
                 dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
                 t1 = time.time()
-                print("Re-building Docker image to demonstrate caching...")
-                t2 = time.time()
-                dag.dkr_build(dkr_ctx, build_flags=["-f", "./examples/dkr-ctx/Dockerfile"], name="image-redux")
-                t3 = time.time()
                 dag.download = download_dataset
                 print("Loading dataset within Docker over SSH...")
                 dataset = dag.download(name="dataset")
@@ -262,7 +258,7 @@ def main() -> None:
                 sshd_proc.kill()
     print("\nPredictions:")
     print(df.head())
-    print(f"\nBuild times: {t1 - t0:.2f}s (cached: {t3 - t2:.2f}s)")
+    print(f"\nBuild time: {t1 - t0:.2f}s")
 
 
 if __name__ == "__main__":
