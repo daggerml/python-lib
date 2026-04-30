@@ -194,7 +194,7 @@ def execute_command(args) -> None:
     try:
         if not getattr(args, "func", None):
             raise ValueError("Missing command method; run with --help for available methods")
-        if args.op in {"init", "clone", "contrib", "status", "config"}:
+        if args.op in {"init", "contrib", "status", "config"}:
             result = args.func(args)
             if isinstance(result, str):
                 sys.stdout.write(result)

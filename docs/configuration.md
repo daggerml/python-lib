@@ -50,8 +50,7 @@ Rules:
   "user": "string-or-null",
   "default_branch": "string",
   "hooks": {
-    "post-init": ["string"],
-    "post-clone": ["string"]
+    "post-init": ["string"]
   },
   "config_home": "string"
 }
@@ -59,7 +58,7 @@ Rules:
 
 Rules:
 
-- canonical config parameters are `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`.
+- canonical config parameters are `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
 - `project.branch` is a helper derived from resolved `project.uri` when a project URI is present; runtime callers MAY also observe the effective branch helper when only branch override inputs are available.
 - config key names MUST remain stable across API, CLI, runtime, and ops boundaries.
 
@@ -109,7 +108,7 @@ Git-like project commands store local state under `<project>/.dml/`:
 - `.dml/db/` contains the local object database.
 - `.dml/.gitignore` contains `*`.
 
-Global project config is loaded from `$DML_CONFIG_HOME/config.toml`, `$XDG_CONFIG_HOME/dml/config.toml`, or `~/.config/dml/config.toml`. It may define `[user].name`, `[defaults].branch`, and ordered `[hooks]` lists for `post-init` and `post-clone`.
+Global project config is loaded from `$DML_CONFIG_HOME/config.toml`, `$XDG_CONFIG_HOME/dml/config.toml`, or `~/.config/dml/config.toml`. It may define `[user].name`, `[defaults].branch`, and ordered `[hooks]` list for `post-init`.
 
 The global config home is referred to as `config_home` in CLI and internal project-config APIs.
 

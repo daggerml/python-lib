@@ -33,13 +33,13 @@ CLI is an operational interface over `_internal` ops. It owns argument parsing a
 - expected domain errors MUST NOT emit unstructured tracebacks,
 - `remote` commands use remote operation methods,
 - `remote` and `cache` are separate command domains,
-- top-level git-like project commands include `clone`, `checkout`, `fetch`, `pull`, `push`, `merge`, and `revert`, with remote subcommand equivalents for lower-level S3 sync operations,
+- top-level git-like project commands include `checkout`, `fetch`, `pull`, `push`, `merge`, and `revert`, with remote subcommand equivalents for lower-level S3 sync operations,
 - `checkout <revision>` resolves revisions locally (branch, tag, commit ref, or ancestry expression), reports attached vs detached mode explicitly, and does not perform implicit network fetches,
-- `clone` composes `fetch` then `checkout`; branch targets attach, tag/commit-expression targets detach, direct commit-target clone is rejected until fetch supports commit retrieval, and clone initialization does not invoke `init` hooks,
+- project bootstrap runs through `init`; remote synchronization then uses explicit `fetch`, `checkout`, or `pull` flows,
 - `dag checkout <revision> <dag-name> [--as <name>] [--replace]` copies one DAG from history into the current branch as a new commit,
 - `contrib status` emits the structured contrib status report as compact JSON,
 - `cache` supports `list|get|put|delete|clear`,
-- runtime config naming follows [configuration.md](configuration.md): `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`.
+- runtime config naming follows [configuration.md](configuration.md): `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
 
 ## Serialization-Limited Gaps
 

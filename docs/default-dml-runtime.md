@@ -68,7 +68,7 @@ These delegate to `get_default_dml()`.
   - `remote` with `uri`
   - `user`
   - `default_branch`
-  - `hooks` with `post-init` and `post-clone`
+  - `hooks` with `post-init`
   - `config_home`
 - `runtime`:
   - `ops_initialized`: `bool`

@@ -315,29 +315,6 @@ def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_name
     return delayed, dependencies
 
 
-def _toposort_methods(method_deps: dict[str, list[str]]) -> list[str]:
-    ordered: list[str] = []
-    temp: set[str] = set()
-    done: set[str] = set()
-
-    def visit(name: str) -> None:
-        if name in done:
-            return
-        if name in temp:
-            raise DmlRepoError(f"dagclass method dependency cycle detected at: {name}")
-        temp.add(name)
-        for dep in method_deps.get(name, []):
-            if dep in method_deps:
-                visit(dep)
-        temp.remove(name)
-        done.add(name)
-        ordered.append(name)
-
-    for name in method_deps:
-        visit(name)
-    return ordered
-
-
 def _collect_member_dependencies(value: Any, member_names: set[str]) -> set[str]:
     deps: set[str] = set()
 

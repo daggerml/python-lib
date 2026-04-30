@@ -157,7 +157,7 @@ The system SHALL resolve project-local state from the project directory and SHAL
 - **THEN** the operation does not use those values
 
 ### Requirement: Project directory initialization
-The system SHALL initialize local project state under `<project-directory>/.dml/` for both `init` and `clone`.
+The system SHALL initialize local project state under `<project-directory>/.dml/` for `init`.
 
 #### Scenario: Init creates DML directory
 - **WHEN** `dml init demo` succeeds
@@ -183,12 +183,8 @@ The system SHALL initialize local project state under `<project-directory>/.dml/
 - **WHEN** `dml init demo` succeeds
 - **THEN** local storage contains an initial empty commit/tree and the current branch is `main`
 
-#### Scenario: Clone creates DML directory
-- **WHEN** `dml clone dml://alice/demo` succeeds
-- **THEN** the system creates a project directory with `.dml/`, `.dml/.gitignore`, `.dml/config.toml`, and local database storage under `.dml/db/`
-
-### Requirement: Init and clone shell hooks
-The system SHALL support `post-init` and `post-clone` shell hooks from global DML config that run in the project directory after `.dml/` exists.
+### Requirement: Init shell hooks
+The system SHALL support `post-init` shell hooks from global DML config that run in the project directory after `.dml/` exists.
 
 #### Scenario: Init hook succeeds
 - **WHEN** a `post-init` hook command is configured and `dml init demo` runs
@@ -202,25 +198,13 @@ The system SHALL support `post-init` and `post-clone` shell hooks from global DM
 - **WHEN** multiple `post-init` hook commands are configured and `dml init demo` runs
 - **THEN** the hook commands run in their configured list order
 
-#### Scenario: Clone does not run init hooks
-- **WHEN** both `post-init` and `post-clone` hooks are configured and `dml clone dml://alice/demo` runs
-- **THEN** only `post-clone` hook commands run
-
 #### Scenario: Init no-hooks skips hooks
 - **WHEN** `dml init --no-hooks demo` runs
 - **THEN** no `post-init` hook commands run
 
-#### Scenario: Clone no-hooks skips hooks
-- **WHEN** `dml clone --no-hooks dml://alice/demo` runs
-- **THEN** no `post-clone` hook commands run
-
 #### Scenario: Hook environment is provided
-- **WHEN** a `post-init` or `post-clone` hook command runs
+- **WHEN** a `post-init` hook command runs
 - **THEN** the process environment includes `DML_HOOK`, `DML_PROJECT_HOME`, `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, `DML_CONFIG_HOME`, and `DML_BRANCH`
-
-#### Scenario: Clone hook fails
-- **WHEN** a `post-clone` hook command exits non-zero during `dml clone dml://alice/demo`
-- **THEN** clone fails and reports the failing hook command
 
 ### Requirement: DML URIs track fetched remote refs
 The system SHALL track fetched remote branches and tags locally by canonical normalized DML URI.
@@ -335,18 +319,3 @@ The system SHALL update remote branch heads only with an ETag conditional write 
 #### Scenario: Create push loses race
 - **WHEN** push uses `--create` and another client creates the remote branch ref first
 - **THEN** push fails without overwriting the remote branch ref
-
-### Requirement: Clone records origin
-The system SHALL clone a remote project branch by initializing local state from the remote branch and recording the remote project as `origin`.
-
-#### Scenario: Clone project
-- **WHEN** `dml clone dml://alice/demo` succeeds
-- **THEN** local config contains an `origin` remote for `dml://alice/demo` and local branch state is initialized from the selected remote branch
-
-#### Scenario: Clone default branch
-- **WHEN** `dml clone dml://alice/demo` omits an explicit branch revision
-- **THEN** clone fetches and initializes the configured default branch, falling back to `main`
-
-#### Scenario: Clone explicit branch
-- **WHEN** `dml clone dml://alice/demo#experiment` succeeds
-- **THEN** clone fetches and initializes branch `experiment`

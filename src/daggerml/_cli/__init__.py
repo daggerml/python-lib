@@ -11,7 +11,7 @@ from .head import setup_head_parser
 from .index import setup_index_parser
 from .init import setup_init_parser
 from .node import setup_node_parser
-from .project import setup_clone_parser, setup_project_alias_parser
+from .project import setup_project_alias_parser
 from .remote import setup_remote_parser
 from .status import setup_status_parser
 
@@ -25,7 +25,7 @@ def cli() -> None:
             "DaggerML CLI\n\n"
             "Command groups:\n"
             "  Core operations: init, status, config, commit, head, index, cache, dag, node, remote, gc, contrib\n"
-            "  Git-like project operations: clone, fetch, pull, push, merge, revert, checkout"
+            "  Git-like project operations: fetch, pull, push, merge, revert, checkout"
         ),
         examples=[
             "dml --help",
@@ -57,10 +57,6 @@ def cli() -> None:
     # Config subcommand
     config_parser = subparsers.add_parser("config", help="Get/set supported configuration values")
     setup_config_parser(config_parser)
-
-    # Commit subcommand
-    clone_parser = subparsers.add_parser("clone", help="Clone a remote DML project")
-    setup_clone_parser(clone_parser)
 
     for alias in ("fetch", "pull", "push", "merge", "revert", "checkout"):
         setup_project_alias_parser(subparsers.add_parser(alias, help=f"Git-like {alias}"), alias)

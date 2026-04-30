@@ -116,25 +116,6 @@ The system SHALL support checking out repository state from a resolved revision 
 - **WHEN** `dml checkout dml://alice/tools#main` is requested and no local tracking ref exists for that URI
 - **THEN** checkout fails without implicit fetch and reports that the revision cannot be resolved locally
 
-### Requirement: Clone composes fetch then checkout
-The system SHALL implement clone as `fetch` followed by `checkout`, using the fetched target revision for checkout semantics.
-
-#### Scenario: Clone branch uses fetch then attached checkout
-- **WHEN** `dml clone dml://alice/tools#main` is requested
-- **THEN** the system fetches `dml://alice/tools#main` and checks out `main` as a branch-attached HEAD
-
-#### Scenario: Clone tag uses fetch then detached checkout
-- **WHEN** `dml clone dml://alice/tools@v1.0` is requested
-- **THEN** the system fetches `dml://alice/tools@v1.0` and checks out the resolved commit in detached mode
-
-#### Scenario: Clone direct commit is not supported yet
-- **WHEN** `dml clone <uri>@<commit-ref>` is requested for a direct commit target that is not fetchable as a branch/tag ref
-- **THEN** clone fails with an error indicating direct commit clone is unsupported until fetch supports commit-target retrieval
-
-#### Scenario: Clone does not run init hooks
-- **WHEN** `dml clone` initializes a local repository for the first time
-- **THEN** the system does not invoke `dml init` and does not run init hooks as part of clone
-
 ### Requirement: DAG removal remains explicit
 The system SHALL remove DAG names from the current branch tree only through an explicit DAG removal command, not through DAG checkout of an absent source.
 

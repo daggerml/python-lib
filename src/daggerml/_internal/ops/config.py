@@ -13,7 +13,7 @@ from daggerml._internal.types import DmlRepoError
 SCOPE_GLOBAL = "global"
 SCOPE_LOCAL = "local"
 
-GLOBAL_KEYS = {"user", "default_branch", "hooks.post-init", "hooks.post-clone"}
+GLOBAL_KEYS = {"user", "default_branch", "hooks.post-init"}
 LOCAL_KEYS = {"project.uri", "remote.uri"}
 ALL_KEYS = GLOBAL_KEYS | LOCAL_KEYS
 
@@ -99,18 +99,11 @@ class ConfigOps:
             if isinstance(value, str):
                 return [value]
             return [str(item) for item in value]
-        if key == "hooks.post-clone":
-            value = (data.get("hooks") or {}).get("post-clone")
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return [value]
-            return [str(item) for item in value]
         raise DmlRepoError(f"Unsupported config key: {key}")
 
     def set(self, key: str, values: list[str], *, scope: str) -> str | list[str]:
         self._validate_scope_key(scope, key)
-        if key in {"hooks.post-init", "hooks.post-clone"}:
+        if key == "hooks.post-init":
             if not values:
                 raise DmlRepoError(f"Config key {key!r} requires at least one value")
             value: str | list[str] = values
@@ -140,8 +133,6 @@ class ConfigOps:
             _set_nested(data, "defaults", "branch", value)
         elif key == "hooks.post-init":
             _set_nested(data, "hooks", "post-init", value)
-        elif key == "hooks.post-clone":
-            _set_nested(data, "hooks", "post-clone", value)
         else:
             raise DmlRepoError(f"Unsupported config key: {key}")
         _write_toml(path, data)

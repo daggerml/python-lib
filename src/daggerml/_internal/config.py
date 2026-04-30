@@ -183,7 +183,6 @@ def _load_global_layer(config_home: str, env: Mapping[str, str]) -> dict[str, ob
     layer["user"] = user.get("name")
     layer["default_branch"] = defaults.get("branch")
     layer["hooks.post-init"] = hooks.get("post-init")
-    layer["hooks.post-clone"] = hooks.get("post-clone")
     return layer
 
 
@@ -270,7 +269,6 @@ class DmlRemoteSettings:
 @dataclass(frozen=True)
 class DmlHookSettings:
     post_init: tuple[str, ...] = ()
-    post_clone: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -376,7 +374,6 @@ class DmlConfig:
 
         hooks = DmlHookSettings(
             post_init=_coerce_commands(merged.get("hooks.post-init")) or (),
-            post_clone=_coerce_commands(merged.get("hooks.post-clone")) or (),
         )
         return cls(
             project=DmlProjectSettings(home=project_home, uri=project_uri),
@@ -418,7 +415,6 @@ class DmlConfig:
             "default_branch": self.default_branch,
             "hooks": {
                 "post-init": list(self.hooks.post_init),
-                "post-clone": list(self.hooks.post_clone),
             },
             "config_home": self.config_home,
         }
@@ -455,7 +451,6 @@ class DmlGlobalConfig:
     user: str | None = None
     default_branch: str = "main"
     post_init: tuple[str, ...] = ()
-    post_clone: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, config_home: Path | str | None = None, *, env: Mapping[str, str] | None = None) -> "DmlGlobalConfig":
@@ -468,7 +463,6 @@ class DmlGlobalConfig:
             user=resolved.user,
             default_branch=resolved.default_branch,
             post_init=resolved.hooks.post_init,
-            post_clone=resolved.hooks.post_clone,
         )
 
 
@@ -515,20 +509,6 @@ class DmlProjectConfig:
         if self.remote_uri:
             lines.extend(["", "[remote]", f'uri = "{validate_remote_uri(self.remote_uri)}"'])
         (dml_dir / "config.toml").write_text("\n".join(lines) + "\n")
-
-
-def resolve_waterfall(
-    explicit: object | None,
-    env: Mapping[str, str],
-    env_name: str,
-    config_value: object | None,
-) -> object | None:
-    if explicit is not None:
-        return explicit
-    value = env.get(env_name)
-    if value:
-        return value
-    return config_value
 
 
 def init_project_layout(project_dir: Path | str, cfg: DmlProjectConfig) -> Path:

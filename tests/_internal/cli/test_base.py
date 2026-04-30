@@ -371,4 +371,5 @@ class TestTopLevelHelp:
             "checkout",
         ]:
             assert op in out
+        assert " clone" not in out
         assert "--remote-root" in out
