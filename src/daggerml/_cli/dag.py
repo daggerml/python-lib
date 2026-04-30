@@ -6,8 +6,6 @@ from argparse import ArgumentParser
 from typing import Any
 
 from daggerml._cli.base import apply_help_config, parse_ref
-from daggerml._internal.config import DmlConfig, DmlProjectConfig
-from daggerml._internal.types import DmlRepoError
 
 
 def setup_dag_parser(parser: ArgumentParser) -> None:
@@ -112,23 +110,14 @@ def setup_dag_checkout_parser(parser: ArgumentParser) -> None:
 
 
 def execute_dag_checkout(_ops_obj: Any, args) -> str:
-    from daggerml._internal.ops.commit import CommitOps
-
-    commit_ops = CommitOps(_db=_ops_obj._db)
-    project = DmlProjectConfig.load(_ops_obj.path)
-    user = args.user or DmlConfig.resolve(explicit={"project.home": _ops_obj.path}).user
-    if not user:
-        raise DmlRepoError("user is required for dag checkout; pass --user or set DML_USER/config user.name")
-    branch = args.branch or project.branch
-    head = args.head or f"head:{branch}"
-    source_commit = commit_ops.resolve_revision_ref(args.revision, current_branch=branch, project_dir=_ops_obj.path)
-    result = commit_ops.checkout_dag(
-        parse_ref(head),
-        source_commit,
+    result = _ops_obj.checkout_dag_from_revision(
+        args.revision,
         args.source_name,
         target_name=args.target_name,
         replace=args.replace,
-        user=user,
+        head=parse_ref(args.head) if args.head else None,
+        branch=args.branch,
+        user=args.user,
     )
     return str(result)
 

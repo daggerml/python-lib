@@ -3,7 +3,6 @@ from __future__ import annotations
 from argparse import ArgumentParser
 
 from daggerml._cli.base import apply_help_config, parse_ref
-from daggerml._cli.remote import create_s3_client, require_boto3
 from daggerml._internal import DmlOps
 
 
@@ -40,31 +39,26 @@ def setup_project_alias_parser(parser: ArgumentParser, name: str) -> None:
 class ProjectAliasHandlers:
     @staticmethod
     def fetch(ops: DmlOps, args) -> str:
-        boto3 = require_boto3()
-        return str(ops.fetch_project(args.remote_or_uri, args.branch, s3_client=create_s3_client(boto3)))
+        return str(ops.fetch_project(args.remote_or_uri, args.branch))
 
     @staticmethod
     def pull(ops: DmlOps, args) -> str:
-        boto3 = require_boto3()
         return str(
             ops.pull_project(
                 args.remote_or_uri,
                 args.branch,
                 head=parse_ref(args.head),
                 user=args.user,
-                s3_client=create_s3_client(boto3),
             )
         )
 
     @staticmethod
     def push(ops: DmlOps, args) -> str:
-        boto3 = require_boto3()
         return ops.push_project(
             args.tag,
             head=parse_ref(args.head),
             create=args.create,
             force=args.force,
-            s3_client=create_s3_client(boto3),
         )
 
     @staticmethod

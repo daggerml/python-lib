@@ -6,7 +6,6 @@ from argparse import ArgumentParser
 
 from daggerml._cli.base import apply_help_config
 from daggerml._internal import DmlOps
-from daggerml._internal.config import DmlConfig
 
 
 def setup_init_parser(parser: ArgumentParser) -> None:
@@ -45,32 +44,14 @@ def setup_init_parser(parser: ArgumentParser) -> None:
 
 def execute_init(args) -> dict[str, str | None]:
     """Execute init command."""
-    repo_name = args.name.strip() if args.name else None
-    if repo_name and getattr(args, "project_uri", None):
-        raise ValueError(
-            "NAME and --project-uri are mutually exclusive; provide NAME to derive project URI or use "
-            "--project-uri for an explicit URI"
-        )
-    if repo_name and ("/" in repo_name or "\\" in repo_name):
-        raise ValueError("Repository NAME must not contain path separators")
-
-    cfg = DmlConfig.resolve(
-        scope="global",
-        explicit={
-            "project.home": args.repo,
-            "config_home": getattr(args, "config_home", None),
-        },
-    )
-    branch = getattr(args, "branch", None) or cfg.default_branch
-    init_result = DmlOps.init(
+    return DmlOps.init(
         path=args.repo,
-        name=repo_name,
+        name=args.name.strip() if args.name else None,
         owner=getattr(args, "owner", None),
-        branch=branch,
+        branch=getattr(args, "branch", None),
         project_uri=getattr(args, "project_uri", None),
         remote_uri=getattr(args, "remote_uri", None),
-        user=cfg.user,
+        user=None,
         config_home=getattr(args, "config_home", None),
         no_hooks=getattr(args, "no_hooks", False),
     )
-    return init_result

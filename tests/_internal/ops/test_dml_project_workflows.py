@@ -42,6 +42,38 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
     assert pushed_tag == "projects/alice/demo/tags/v1.0.json"
 
 
+def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
+    ops = DmlOps(path="/repo", remote_root="s3://bucket/prefix", _db=Mock())
+    remote_ops = Mock()
+    s3_client = object()
+    with (
+        patch.object(
+            ops,
+            "_load_project_config",
+            return_value=SimpleNamespace(branch="main", uri="dml://alice/demo"),
+        ),
+        patch.object(ops, "remote", return_value=remote_ops),
+        patch.object(ops, "_create_s3_client", return_value=s3_client) as mock_create_s3,
+    ):
+        remote_ops.fetch_uri.return_value = Ref("commit:1")
+        remote_ops.pull_uri_into_head.return_value = Ref("commit:2")
+        remote_ops.push_project_branch.return_value = "projects/alice/demo/heads/main.json"
+
+        fetched = ops.fetch_project("origin", None)
+        pulled = ops.pull_project("origin", None, head=Ref("head:main"), user="alice")
+        pushed = ops.push_project(None, head=Ref("head:main"), create=False, force=False)
+
+    assert mock_create_s3.call_count == 3
+    remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo#main")
+    remote_ops.pull_uri_into_head.assert_called_once_with("dml://alice/demo#main", Ref("head:main"), user="alice")
+    remote_ops.push_project_branch.assert_called_once_with(
+        "dml://alice/demo#main", Ref("head:main"), create=False, force=False
+    )
+    assert fetched == Ref("commit:1")
+    assert pulled == Ref("commit:2")
+    assert pushed == "projects/alice/demo/heads/main.json"
+
+
 def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
     ops = DmlOps(path="/repo", remote_root="s3://bucket/prefix", _db=Mock())
     project = SimpleNamespace(name="demo", owner="alice", branch="main", remote_uri="s3://bucket/prefix")
@@ -68,6 +100,48 @@ def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
     assert checkout["mode"] == "attached"
     assert merged == Ref("commit:3")
     assert reverted == Ref("commit:4")
+
+
+def test_checkout_dag_from_revision_delegates_to_commit_ops_with_resolved_defaults():
+    ops = DmlOps(path="/repo", remote_root="s3://bucket/prefix", _db=Mock())
+    project = SimpleNamespace(name="demo", owner="alice", branch="main", remote_uri="s3://bucket/prefix")
+    commit_ops = Mock()
+    commit_ops.resolve_revision_ref.return_value = Ref("commit:2")
+    commit_ops.checkout_dag.return_value = Ref("commit:3")
+
+    with (
+        patch.object(ops, "_load_project_config", return_value=project),
+        patch.object(ops, "commit", return_value=commit_ops),
+        patch("daggerml._internal.ops.DmlConfig.resolve", return_value=SimpleNamespace(user="alice")),
+    ):
+        result = ops.checkout_dag_from_revision("origin/main", "train")
+
+    commit_ops.resolve_revision_ref.assert_called_once_with(
+        "origin/main",
+        current_branch="main",
+        project_dir="/repo",
+    )
+    commit_ops.checkout_dag.assert_called_once_with(
+        Ref("head:main"),
+        Ref("commit:2"),
+        "train",
+        target_name=None,
+        replace=False,
+        user="alice",
+    )
+    assert result == Ref("commit:3")
+
+
+def test_checkout_dag_from_revision_requires_user_if_not_resolved():
+    ops = DmlOps(path="/repo", remote_root="s3://bucket/prefix", _db=Mock())
+    project = SimpleNamespace(name="demo", owner="alice", branch="main", remote_uri="s3://bucket/prefix")
+
+    with (
+        patch.object(ops, "_load_project_config", return_value=project),
+        patch("daggerml._internal.ops.DmlConfig.resolve", return_value=SimpleNamespace(user=None)),
+    ):
+        with pytest.raises(DmlRepoError, match="user is required for dag checkout"):
+            ops.checkout_dag_from_revision("origin/main", "train")
 
 
 def test_push_lifecycle_uses_configured_uri_and_optional_tag(tmp_path, aws_server):

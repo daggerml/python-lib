@@ -12,6 +12,28 @@ from daggerml._cli.init import execute_init, setup_init_parser
 from daggerml._internal.types import DmlRepoError
 
 
+@patch("daggerml._cli.init.DmlOps.init")
+def test_execute_init_forwards_branch_argument_without_local_derivation(mock_dml_init):
+    mock_dml_init.return_value = {"head": "head:dev"}
+
+    args = Namespace(
+        name="demo",
+        config_home=None,
+        repo=None,
+        owner=None,
+        branch=None,
+        project_uri=None,
+        remote_uri="s3://test-bucket/test-prefix",
+        no_hooks=True,
+    )
+
+    execute_init(args)
+
+    mock_dml_init.assert_called_once()
+    assert mock_dml_init.call_args.kwargs["branch"] is None
+    assert mock_dml_init.call_args.kwargs["user"] is None
+
+
 class TestSetupInitParser:
     """Test init parser setup."""
 

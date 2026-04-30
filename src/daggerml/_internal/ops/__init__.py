@@ -182,11 +182,21 @@ class DmlOps:
             raise DmlRepoError(f"Unknown remote: {remote_or_uri}")
         return f"{project.uri}#{branch or project.branch}"
 
-    def fetch_project(self, remote_or_uri: str, branch: str | None, *, s3_client: Any) -> Ref:
-        return self.remote(client=s3_client).fetch_uri(self._project_remote_uri(remote_or_uri, branch))
+    def fetch_project(self, remote_or_uri: str, branch: str | None, *, s3_client: Any | None = None) -> Ref:
+        client = s3_client or self._create_s3_client()
+        return self.remote(client=client).fetch_uri(self._project_remote_uri(remote_or_uri, branch))
 
-    def pull_project(self, remote_or_uri: str, branch: str | None, *, head: Ref, user: str, s3_client: Any) -> Ref:
-        return self.remote(client=s3_client).pull_uri_into_head(
+    def pull_project(
+        self,
+        remote_or_uri: str,
+        branch: str | None,
+        *,
+        head: Ref,
+        user: str,
+        s3_client: Any | None = None,
+    ) -> Ref:
+        client = s3_client or self._create_s3_client()
+        return self.remote(client=client).pull_uri_into_head(
             self._project_remote_uri(remote_or_uri, branch),
             head,
             user=user,
@@ -199,10 +209,11 @@ class DmlOps:
         head: Ref,
         create: bool,
         force: bool,
-        s3_client: Any,
+        s3_client: Any | None = None,
     ) -> str:
         project = self._load_project_config()
-        remote = self.remote(client=s3_client)
+        client = s3_client or self._create_s3_client()
+        remote = self.remote(client=client)
         if tag:
             return remote.push_project_tag(f"{project.uri}@{tag}", head)
         return remote.push_project_branch(
@@ -210,6 +221,38 @@ class DmlOps:
             head,
             create=create,
             force=force,
+        )
+
+    def checkout_dag_from_revision(
+        self,
+        revision: str,
+        source_name: str,
+        *,
+        target_name: str | None = None,
+        replace: bool = False,
+        head: Ref | None = None,
+        branch: str | None = None,
+        user: str | None = None,
+    ) -> Ref:
+        project = self._load_project_config()
+        current_branch = branch or project.branch
+        effective_user = user or DmlConfig.resolve(explicit={"project.home": self.path}).user
+        if not effective_user:
+            raise DmlRepoError("user is required for dag checkout; pass --user or set DML_USER/config user.name")
+        head_ref = head or Ref(f"head:{current_branch}")
+        commit_ops = self.commit()
+        source_commit = commit_ops.resolve_revision_ref(
+            revision,
+            current_branch=current_branch,
+            project_dir=self.path,
+        )
+        return commit_ops.checkout_dag(
+            head_ref,
+            source_commit,
+            source_name,
+            target_name=target_name,
+            replace=replace,
+            user=effective_user,
         )
 
     def checkout_project(self, revision: str) -> dict[str, str | None]:
