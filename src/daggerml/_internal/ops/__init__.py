@@ -288,8 +288,11 @@ class DmlOps:
         no_hooks: bool = False,
     ) -> dict[str, str | None]:
         root = Path(path) if path else Path.cwd()
-        if name is None and path is None:
-            raise ValueError("NAME is required when --repo is not provided")
+        if name is not None and project_uri is not None:
+            raise ValueError(
+                "NAME and --project-uri are mutually exclusive; provide NAME to derive project URI or use "
+                "--project-uri for an explicit URI"
+            )
 
         global_cfg = DmlConfig.resolve(
             scope="global",
@@ -312,7 +315,14 @@ class DmlOps:
 
         config_path = root / ".dml" / "config.toml"
         config_exists = config_path.exists()
-        if not project_uri and not config_exists:
+        if name is not None and not project_uri:
+            if not global_cfg.user:
+                raise DmlRepoError(
+                    "user is required to derive project URI from NAME; set DML_USER or configure global user.name"
+                )
+            owner_name = cls._default_owner(global_cfg.user)
+            project_uri = f"dml://{owner_name}/{project_name}#{branch_name}"
+        elif not project_uri and not config_exists:
             project_uri = f"dml://{owner_name}/{project_name}#{branch_name}"
         if remote_uri is None:
             remote_uri = global_cfg.remote.uri

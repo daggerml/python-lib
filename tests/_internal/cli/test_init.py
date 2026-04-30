@@ -53,10 +53,61 @@ class TestExecuteInit:
         with pytest.raises(ValueError, match="must not contain path separators"):
             execute_init(args)
 
-    def test_execute_init_requires_name_without_repo(self):
-        args = Namespace(name=None, config_home="~/.config/dml/", repo=None)
-        with pytest.raises(ValueError, match="NAME is required when --repo is not provided"):
+    def test_execute_init_accepts_project_uri_without_name(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            monkeypatch.chdir(temp_dir)
+            args = Namespace(
+                name=None,
+                config_home=None,
+                repo=None,
+                owner=None,
+                branch=None,
+                project_uri="dml://alice/demo#main",
+                remote_uri="s3://test-bucket/test-prefix",
+                no_hooks=True,
+            )
+            result = execute_init(args)
+            assert result["name"] is None
+            assert result["head"] == "head:main"
+
+    def test_execute_init_rejects_name_with_project_uri(self):
+        args = Namespace(
+            name="demo",
+            config_home=None,
+            repo=None,
+            owner=None,
+            branch=None,
+            project_uri="dml://alice/demo#main",
+            remote_uri="s3://test-bucket/test-prefix",
+            no_hooks=True,
+        )
+        with pytest.raises(
+            ValueError,
+            match=(
+                "NAME and --project-uri are mutually exclusive; provide NAME to derive project URI "
+                "or use --project-uri for an explicit URI"
+            ),
+        ):
             execute_init(args)
+
+    def test_execute_init_requires_resolved_user_for_name_mode(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            monkeypatch.chdir(temp_dir)
+            monkeypatch.setenv("USER", "")
+            monkeypatch.setattr("daggerml._internal.config.getuser", lambda: (_ for _ in ()).throw(RuntimeError()))
+            monkeypatch.setattr("daggerml._internal.config.gethostname", lambda: (_ for _ in ()).throw(RuntimeError()))
+            args = Namespace(
+                name="demo",
+                config_home=None,
+                repo=None,
+                owner=None,
+                branch=None,
+                project_uri=None,
+                remote_uri="s3://test-bucket/test-prefix",
+                no_hooks=True,
+            )
+            with pytest.raises(DmlRepoError, match="user is required to derive project URI from NAME"):
+                execute_init(args)
 
     def test_execute_init_uses_repo_flag_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -102,7 +153,7 @@ class TestExecuteInit:
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.chdir(temp_dir)
             args = Namespace(
-                name="from-env",
+                name=None,
                 config_home=None,
                 repo=None,
                 owner=None,

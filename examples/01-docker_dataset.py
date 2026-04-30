@@ -112,8 +112,7 @@ def main() -> None:
         dataset = dag.download(name="dataset")
         print("Training model and generating predictions within Docker...")
         dag.predict_fn = predict_target
-        predictions = dag.call(
-            predict_target,
+        predictions = dag.predict_fn(
             dataset,
             {"max_iter": 200, "solver": "saga", "penalty": "elasticnet", "l1_ratio": 0.2},
             name="predictions",

@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from argparse import ArgumentParser
 
 from daggerml._cli.base import apply_help_config
 from daggerml._internal import DmlOps
 from daggerml._internal.config import DmlConfig
-
-
-def _default_owner(value: str) -> str:
-    value = value.split("@", 1)[0].lower()
-    value = re.sub(r"[^a-z0-9._-]+", "-", value).strip("-._")
-    return value or "dml"
 
 
 def setup_init_parser(parser: ArgumentParser) -> None:
@@ -23,6 +16,7 @@ def setup_init_parser(parser: ArgumentParser) -> None:
         description="Initialize .dml-managed state in the current project directory.",
         examples=[
             "dml init my-project",
+            "dml init --project-uri dml://alice/my-project#main",
             "dml init --repo /path/to/project my-project",
             "dml --repo /path/to/project init",
         ],
@@ -33,7 +27,7 @@ def setup_init_parser(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--project-uri",
         default=None,
-        help="Explicit project URI (dml://owner/project#branch). Overrides owner/name/branch derivation.",
+        help="Explicit project URI (dml://owner/project#branch). Mutually exclusive with NAME.",
     )
     parser.add_argument(
         "--remote-uri",
@@ -52,8 +46,11 @@ def setup_init_parser(parser: ArgumentParser) -> None:
 def execute_init(args) -> dict[str, str | None]:
     """Execute init command."""
     repo_name = args.name.strip() if args.name else None
-    if not repo_name and not args.repo:
-        raise ValueError("NAME is required when --repo is not provided")
+    if repo_name and getattr(args, "project_uri", None):
+        raise ValueError(
+            "NAME and --project-uri are mutually exclusive; provide NAME to derive project URI or use "
+            "--project-uri for an explicit URI"
+        )
     if repo_name and ("/" in repo_name or "\\" in repo_name):
         raise ValueError("Repository NAME must not contain path separators")
 
@@ -64,12 +61,11 @@ def execute_init(args) -> dict[str, str | None]:
             "config_home": getattr(args, "config_home", None),
         },
     )
-    owner = getattr(args, "owner", None) or _default_owner(str(cfg.user or "dml"))
     branch = getattr(args, "branch", None) or cfg.default_branch
     init_result = DmlOps.init(
         path=args.repo,
         name=repo_name,
-        owner=owner,
+        owner=getattr(args, "owner", None),
         branch=branch,
         project_uri=getattr(args, "project_uri", None),
         remote_uri=getattr(args, "remote_uri", None),

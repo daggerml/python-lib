@@ -142,9 +142,10 @@ def test_dmlops_init_uses_init_project_layout_for_bootstrap(tmp_path):
         result = DmlOps.init(
             str(repo_dir),
             name="demo",
-            owner="alice",
+            owner="ignored-owner",
             branch="main",
             remote_uri="s3://bucket/prefix",
+            user="alice@example-host",
             no_hooks=True,
         )
 
@@ -158,6 +159,41 @@ def test_dmlops_init_uses_init_project_layout_for_bootstrap(tmp_path):
     assert init_cfg.remote_uri == "s3://bucket/prefix"
     mock_create.assert_called_once()
     assert result["head"] == "head:main"
+
+
+def test_dmlops_init_rejects_name_and_project_uri_together(tmp_path):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "NAME and --project-uri are mutually exclusive; provide NAME to derive project URI "
+            "or use --project-uri for an explicit URI"
+        ),
+    ):
+        DmlOps.init(
+            str(repo_dir),
+            name="demo",
+            project_uri="dml://alice/demo#main",
+            remote_uri="s3://bucket/prefix",
+        )
+
+
+def test_dmlops_init_name_mode_requires_resolved_user(tmp_path, monkeypatch):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    monkeypatch.setenv("USER", "")
+    monkeypatch.setattr("daggerml._internal.config.getuser", lambda: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr("daggerml._internal.config.gethostname", lambda: (_ for _ in ()).throw(RuntimeError()))
+
+    with pytest.raises(DmlRepoError, match="user is required to derive project URI from NAME"):
+        DmlOps.init(
+            str(repo_dir),
+            name="demo",
+            remote_uri="s3://bucket/prefix",
+        )
 
 
 def test_dmlops_init_requires_remote_uri_for_recovery_pull(tmp_path):

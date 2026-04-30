@@ -1334,7 +1334,10 @@ class RemoteOps(BaseOps):
             observed = self._remote_get_ref_with_etag(ref_path)
         except RemoteError:
             if not create:
-                raise
+                raise DmlRepoError(
+                    f"Remote branch ref '{ref_path}' does not exist; push updates existing refs only. "
+                    "Use --create to create a new remote branch ref."
+                ) from None
 
         with self._tx(readonly=True) as txn:
             lm = self._local_dump_dict(txn, root_ref)

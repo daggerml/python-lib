@@ -1,0 +1,36 @@
+"""Run an end-to-end Docker-backed dataset pipeline.
+
+The example builds a Docker image from this repository, loads the iris dataset
+in one Docker-executed funk, and trains a small classifier in another. It
+exercises the contrib runtime end to end: script funkification, Docker
+execution, remote cache publication, and S3-backed artifact exchange between
+DAG nodes.
+"""
+
+import polars as pl
+
+import daggerml as dml
+
+
+def main() -> None:
+    with dml.new("examples/03-load-docker-dataset") as dag:
+        print("Training model and generating predictions within Docker...")
+        loaded_dag = dml.load("examples/01-docker-dataset")
+        dag.predict_fn = loaded_dag.predict_fn
+        dag.dataset = loaded_dag.dataset
+        predictions = dag.predict_fn(
+            dag.dataset,
+            {"max_iter": 200, "solver": "saga", "penalty": "elasticnet", "l1_ratio": 0.5},
+            name="predictions",
+        )
+        print("Committing DAG to persist artifacts...")
+        dag.commit(predictions)
+    print("Reading predictions parquet from S3...")
+    df = pl.read_parquet(predictions.value().uri)
+    print(f"\nPredictions parquet URI: {predictions.value().uri}")
+    print("\nPredictions:")
+    print(df.head())
+
+
+if __name__ == "__main__":
+    main()

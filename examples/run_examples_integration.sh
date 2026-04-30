@@ -10,10 +10,49 @@ moto_dir="${ignore_dir}/.integration-moto-$(date +%s)-$$"
 moto_env_file="${moto_dir}/moto.env"
 moto_log_file="${moto_dir}/moto.log"
 moto_pid=""
+export DML_CONFIG_HOME="${scratch_dir}/dml_config"
 
 log() {
     echo
     echo "*** $* ***"
+}
+
+s3_ls_recursive() {
+  local s3_uri="$1"
+  python - "$s3_uri" <<'PY'
+from __future__ import annotations
+
+import os
+import sys
+from urllib.parse import urlparse
+
+import boto3
+
+
+def main() -> None:
+    uri = sys.argv[1]
+    parsed = urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise RuntimeError(f"expected s3://bucket[/prefix], got: {uri!r}")
+
+    bucket = parsed.netloc
+    prefix = parsed.path.lstrip("/")
+    endpoint_url = os.environ.get("AWS_ENDPOINT_URL") or None
+
+    client = boto3.client("s3", endpoint_url=endpoint_url)
+    paginator = client.get_paginator("list_objects_v2")
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            dt = obj["LastModified"].strftime("%Y-%m-%d %H:%M:%S")
+            size = obj["Size"]
+            key = obj["Key"]
+            print(f"{dt} {size:>10d} {key}")
+
+
+if __name__ == "__main__":
+    main()
+PY
 }
 
 cleanup() {
@@ -31,6 +70,9 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "${moto_dir}"
+mkdir -p "${DML_CONFIG_HOME}"
+dml_user="cool-guy"
+dml config --global user $dml_user
 
 log "Starting moto server and preparing env..."
 python - "${moto_env_file}" >"${moto_log_file}" 2>&1 <<'PY' &
@@ -125,18 +167,11 @@ mkdir -p "${scratch_dir}" || true
 printf '*\n' > "${ignore_dir}/.gitignore"
 cd "${scratch_dir}"
 
-project_name="project-0"
-log "Initializing DML repo in ${project_name}"
-mkdir "${scratch_dir}/${project_name}"
-cd "${scratch_dir}/${project_name}"
-dml init $project_name
-
-if [[ ! -d "./.dml/db" ]]; then
-  log "dml init did not create .dml/db" >&2
-  exit 1
-fi
-
-cat .dml/config.toml
+project0="project-0"
+log "Initializing DML repo in ${project0}"
+mkdir "${scratch_dir}/${project0}"
+cd "${scratch_dir}/${project0}"
+dml init "$project0"
 
 log "DML repo initialized. Current status:"
 dml status | jq .
@@ -152,5 +187,25 @@ python "${examples_dir}/01-docker_dataset.py"
 
 log "Running example: 02-ssh_docker_dataset.py"
 python "${examples_dir}/02-ssh_docker_dataset.py"
+
+log "Listing DML refs after running all examples:"
+s3_ls_recursive "${DML_REMOTE_URI}/dml/refs/projects/"
+dml push --create
+s3_ls_recursive "${DML_REMOTE_URI}/dml/refs/projects/"
+
+log "Cleaning up first project to test fresh init with existing remote"
+cd .. && rm -rf "${project0}"
+
+## Second "project"
+project1="project-1"
+log "Initializing DML repo in ${project1}"
+mkdir "${scratch_dir}/${project1}"
+cd "${scratch_dir}/${project1}"
+dml init $project1
+dml fetch "dml://${dml_user}/${project0}"
+dml dag checkout "dml://${dml_user}/${project0}" "examples/01-docker-dataset"
+
+log "Running example: 03-load_docker_dataset.py"
+python "${examples_dir}/03-load_docker_dataset.py"
 
 log "All examples completed successfully."
