@@ -42,6 +42,10 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **WHEN** configuration is resolved from environment variables
 - **THEN** the shared internal resolver, not the frontend, maps those values into the canonical internal configuration model
 
+#### Scenario: Init project layout creation delegates to shared internal helper
+- **WHEN** `DmlOps.init` must create missing project layout artifacts for a local project
+- **THEN** it delegates filesystem bootstrap work to shared internal project-layout helper logic instead of duplicating directory and config-file writes in ops code
+
 #### Scenario: Init resolves explicit options through shared resolver
 - **WHEN** a caller provides init-time options for project/runtime configuration
 - **THEN** `DmlOps.init` resolves them through the shared internal resolver before mutating project state

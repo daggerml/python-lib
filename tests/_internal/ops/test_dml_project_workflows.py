@@ -127,6 +127,39 @@ def test_dmlops_init_recovers_when_config_exists_and_db_missing(tmp_path):
     assert result["head"] == "head:main"
 
 
+def test_dmlops_init_uses_init_project_layout_for_bootstrap(tmp_path):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    create_context = Mock()
+    create_context.__enter__ = Mock(return_value=None)
+    create_context.__exit__ = Mock(return_value=None)
+
+    with (
+        patch("daggerml._internal.ops.DmlOps.create", return_value=create_context) as mock_create,
+        patch("daggerml._internal.ops.init_project_layout", wraps=init_project_layout) as mock_init_layout,
+    ):
+        result = DmlOps.init(
+            str(repo_dir),
+            name="demo",
+            owner="alice",
+            branch="main",
+            remote_uri="s3://bucket/prefix",
+            no_hooks=True,
+        )
+
+    mock_init_layout.assert_called_once()
+    init_root, init_cfg = mock_init_layout.call_args.args
+    assert init_root == repo_dir
+    assert isinstance(init_cfg, DmlProjectConfig)
+    assert init_cfg.name == "demo"
+    assert init_cfg.owner == "alice"
+    assert init_cfg.branch == "main"
+    assert init_cfg.remote_uri == "s3://bucket/prefix"
+    mock_create.assert_called_once()
+    assert result["head"] == "head:main"
+
+
 def test_dmlops_init_requires_remote_uri_for_recovery_pull(tmp_path):
     repo_dir = tmp_path / "repo"
     dml_dir = repo_dir / ".dml"

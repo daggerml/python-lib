@@ -17,7 +17,13 @@ except ImportError:
     from typing_extensions import Self
 
 from daggerml._internal._db import DmlDbEnv, Ref
-from daggerml._internal.config import DmlConfig, DmlProjectConfig, run_project_hooks
+from daggerml._internal.config import (
+    DmlConfig,
+    DmlProjectConfig,
+    init_project_layout,
+    parse_dml_project_uri,
+    run_project_hooks,
+)
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
 
 if TYPE_CHECKING:
@@ -252,21 +258,6 @@ class DmlOps:
         return str(dml_db)
 
     @staticmethod
-    def _config_path(path: str) -> Path:
-        return Path(path) / ".dml" / "config.toml"
-
-    @staticmethod
-    def _write_local_config(path: Path, *, project_uri: str | None, remote_uri: str) -> None:
-        lines: list[str] = []
-        if project_uri:
-            lines.extend(["[project]", f'uri = "{project_uri}"'])
-        if remote_uri:
-            if lines:
-                lines.append("")
-            lines.extend(["[remote]", f'uri = "{remote_uri}"'])
-        path.write_text("\n".join(lines) + "\n")
-
-    @staticmethod
     def _default_owner(value: str) -> str:
         import re
 
@@ -319,7 +310,7 @@ class DmlOps:
         branch_name = branch or global_cfg.default_branch
         owner_name = owner or cls._default_owner(str(global_cfg.user or "dml"))
 
-        config_path = cls._config_path(str(root))
+        config_path = root / ".dml" / "config.toml"
         config_exists = config_path.exists()
         if not project_uri and not config_exists:
             project_uri = f"dml://{owner_name}/{project_name}#{branch_name}"
@@ -339,7 +330,6 @@ class DmlOps:
         if not cfg.project.home:
             raise DmlRepoError("project.home is required for init")
 
-        dml_dir = root / ".dml"
         db_path = Path(cls._db_path(str(root)))
         db_exists = db_path.exists()
         needs_recovery_pull = config_exists and not db_exists and bool(
@@ -349,13 +339,24 @@ class DmlOps:
         if (project_uri or config_exists) and not cfg.remote.uri:
             raise DmlRepoError("remote.uri is required when project.uri is configured")
 
-        dml_dir.mkdir(parents=True, exist_ok=True)
-        gitignore_path = dml_dir / ".gitignore"
-        if not gitignore_path.exists():
-            gitignore_path.write_text("*\n")
-
-        if not config_exists:
-            cls._write_local_config(config_path, project_uri=cfg.project.uri, remote_uri=cfg.remote.uri)
+        gitignore_path = root / ".dml" / ".gitignore"
+        if not config_exists or not db_exists or not gitignore_path.exists():
+            if config_exists:
+                layout_cfg = DmlProjectConfig.load(root)
+            else:
+                project_uri_value = cfg.project.uri
+                if not project_uri_value:
+                    raise DmlRepoError("project.uri is required for init")
+                project_ref = parse_dml_project_uri(project_uri_value, require_identifier=True)
+                if project_ref.branch is None:
+                    raise DmlRepoError("project.uri is required for init")
+                layout_cfg = DmlProjectConfig(
+                    name=project_ref.project,
+                    owner=project_ref.owner,
+                    branch=project_ref.branch,
+                    remote_uri=cfg.remote.uri,
+                )
+            init_project_layout(root, layout_cfg)
 
         if not db_exists:
             with cls.create(str(root), user=cfg.user, remote_root=cfg.remote.uri, branch=cfg.branch):
