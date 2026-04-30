@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from daggerml._internal.ops.config import ConfigOps, SCOPE_GLOBAL, SCOPE_LOCAL
+from daggerml._internal.ops.config import SCOPE_GLOBAL, SCOPE_LOCAL, ConfigOps
 from daggerml._internal.types import DmlRepoError
 
 

@@ -4,6 +4,7 @@ Public API:
     Dml - Main repository class providing complete DML functionality
 """
 
+import importlib
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -253,6 +254,144 @@ class DmlOps:
         root = Path(path)
         dml_db = root / ".dml" / "db"
         return str(dml_db)
+
+    @staticmethod
+    def _config_path(path: str) -> Path:
+        return Path(path) / ".dml" / "config.toml"
+
+    @staticmethod
+    def _write_local_config(path: Path, *, project_uri: str | None, remote_uri: str) -> None:
+        lines: list[str] = []
+        if project_uri:
+            lines.extend(["[project]", f'uri = "{project_uri}"'])
+        if remote_uri:
+            if lines:
+                lines.append("")
+            lines.extend(["[remote]", f'uri = "{remote_uri}"'])
+        path.write_text("\n".join(lines) + "\n")
+
+    @staticmethod
+    def _default_owner(value: str) -> str:
+        import re
+
+        owner = value.split("@", 1)[0].lower()
+        owner = re.sub(r"[^a-z0-9._-]+", "-", owner).strip("-._")
+        return owner or "dml"
+
+    @staticmethod
+    def _create_s3_client() -> Any:
+        try:
+            boto3 = importlib.import_module("boto3")
+        except ImportError as exc:
+            raise DmlRepoError("Remote commands require boto3; install boto3 to continue") from exc
+        return boto3.client("s3")
+
+    @classmethod
+    def init(
+        cls,
+        path: str | None = None,
+        *,
+        name: str | None = None,
+        owner: str | None = None,
+        branch: str | None = None,
+        project_uri: str | None = None,
+        remote_uri: str | None = None,
+        user: str | None = None,
+        config_home: str | None = None,
+        no_hooks: bool = False,
+    ) -> dict[str, str | None]:
+        root = Path(path) if path else Path.cwd()
+        if name is None and path is None:
+            raise ValueError("NAME is required when --repo is not provided")
+
+        global_cfg = DmlConfig.resolve(
+            scope="global",
+            explicit={
+                "project.home": str(root),
+                "user": user,
+                "config_home": config_home,
+            }
+        )
+        if not root.exists():
+            raise FileNotFoundError(f"Project directory does not exist: {root}")
+        if not root.is_dir():
+            raise NotADirectoryError(f"Project path is not a directory: {root}")
+
+        project_name = name or root.name
+        if project_name and ("/" in project_name or "\\" in project_name):
+            raise ValueError("Repository NAME must not contain path separators")
+        branch_name = branch or global_cfg.default_branch
+        owner_name = owner or cls._default_owner(str(global_cfg.user or "dml"))
+
+        config_path = cls._config_path(str(root))
+        config_exists = config_path.exists()
+        if not project_uri and not config_exists:
+            project_uri = f"dml://{owner_name}/{project_name}#{branch_name}"
+        if remote_uri is None:
+            remote_uri = global_cfg.remote.uri
+
+        cfg = DmlConfig.resolve(
+            explicit={
+                "project.home": str(root),
+                "project.uri": project_uri,
+                "remote.uri": remote_uri,
+                "user": user,
+                "default_branch": branch_name,
+                "config_home": config_home,
+            }
+        )
+        if not cfg.project.home:
+            raise DmlRepoError("project.home is required for init")
+
+        dml_dir = root / ".dml"
+        db_path = Path(cls._db_path(str(root)))
+        db_exists = db_path.exists()
+        needs_recovery_pull = config_exists and not db_exists and bool(
+            DmlConfig.resolve(explicit={"project.home": str(root)}).project.uri
+        )
+
+        if (project_uri or config_exists) and not cfg.remote.uri:
+            raise DmlRepoError("remote.uri is required when project.uri is configured")
+
+        dml_dir.mkdir(parents=True, exist_ok=True)
+        gitignore_path = dml_dir / ".gitignore"
+        if not gitignore_path.exists():
+            gitignore_path.write_text("*\n")
+
+        if not config_exists:
+            cls._write_local_config(config_path, project_uri=cfg.project.uri, remote_uri=cfg.remote.uri)
+
+        if not db_exists:
+            with cls.create(str(root), user=cfg.user, remote_root=cfg.remote.uri, branch=cfg.branch):
+                pass
+
+        recovered_ref: str | None = None
+        if needs_recovery_pull:
+            if not cfg.user:
+                raise DmlRepoError("user is required for recovery pull")
+            s3_client = cls._create_s3_client()
+            with cls.open(str(root), remote_root=cfg.remote.uri) as ops:
+                recovered_ref = ops.pull_project(
+                    "origin", None, head=Ref(f"head:{cfg.branch}"), user=cfg.user, s3_client=s3_client
+                ).to
+
+        project_cfg = DmlProjectConfig.load(root)
+        run_project_hooks(
+            "post-init",
+            cfg.hooks.post_init,
+            project_dir=root,
+            project=project_cfg,
+            config_home=Path(cfg.config_home),
+            no_hooks=no_hooks,
+        )
+
+        return {
+            "name": name,
+            "repo_path": str(root),
+            "db_path": str(db_path),
+            "head": f"head:{cfg.branch}",
+            "recovered": recovered_ref,
+        }
 
     @classmethod
     def create(

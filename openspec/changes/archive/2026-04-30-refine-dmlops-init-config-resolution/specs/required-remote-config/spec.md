@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: Remote-aware components require explicit remote configuration
 The system SHALL require explicit remote configuration at the constructor or helper boundary for any runtime or ops component that performs remote-backed behavior. Remote-aware interfaces MUST NOT model remote configuration as optional, MUST NOT provide `None` defaults for required remote parameters, and MUST receive normalized `remote.uri` configuration from the shared internal configuration resolver rather than reading raw environment variables or project config files themselves.
 

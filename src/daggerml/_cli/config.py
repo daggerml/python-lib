@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 
 from daggerml._cli.base import apply_help_config
 from daggerml._internal.config import DmlConfig
-from daggerml._internal.ops.config import ConfigOps, SCOPE_GLOBAL, SCOPE_LOCAL, render_config_output
+from daggerml._internal.ops.config import SCOPE_GLOBAL, SCOPE_LOCAL, ConfigOps, render_config_output
 from daggerml._internal.types import DmlRepoError
 
 

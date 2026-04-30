@@ -4,10 +4,12 @@ import json
 import tempfile
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from daggerml._cli.init import execute_init, setup_init_parser
+from daggerml._internal.types import DmlRepoError
 
 
 class TestSetupInitParser:
@@ -23,19 +25,28 @@ class TestSetupInitParser:
 class TestExecuteInit:
     """Test init command execution helper."""
 
-    def test_execute_init_creates_repo_in_cwd(self, monkeypatch):
+    def test_execute_init_initializes_current_directory(self, monkeypatch):
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.chdir(temp_dir)
-            args = Namespace(name="my-repo", config_home=temp_dir, repo=None)
+            args = Namespace(
+                name="my-repo",
+                config_home=temp_dir,
+                repo=None,
+                owner=None,
+                branch=None,
+                project_uri=None,
+                remote_uri="s3://test-bucket/test-prefix",
+                no_hooks=True,
+            )
             result = execute_init(args)
-            expected_repo = Path(temp_dir) / "my-repo"
+            expected_repo = Path(temp_dir)
             repo_path = result["repo_path"]
             assert repo_path is not None
-            # macOS may report the cwd through /private/var even when tempfile returned /var.
             assert Path(repo_path).resolve() == expected_repo.resolve()
             assert result["name"] == "my-repo"
             assert result["head"] == "head:main"
-            assert expected_repo.exists()
+            assert (expected_repo / ".dml" / "config.toml").exists()
+            assert (expected_repo / ".dml" / "db").exists()
 
     def test_execute_init_rejects_path_separators(self):
         args = Namespace(name="bad/name", config_home="~/.config/dml/", repo=None)
@@ -50,24 +61,85 @@ class TestExecuteInit:
     def test_execute_init_uses_repo_flag_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             explicit = Path(temp_dir) / "repo-from-flag"
-            args = Namespace(name=None, config_home="~/.config/dml/", repo=str(explicit))
+            explicit.mkdir()
+            args = Namespace(
+                name=None,
+                config_home="~/.config/dml/",
+                repo=str(explicit),
+                owner=None,
+                branch=None,
+                project_uri=None,
+                remote_uri="s3://test-bucket/test-prefix",
+                no_hooks=True,
+            )
             result = execute_init(args)
             assert result["repo_path"] == str(explicit)
             assert result["name"] is None
-            assert explicit.exists()
+            assert (explicit / ".dml" / "db").exists()
 
     def test_execute_init_uses_env_when_flag_missing(self, monkeypatch):
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.setenv("DML_CONFIG_HOME", temp_dir)
             monkeypatch.chdir(temp_dir)
-            args = Namespace(name="from-env", config_home=None, repo=None)
+            args = Namespace(
+                name="from-env",
+                config_home=None,
+                repo=None,
+                owner=None,
+                branch=None,
+                project_uri=None,
+                remote_uri="s3://test-bucket/test-prefix",
+                no_hooks=True,
+            )
             result = execute_init(args)
-            expected_repo = Path(temp_dir) / "from-env"
+            expected_repo = Path(temp_dir)
             repo_path = result["repo_path"]
             assert repo_path is not None
-            # macOS may report the cwd through /private/var even when tempfile returned /var.
             assert Path(repo_path).resolve() == expected_repo.resolve()
-            assert expected_repo.exists()
+            assert (expected_repo / ".dml" / "db").exists()
+
+    def test_execute_init_requires_remote_when_project_uri_present(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            monkeypatch.chdir(temp_dir)
+            args = Namespace(
+                name="from-env",
+                config_home=None,
+                repo=None,
+                owner=None,
+                branch=None,
+                project_uri="dml://alice/demo#main",
+                remote_uri="",
+                no_hooks=True,
+            )
+            with pytest.raises(DmlRepoError, match="remote.uri is required"):
+                execute_init(args)
+
+    def test_execute_init_recovery_without_project_uri_does_not_require_remote(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            dml = root / ".dml"
+            dml.mkdir(parents=True)
+            (dml / "config.toml").write_text('[project]\nuri = "dml://alice/demo#main"\n[remote]\nuri = "s3://bucket/prefix"\n')
+            monkeypatch.chdir(temp_dir)
+            args = Namespace(
+                name="demo",
+                config_home=None,
+                repo=None,
+                owner=None,
+                branch=None,
+                project_uri=None,
+                remote_uri=None,
+                no_hooks=True,
+            )
+            with patch("daggerml._cli.init.DmlOps.init") as mock_init:
+                mock_init.return_value = {
+                    "db_path": str(root / ".dml" / "db"),
+                    "head": "head:main",
+                }
+                result = execute_init(args)
+
+            assert result["head"] == "head:main"
+            assert mock_init.call_args.kwargs["path"] is None
 
 
 class TestInitCLIIntegration:
@@ -102,23 +174,27 @@ class TestInitCLIIntegration:
     def test_init_creates_repo(self, monkeypatch):
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.chdir(temp_dir)
-            stdout, stderr = self.run_cli_command(["init", "--config-home", temp_dir, "named-repo"])
+            stdout, stderr = self.run_cli_command(
+                ["init", "--config-home", temp_dir, "--remote-uri", "s3://test-bucket/test-prefix", "named-repo"]
+            )
             assert not stderr
             payload = json.loads(stdout.strip())
-            expected_repo = Path(temp_dir) / "named-repo"
+            expected_repo = Path(temp_dir)
             repo_path = payload["repo_path"]
             assert repo_path is not None
-            # macOS may report the cwd through /private/var even when tempfile returned /var.
             assert Path(repo_path).resolve() == expected_repo.resolve()
             assert payload["head"] == "head:main"
-            assert expected_repo.exists()
+            assert (expected_repo / ".dml" / "db").exists()
 
     def test_init_with_db_path_only(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             explicit = Path(temp_dir) / "db-only"
-            stdout, stderr = self.run_cli_command(["--repo", str(explicit), "init"])
+            explicit.mkdir()
+            stdout, stderr = self.run_cli_command(
+                ["--repo", str(explicit), "init", "--remote-uri", "s3://test-bucket/test-prefix"]
+            )
             assert not stderr
             payload = json.loads(stdout.strip())
             assert payload["repo_path"] == str(explicit)
             assert payload["name"] is None
-            assert explicit.exists()
+            assert (explicit / ".dml" / "db").exists()

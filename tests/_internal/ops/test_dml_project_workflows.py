@@ -139,7 +139,7 @@ def test_push_lifecycle_uses_configured_uri_and_optional_tag(tmp_path, aws_serve
     except Exception:
         pass
 
-    with DmlOps.create(str(repo_dir), remote_root="s3://test-bucket/test-prefix", branch="main") as created:
+    with DmlOps.create(str(repo_dir), remote_root="s3://test-bucket/test-prefix", branch="main"):
         pass
 
     with DmlOps.open(str(repo_dir), remote_root="s3://test-bucket/test-prefix") as ops:
@@ -153,3 +153,44 @@ def test_push_lifecycle_uses_configured_uri_and_optional_tag(tmp_path, aws_serve
     keys = {obj["Key"] for obj in objects.get("Contents", [])}
     assert "test-prefix/dml/refs/projects/alice/demo/heads/main.json" in keys
     assert "test-prefix/dml/refs/projects/alice/demo/tags/v1.0.json" in keys
+
+
+def test_dmlops_init_recovers_when_config_exists_and_db_missing(tmp_path):
+    repo_dir = tmp_path / "repo"
+    dml_dir = repo_dir / ".dml"
+    dml_dir.mkdir(parents=True)
+    (dml_dir / "config.toml").write_text('[project]\nuri = "dml://alice/demo#main"\n[remote]\nuri = "s3://bucket/prefix"\n')
+
+    open_context = Mock()
+    open_ops = Mock()
+    open_context.__enter__ = Mock(return_value=open_ops)
+    open_context.__exit__ = Mock(return_value=None)
+    open_ops.pull_project.return_value = Ref("commit:9")
+
+    with (
+        patch("daggerml._internal.ops.DmlOps.create") as mock_create,
+        patch("daggerml._internal.ops.DmlOps.open", return_value=open_context) as mock_open,
+        patch("daggerml._internal.ops.DmlOps._create_s3_client", return_value=object()),
+    ):
+        result = DmlOps.init(str(repo_dir), remote_uri="s3://bucket/prefix")
+
+    mock_create.assert_called_once()
+    mock_open.assert_called_once_with(str(repo_dir), remote_root="s3://bucket/prefix")
+    open_ops.pull_project.assert_called_once()
+    assert result["head"] == "head:main"
+
+
+def test_dmlops_init_requires_remote_uri_for_recovery_pull(tmp_path):
+    repo_dir = tmp_path / "repo"
+    dml_dir = repo_dir / ".dml"
+    dml_dir.mkdir(parents=True)
+    (dml_dir / "config.toml").write_text('[project]\nuri = "dml://alice/demo#main"\n')
+
+    with pytest.raises(DmlRepoError, match="remote.uri is required"):
+        DmlOps.init(str(repo_dir), remote_uri="")
+
+
+def test_dmlops_init_requires_existing_project_directory(tmp_path):
+    missing = tmp_path / "missing"
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        DmlOps.init(str(missing), project_uri="dml://alice/demo#main", remote_uri="s3://bucket/prefix")

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import re
 from argparse import ArgumentParser
-from pathlib import Path
 
 from daggerml._cli.base import apply_help_config
 from daggerml._internal import DmlOps
-from daggerml._internal.config import DmlConfig, DmlProjectConfig, init_project_layout, run_project_hooks
+from daggerml._internal.config import DmlConfig
 
 
 def _default_owner(value: str) -> str:
@@ -21,17 +20,26 @@ def setup_init_parser(parser: ArgumentParser) -> None:
     """Setup init command parser."""
     apply_help_config(
         parser,
-        description="Create a DML project directory with .dml-managed state.",
+        description="Initialize .dml-managed state in the current project directory.",
         examples=[
-            "dml init my-repo",
             "dml init my-project",
-            "dml init --here my-project",
+            "dml init --repo /path/to/project my-project",
+            "dml --repo /path/to/project init",
         ],
     )
     parser.add_argument("name", nargs="?", help="Project name")
-    parser.add_argument("--here", action="store_true", help="Initialize the current directory")
     parser.add_argument("--owner", default=None, help="Project owner (default: global user)")
     parser.add_argument("--branch", default=None, help="Initial branch (default: global default branch or main)")
+    parser.add_argument(
+        "--project-uri",
+        default=None,
+        help="Explicit project URI (dml://owner/project#branch). Overrides owner/name/branch derivation.",
+    )
+    parser.add_argument(
+        "--remote-uri",
+        default=None,
+        help="Remote root URI (s3://bucket or s3://bucket/prefix).",
+    )
     parser.add_argument("--no-hooks", action="store_true", help="Skip post-init hooks")
     parser.add_argument(
         "--config-home",
@@ -44,7 +52,6 @@ def setup_init_parser(parser: ArgumentParser) -> None:
 def execute_init(args) -> dict[str, str | None]:
     """Execute init command."""
     repo_name = args.name.strip() if args.name else None
-    here = getattr(args, "here", False)
     if not repo_name and not args.repo:
         raise ValueError("NAME is required when --repo is not provided")
     if repo_name and ("/" in repo_name or "\\" in repo_name):
@@ -57,38 +64,17 @@ def execute_init(args) -> dict[str, str | None]:
             "config_home": getattr(args, "config_home", None),
         },
     )
-    explicit_owner = getattr(args, "owner", None)
-    owner = explicit_owner or _default_owner(str(cfg.user or "dml"))
-    if not owner:
-        raise ValueError("Project owner is required; pass --owner or set DML_USER/global [user].name")
+    owner = getattr(args, "owner", None) or _default_owner(str(cfg.user or "dml"))
     branch = getattr(args, "branch", None) or cfg.default_branch
-    if args.repo:
-        repo_path = Path(args.repo)
-        project_name = repo_name or repo_path.name
-    else:
-        project_name = str(repo_name)
-        repo_path = Path.cwd() if here else Path.cwd() / project_name
-    if not here and repo_path.exists():
-        raise FileExistsError(f"Project directory exists: {repo_path}. Use 'dml init --here {repo_name}' inside it.")
-    repo_path.mkdir(parents=True, exist_ok=here)
-    project = DmlProjectConfig(name=project_name, owner=owner, branch=branch, remote_uri=cfg.remote.uri)
-    db_path = init_project_layout(repo_path, project)
-    remote_root = cfg.remote.uri
-
-    with DmlOps.create(str(repo_path), remote_root=remote_root, branch=branch):
-        pass
-    run_project_hooks(
-        "post-init",
-        cfg.hooks.post_init,
-        project_dir=repo_path,
-        project=project,
-        config_home=Path(cfg.config_home),
+    init_result = DmlOps.init(
+        path=args.repo,
+        name=repo_name,
+        owner=owner,
+        branch=branch,
+        project_uri=getattr(args, "project_uri", None),
+        remote_uri=getattr(args, "remote_uri", None),
+        user=cfg.user,
+        config_home=getattr(args, "config_home", None),
         no_hooks=getattr(args, "no_hooks", False),
     )
-
-    return {
-        "name": repo_name,
-        "repo_path": str(repo_path),
-        "db_path": str(db_path),
-        "head": f"head:{branch}",
-    }
+    return init_result

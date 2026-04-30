@@ -42,6 +42,10 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **WHEN** configuration is resolved from environment variables
 - **THEN** the shared internal resolver, not the frontend, maps those values into the canonical internal configuration model
 
+#### Scenario: Init resolves explicit options through shared resolver
+- **WHEN** a caller provides init-time options for project/runtime configuration
+- **THEN** `DmlOps.init` resolves them through the shared internal resolver before mutating project state
+
 ### Requirement: Project URI is normalized and exposes helper accessors
 The system SHALL normalize `project.uri` so that resolved project configuration always includes a branch and never a tag. The resolved config object SHALL expose a `project.branch` helper derived from the normalized URI.
 
@@ -56,6 +60,10 @@ The system SHALL normalize `project.uri` so that resolved project configuration 
 #### Scenario: Project branch helper is derived from normalized URI
 - **WHEN** resolved configuration includes `project.uri`
 - **THEN** `project.branch` returns the branch encoded in the normalized URI rather than reading a standalone branch config parameter
+
+#### Scenario: Init fails when required project URI cannot resolve validly
+- **WHEN** init flow requires `project.uri` for bootstrap behavior but resolver output leaves it invalid or unresolved
+- **THEN** `DmlOps.init` fails before creating or mutating repository state
 
 ### Requirement: DB path can be overridden but defaults from project home
 The system SHALL resolve `db.path` with the same precedence as other `project/runtime` parameters, and when no higher-precedence value is provided it SHALL default to `<project.home>/.dml/db/`.

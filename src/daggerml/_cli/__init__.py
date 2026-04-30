@@ -47,7 +47,7 @@ def cli() -> None:
     subparsers = parser.add_subparsers(dest="op", metavar="<operation>", help="Operations")
 
     # Init subcommand
-    init_parser = subparsers.add_parser("init", help="Create a named repository in config dir")
+    init_parser = subparsers.add_parser("init", help="Initialize .dml state in current or --repo directory")
     setup_init_parser(init_parser)
 
     # Status subcommand

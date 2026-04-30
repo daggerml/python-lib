@@ -127,9 +127,9 @@ cd "${scratch_dir}"
 
 project_name="project-0"
 log "Initializing DML repo in ${project_name}"
-# mkdir "${scratch_dir}/${project_name}"
-dml init $project_name
+mkdir "${scratch_dir}/${project_name}"
 cd "${scratch_dir}/${project_name}"
+dml init $project_name
 
 if [[ ! -d "./.dml/db" ]]; then
   log "dml init did not create .dml/db" >&2
