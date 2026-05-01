@@ -57,6 +57,11 @@ requests and appreciate your help in improving this project.
   ```
   uv run --dev --all-extras pytest -m "not slow" .
   ```
+- Contract-first test layout guidance:
+  - fast, isolated contract tests live under `tests/contracts/`,
+  - integration or infrastructure-heavy coverage lives under `tests/integration/` and should be marked `@pytest.mark.slow`,
+  - canonical contract IDs should be embedded directly in test names or parameterized case IDs for migrated contract suites.
+- CI continues to run the full suite (`uv run pytest .`) to preserve complete coverage while local quick loops use `-m "not slow"`.
 - We mark tests that require `daggerml-cli` to be installed with `@pytest.mark.needs_dml`. You can exclude those tests with:
   ```
   uv run --dev --all-extras pytest -m "not needs_dml" .
