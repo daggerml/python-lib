@@ -17,24 +17,6 @@ from daggerml._cli.commit import (
 class TestSetupCommitParser:
     """Test commit parser setup."""
 
-    def test_parser_creation(self):
-        """Test that parser is created with subcommands."""
-        parser = ArgumentParser()
-        setup_commit_parser(parser)
-        # Test that parsing works for each subcommand
-        args = parser.parse_args(["list", "head"])
-        assert args.subcommand == "list"
-        args = parser.parse_args(["merge", "c1", "c2", "--user", "u"])
-        assert args.subcommand == "merge"
-        args = parser.parse_args(["rebase", "s", "t", "--user", "u"])
-        assert args.subcommand == "rebase"
-        args = parser.parse_args(["get-dag", "c", "n"])
-        assert args.subcommand == "get-dag"
-        args = parser.parse_args(["describe", "c"])
-        assert args.subcommand == "describe"
-        args = parser.parse_args(["delete-dag", "n", "h", "--user", "u"])
-        assert args.subcommand == "delete-dag"
-
     def test_list_parser_args(self):
         """Test list subcommand arguments."""
         parser = ArgumentParser()

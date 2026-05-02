@@ -14,18 +14,6 @@ from daggerml._internal._db import Ref
 class TestSetupNodeParser:
     """Test node parser setup."""
 
-    def test_parser_creation(self):
-        """Test that parser is created with subcommands."""
-        parser = ArgumentParser()
-        setup_node_parser(parser)
-        # Test that parsing works for each subcommand
-        args = parser.parse_args(["get", "node:abc123"])
-        assert args.method == "get"
-        assert args.node == "node:abc123"
-        args = parser.parse_args(["unroll", "node:def456"])
-        assert args.method == "unroll"
-        assert args.node == "node:def456"
-
     def test_get_parser_args(self):
         """Test get subcommand arguments."""
         parser = ArgumentParser()

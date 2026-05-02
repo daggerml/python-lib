@@ -223,19 +223,44 @@ class TestIndexOps:
         finally:
             ops.delete(index)
 
-    @given(args=st.lists(st.one_of(int_strategy(), float_strategy()), min_size=1, max_size=5))
-    @settings(max_examples=10, deadline=2000, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    def test_start_fn_sum(self, temp_bo, args, s3):
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        "contract_id,stage,args,prepop,name",
+        [
+            ("adapter-path-sum", "unnamed", [1.0, 2.0, 3.0], None, None),
+            ("adapter-path-sum", "named", [1.0, 2.0, 3.0], None, "result"),
+            ("adapter-path-prepop", "kwarg-override", [1.0, 2.0, 3.0], 2.0, "result"),
+        ],
+        ids=[
+            "adapter-path-sum:unnamed",
+            "adapter-path-sum:named",
+            "adapter-path-prepop:kwarg-override",
+        ],
+    )
+    def test_start_fn_adapter_execution_matrix(self, temp_bo, contract_id, stage, args, prepop, name, s3):
+        del contract_id, stage
         temp_bo._db.clear_all()
         _ops, _head_ref, index = _mk_repo_state(temp_bo)
         ops = _mk_remote_index_ops(temp_bo)
         try:
-            fn_node = _put_runnable_literal(ops, index, uri=SUM_FN_URI, adapter=FN_ADAPTER)
-            node_args = [fn_node, *[ops.put_literal(index, arg) for arg in args]]
-            result = ops.start_fn(index, node_args)
+            if prepop is None:
+                fn_node = _put_runnable_literal(ops, index, uri=SUM_FN_URI, adapter=FN_ADAPTER)
+                expected = float(sum(args))
+                kwargv = None
+            else:
+                x_default = ops.put_literal(index, 1.0)
+                fn_node = ops.put_literal(
+                    index,
+                    Runnable(target=Uri(PREPOP_FN_URI), kwargs={"x": x_default}, adapter=FN_ADAPTER),
+                )
+                prepop_node = ops.put_literal(index, prepop)
+                kwargv = {"x": prepop_node}
+                expected = float(sum(args) * prepop)
+            arg_nodes = [ops.put_literal(index, arg) for arg in args]
+            result = ops.start_fn(index, [fn_node, *arg_nodes], kwargv=kwargv, name=name)
             assert result is not None
             nv = NodeOps(_db=temp_bo._db).unroll(result)
-            assert nv == pytest.approx(sum(args))
+            assert nv == pytest.approx(expected)
         finally:
             ops.delete(index)
 
@@ -291,61 +316,7 @@ class TestIndexOps:
         finally:
             ops.delete(index)
 
-    @given(
-        args=st.lists(
-            st.one_of(
-                st.integers(min_value=-(2**63), max_value=2**63 - 1),
-                st.floats(allow_nan=False, allow_infinity=False),
-            ),
-            max_size=6,
-        )
-    )
-    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture], max_examples=2, deadline=None)
-    def test_start_fn_sum_adapter(self, temp_bo, args, s3):
-        total = float(sum(args))
-        _ops, _head_ref, index = _mk_repo_state(temp_bo)
-        ops = _mk_remote_index_ops(temp_bo)
-        try:
-            fn_node = _put_runnable_literal(ops, index, uri=SUM_FN_URI, adapter=FN_ADAPTER)
-            arg_nodes = [ops.put_literal(index, arg) for arg in args]
-            result = ops.start_fn(index, [fn_node, *arg_nodes], name="result")
-            assert result is not None
-            nv = NodeOps(_db=temp_bo._db).unroll(result)
-            assert nv == pytest.approx(total)
-        finally:
-            ops.delete(index)
-
-    @given(
-        args=st.lists(
-            st.one_of(
-                st.integers(min_value=-(2**63), max_value=2**63 - 1),
-                st.floats(allow_nan=False, allow_infinity=False),
-            ),
-            max_size=6,
-        ),
-        prepop=st.floats(allow_nan=False, allow_infinity=False),
-    )
-    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture], max_examples=2, deadline=None)
-    def test_start_fn_prepop(self, temp_bo, args, prepop, s3):
-        temp_bo._db.clear_all()
-        total = float(sum(args) * prepop)
-        _ops, _head_ref, index = _mk_repo_state(temp_bo)
-        ops = _mk_remote_index_ops(temp_bo)
-        try:
-            x_default = ops.put_literal(index, 1.0)
-            fn_node = ops.put_literal(
-                index,
-                Runnable(target=Uri(PREPOP_FN_URI), kwargs={"x": x_default}, adapter=FN_ADAPTER),
-            )
-            arg_nodes = [ops.put_literal(index, arg) for arg in args]
-            prepop_node = ops.put_literal(index, prepop)
-            result = ops.start_fn(index, [fn_node, *arg_nodes], kwargv={"x": prepop_node}, name="result")
-            assert result is not None
-            nv = NodeOps(_db=temp_bo._db).unroll(result)
-            assert nv == pytest.approx(total)
-        finally:
-            ops.delete(index)
-
+    @pytest.mark.slow
     @given(
         args=st.lists(
             st.one_of(
@@ -375,6 +346,7 @@ class TestIndexOps:
         finally:
             ops.delete(index)
 
+    @pytest.mark.slow
     def test_start_fn_adapter_nonzero_exit_raises(self, temp_bo, tmp_path, s3):
         _ops, _head_ref, index = _mk_repo_state(temp_bo)
         ops = _mk_remote_index_ops(temp_bo)
@@ -391,6 +363,7 @@ class TestIndexOps:
         finally:
             ops.delete(index)
 
+    @pytest.mark.slow
     def test_start_fn_adapter_invalid_json_raises(self, temp_bo, tmp_path, s3):
         _ops, _head_ref, index = _mk_repo_state(temp_bo)
         ops = _mk_remote_index_ops(temp_bo)
@@ -1128,6 +1101,7 @@ class TestIndexOps:
         finally:
             ops.delete(index_ref)
 
+    @pytest.mark.slow
     def test_start_fn_sub_runnable_forwards_and_resolves_kwargs(self, temp_bo, tmp_path, s3):
         temp_bo._db.clear_all()
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)

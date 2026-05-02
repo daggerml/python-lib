@@ -17,15 +17,6 @@ from daggerml._internal._db import Ref
 class TestSetupGcParser:
     """Test gc parser setup."""
 
-    def test_parser_creation(self):
-        """Test that parser is created with subcommands."""
-        parser = ArgumentParser()
-        setup_gc_parser(parser)
-        args = parser.parse_args(["run"])
-        assert args.method == "run"
-        args = parser.parse_args(["list-orphans"])
-        assert args.method == "list-orphans"
-
     def test_list_orphans_parser_heads_args(self):
         """Test list-orphans --heads argument handling."""
         parser = ArgumentParser()

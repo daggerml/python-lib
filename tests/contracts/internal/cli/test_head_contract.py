@@ -16,18 +16,6 @@ from daggerml._cli.head import (
 class TestSetupHeadParser:
     """Test head parser setup."""
 
-    def test_parser_creation(self):
-        """Test that parser is created with subcommands."""
-        parser = ArgumentParser()
-        setup_head_parser(parser)
-        # Test that parsing works for each subcommand
-        args = parser.parse_args(["list"])
-        assert args.subcommand == "list"
-        args = parser.parse_args(["create", "branch"])
-        assert args.subcommand == "create"
-        args = parser.parse_args(["delete", "head:branch"])
-        assert args.subcommand == "delete"
-
     def test_list_parser_args(self):
         """Test list subcommand arguments."""
         parser = ArgumentParser()

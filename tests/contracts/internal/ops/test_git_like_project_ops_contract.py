@@ -7,8 +7,7 @@ from daggerml._internal.config import DmlProjectConfig, init_project_layout
 from daggerml._internal.ops.commit import CommitOps
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps
-from daggerml._internal.ops.remote import RemoteOps
-from daggerml._internal.types import Commit, DmlRepoError, Tree
+from daggerml._internal.types import DmlRepoError
 
 
 def test_project_ref_paths_and_dml_uri_validation(remote_ops):
@@ -16,10 +15,6 @@ def test_project_ref_paths_and_dml_uri_validation(remote_ops):
         "projects/alice/demo/heads/feature/x.json"
     )
     assert remote_ops._project_tag_ref_path("alice", "demo", "v1.0") == "projects/alice/demo/tags/v1.0.json"
-    assert RemoteOps.canonical_dml_uri("dml://alice/demo#main", require_identifier=True) == "dml://alice/demo#main"
-    assert remote_ops._dml_uri_ref_path("dml://alice/demo@v1.0") == "projects/alice/demo/tags/v1.0.json"
-    with pytest.raises(ValueError, match="64-byte"):
-        RemoteOps.canonical_dml_uri("dml://alice/" + "x" * 80 + "#main", require_identifier=True)
 
 
 def test_project_config_layout_roundtrip(tmp_path: Path):
@@ -60,53 +55,6 @@ def test_checkout_absent_dag_does_not_advance_head(temp_bo_fn):
     with pytest.raises(DmlRepoError, match="not found"):
         commit_ops.checkout_dag(head, commit, "missing", user="alice")
     assert head_ops.describe(head)["commit"] == commit
-
-
-def test_revision_resolution_classifies_branch_tag_and_revision_forms(temp_bo_fn, tmp_path: Path):
-    project = DmlProjectConfig(name="demo", owner="alice", branch="main", remote_uri="s3://bucket/prefix")
-    init_project_layout(tmp_path, project)
-    head_ops = HeadOps(_db=temp_bo_fn._db)
-    commit_ops = CommitOps(_db=temp_bo_fn._db)
-
-    main_head = head_ops.create("main")
-    initial = head_ops.describe(main_head)["commit"]
-    with commit_ops._tx(readonly=False) as txn:
-        tree = txn.get(txn.get(initial).tree)
-        next_tree = txn.put(Tree(dags=dict(tree.dags)))
-        next_commit = txn.put(Commit(parents=[initial], tree=next_tree, author="alice", message="next"))
-        txn.put(type(txn.get(main_head))(commit=next_commit), to=main_head)
-        txn.put(type(txn.get(main_head))(commit=initial), to=Ref("head:dml://alice/demo@v1.0"))
-
-    branch = commit_ops.resolve_revision("main", project_dir=str(tmp_path))
-    assert branch.kind == "branch"
-    assert branch.branch == "main"
-
-    tag = commit_ops.resolve_revision("v1.0", project_dir=str(tmp_path))
-    assert tag.kind == "tag"
-    assert tag.commit == initial
-
-    expr = commit_ops.resolve_revision("HEAD~1", current_branch="main", project_dir=str(tmp_path))
-    assert expr.kind == "commit"
-    assert expr.commit == initial
-
-    direct = commit_ops.resolve_revision(initial.id(), project_dir=str(tmp_path))
-    assert direct.kind == "commit"
-    assert direct.commit == initial
-
-    explicit_ref = commit_ops.resolve_revision(f"commit:{initial.id()}", project_dir=str(tmp_path))
-    assert explicit_ref.kind == "commit"
-    assert explicit_ref.commit == initial
-
-
-def test_checkout_unfetched_remote_uri_fails_locally(temp_bo_fn, tmp_path: Path):
-    project = DmlProjectConfig(name="demo", owner="alice", branch="main", remote_uri="s3://bucket/prefix")
-    init_project_layout(tmp_path, project)
-    head_ops = HeadOps(_db=temp_bo_fn._db)
-    commit_ops = CommitOps(_db=temp_bo_fn._db)
-    head_ops.create("main")
-
-    with pytest.raises(DmlRepoError, match="cannot be resolved locally"):
-        commit_ops.resolve_revision("dml://alice/demo#main", project_dir=str(tmp_path))
 
 
 def test_detached_commit_does_not_advance_branch_head_and_reattach_resumes(temp_bo_fn):

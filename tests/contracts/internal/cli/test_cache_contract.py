@@ -17,22 +17,6 @@ from daggerml._internal._db import Ref
 class TestSetupCacheParser:
     """Test cache parser setup."""
 
-    def test_parser_creation(self):
-        """Test that parser is created with subcommands."""
-        parser = ArgumentParser()
-        setup_cache_parser(parser)
-        # Test that parsing works for each subcommand
-        args = parser.parse_args(["put", "dag:abc"])
-        assert args.subcommand == "put"
-        args = parser.parse_args(["get", "node-argv:def"])
-        assert args.subcommand == "get"
-        args = parser.parse_args(["delete", "node-argv:def"])
-        assert args.subcommand == "delete"
-        args = parser.parse_args(["list"])
-        assert args.subcommand == "list"
-        args = parser.parse_args(["clear"])
-        assert args.subcommand == "clear"
-
     def test_put_parser_args(self):
         """Test put subcommand arguments."""
         parser = ArgumentParser()

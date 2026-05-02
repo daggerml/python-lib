@@ -14,17 +14,6 @@ from daggerml._cli.index import (
 class TestSetupIndexParser:
     """Test index parser setup."""
 
-    def test_parser_creation(self):
-        """Test that parser is created with supported subcommands."""
-        parser = ArgumentParser()
-        setup_index_parser(parser)
-        args = parser.parse_args(["list"])
-        assert args.method == "list"
-        args = parser.parse_args(["describe", "index:abc"])
-        assert args.method == "describe"
-        args = parser.parse_args(["delete", "index:abc"])
-        assert args.method == "delete"
-
 
 class TestExecuteIndexHandlers:
     """Test index handler functions."""

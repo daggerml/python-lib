@@ -9,7 +9,7 @@ import pytest
 from daggerml import Dml
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def _aws_server():
     with patch.dict(os.environ):
         for key in list(os.environ.keys()):
