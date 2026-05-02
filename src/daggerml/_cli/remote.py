@@ -4,7 +4,7 @@ import importlib
 from argparse import ArgumentParser
 from typing import Any
 
-from daggerml._cli.base import apply_help_config, parse_ref
+from daggerml._cli.base import apply_help_config
 from daggerml._internal import DmlOps
 from daggerml._internal.types import DmlRepoError
 
@@ -21,10 +21,16 @@ def setup_remote_parser(parser: ArgumentParser) -> None:
     )
     subparsers = parser.add_subparsers(dest="method", metavar="<method>", help="Methods", required=True)
 
-    setup_remote_push_parser(subparsers.add_parser("push", help="Push a commit/head ref to remote"))
+    setup_remote_push_parser(subparsers.add_parser("push", help="Push a branch to remote"))
     setup_remote_fetch_parser(subparsers.add_parser("fetch", help="Fetch a project URI into local tracking refs"))
-    setup_remote_pull_branch_parser(subparsers.add_parser("pull-branch", help="Fetch and merge a project branch"))
-    setup_remote_push_branch_parser(subparsers.add_parser("push-branch", help="Push a local head to a project branch"))
+    setup_remote_pull_branch_parser(
+        subparsers.add_parser("pull-branch", help="Fetch and merge a project branch")
+    )
+    setup_remote_push_branch_parser(
+        subparsers.add_parser(
+            "push-branch", help="Push a local branch to a project branch"
+        )
+    )
     setup_remote_pull_parser(subparsers.add_parser("pull", help="Pull a ref path from remote"))
     setup_remote_list_parser(subparsers.add_parser("list", help="List remote refs under a prefix"))
     setup_remote_prune_parser(subparsers.add_parser("prune", help="Prune remote io/invoke transport blobs"))
@@ -35,12 +41,12 @@ def setup_remote_push_parser(parser: ArgumentParser) -> None:
     """Configure arguments for `dml remote push`."""
     apply_help_config(
         parser,
-        description="Push a commit ref or publish a head as a tag ref in remote storage.",
+        description="Publish a local branch as a tag ref in remote storage.",
         examples=[
-            "dml --remote-root s3://bucket/project remote push head:main",
+            "dml --remote-root s3://bucket/project remote push main",
         ],
     )
-    parser.add_argument("ref", help="Ref to push (head:<name>)")
+    parser.add_argument("branch", help="Branch name to push")
     parser.set_defaults(method="push", func=execute_remote_push)
 
 
@@ -62,17 +68,17 @@ def setup_remote_fetch_parser(parser: ArgumentParser) -> None:
 
 
 def setup_remote_pull_branch_parser(parser: ArgumentParser) -> None:
-    apply_help_config(parser, description="Fetch a DML URI and merge it into the selected local head.")
+    apply_help_config(parser, description="Fetch a DML URI and merge it into the selected local branch.")
     parser.add_argument("uri")
-    parser.add_argument("--head", default="head:main")
+    parser.add_argument("--branch", dest="branch_name", default="main")
     parser.add_argument("--user", required=True)
     parser.set_defaults(method="pull-branch", func=execute_remote_pull_branch)
 
 
 def setup_remote_push_branch_parser(parser: ArgumentParser) -> None:
-    apply_help_config(parser, description="Push a local head to dml://<owner>/<project>#<branch>.")
+    apply_help_config(parser, description="Push a local branch to dml://<owner>/<project>#<branch>.")
     parser.add_argument("uri")
-    parser.add_argument("--head", default="head:main")
+    parser.add_argument("--branch", dest="branch_name", default="main")
     parser.add_argument("--create", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.set_defaults(method="push-branch", func=execute_remote_push_branch)
@@ -140,7 +146,7 @@ def execute_remote_push(ops, args) -> str:
     boto3 = require_boto3()
     s3_client = create_s3_client(boto3)
     remote_ops = get_remote_ops(ops, s3_client)
-    return remote_ops.push(parse_ref(args.ref))
+    return remote_ops.push(args.branch)
 
 
 def execute_remote_pull(ops, args) -> None:
@@ -163,14 +169,14 @@ def execute_remote_pull_branch(ops, args) -> str:
     boto3 = require_boto3()
     s3_client = create_s3_client(boto3)
     remote_ops = get_remote_ops(ops, s3_client)
-    return str(remote_ops.pull_uri_into_head(args.uri, parse_ref(args.head), user=args.user))
+    return str(remote_ops.pull_uri_into_branch(args.uri, args.branch_name, user=args.user))
 
 
 def execute_remote_push_branch(ops, args) -> str:
     boto3 = require_boto3()
     s3_client = create_s3_client(boto3)
     remote_ops = get_remote_ops(ops, s3_client)
-    return remote_ops.push_project_branch(args.uri, parse_ref(args.head), create=args.create, force=args.force)
+    return remote_ops.push_project_branch(args.uri, args.branch_name, create=args.create, force=args.force)
 
 
 def execute_remote_list(ops, args) -> list[dict]:

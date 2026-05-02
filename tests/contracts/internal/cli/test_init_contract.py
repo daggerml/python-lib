@@ -1,6 +1,5 @@
 """Unit and integration tests for init CLI functionality."""
 
-import json
 import tempfile
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
@@ -14,7 +13,7 @@ from daggerml._internal.types import DmlRepoError
 
 @patch("daggerml._cli.init.DmlOps.init")
 def test_execute_init_forwards_branch_argument_without_local_derivation(mock_dml_init):
-    mock_dml_init.return_value = {"head": "head:dev"}
+    mock_dml_init.return_value = {"branch": "dev"}
 
     args = Namespace(
         name="demo",
@@ -66,7 +65,7 @@ class TestExecuteInit:
             assert repo_path is not None
             assert Path(repo_path).resolve() == expected_repo.resolve()
             assert result["name"] == "my-repo"
-            assert result["head"] == "head:main"
+            assert result["branch"] == "main"
             assert (expected_repo / ".dml" / "config.toml").exists()
             assert (expected_repo / ".dml" / "db").exists()
 
@@ -90,7 +89,7 @@ class TestExecuteInit:
             )
             result = execute_init(args)
             assert result["name"] is None
-            assert result["head"] == "head:main"
+            assert result["branch"] == "main"
 
     def test_execute_init_rejects_name_with_project_uri(self):
         args = Namespace(
@@ -207,10 +206,9 @@ class TestExecuteInit:
             with patch("daggerml._cli.init.DmlOps.init") as mock_init:
                 mock_init.return_value = {
                     "db_path": str(root / ".dml" / "db"),
-                    "head": "head:main",
+                    "branch": "main",
                 }
                 result = execute_init(args)
 
-            assert result["head"] == "head:main"
+            assert result["branch"] == "main"
             assert mock_init.call_args.kwargs["path"] is None
-

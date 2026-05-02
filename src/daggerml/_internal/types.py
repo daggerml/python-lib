@@ -466,6 +466,14 @@ class DmlRepoError(Error):
         super().__init__(message=message, origin=origin, type=type, stack=stack or [])
 
 
+class DmlPointerConflictError(DmlRepoError):
+    """Raised when a branch or index commit update loses a stale-write race."""
+
+    def __init__(self, message: str, *, current_commit: Ref):
+        super().__init__(message, type="dmlpointerconflicterror")
+        self.current_commit = current_commit
+
+
 class Node(DmlBase):
     """Base class for computational nodes in a DAG.
 

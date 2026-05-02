@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-
-import pytest
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.head import HeadOps
@@ -170,8 +169,8 @@ def test_put_literal_unroll_roundtrip_with_nested_runnables(temp_bo, payload):
     index_ops = IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env())
     node_ops = NodeOps(_db=temp_bo._db)
 
-    head_ref = head_ops.create(f"rt-{uuid4().hex}")
-    index_ref = index_ops.create(head=head_ref)
+    branch = head_ops.create_branch(f"rt-{uuid4().hex}")
+    index_ref = index_ops.create(head=branch)
     try:
         materialized = _materialize(payload, index_ops, index_ref)
         root_ref = index_ops.put_literal(index_ref, materialized, name="root")
@@ -180,4 +179,4 @@ def test_put_literal_unroll_roundtrip_with_nested_runnables(temp_bo, payload):
             assert _canonical_value(txn, result) == _canonical_value(txn, materialized)
     finally:
         index_ops.delete(index_ref)
-        head_ops.delete(head_ref)
+        head_ops.delete_branch(branch)

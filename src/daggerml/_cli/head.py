@@ -13,8 +13,8 @@ def setup_head_parser(parser: ArgumentParser) -> None:
         description="Head operations: list, create, and delete heads (branch pointers).",
         examples=[
             "dml head list",
-            "dml head create feature --from head:main",
-            "dml head delete head:feature",
+            "dml head create feature --from main",
+            "dml head delete feature",
         ],
     )
     subparsers = parser.add_subparsers(dest="subcommand", metavar="<method>", help="Methods")
@@ -29,44 +29,41 @@ def setup_head_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         create_parser,
         description="Create a new head, optionally from an existing head or commit.",
-        examples=["dml head create feature --from head:main"],
+        examples=["dml head create feature --from main"],
     )
-    create_parser.add_argument("branch_name", help="Head name (string; stored as head:<name>)")
-    create_parser.add_argument("--from", dest="from_head", help="Source ref (head:<name> or commit:<id>)")
+    create_parser.add_argument("branch_name", help="Branch name")
+    create_parser.add_argument("--from", dest="from_head", help="Source branch name or commit ref")
     create_parser.set_defaults(func=execute_head_create)
 
     # delete subcommand
     delete_parser = subparsers.add_parser("delete", help="Delete head")
     apply_help_config(
         delete_parser,
-        description="Delete a head ref.",
-        examples=["dml head delete head:feature"],
+        description="Delete a branch.",
+        examples=["dml head delete feature"],
     )
-    delete_parser.add_argument("head_ref", help="Head ref (head:<name>)")
+    delete_parser.add_argument("branch_name", help="Branch name")
     delete_parser.set_defaults(func=execute_head_delete)
 
 
 def execute_head_list(head_ops, args) -> List[str]:
     """Execute head list command, return JSON-serializable result."""
-    result = head_ops.list()
-    return [str(ref) for ref in result]
+    return head_ops.list_branches()
 
 
 def execute_head_create(head_ops, args) -> Any:
     """Execute head create command, return JSON-serializable result."""
-    if args.from_head and ":" not in args.from_head:
-        args.from_head = f"head:{args.from_head}"
-    parsed_from = parse_ref(args.from_head) if args.from_head else None
-    result = head_ops.create(args.branch_name, parsed_from)
+    from_commit = None
+    if args.from_head:
+        parsed_from = parse_ref(args.from_head) if ":" in args.from_head else parse_ref(f"head:{args.from_head}")
+        from_commit = parsed_from if parsed_from.ns() == "commit" else head_ops.get_branch_commit(parsed_from.id())
+    result = head_ops.create_branch(args.branch_name, from_commit)
     return {
-        "head": result.to,
+        "branch": result,
     }
 
 
 def execute_head_delete(head_ops, args) -> None:
     """Execute head delete command, return JSON-serializable result."""
-    parsed_head = parse_ref(args.head_ref)
-    if not parsed_head.to.startswith("head:"):
-        raise ValueError("Head reference must start with 'head:'")
-    head_ops.delete(parsed_head)
+    head_ops.delete_branch(args.branch_name)
     return None

@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-
 pytestmark = pytest.mark.slow
 
 
@@ -47,7 +46,7 @@ class TestInitCLIIntegration:
             repo_path = payload["repo_path"]
             assert repo_path is not None
             assert Path(repo_path).resolve() == expected_repo.resolve()
-            assert payload["head"] == "head:main"
+            assert payload["branch"] == "main"
             assert (expected_repo / ".dml" / "db").exists()
 
     def test_init_cli_respects_repo_flag_for_db_path_only_mode(self):

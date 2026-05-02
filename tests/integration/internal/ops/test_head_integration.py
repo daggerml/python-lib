@@ -24,13 +24,13 @@ class TestHeadOps:
             cr0 = txn.put(c0)
             txn.put(Head(commit=cr0), to=hr0)
         ops = HeadOps(temp_bo._db)
-        ref = ops.create(branch_name, hr0)
-        assert ref.id() == branch_name
+        ref = ops.create_branch(branch_name, cr0)
+        assert ref == branch_name
         with temp_bo._tx(readonly=True) as txn:
-            assert txn.get(ref) == Head(commit=cr0)
-        ops.delete(ref)
+            assert txn.get(ops._branch_ref(ref)) == Head(commit=cr0)
+        ops.delete_branch(ref)
         with temp_bo._tx(readonly=True) as txn:
-            assert not txn.exists(ref)
+            assert not txn.exists(ops._branch_ref(ref))
         with temp_bo._tx(readonly=False) as txn:
             txn.delete(hr0)
             txn.delete(cr0)
@@ -48,20 +48,17 @@ class TestHeadOps:
         ops = HeadOps(temp_bo._db)
         with temp_bo._tx(readonly=False) as txn:
             head_refs = [txn.put(v, to=k) for k, v in head_dict.items()]
-        listed_heads = ops.list()
-        assert set(listed_heads) == set(head_refs)
+        listed_heads = ops.list_branches()
+        assert set(listed_heads) == {ref.id() for ref in head_refs}
         assert len(listed_heads) == len(head_dict)
         with temp_bo._tx(readonly=False) as txn:
             for hr in head_refs:
                 txn.delete(hr)
 
     @given(_commit_strategy(), _refs("head", full=True))
-    def test_describe(self, temp_bo, commit_obj, head_ref):
+    def test_get_branch_commit(self, temp_bo, commit_obj, head_ref):
         with temp_bo._tx(readonly=False) as txn:
             commit_ref = txn.put(commit_obj)
             txn.put(Head(commit=commit_ref), to=head_ref)
         ops = HeadOps(temp_bo._db)
-        info = ops.describe(head_ref)
-        assert info["id"] == head_ref.id()
-        assert info["ref"] == head_ref
-        assert info["commit"] == commit_ref
+        assert ops.get_branch_commit(head_ref.id()) == commit_ref

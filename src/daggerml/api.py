@@ -107,7 +107,7 @@ def status() -> dict[str, object]:
         "config": cfg.to_dict(),
         "runtime": {
             "ops_initialized": dml._ops is not None,
-            "head_ref": dml.head_ref.to,
+            "branch": dml.branch,
         },
     }
 
@@ -150,11 +150,6 @@ class Dml:
             self._ops.__enter__()
         _ensure_default_literal_codecs(self)
         return self._ops
-
-    @property
-    def head_ref(self) -> Ref:
-        """Get the current head reference."""
-        return Ref(f"head:{self.branch}")
 
     @property
     def commit(self):
@@ -223,7 +218,7 @@ class Dml:
             # DmlOps.create initializes the default head; only add a new branch when requested.
             if branch != DEFAULT_HEAD.id():
                 head_ops = ops.head()
-                head_ops.create(branch, from_head=DEFAULT_HEAD)
+                head_ops.create_branch(branch, head_ops.get_branch_commit(DEFAULT_HEAD.id()))
 
         return cls(repo=repo_path, user=user, branch=branch, tmpdirs={"repo": tmpdir})
 
@@ -244,11 +239,11 @@ class Dml:
             New DAG instance
         """
         if argv_ptr is not None:
-            index_ref = self.ops.index().create(argv_ptr=argv_ptr)
+            index_id = self.ops.index().create(argv_ptr=argv_ptr)
         else:
-            index_ref = self.ops.index().create(head=self.head_ref)
+            index_id = self.ops.index().create(head=self.branch)
 
-        return Dag(dml=self, token=index_ref, ref=None, name=name, message=message)
+        return Dag(dml=self, token=index_id, ref=None, name=name, message=message)
 
     def load(self, name: Union[str, "Node"]) -> "Dag":
         """Load an existing DAG by name.
@@ -271,7 +266,7 @@ class Dml:
         else:
             dag_name = name
 
-        commit_ref = self.ops.head().describe(self.head_ref)["commit"]
+        commit_ref = self.ops.head().get_branch_commit(cast(str, self.branch))
         dag_ref = self.ops.commit().get_dag(commit_ref, str(dag_name))
 
         if dag_ref is None:
@@ -317,13 +312,13 @@ def make_node(dag: "Dag", ref: Ref) -> "Node":
 @dataclass
 class Dag:
     dml: Dml
-    token: Optional[Ref] = None  # Working index reference
+    token: Optional[str] = None  # Working index id
     ref: Optional[Ref] = None
     name: str = ""  # DAG name for commit
     message: str = ""  # Commit message
 
     def __repr__(self):
-        to = self.ref.to if self.ref else (self.token.to if self.token is not None else "NA")
+        to = self.ref.to if self.ref else (f"index:{self.token}" if self.token is not None else "NA")
         return f"Dag({to})"
 
     def __hash__(self):
@@ -341,15 +336,15 @@ class Dag:
             err = Error.from_ex(exc_value) if not isinstance(exc_value, Error) else exc_value
             self.commit(err)
 
-    def _require_index_ref(self) -> Ref:
-        index_ref = self.token
-        if index_ref is None:
+    def _require_index_ref(self) -> str:
+        index_id = self.token
+        if index_id is None:
             raise DmlRepoError("No active index")
-        return index_ref
+        return index_id
 
     def _put_literal(self, value: Any, *, name: Optional[str] = None) -> Ref:
-        index_ref = self._require_index_ref()
-        return self.dml.index.put_literal(index_ref, value, name=name)
+        index_id = self._require_index_ref()
+        return self.dml.index.put_literal(index_id, value, name=name)
 
     def _start_fn(
         self, argv: list[Ref], *, kwargv: Optional[dict[str, Ref]] = None, name: Optional[str] = None
@@ -596,7 +591,7 @@ class Dag:
         # For Errors, pass directly to _commit (don't try to store as literal)
         if isinstance(value, Error):
             commit_ref = self.dml.index.commit(
-                self._require_index_ref(), value, head=self.dml.head_ref, message=self.message, dag_name=self.name
+                self._require_index_ref(), value, head=self.dml.branch, message=self.message, dag_name=self.name
             )
         else:
             # For other values, ensure it's a Node and get its ref
@@ -605,7 +600,7 @@ class Dag:
             commit_ref = self.dml.index.commit(
                 self._require_index_ref(),
                 value_ref,
-                head=self.dml.head_ref,
+                head=self.dml.branch,
                 message=self.message,
                 dag_name=self.name,
             )
@@ -1002,14 +997,14 @@ class NodeCodec:
         return isinstance(value, Node)
 
     def encode(self, value: Node, ctx: CodecContext) -> Ref:
-        if value.dag.token is not None and value.dag.token == ctx.index_ref:
+        if value.dag.token is not None and value.dag.token == ctx.index_id:
             return value.ref
         if value.dag.ref is None:
             raise DmlRepoError("Cannot encode node from uncommitted DAG in a different index")
-        if value.dag.ref == ctx.index_ops.current_dag_ref(ctx.index_ref):
+        if value.dag.ref == ctx.index_ops.current_dag_ref(ctx.index_id):
             return value.ref
         try:
-            return cast(Ref, ctx.index_ops.put_import(ctx.index_ref, value.dag.ref, node=value.ref, name=None))
+            return cast(Ref, ctx.index_ops.put_import(ctx.index_id, value.dag.ref, node=value.ref, name=None))
         except Exception as e:
             raise DmlRepoError(f"Failed to encode cross-dag node import: {e}") from e
 

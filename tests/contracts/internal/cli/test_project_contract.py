@@ -3,7 +3,6 @@ from unittest.mock import Mock
 
 import daggerml._cli.project as project_cli
 from daggerml._cli.project import ProjectAliasHandlers
-from daggerml._internal._db import Ref
 
 
 def test_fetch_alias_delegates_to_dmlops():
@@ -19,56 +18,41 @@ def test_fetch_alias_delegates_to_dmlops():
 
 def test_pull_alias_delegates_to_dmlops():
     ops = Mock()
-    args = Namespace(remote_or_uri="origin", branch=None, head="head:main", user="alice")
+    args = Namespace(remote_or_uri="origin", branch=None, branch_name="main", user="alice")
     ops.pull_project.return_value = "commit:1"
 
     result = ProjectAliasHandlers.pull(ops, args)
 
-    ops.pull_project.assert_called_once_with(
-        "origin",
-        None,
-        head=Ref("head:main"),
-        user="alice",
-    )
+    ops.pull_project.assert_called_once_with("origin", None, branch="main", user="alice")
     assert result == "commit:1"
 
 
 def test_push_alias_delegates_to_dmlops():
     ops = Mock()
-    args = Namespace(tag=None, head="head:main", create=False, force=False)
+    args = Namespace(tag=None, branch_name="main", create=False, force=False)
     ops.push_project.return_value = "commit:1"
 
     result = ProjectAliasHandlers.push(ops, args)
 
-    ops.push_project.assert_called_once_with(
-        None,
-        head=Ref("head:main"),
-        create=False,
-        force=False,
-    )
+    ops.push_project.assert_called_once_with(None, branch="main", create=False, force=False)
     assert result == "commit:1"
 
 
 def test_push_alias_with_tag_delegates_to_dmlops():
     ops = Mock()
-    args = Namespace(tag="v1.0", head="head:main", create=False, force=False)
+    args = Namespace(tag="v1.0", branch_name="main", create=False, force=False)
     ops.push_project.return_value = "projects/alice/demo/tags/v1.0.json"
 
     result = ProjectAliasHandlers.push(ops, args)
 
-    ops.push_project.assert_called_once_with(
-        "v1.0",
-        head=Ref("head:main"),
-        create=False,
-        force=False,
-    )
+    ops.push_project.assert_called_once_with("v1.0", branch="main", create=False, force=False)
     assert result == "projects/alice/demo/tags/v1.0.json"
 
 
 def test_checkout_alias_delegates_to_dmlops():
     ops = Mock()
     args = Namespace(revision="main")
-    ops.checkout_project.return_value = {"mode": "attached", "head": "head:main"}
+    ops.checkout_project.return_value = {"mode": "attached", "branch": "main"}
 
     result = ProjectAliasHandlers.checkout(ops, args)
 
@@ -78,23 +62,23 @@ def test_checkout_alias_delegates_to_dmlops():
 
 def test_merge_alias_delegates_to_dmlops():
     ops = Mock()
-    args = Namespace(revision="origin/main", head="head:main", user="alice")
+    args = Namespace(revision="origin/main", branch_name="main", user="alice")
     ops.merge_project.return_value = "commit:2"
 
     result = ProjectAliasHandlers.merge(ops, args)
 
-    ops.merge_project.assert_called_once_with("origin/main", Ref("head:main"), "alice")
+    ops.merge_project.assert_called_once_with("origin/main", "main", "alice")
     assert result == "commit:2"
 
 
 def test_revert_alias_delegates_to_dmlops():
     ops = Mock()
-    args = Namespace(revision="origin/main", head="head:main", user="alice")
+    args = Namespace(revision="origin/main", branch_name="main", user="alice")
     ops.revert_project.return_value = "commit:2"
 
     result = ProjectAliasHandlers.revert(ops, args)
 
-    ops.revert_project.assert_called_once_with("origin/main", Ref("head:main"), "alice")
+    ops.revert_project.assert_called_once_with("origin/main", "main", "alice")
     assert result == "commit:2"
 
 

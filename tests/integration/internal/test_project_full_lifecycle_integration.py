@@ -50,7 +50,7 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
         ]
     )
     assert not stderr
-    assert json.loads(stdout)["head"] == "head:main"
+    assert json.loads(stdout)["branch"] == "main"
 
     expected_result = {"score": 7, "ok": True}
     with Dml(repo=str(source_repo), user=owner, branch="main") as dml:
@@ -61,7 +61,7 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
             candidate = dag.put(11, name="candidate")
             dag.commit(candidate)
 
-    stdout, stderr = _run_cli(["--repo", str(source_repo), "push", "--head", "head:main", "--create"])
+    stdout, stderr = _run_cli(["--repo", str(source_repo), "push", "--branch", "main", "--create"])
     assert not stderr
     pushed_ref_path = json.loads(stdout)
     assert pushed_ref_path.endswith(f"/{name0}/heads/main.json")
@@ -84,7 +84,7 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
         ]
     )
     assert not stderr
-    assert json.loads(stdout)["head"] == "head:main"
+    assert json.loads(stdout)["branch"] == "main"
 
     source_uri = f"dml://{owner_from_remote}/{name0}"
     stdout, stderr = _run_cli(["--repo", str(target_repo), "fetch", source_uri])

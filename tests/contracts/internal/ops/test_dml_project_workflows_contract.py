@@ -21,21 +21,21 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
         patch.object(ops, "remote", return_value=remote_ops),
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
-        remote_ops.pull_uri_into_head.return_value = Ref("commit:2")
+        remote_ops.pull_uri_into_branch.return_value = Ref("commit:2")
         remote_ops.push_project_branch.return_value = "projects/alice/demo/heads/main.json"
         remote_ops.push_project_tag.return_value = "projects/alice/demo/tags/v1.0.json"
 
         fetched = ops.fetch_project("origin", None, s3_client=object())
-        pulled = ops.pull_project("origin", None, head=Ref("head:main"), user="alice", s3_client=object())
-        pushed = ops.push_project(None, head=Ref("head:main"), create=False, force=False, s3_client=object())
-        pushed_tag = ops.push_project("v1.0", head=Ref("head:main"), create=False, force=False, s3_client=object())
+        pulled = ops.pull_project("origin", None, branch="main", user="alice", s3_client=object())
+        pushed = ops.push_project(None, branch="main", create=False, force=False, s3_client=object())
+        pushed_tag = ops.push_project("v1.0", branch="main", create=False, force=False, s3_client=object())
 
     remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo#main")
-    remote_ops.pull_uri_into_head.assert_called_once_with("dml://alice/demo#main", Ref("head:main"), user="alice")
+    remote_ops.pull_uri_into_branch.assert_called_once_with("dml://alice/demo#main", "main", user="alice")
     remote_ops.push_project_branch.assert_called_once_with(
-        "dml://alice/demo#main", Ref("head:main"), create=False, force=False
+        "dml://alice/demo#main", "main", create=False, force=False
     )
-    remote_ops.push_project_tag.assert_called_once_with("dml://alice/demo@v1.0", Ref("head:main"))
+    remote_ops.push_project_tag.assert_called_once_with("dml://alice/demo@v1.0", "main")
     assert fetched == Ref("commit:1")
     assert pulled == Ref("commit:2")
     assert pushed == "projects/alice/demo/heads/main.json"
@@ -56,18 +56,18 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
         patch.object(ops, "_create_s3_client", return_value=s3_client) as mock_create_s3,
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
-        remote_ops.pull_uri_into_head.return_value = Ref("commit:2")
+        remote_ops.pull_uri_into_branch.return_value = Ref("commit:2")
         remote_ops.push_project_branch.return_value = "projects/alice/demo/heads/main.json"
 
         fetched = ops.fetch_project("origin", None)
-        pulled = ops.pull_project("origin", None, head=Ref("head:main"), user="alice")
-        pushed = ops.push_project(None, head=Ref("head:main"), create=False, force=False)
+        pulled = ops.pull_project("origin", None, branch="main", user="alice")
+        pushed = ops.push_project(None, branch="main", create=False, force=False)
 
     assert mock_create_s3.call_count == 3
     remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo#main")
-    remote_ops.pull_uri_into_head.assert_called_once_with("dml://alice/demo#main", Ref("head:main"), user="alice")
+    remote_ops.pull_uri_into_branch.assert_called_once_with("dml://alice/demo#main", "main", user="alice")
     remote_ops.push_project_branch.assert_called_once_with(
-        "dml://alice/demo#main", Ref("head:main"), create=False, force=False
+        "dml://alice/demo#main", "main", create=False, force=False
     )
     assert fetched == Ref("commit:1")
     assert pulled == Ref("commit:2")
@@ -102,7 +102,7 @@ def test_push_project_branch_rejects_tag_based_project_uri():
         ),
     ):
         with pytest.raises(DmlRepoError, match="branch-based"):
-            ops.push_project(None, head=Ref("head:main"), create=False, force=False, s3_client=object())
+            ops.push_project(None, branch="main", create=False, force=False, s3_client=object())
 
 
 def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
@@ -120,13 +120,13 @@ def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
         patch("daggerml._internal.ops.DmlProjectConfig.save") as mock_save,
     ):
         checkout = ops.checkout_project("feature")
-        merged = ops.merge_project("origin/main", Ref("head:main"), "alice")
-        reverted = ops.revert_project("origin/main", Ref("head:main"), "alice")
+        merged = ops.merge_project("origin/main", "main", "alice")
+        reverted = ops.revert_project("origin/main", "main", "alice")
 
     commit_ops.resolve_revision.assert_called_once_with("feature", current_branch="main", project_dir="/repo")
     commit_ops.resolve_revision_ref.assert_any_call("origin/main", project_dir="/repo")
-    commit_ops.merge_into_head.assert_called_once_with(Ref("head:main"), Ref("commit:2"), "alice")
-    commit_ops.revert.assert_called_once_with(Ref("head:main"), Ref("commit:2"), "alice")
+    commit_ops.merge_into_head.assert_called_once_with("main", Ref("commit:2"), "alice")
+    commit_ops.revert.assert_called_once_with("main", Ref("commit:2"), "alice")
     mock_save.assert_called_once_with("/repo")
     assert checkout["mode"] == "attached"
     assert merged == Ref("commit:3")
@@ -153,7 +153,7 @@ def test_checkout_dag_from_revision_delegates_to_commit_ops_with_resolved_defaul
         project_dir="/repo",
     )
     commit_ops.checkout_dag.assert_called_once_with(
-        Ref("head:main"),
+        "main",
         Ref("commit:2"),
         "train",
         target_name=None,
@@ -197,7 +197,7 @@ def test_dmlops_init_recovers_when_config_exists_and_db_missing(tmp_path):
     mock_create.assert_called_once()
     mock_open.assert_called_once_with(str(repo_dir), remote_root="s3://bucket/prefix")
     open_ops.pull_project.assert_called_once()
-    assert result["head"] == "head:main"
+    assert result["branch"] == "main"
 
 
 def test_dmlops_init_uses_init_project_layout_for_bootstrap(tmp_path):
@@ -231,7 +231,7 @@ def test_dmlops_init_uses_init_project_layout_for_bootstrap(tmp_path):
     assert init_cfg.branch == "main"
     assert init_cfg.remote_uri == "s3://bucket/prefix"
     mock_create.assert_called_once()
-    assert result["head"] == "head:main"
+    assert result["branch"] == "main"
 
 
 def test_dmlops_init_rejects_name_and_project_uri_together(tmp_path):

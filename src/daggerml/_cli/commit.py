@@ -14,9 +14,9 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
         examples=[
             "dml commit list HEAD --limit 10",
             "dml commit merge commit:abc commit:def --user alice",
-            "dml commit rebase head:feature head:main --user bob",
+            "dml commit rebase commit:abc commit:def --user bob",
             "dml commit get-dag commit:abc mydag",
-            "dml commit delete-dag mydag HEAD --user alice",
+            "dml commit delete-dag mydag main --user alice",
         ],
     )
     subparsers = parser.add_subparsers(dest="subcommand", metavar="<method>", help="Methods")
@@ -25,10 +25,10 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
     list_parser = subparsers.add_parser("list", help="List commit history")
     apply_help_config(
         list_parser,
-        description="List commits reachable from a head/commit ref or the special value HEAD.",
+        description="List commits reachable from a branch/commit ref or the special value HEAD.",
         examples=["dml commit list HEAD --limit 10"],
     )
-    list_parser.add_argument("head", help="Head/commit ref (e.g. head:main, commit:<id>) or HEAD")
+    list_parser.add_argument("head", help="Branch/commit ref (e.g. head:main, commit:<id>) or HEAD")
     list_parser.add_argument("--limit", type=int, help="Maximum number of commits to return")
     list_parser.set_defaults(func=execute_commit_list)
 
@@ -44,20 +44,20 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
     merge_parser.add_argument("--user", required=True, help="Commit author username")
     merge_parser.set_defaults(func=execute_commit_merge)
 
-    merge_head_parser = subparsers.add_parser("merge-head", help="Merge into and advance a head")
+    merge_head_parser = subparsers.add_parser("merge-head", help="Merge into and advance a branch")
     apply_help_config(
         merge_head_parser,
         description="Merge another commit into a branch head, fast-forwarding when possible.",
-        examples=["dml commit merge-head head:main commit:abc --user alice"],
+        examples=["dml commit merge-head main commit:abc --user alice"],
     )
-    merge_head_parser.add_argument("head", help="Head ref (head:<name>)")
+    merge_head_parser.add_argument("head", help="Branch name")
     merge_head_parser.add_argument("other", help="Commit ref (commit:<id>)")
     merge_head_parser.add_argument("--user", required=True, help="Commit author username")
     merge_head_parser.set_defaults(func=execute_commit_merge_head)
 
     revert_parser = subparsers.add_parser("revert", help="Revert a commit on a head")
-    apply_help_config(revert_parser, description="Apply the inverse of a commit to a head.")
-    revert_parser.add_argument("head", help="Head ref (head:<name>)")
+    apply_help_config(revert_parser, description="Apply the inverse of a commit to a branch.")
+    revert_parser.add_argument("head", help="Branch name")
     revert_parser.add_argument("commit", help="Commit ref (commit:<id>)")
     revert_parser.add_argument("--user", required=True, help="Commit author username")
     revert_parser.set_defaults(func=execute_commit_revert)
@@ -67,7 +67,7 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         rebase_parser,
         description="Rebase a source commit onto a target commit.",
-        examples=["dml commit rebase head:feature head:main --user bob"],
+        examples=["dml commit rebase commit:abc commit:def --user bob"],
     )
     rebase_parser.add_argument("source", help="Source commit ref (commit:<id>)")
     rebase_parser.add_argument("target", help="Target commit ref (commit:<id>)")
@@ -96,14 +96,14 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
     describe_parser.set_defaults(func=execute_commit_describe)
 
     # delete-dag subcommand
-    delete_dag_parser = subparsers.add_parser("delete-dag", help="Delete DAG from head commit")
+    delete_dag_parser = subparsers.add_parser("delete-dag", help="Delete DAG from branch commit")
     apply_help_config(
         delete_dag_parser,
-        description="Delete a named DAG from a head/commit ref.",
-        examples=["dml commit delete-dag mydag HEAD --user alice"],
+        description="Delete a named DAG from a branch head.",
+        examples=["dml commit delete-dag mydag main --user alice"],
     )
     delete_dag_parser.add_argument("name", help="DAG name (string)")
-    delete_dag_parser.add_argument("head", help="Head/commit ref (e.g. head:main, commit:<id>) or HEAD")
+    delete_dag_parser.add_argument("head", help="Branch name")
     delete_dag_parser.add_argument("--user", required=True, help="Commit author username")
     delete_dag_parser.set_defaults(func=execute_commit_delete_dag)
 
@@ -124,12 +124,12 @@ def execute_commit_merge(ops_obj, args) -> str:
 
 
 def execute_commit_merge_head(ops_obj, args) -> str:
-    result = ops_obj.merge_into_head(parse_ref(args.head), parse_ref(args.other), args.user)
+    result = ops_obj.merge_into_head(args.head, parse_ref(args.other), args.user)
     return str(result)
 
 
 def execute_commit_revert(ops_obj, args) -> str:
-    result = ops_obj.revert(parse_ref(args.head), parse_ref(args.commit), args.user)
+    result = ops_obj.revert(args.head, parse_ref(args.commit), args.user)
     return str(result)
 
 
@@ -156,6 +156,7 @@ def execute_commit_describe(ops_obj, args) -> dict:
 
 def execute_commit_delete_dag(ops_obj, args) -> str:
     """Execute commit delete-dag command, return JSON-serializable result."""
-    head = parse_ref(args.head)
+    # head may be a branch name or a ref string; parse into a Ref when present
+    head = parse_ref(args.head) if getattr(args, "head", None) is not None else None
     result = ops_obj.delete_dag(args.name, head, args.user)
     return str(result)

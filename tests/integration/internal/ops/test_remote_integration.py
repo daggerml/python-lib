@@ -612,6 +612,11 @@ class TestLocalHelpers:
         ref_path = "tags/main/abc123.json"
         commit_id = "def4567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
 
+        def _exists(ref):
+            return ref == Ref(f"commit:{commit_id}")
+
+        mock_txn.exists.side_effect = _exists
+
         remote_ops._local_put_head(mock_txn, remote_name, ref_path, commit_id)
 
         expected_value = Head(commit=Ref(f"commit:{commit_id}"))
@@ -906,7 +911,7 @@ class TestPush:
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest) as mock_dump:
             with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
                 # Push the head ref
-                ref_path = remote_ops.push(Ref("head:main"))
+                ref_path = remote_ops.push("main")
 
             # Verify _local_dump_dict was called
             mock_dump.assert_called_once()
@@ -959,7 +964,7 @@ class TestPush:
             txn.put(Head(commit=Ref(f"commit:{commit_oid}")), to=Ref("head:main"))
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest) as mock_dump:
             with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
-                ref_path = remote_ops.push(Ref("head:main"))
+                ref_path = remote_ops.push("main")
 
         assert ref_path == f"tags/main/{commit_oid}.json"
         assert mock_dump.call_args.args[1] == Ref(f"commit:{commit_oid}")
@@ -1001,7 +1006,7 @@ class TestPush:
         events = []
         with patch.object(
             remote_ops,
-            "_resolve_push_target",
+            "_resolve_branch_push_target",
             return_value=(Ref(f"commit:{commit_oid}"), f"tags/main/{commit_oid}.json"),
         ):
             with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest):
@@ -1045,7 +1050,7 @@ class TestPush:
                                                 ("put-ref", json.loads(data))
                                             ),
                                         ):
-                                            remote_ops.push(Ref("head:main"))
+                                            remote_ops.push("main")
 
         assert events[0:1] == [("ensure", dag_a)]
         assert events[-1][0] == "put-ref"
@@ -1074,12 +1079,12 @@ class TestPush:
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest):
             with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
                 # First push should succeed
-                ref_path = remote_ops.push(Ref("head:main"))
+                ref_path = remote_ops.push("main")
                 assert ref_path == f"tags/main/{commit_oid}.json"
 
                 # Public API wraps remote errors at subsystem boundary
                 with pytest.raises(DmlRepoError, match="already exists"):
-                    remote_ops.push(Ref("head:main"))
+                    remote_ops.push("main")
 
     def test_push_manifest_uploaded_and_addressable(self, integration_remote_ops_fn):
         """Test that the manifest is uploaded and can be retrieved via its hash."""
@@ -1108,7 +1113,7 @@ class TestPush:
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest):
             with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
                 # Push
-                remote_ops.push(Ref("head:main"))
+                remote_ops.push("main")
 
         # Build expected remote manifest to get its hash
         remote_manifest_dict, remote_manifest_bytes = remote_ops._build_remote_manifest(local_manifest)
@@ -1550,12 +1555,12 @@ class TestTask17PublicApiPolish:
             commit_ref = Ref("commit:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
             with patch.object(
                 remote_ops,
-                "_resolve_push_target",
+                "_resolve_branch_push_target",
                 return_value=(commit_ref, "tags/main/test.json"),
             ):
                 with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
                     with pytest.raises(DmlRepoError, match="Cannot push non-commit root namespace: 'blob'"):
-                        remote_ops.push(Ref("head:main"))
+                        remote_ops.push("main")
 
     def test_pull_raises_on_missing_cas_object(self, remote_ops):
         """Test that pull surfaces missing CAS objects as DmlRepoError."""
@@ -2534,11 +2539,11 @@ class TestE2E:
         with patch.object(push_remote_ops, "_local_dump_dict", return_value=local_manifest):
             with patch.object(
                 push_remote_ops,
-                "_resolve_push_target",
+                "_resolve_branch_push_target",
                 return_value=(Ref(f"commit:{commit_oid}"), f"tags/main/{commit_oid}.json"),
             ):
                 with patch.object(push_remote_ops, "_direct_dag_ids", return_value=[]):
-                    ref_path = push_remote_ops.push(Ref("head:main"))
+                    ref_path = push_remote_ops.push("main")
             assert ref_path == f"tags/main/{commit_oid}.json"
 
         # Verify push artifacts exist

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 
-from daggerml._cli.base import apply_help_config, parse_ref
+from daggerml._cli.base import apply_help_config
 
 
 def setup_index_parser(parser: ArgumentParser) -> None:
@@ -14,8 +14,8 @@ def setup_index_parser(parser: ArgumentParser) -> None:
         description="Index operations: list, describe, and delete.",
         examples=[
             "dml index list",
-            "dml index describe index:abc",
-            "dml index delete index:abc",
+            "dml index describe abc",
+            "dml index delete abc",
         ],
     )
     subparsers = parser.add_subparsers(dest="method", metavar="<method>", help="Methods", required=True)
@@ -33,32 +33,29 @@ def setup_index_list_parser(parser: ArgumentParser) -> None:
 
 def setup_index_describe_parser(parser: ArgumentParser) -> None:
     """Setup index describe command parser."""
-    apply_help_config(parser, description="Describe an index.", examples=["dml index describe index:abc123"])
-    parser.add_argument("index_ref", help="Index ref (index:<id>)")
+    apply_help_config(parser, description="Describe an index.", examples=["dml index describe abc123"])
+    parser.add_argument("index_id", help="Index id")
     parser.set_defaults(op="index", method="describe", func=execute_index_describe)
 
 
 def setup_index_delete_parser(parser: ArgumentParser) -> None:
     """Setup index delete command parser."""
-    apply_help_config(parser, description="Delete an index.", examples=["dml index delete index:abc123"])
-    parser.add_argument("index_ref", help="Index ref (index:<id>)")
+    apply_help_config(parser, description="Delete an index.", examples=["dml index delete abc123"])
+    parser.add_argument("index_id", help="Index id")
     parser.set_defaults(op="index", method="delete", func=execute_index_delete)
 
 
 def execute_index_list(ops, args) -> list[str]:
     """Execute index list command."""
-    result = ops.list()
-    return [ref.to for ref in result]
+    return ops.list_indexes()
 
 
 def execute_index_describe(ops, args) -> dict:
     """Execute index describe command."""
-    index_ref = parse_ref(args.index_ref)
-    return ops.describe(index_ref)
+    return ops.describe(args.index_id)
 
 
 def execute_index_delete(ops, args) -> None:
     """Execute index delete command."""
-    index_ref = parse_ref(args.index_ref)
-    ops.delete(index_ref)
+    ops.delete(args.index_id)
     return None

@@ -31,7 +31,7 @@ class TestCommitOps:
 
     def test_list_commits_integration(self, ops):
         """Test listing commit history with real database."""
-        ops, head_ref = ops
+        ops, _head_ref = ops
         # Create a commit chain: A -> B -> C
         tree = Tree(dags={"test": _gen_ref("dag")})
         with ops._tx(readonly=False) as txn:
@@ -92,7 +92,11 @@ class TestCommitOps:
 
     def test_delete_dag_integration(self, ops):
         """Test delete_dag with real database."""
-        ops, head_ref = ops
+        from daggerml._internal._db import Ref
+
+        ops, _head_ref = ops
+        branch = "main"
+        head_ref = Ref(f"head:{branch}")
         # Create tree with multiple DAGs and store as head
         keep1_ref = _gen_ref("dag")
         delete_ref = _gen_ref("dag")
@@ -106,15 +110,16 @@ class TestCommitOps:
             from daggerml._internal.types import Head
 
             head = Head(commit=commit_ref)
-            head_ref = txn.put(head)
+            txn.put(head, to=head_ref)
 
         # Test delete_dag operation (note: returns self for chaining now)
-        result = ops.delete_dag("delete_me", head_ref, "test_user")
+        result = ops.delete_dag("delete_me", branch, "test_user")
         assert result is ops
 
         # Get updated context to verify changes
         with ops._tx(readonly=True) as txn:
-            ctx = txn.get_ctx(head_ref)
+            head = txn.get(head_ref)
+            ctx = txn.get_commit_ctx(head.commit)
 
         # Verify DAG was removed from tree
         assert "keep1" in ctx.tree.dags

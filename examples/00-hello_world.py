@@ -11,20 +11,22 @@ from daggerml.contrib import api
 
 
 @api.funkify(uri="script", adapter="local")
-def hello(dag):
+def hello(dag, arg):
     from uuid import uuid4
 
-    return f"Hello, world! Your UUID is {uuid4()}"
+    arg = arg.value()
+    return f"{uuid4() = !s} and {arg = }."
 
 
 def main() -> None:
     with dml.new("examples/00-hello-world") as dag:
-        result = dag.call(hello, name="greeting")
+        result = dag.call(hello, 23, name="greeting")
         dag.commit(result)
     loaded = dml.load("examples/00-hello-world")
     print(loaded.result.value())
-    with dml.new("examples/00-hello-world") as dag:
-        print(dag.call(hello, name="greeting").value())
+    with dml.new("examples/00-hello-world-redux") as dag:
+        print(dag.call(hello, 23).value())
+        print(dag.call(hello, 42).value())
 
 
 if __name__ == "__main__":

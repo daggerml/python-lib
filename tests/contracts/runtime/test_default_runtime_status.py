@@ -38,7 +38,7 @@ def test_default_runtime_status_DRT_STS_001_reports_implicit_default_creation_so
 
     runtime = _runtime_info(status)
     assert runtime["ops_initialized"] is False
-    assert isinstance(runtime["head_ref"], str)
+    assert isinstance(runtime["branch"], str)
 
 
 def test_default_runtime_status_DRT_STS_002_get_default_dml_is_cached_process_default():

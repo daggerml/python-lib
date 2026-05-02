@@ -413,7 +413,7 @@ class DelayedActionCodec:
 
     def encode(self, value: DelayedRef | DelayedLoad | DelayedRunnable, ctx: CodecContext):
         if isinstance(value, DelayedRef):
-            return ctx.index_ops.get_node(ctx.index_ref, value.name)
+            return ctx.index_ops.get_node(ctx.index_id, value.name)
         if isinstance(value, DelayedRunnable):
             adapter_spec = get_adapter(value.adapter)
             sub = value.sub
@@ -423,8 +423,8 @@ class DelayedActionCodec:
             if not isinstance(resolved, Runnable):
                 raise DmlRepoError("Adapter resolve_runnable must return Runnable")
             return resolved
-        dag_ref, node_ref = ctx.index_ops.resolve_dag_node(ctx.index_ref, value.dagname, value.nodename)
-        return ctx.index_ops.put_import(ctx.index_ref, dag_ref, node=node_ref, name=None)
+        dag_ref, node_ref = ctx.index_ops.resolve_dag_node(ctx.index_id, value.dagname, value.nodename)
+        return ctx.index_ops.put_import(ctx.index_id, dag_ref, node=node_ref, name=None)
 
 
 def is_node_like(x: object) -> bool:

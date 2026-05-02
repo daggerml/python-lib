@@ -224,7 +224,11 @@ def test_script_executor_lifecycle_stage_matrix_LRT_LFC_001_to_LRT_LFC_004(
     else:
         argv_ptr = _mk_argv_ptr(3, argv0=runnable) if call_kwargs else _mk_argv_ptr(argv0=runnable)
 
-    cache_key = f"ck-stage-{expected_terminal}-{'resume' if resume_once else 'kickoff'}-{'prepop' if inject_prepop else 'plain'}"
+    cache_key = (
+        f"ck-stage-{expected_terminal}-"
+        f"{'resume' if resume_once else 'kickoff'}-"
+        f"{'prepop' if inject_prepop else 'plain'}"
+    )
     kickoff = LocalAdapter.send(
         runnable=runnable,
         argv_ptr=argv_ptr,

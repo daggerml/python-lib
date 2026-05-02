@@ -26,6 +26,7 @@ from daggerml._internal.ops import DmlOps
 from daggerml._internal.types import (
     DEFAULT_HEAD,
     DEFAULT_USER,
+    DmlPointerConflictError,
     DmlRepoError,
     Error,
     Runnable,
@@ -43,6 +44,7 @@ __all__ = [
     "Runnable",
     "Error",
     "DmlRepoError",
+    "DmlPointerConflictError",
     "DEFAULT_HEAD",
     "DEFAULT_USER",
 ]

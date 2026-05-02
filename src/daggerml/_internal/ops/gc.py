@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
+from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.types import DmlRepoError
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ class GcOps(BaseOps):
         try:
             with self._tx(readonly=True) as txn:
                 if heads is None:
-                    heads = list(txn.iter("head")) + list(txn.iter("index"))
+                    heads = HeadOps(_db=self._db).list_pointer_roots(txn=txn)
                 if not heads:
                     logger.warning("Listing orphans with no heads; this will clear the repo.")
                 # Call the raw DB transaction helper directly (no BaseOps edits required)

@@ -26,35 +26,15 @@ from daggerml._internal._db import (
     DmlDbMapFullError,
     Ref,
 )
-from daggerml._internal.types import NAMESPACES, Commit, Dag, Deletable, DmlRepoError, Error, Head, Tree, Uri
+from daggerml._internal.types import NAMESPACES, Commit, Dag, Deletable, DmlRepoError, Error, Tree, Uri
 
 
 @dataclass
-class CtxHelper:
-    """Context helper for accessing commit/tree/dag state.
+class CommitCtx:
+    """Context helper for accessing commit/tree/dag state without pointers."""
 
-    Provides convenient access to related objects from a head reference.
-
-    Attributes
-    ----------
-    head : Head
-        The head object.
-    commit : Commit
-        The commit this head points to.
-    tree : Tree
-        The tree from the commit.
-    dag : Dag
-        The DAG from the commit (if present).
-
-    Notes
-    -----
-    - The commit, tree, and dag attributes are lazy, and the dag is optional.
-      We use `cast` so that pyright doesn't yell at us. Be smart when using this.
-    """
-
-    head: Head
-    commit: Commit = cast(Commit, None)
-    tree: Tree = cast(Tree, None)
+    commit: Commit
+    tree: Tree
     dag: Dag = cast(Dag, None)
 
 
@@ -369,25 +349,13 @@ class TxnContext:
         context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
         self.logger.exception(f"{operation}: {context}")
 
-    def get_ctx(self, head: Ref) -> CtxHelper:
-        """Create context helper from a head reference.
+    def get_commit_ctx(self, commit_ref: Ref) -> CommitCtx:
+        """Create context helper from a commit reference."""
 
-        Parameters
-        ----------
-        head : Ref
-            Head (or index) reference
-
-        Returns
-        -------
-        CtxHelper
-            Context helper with loaded head, commit, tree, and dag objects.
-        """
-
-        head_obj: Head = self.get(head)
-        commit: Commit = self.get(head_obj.commit)
+        commit: Commit = self.get(commit_ref)
         tree: Tree = self.get(commit.tree)
         dag = commit.dag and self.get(commit.dag)
-        return CtxHelper(head_obj, commit, tree, dag=cast(Dag, dag))
+        return CommitCtx(commit, tree, dag=cast(Dag, dag))
 
 
 @dataclass

@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 
 import daggerml._internal.codec as literal_codec
 from daggerml._internal._db import Ref
+from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps, _PreparedAdapterCall
 from daggerml._internal.ops.node import NodeOps
 from daggerml._internal.types import (
@@ -19,7 +20,6 @@ from daggerml._internal.types import (
     DictDatum,
     DmlRepoError,
     Error,
-    FnNode,
     Head,
     ImportNode,
     Index,
@@ -33,9 +33,13 @@ from daggerml._internal.types import (
     Uri,
 )
 from tests.contracts.internal.support.conftest_support import remote_bucket_and_prefix_from_env
-from tests.contracts.internal.support.test_db_support import REF_ALPHABET, _gen_ref, float_strategy, int_strategy, scalar_strategy
-from tests.contracts.internal.test_types_contract import _index_strategy
+from tests.contracts.internal.support.test_db_support import (
+    REF_ALPHABET,
+    _gen_ref,
+    scalar_strategy,
+)
 from tests.contracts.internal.support.util_support import TEST_DIR
+from tests.contracts.internal.test_types_contract import _index_strategy
 
 _NAME_STRAT = st.text(alphabet=REF_ALPHABET, min_size=1, max_size=12)
 DELAYED_FN_URI = str(TEST_DIR / "delayed-sum.py")
@@ -55,7 +59,7 @@ def _remote_protocol_prefix_from_env() -> str:
     return f"{prefix}/dml" if prefix else "dml"
 
 
-def _mk_repo_state(temp_bo, *, with_argv: bool = False) -> tuple[IndexOps, Ref, Ref]:
+def _mk_repo_state(temp_bo, *, with_argv: bool = False) -> tuple[IndexOps, str, str]:
     """Create a minimal head + working index context for IndexOps tests."""
     head_ref = _gen_ref("head")
     tree_ref = _gen_ref("tree")
@@ -87,7 +91,7 @@ def _mk_repo_state(temp_bo, *, with_argv: bool = False) -> tuple[IndexOps, Ref, 
             to=index_commit_ref,
         )
         txn.put(Index(commit=index_commit_ref), to=index_ref)
-    return IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env()), head_ref, index_ref
+    return IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env()), head_ref.id(), index_ref.id()
 
 
 def _mk_remote_index_ops(temp_bo) -> IndexOps:
@@ -186,13 +190,14 @@ class TestIndexOps:
     def test_list(self, temp_bo, idx):
         """List returns existing refs; delete removes them."""
         ops = IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env())
+        head_ops = HeadOps(_db=temp_bo._db)
         with temp_bo._tx(readonly=False) as txn:
             ref = txn.put(idx)
         try:
-            assert ref in list(ops.list())
+            assert ref.id() in head_ops.list_indexes()
         finally:
-            ops.delete(ref)
-        assert ref not in list(ops.list())
+            ops.delete(ref.id())
+        assert ref.id() not in head_ops.list_indexes()
 
     @pytest.mark.parametrize(
         "builtin,args,expected",
@@ -270,7 +275,7 @@ class TestIndexOps:
         ops.put_literal(index_ref, {"a": n0}, name="v1")
         nops = NodeOps(_db=temp_bo._db)
         with ops._tx(readonly=True) as txn:
-            dag: Dag = txn.get_ctx(index_ref).dag
+            dag: Dag = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn)).dag
         vals = [nops.unroll(v) for v in dag.nodes]
         vals = [str(v) if isinstance(v, dict) else v for v in vals]
         vals = [x for x in vals if not isinstance(x, (Uri, Runnable))]
@@ -283,7 +288,7 @@ class TestIndexOps:
         ops.put_literal(index_ref, [1, n0], name="v1")
         nops = NodeOps(_db=temp_bo._db)
         with ops._tx(readonly=True) as txn:
-            dag: Dag = txn.get_ctx(index_ref).dag
+            dag: Dag = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn)).dag
         vals = [nops.unroll(v) for v in dag.nodes]
         vals = [tuple(v) if isinstance(v, list) else v for v in vals]
         vals = [x for x in vals if not isinstance(x, (Uri, Runnable))]
@@ -391,7 +396,7 @@ class TestIndexOps:
                     RunnableDatum(target=uri_ref, sub=runnable_ref, kwargs=kwargs_ref, adapter="nonempty"),
                     to=runnable_ref,
                 )
-                fn_node_ref = ops._put_node(LiteralNode(value=runnable_ref), txn=txn, index_ref=index_ref)
+                fn_node_ref = ops._put_node(LiteralNode(value=runnable_ref), txn=txn, index_id=index_ref)
             with pytest.raises(DmlRepoError, match="Runnable sub cycle detected"):
                 ops.start_fn(index_ref, [fn_node_ref], name="result")
         finally:
@@ -568,7 +573,7 @@ class TestIndexOps:
             adapter_path="dummy-adapter",
             cache_key="cache-key-lineage",
             runnable={"target": "noop://lineage", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
-            caller_index_id=index_ref.id(),
+            caller_index_id=index_ref,
         )
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
@@ -585,7 +590,7 @@ class TestIndexOps:
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is None
-            assert _FakeExecutionState.index_edges == [(index_ref.id(), prepared.cache_key)]
+            assert _FakeExecutionState.index_edges == [(index_ref, prepared.cache_key)]
         finally:
             ops.delete(index_ref)
 
@@ -624,7 +629,13 @@ class TestIndexOps:
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo, with_argv=True)
         fn_node = _put_runnable_literal(ops, index_ref, uri="noop://lineage-fn", adapter="dummy-adapter")
         with ops._tx(readonly=True) as txn:
-            caller_cache_key = txn.get_ctx(index_ref).dag.argv.id()
+            caller_cache_key = (
+                txn.get_commit_ctx(
+                    HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn)
+                )
+                .dag.argv
+                .id()
+            )
         prepared = _PreparedAdapterCall(
             argv_ref=Ref(f"node-argv:{'8' * 64}"),
             adapter_path="dummy-adapter",
@@ -779,7 +790,7 @@ class TestIndexOps:
         try:
             node_ref = ops.put_literal(index_ref, value, name=name)
             with ops._tx(readonly=True) as txn:
-                ctx = txn.get_ctx(index_ref)
+                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn))
                 assert node_ref in ctx.dag.nodes
                 assert ctx.dag.names[name] == node_ref
                 node = txn.get(node_ref)
@@ -1060,7 +1071,7 @@ class TestIndexOps:
         seen: list[Ref] = []
 
         def _spy_apply(value, *, ctx):
-            assert ctx.index_ref == index_ref
+            assert ctx.index_id == index_ref
             assert ctx.index_ops is ops
             seen.append(value)
             return value
@@ -1329,7 +1340,7 @@ class TestIndexOps:
         ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         try:
             with ops._tx(readonly=True) as txn:
-                ctx = txn.get_ctx(index_ref)
+                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn))
                 with pytest.raises(DmlRepoError, match="Cannot import from a DAG with no result node"):
                     ops.put_import(index_ref, cast(Ref, ctx.commit.dag))
         finally:
@@ -1352,7 +1363,7 @@ class TestIndexOps:
                 assert isinstance(node, ImportNode)
                 assert node.dag == other_dag_ref
                 assert node.node == other_node_ref
-                ctx = txn.get_ctx(index_ref)
+                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn))
                 assert imported_ref in ctx.dag.nodes
         finally:
             ops.delete(index_ref)
@@ -1379,19 +1390,19 @@ class TestIndexOps:
         finally:
             ops.delete(index_ref)
             with ops._tx(readonly=False) as txn:
-                txn.delete(head_ref)
+                txn.delete(Ref(f"head:{head_ref}"))
 
     def test_create_validates_input_mode(self, temp_bo):
         ops, head_ref, index_ref = _mk_repo_state(temp_bo)
         try:
-            with pytest.raises(DmlRepoError, match="Provide exactly one of head or argv_ptr."):
+            with pytest.raises(DmlRepoError, match="Provide exactly one of branch, commit, or argv_ptr."):
                 ops.create()
-            with pytest.raises(DmlRepoError, match="Provide exactly one of head or argv_ptr."):
+            with pytest.raises(DmlRepoError, match="Provide exactly one of branch, commit, or argv_ptr."):
                 ops.create(head=head_ref, argv_ptr="a" * 64)
         finally:
             ops.delete(index_ref)
             with ops._tx(readonly=False) as txn:
-                txn.delete(head_ref)
+                txn.delete(Ref(f"head:{head_ref}"))
 
     def test_create_argv_ptr_requires_remote_context(self, temp_bo):
         ops = IndexOps(_db=temp_bo._db, remote_root="")
@@ -1418,7 +1429,7 @@ class TestIndexOps:
             created_index = remote_index_ops.create(argv_ptr=argv_ptr)
 
             with remote_index_ops._tx(readonly=True) as txn:
-                ctx = txn.get_ctx(created_index)
+                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(created_index, txn=txn))
                 assert ctx.dag is not None
                 assert ctx.dag.argv == argv_ref
                 kwargv_ref = remote_index_ops._kwargv_ref_from_nodes(ctx.dag, txn)
@@ -1429,21 +1440,21 @@ class TestIndexOps:
                 ops.delete(created_index)
             ops.delete(index_ref)
             with ops._tx(readonly=False) as txn:
-                txn.delete(head_ref)
+                txn.delete(Ref(f"head:{head_ref}"))
 
     @given(value=scalar_strategy(), dag_name=_NAME_STRAT)
     @settings(max_examples=10)
     def test_commit_deletes_index_and_updates_head(self, temp_bo, value, dag_name):
         ops, head_ref, index_ref = _mk_repo_state(temp_bo)
         with ops._tx(readonly=True) as txn:
-            before = txn.get_ctx(head_ref).head.commit
+            before = txn.get(Ref(f"head:{head_ref}")).commit
         node_ref = ops.put_literal(index_ref, value, name="result")
         commit_ref = ops.commit(index_ref, node_ref, message="done", dag_name=dag_name, head=head_ref)
 
         with ops._tx(readonly=True) as txn:
-            assert not txn.exists(index_ref)
-            assert txn.get_ctx(head_ref).head.commit == commit_ref
-            assert txn.get_ctx(head_ref).head.commit != before
+            assert not txn.exists(Ref(f"index:{index_ref}"))
+            assert txn.get(Ref(f"head:{head_ref}")).commit == commit_ref
+            assert txn.get(Ref(f"head:{head_ref}")).commit != before
 
             commit_obj = txn.get(commit_ref)
             assert isinstance(commit_obj, Commit)

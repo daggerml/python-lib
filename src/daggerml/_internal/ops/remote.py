@@ -19,6 +19,7 @@ from botocore.config import Config
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
+from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.revision_uri import (
     RevisionUri,
     canonicalize_revision_uri,
@@ -26,7 +27,7 @@ from daggerml._internal.revision_uri import (
     validate_ref_name,
     validate_segment,
 )
-from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
+from daggerml._internal.types import Commit, DmlRepoError, Tree
 
 
 def _get_s3_client():
@@ -527,11 +528,26 @@ class RemoteOps(BaseOps):
         self.client.delete_object(Bucket=self.bucket, Key=self._ref_key(ref_path))
 
     def _local_put_head(self, txn, remote_name: str, ref_path: str, commit_id: str) -> None:
-        txn.put(Head(commit=Ref(f"commit:{commit_id}")), to=Ref(f"head:{remote_name}/{ref_path}"))
+        branch = f"{remote_name}/{ref_path}"
+        self._local_put_tracking_branch(txn, branch, Ref(f"commit:{commit_id}"))
 
     def _local_put_tracking_head(self, txn, uri: str, commit_id: str) -> None:
         canonical = self.canonical_dml_uri(uri, require_identifier=True)
-        txn.put(Head(commit=Ref(f"commit:{commit_id}")), to=Ref(f"head:{canonical}"))
+        self._local_put_tracking_branch(txn, canonical, Ref(f"commit:{commit_id}"))
+
+    def _local_put_tracking_branch(self, txn, branch: str, commit_ref: Ref) -> None:
+        head_ops = HeadOps(_db=self._db)
+        try:
+            current = head_ops.get_branch_commit(branch, txn=txn)
+            head_ops.update_branch_commit(branch, current, commit_ref, txn=txn)
+            return
+        except DmlRepoError:
+            pass
+        head_ops.create_branch(branch, commit_ref, txn=txn)
+
+    def _resolve_branch_push_target(self, branch: str) -> tuple[Ref, str]:
+        commit_ref = HeadOps(_db=self._db).get_branch_commit(branch)
+        return commit_ref, f"tags/{branch}/{commit_ref.id()}.json"
 
     def _ref_payload(self, manifest_id: str, targets: dict[str, list[str]], meta: dict | None = None) -> bytes:
         ref_obj = {
@@ -1182,23 +1198,14 @@ class RemoteOps(BaseOps):
                 if not self._remote_has_cas(id_):
                     self._remote_put_cas(id_, raw)
 
-    def _resolve_push_target(self, ref: Ref) -> tuple[Ref, str]:
-        """Resolve a pushed ref into the commit root ref and remote ref path."""
-        if ref.ns() == "head":
-            with self._tx(readonly=True) as txn:
-                head: Head = txn.get(ref)
-            commit_ref = head.commit
-            return commit_ref, f"tags/{ref.id()}/{commit_ref.id()}.json"
-        raise ValueError(f"Unsupported ref namespace: {ref.ns()}. Expected 'head'.")
-
     @_remote_boundary("push")
-    def push(self, ref: Ref) -> str:
-        """Push a repository reference to remote storage.
+    def push(self, branch: str) -> str:
+        """Push a branch to remote storage.
 
         Parameters
         ----------
-        ref : Ref
-            Reference to push (Ref("head:<name>")).
+        branch : str
+            Branch name to publish.
 
         Returns
         -------
@@ -1207,12 +1214,10 @@ class RemoteOps(BaseOps):
 
         Raises
         ------
-        ValueError
-            If the reference namespace is unsupported
         RefAlreadyExists
             If the ref already exists remotely
         """
-        root_ref, ref_path = self._resolve_push_target(ref)
+        root_ref, ref_path = self._resolve_branch_push_target(branch)
 
         with self._tx(readonly=False) as txn:
             lm = self._local_dump_dict(txn, root_ref)
@@ -1281,12 +1286,12 @@ class RemoteOps(BaseOps):
             return root_ref
 
     @_remote_boundary("push branch")
-    def push_project_branch(self, uri: str, head: Ref, *, create: bool = False, force: bool = False) -> str:
+    def push_project_branch(self, uri: str, branch: str, *, create: bool = False, force: bool = False) -> str:
         parsed = self.parse_dml_uri(uri, require_identifier=True)
         if parsed.branch is None:
             raise ValueError("Project branch push requires a branch URI")
         ref_path = self._project_branch_ref_path(parsed.owner, parsed.project, parsed.branch)
-        root_ref, _legacy_ref_path = self._resolve_push_target(head)
+        root_ref, _ref_path = self._resolve_branch_push_target(branch)
 
         observed: RemoteRefRead | None = None
         try:
@@ -1330,11 +1335,11 @@ class RemoteOps(BaseOps):
         )
 
     @_remote_boundary("push tag")
-    def push_project_tag(self, uri: str, head: Ref) -> str:
+    def push_project_tag(self, uri: str, branch: str) -> str:
         parsed = self.parse_dml_uri(uri, require_identifier=True)
         if parsed.tag is None:
             raise ValueError("Project tag push requires a tag URI")
-        root_ref, _legacy_ref_path = self._resolve_push_target(head)
+        root_ref, _ref_path = self._resolve_branch_push_target(branch)
         with self._tx(readonly=True) as txn:
             lm = self._local_dump_dict(txn, root_ref)
             targets = self._targets_for_root(txn, root_ref)
@@ -1348,11 +1353,11 @@ class RemoteOps(BaseOps):
         return self.put_project_tag_ref(parsed.owner, parsed.project, parsed.tag, manifest_id, targets=targets)
 
     @_remote_boundary("pull branch")
-    def pull_uri_into_head(self, uri: str, head: Ref, *, user: str) -> Ref:
+    def pull_uri_into_branch(self, uri: str, branch: str, *, user: str) -> Ref:
         fetched = self.fetch_uri(uri)
         from daggerml._internal.ops.commit import CommitOps
 
-        return CommitOps(_db=self._db).merge_into_head(head, fetched, user)
+        return CommitOps(_db=self._db).merge_into_head(branch, fetched, user)
 
     @_remote_boundary("list")
     def list(self, prefix: str) -> list[dict]:

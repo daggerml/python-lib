@@ -19,8 +19,9 @@ except ImportError:
 from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlProjectConfig
 from daggerml._internal.ops.base_ops import BaseOps
+from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.revision_uri import RevisionUri, stringify_revision_uri
-from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
+from daggerml._internal.types import Commit, DmlRepoError, Tree
 from daggerml._internal.util import now
 
 
@@ -170,33 +171,38 @@ class CommitOps(BaseOps):
         return len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
 
     def _resolve_base(self, base: str, *, project_dir: str, txn) -> tuple[Ref, str, str | None]:
+        head_ops = HeadOps(_db=self._db)
         if base.startswith("commit:"):
             ref = Ref(base)
             return ref, "commit", None
         if self._looks_like_commit_id(base):
             return Ref(f"commit:{base}"), "commit", None
         if base.startswith("dml://"):
-            tracking = Ref(f"head:{base}")
-            if not txn.exists(tracking):
-                raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first")
-            return txn.get(tracking).commit, ("tag" if "@" in base else "remote-branch"), None
+            try:
+                return head_ops.get_branch_commit(base, txn=txn), ("tag" if "@" in base else "remote-branch"), None
+            except DmlRepoError:
+                raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first") from None
         if "/" in base and not base.startswith("head:"):
             remote_name, branch = base.split("/", 1)
             if remote_name != "origin":
                 raise DmlRepoError(f"Unknown remote: {remote_name}")
             project = DmlProjectConfig.load(project_dir)
             tracking_uri = stringify_revision_uri(RevisionUri(project.owner, project.name, branch=branch))
-            tracking = Ref(f"head:{tracking_uri}")
-            if not txn.exists(tracking):
-                raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first")
-            return txn.get(tracking).commit, "remote-branch", None
-        head_ref = Ref(base if base.startswith("head:") else f"head:{base}")
-        if txn.exists(head_ref):
-            return txn.get(head_ref).commit, "branch", head_ref.id()
+            try:
+                return head_ops.get_branch_commit(tracking_uri, txn=txn), "remote-branch", None
+            except DmlRepoError:
+                raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first") from None
+        branch_name = base.split(":", 1)[1] if base.startswith("head:") else base
+        try:
+            return head_ops.get_branch_commit(branch_name, txn=txn), "branch", branch_name
+        except DmlRepoError:
+            pass
         project = DmlProjectConfig.load(project_dir)
-        tag_tracking = Ref(f"head:{stringify_revision_uri(RevisionUri(project.owner, project.name, tag=base))}")
-        if txn.exists(tag_tracking):
-            return txn.get(tag_tracking).commit, "tag", None
+        tag_tracking_uri = stringify_revision_uri(RevisionUri(project.owner, project.name, tag=base))
+        try:
+            return head_ops.get_branch_commit(tag_tracking_uri, txn=txn), "tag", None
+        except DmlRepoError:
+            pass
         raise DmlRepoError(f"Revision {base!r} cannot be resolved locally")
 
     def resolve_revision(
@@ -232,13 +238,13 @@ class CommitOps(BaseOps):
         """Get commit history starting from head.
 
         Walks the commit history following parent references from the given
-        head commit. Yields commit references in reverse chronological order
+        branch or commit tip. Yields commit references in reverse chronological order
         (newest to oldest).
 
         Parameters
         ----------
         head : Ref
-            Starting commit or head reference.
+            Starting commit or branch reference.
         limit : Optional[int]
             Maximum number of commits to return. If None, returns all.
 
@@ -250,7 +256,7 @@ class CommitOps(BaseOps):
         Raises
         ------
         DmlRepoError
-            If head commit doesn't exist or history traversal fails.
+            If the starting commit doesn't exist or history traversal fails.
         """
         count = 0
         try:
@@ -321,26 +327,26 @@ class CommitOps(BaseOps):
                 )
             )
 
-    def merge_into_head(self, head: Ref, other: Ref, user: str) -> Ref:
-        if head.ns() != "head":
-            raise DmlRepoError(f"Expected head ref, got: {head}")
+    def merge_into_head(self, branch: str, other: Ref, user: str) -> Ref:
+        hops = HeadOps(_db=self._db)
         with self._tx(readonly=False) as txn:
-            current = txn.get(head).commit
+            current = hops.get_branch_commit(branch, txn=txn)
             if self._is_ancestor_in_txn(current, other, txn):
-                txn.put(Head(commit=other), to=head)
+                hops.update_branch_commit(branch, current, other, txn=txn)
                 return other
             if self._is_ancestor_in_txn(other, current, txn):
                 return current
         merged = self.merge(current, other, user)
         with self._tx(readonly=False) as txn:
-            txn.put(Head(commit=merged), to=head)
+            hops.update_branch_commit(branch, current, merged, txn=txn)
         return merged
 
-    def revert(self, head: Ref, commit: Ref, user: str) -> Ref:
-        if head.ns() != "head" or commit.ns() != "commit":
+    def revert(self, branch: str, commit: Ref, user: str) -> Ref:
+        if commit.ns() != "commit":
             raise DmlRepoError("Revert expects head and commit refs")
+        hops = HeadOps(_db=self._db)
         with self._tx(readonly=False) as txn:
-            current_head = txn.get(head).commit
+            current_head = hops.get_branch_commit(branch, txn=txn)
             target = txn.get(commit)
             if len(target.parents) != 1:
                 raise DmlRepoError("Can only revert commits with exactly one parent")
@@ -367,12 +373,12 @@ class CommitOps(BaseOps):
             new_commit = txn.put(
                 Commit(parents=[current_head], tree=new_tree, author=user, message=f"Revert {commit.id()[:8]}")
             )
-            txn.put(Head(commit=new_commit), to=head)
+            hops.update_branch_commit(branch, current_head, new_commit, txn=txn)
             return new_commit
 
     def checkout_dag(
         self,
-        head: Ref,
+        branch: str,
         source_commit: Ref,
         source_name: str,
         *,
@@ -380,10 +386,11 @@ class CommitOps(BaseOps):
         replace: bool = False,
         user: str,
     ) -> Ref:
+        hops = HeadOps(_db=self._db)
         target_name = target_name or source_name
         with self._tx(readonly=False) as txn:
-            head_obj = txn.get(head)
-            current_commit = txn.get(head_obj.commit)
+            current_commit_ref = hops.get_branch_commit(branch, txn=txn)
+            current_commit = txn.get(current_commit_ref)
             source_tree = txn.get(txn.get(source_commit).tree)
             if source_name not in source_tree.dags:
                 raise DmlRepoError(f"DAG '{source_name}' not found in source commit")
@@ -396,14 +403,14 @@ class CommitOps(BaseOps):
             new_tree = txn.put(Tree(dags=dags))
             new_commit = txn.put(
                 Commit(
-                    parents=[head_obj.commit],
+                    parents=[current_commit_ref],
                     tree=new_tree,
                     author=user,
                     message=f"Checkout DAG '{source_name}' from {source_commit.id()[:8]}",
                     dag=dag_ref,
                 )
             )
-            txn.put(Head(commit=new_commit), to=head)
+            hops.update_branch_commit(branch, current_commit_ref, new_commit, txn=txn)
             return new_commit
 
     def rebase(self, source, target, user: str):
@@ -505,18 +512,18 @@ class CommitOps(BaseOps):
         }
 
     # FIXME: Move to HeadOps.delete_dag.
-    def delete_dag(self, name: str, head: Ref, user: str) -> Self:
+    def delete_dag(self, name: str, branch: str, user: str) -> Self:
         """Remove DAG from head's tree and create new commit.
 
         Creates a new commit with the specified DAG removed from the tree.
-        Uses the given head commit as the parent of the new commit.
+        Uses the current branch commit as the parent of the new commit.
 
         Parameters
         ----------
         name : str
             Name of the DAG to remove.
         head : Ref
-            Head reference to modify.
+            Branch name to modify.
         user : str
             Username for commit authorship.
 
@@ -528,24 +535,24 @@ class CommitOps(BaseOps):
         Raises
         ------
         DmlRepoError
-            If head commit/DAG doesn't exist or deletion fails.
+            If the branch commit/DAG doesn't exist or deletion fails.
         """
         try:
+            hops = HeadOps(_db=self._db)
             with self._tx(readonly=False) as txn:
-                # Get head object, then its commit
-                ctx = txn.get_ctx(head)
+                current_commit_ref = hops.get_branch_commit(branch, txn=txn)
+                ctx = txn.get_commit_ctx(current_commit_ref)
                 # Check if DAG exists
                 if name not in ctx.tree.dags:
-                    raise DmlRepoError(f"DAG '{name}' not found in head commit tree")
+                    raise DmlRepoError(f"DAG '{name}' not found in branch commit tree")
                 # Create new tree without the specified DAG
                 ctx.tree.dags = {k: v for k, v in ctx.tree.dags.items() if k != name}
                 ctx.commit.tree = txn.put(ctx.tree)
                 ctx.commit.author = user
-                ctx.commit.parents = [ctx.head.commit]
+                ctx.commit.parents = [current_commit_ref]
                 ctx.commit.message = f"Delete DAG '{name}'"
-                ctx.head.commit = txn.put(ctx.commit)
-                # Update the head to point to the new commit
-                txn.put(ctx.head, to=head)
+                new_commit_ref = txn.put(ctx.commit)
+                hops.update_branch_commit(branch, current_commit_ref, new_commit_ref, txn=txn)
             return self
         except Exception as e:
             raise DmlRepoError(f"Failed to delete DAG '{name}': {e}") from e

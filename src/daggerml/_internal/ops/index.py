@@ -11,9 +11,8 @@ import shutil
 import sys
 from dataclasses import dataclass
 from subprocess import run
-from typing import Any, Iterator, Mapping, Optional, cast
+from typing import Any, Mapping, Optional, cast
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from daggerml._internal._db import Ref
 from daggerml._internal.builtins import BUILTIN_FNS
@@ -22,6 +21,7 @@ from daggerml._internal.exec_state import ExecutionRecord, ExecutionState
 from daggerml._internal.ops.base_ops import BaseOps, with_retry
 from daggerml._internal.ops.cache import CacheOps
 from daggerml._internal.ops.dag import DagOps
+from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.node import NodeOps
 from daggerml._internal.types import (
     ArgvNode,
@@ -33,7 +33,6 @@ from daggerml._internal.types import (
     Error,
     FnNode,
     ImportNode,
-    Index,
     KwargvNode,
     ListDatum,
     LiteralNode,
@@ -46,10 +45,6 @@ from daggerml._internal.types import (
     require_ref,
 )
 from daggerml._internal.util import now, unnest
-
-
-def _random_ref(ns: str) -> Ref:
-    return Ref(f"{ns}:{uuid4().hex}")
 
 
 @dataclass(frozen=True)
@@ -89,40 +84,27 @@ class IndexOps(BaseOps):
             raise DmlRepoError("DAG has multiple kwargv nodes")
         return matches[0] if matches else None
 
-    def list(self) -> Iterator[Ref]:
-        """Get all index objects in db.
-
-        Yields
-        ------
-        Ref
-            Index object references.
-        """
-        with self._tx(readonly=True) as txn:
-            for index_ref in txn.iter("index"):
-                yield index_ref
-
     def start_fn(
         self,
-        index_ref: Ref,
+        index_id: str,
         argv: list[Ref],
         kwargv: Optional[dict[str, Ref]] = None,
         name: Optional[str] = None,
     ) -> Optional[Ref]:
-        self._validate_index_ref(index_ref)
-        codec_ctx = self._make_codec_ctx(index_ref)
+        codec_ctx = self._make_codec_ctx(index_id)
         argv = [self._normalize_codec_value(arg, ctx=codec_ctx) for arg in argv]
         kwargv = kwargv or {}
         kwargv = {k: self._normalize_codec_value(v, ctx=codec_ctx) for k, v in kwargv.items()}
         with self._tx(readonly=False) as txn:
-            argv_ref = self._prepare_fn(index_ref, argv, kwargv, txn)
+            argv_ref = self._prepare_fn(index_id, argv, kwargv, txn)
             dag_ref = self._run_builtin(argv_ref, txn)
             if dag_ref is not None:
-                return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+                return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
             cops = CacheOps(_db=self._db, remote_root=self.remote_root)
             dag_ref = cops._get(argv_ref, txn)
             if dag_ref is not None:
-                return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
-            prepared = self._prepare_adapter_call(index_ref, argv_ref, txn)
+                return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+            prepared = self._prepare_adapter_call(index_id, argv_ref, txn)
         argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
         es = ExecutionState(prepared.cache_key, remote_root=self.remote_root)
 
@@ -137,7 +119,7 @@ class IndexOps(BaseOps):
             dag_ref = cops._get(prepared.argv_ref, txn)
             if dag_ref is not None:
                 es.unlock()
-                return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+                return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
 
         execution_number = es.read_active_execution_number()
         execution_record = None
@@ -177,7 +159,7 @@ class IndexOps(BaseOps):
                 cops = CacheOps(_db=self._db, remote_root=self.remote_root)
                 dag_ref = cops._get(prepared.argv_ref, txn)
                 if dag_ref is not None:
-                    return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+                    return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
             raise DmlRepoError("Adapter reported success but no cached DAG was published")
         elif status == "failed":
             self._publish_terminal_state(prepared.argv_ref, result)
@@ -187,7 +169,7 @@ class IndexOps(BaseOps):
                 cops = CacheOps(_db=self._db, remote_root=self.remote_root)
                 dag_ref = cops._get(prepared.argv_ref, txn)
                 if dag_ref is not None:
-                    return self._finish_fn_result(dag_ref, argv, name, txn, index_ref)
+                    return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
             raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
         else:
             if state is None:
@@ -208,62 +190,66 @@ class IndexOps(BaseOps):
             es.unlock()
             return None
 
-    def delete(self, index_ref: Ref) -> None:
+    def delete(self, index_id: str) -> None:
         """Delete an index object from db."""
-        with self._tx(readonly=False) as txn:
-            txn.delete(self._validate_index_ref(index_ref))
+        HeadOps(_db=self._db).delete_index(index_id)
 
     @with_retry
     def create(
         self,
-        head: Optional[Ref] = None,
+        head: Optional[str] = None,
+        commit: Optional[Ref] = None,
         argv_ptr: Optional[str] = None,
-    ) -> Ref:
+    ) -> str:
         """Create a new index object.
 
         Parameters
         ----------
-        head : Ref, optional
-            Reference to the head to base the index on. If None, uses the active head.
+        head : str, optional
+            Branch name to base the index on.
+        commit : Ref, optional
+            Commit reference to base the index on.
         argv_ptr : str, optional
             Optional remote manifest OID to initialize argv from.
 
         Returns
         -------
-        Ref
-            Reference to the newly created index object.
+        str
+            Opaque index id for the newly created index pointer.
         """
-        if head is not None and head.ns() != "head":
-            raise DmlRepoError(f"Expected head ref, got: {head}")
-        modes = [head is not None, argv_ptr is not None]
+        modes = [head is not None, commit is not None, argv_ptr is not None]
         if sum(modes) != 1:
-            raise DmlRepoError("Provide exactly one of head or argv_ptr.")
+            raise DmlRepoError("Provide exactly one of branch, commit, or argv_ptr.")
         kw = {}
+        if head is not None:
+            kw["commit"] = HeadOps(_db=self._db).get_branch_commit(head)
+        elif commit is not None:
+            kw["commit"] = commit
         if argv_ptr is not None:
             kw["argv"] = self._remote_ops().load_ptr(argv_ptr, expected_root_ns="node-argv")
         with self._tx(readonly=False) as txn:
-            index = self._create(head=head, **kw, txn=txn)
+            index = self._create(**kw, txn=txn)
         return index
 
     @with_retry
-    def get_kwargv(self, index_ref: Ref) -> Ref:
+    def get_kwargv(self, index_id: str) -> Ref:
         """Return the kwargv node for an index (raises if missing)."""
         with self._tx(readonly=True) as txn:
-            ctx = txn.get_ctx(self._validate_index_ref(index_ref))
+            ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
         return DagOps(_db=self._db).get_kwargv(cast(Ref, ctx.commit.dag))
 
     @with_retry
-    def get_argv(self, index_ref: Ref) -> Ref:
+    def get_argv(self, index_id: str) -> Ref:
         """Return the argv node for an index (raises if missing)."""
         with self._tx(readonly=True) as txn:
-            ctx = txn.get_ctx(self._validate_index_ref(index_ref))
+            ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
         return DagOps(_db=self._db).get_argv(cast(Ref, ctx.commit.dag))
 
     @with_retry
-    def get_node(self, index_ref: Ref, name: str) -> Ref:
+    def get_node(self, index_id: str, name: str) -> Ref:
         """Return a named node from an index's DAG."""
         with self._tx(readonly=True) as txn:
-            ctx = txn.get_ctx(self._validate_index_ref(index_ref))
+            ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
             # Access the dag's names directly to avoid nested transactions
             dag: Dag = txn.get(cast(Ref, ctx.commit.dag))
             if name not in dag.names:
@@ -271,15 +257,14 @@ class IndexOps(BaseOps):
             return dag.names[name]
 
     @with_retry
-    def describe(self, index_ref: Ref) -> dict[str, Any]:
+    def describe(self, index_id: str) -> dict[str, Any]:
         """Describe the current index state."""
         with self._tx(readonly=True) as txn:
-            ctx = txn.get_ctx(self._validate_index_ref(index_ref))
+            ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
             dag_ref = ctx.commit.dag
             return {
-                "id": index_ref.id(),
-                "head": index_ref,
-                "commit": ctx.head.commit,
+                "id": index_id,
+                "commit": HeadOps(_db=self._db).get_index_commit(index_id, txn=txn),
                 "dag": dag_ref,
                 "nodes": list(ctx.dag.nodes) if ctx.dag is not None else [],
                 "names": dict(ctx.dag.names) if ctx.dag is not None else {},
@@ -289,12 +274,13 @@ class IndexOps(BaseOps):
             }
 
     @with_retry
-    def set_node_name(self, index_ref: Ref, name: str, node_ref: Ref) -> Ref:
+    def set_node_name(self, index_id: str, name: str, node_ref: Ref) -> Ref:
         """Set or replace a node name in the index DAG."""
-        self._validate_index_ref(index_ref)
         require_ref(node_ref, ["node"], "set_node_name node_ref")
         with self._tx(readonly=False) as txn:
-            ctx = txn.get_ctx(index_ref)
+            head_ops = HeadOps(_db=self._db)
+            old_commit = head_ops.get_index_commit(index_id, txn=txn)
+            ctx = txn.get_commit_ctx(old_commit)
             if ctx.dag is None:
                 raise DmlRepoError("Index commit has no DAG.")
             if node_ref not in ctx.dag.nodes:
@@ -302,16 +288,15 @@ class IndexOps(BaseOps):
             ctx.dag.names[name] = node_ref
             ctx.commit.dag = txn.put(ctx.dag)
             ctx.commit.modified = now()
-            ctx.head.commit = txn.put(ctx.commit)
-            txn.put(ctx.head, to=index_ref)
+            new_commit = txn.put(ctx.commit)
+            head_ops.update_index_commit(index_id, old_commit, new_commit, txn=txn)
             return node_ref
 
     @with_retry
-    def put_import(self, index_ref: Ref, dag: Ref, node: Optional[Ref] = None, name: Optional[str] = None) -> Ref:
+    def put_import(self, index_id: str, dag: Ref, node: Optional[Ref] = None, name: Optional[str] = None) -> Ref:
         """Import a node from another DAG into the current index DAG."""
-        self._validate_index_ref(index_ref)
         with self._tx(readonly=False) as txn:
-            ctx = txn.get_ctx(index_ref)
+            ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
             dag_obj: Dag = txn.get(dag)
             # determine node (prefer explicit `node` arg)
             imported_node = node if node is not None else dag_obj.result
@@ -321,22 +306,21 @@ class IndexOps(BaseOps):
                 # importing from current dag is not allowed
                 raise DmlRepoError("Cannot import from the current DAG")
             node_obj = ImportNode(dag, imported_node)
-            return self._put_node(node_obj, name=name, txn=txn, index_ref=index_ref)
+            return self._put_node(node_obj, name=name, txn=txn, index_id=index_id)
 
     @with_retry
-    def put_literal(self, index_ref: Ref, value: Any, name: Optional[str] = None) -> Ref:
-        self._validate_index_ref(index_ref)
-        codec_ctx = self._make_codec_ctx(index_ref)
+    def put_literal(self, index_id: str, value: Any, name: Optional[str] = None) -> Ref:
+        codec_ctx = self._make_codec_ctx(index_id)
         value = self._normalize_codec_value(value, ctx=codec_ctx)
         with self._tx(readonly=False) as txn:
-            return self._put_literal(value, name=name, txn=txn, index_ref=index_ref)
+            return self._put_literal(value, name=name, txn=txn, index_id=index_id)
 
     @with_retry
     def commit(
         self,
-        index_ref: Ref,
+        index_id: str,
         value: Ref | Error,
-        head: Optional[Ref] = None,
+        head: Optional[str] = None,
         message: Optional[str] = None,
         dag_name: Optional[str] = None,
     ) -> Ref:
@@ -352,9 +336,11 @@ class IndexOps(BaseOps):
         DmlRepoError
             If the commit operation fails.
         """
-        self._validate_index_ref(index_ref)
+        head_ops = HeadOps(_db=self._db)
+        branch_name = head
         with self._tx(readonly=False) as txn:
-            ctx = txn.get_ctx(index_ref)
+            old_commit = head_ops.get_index_commit(index_id, txn=txn)
+            ctx = txn.get_commit_ctx(old_commit)
             if ctx.dag is None:
                 raise DmlRepoError("Index commit has no DAG.")
             if isinstance(value, Error):
@@ -371,33 +357,23 @@ class IndexOps(BaseOps):
                 ctx.commit.message = message
             ctx.commit.modified = now()
             commit_ref = txn.put(ctx.commit)
-            if head is not None:
-                head_ctx = txn.get_ctx(head)
-                head_ctx.head.commit = commit_ref
-                txn.put(head_ctx.head, to=head)
-            txn.delete(index_ref)
+            if branch_name is not None:
+                branch_commit = head_ops.get_branch_commit(branch_name, txn=txn)
+                head_ops.update_branch_commit(branch_name, branch_commit, commit_ref, txn=txn)
+            head_ops.delete_index(index_id, txn=txn)
         if ctx.dag.argv is not None:
             # automatically cache the DAG if it has an argv (i.e. is runnable)
             cops = CacheOps(_db=self._db, remote_root=self.remote_root)
             cops.put(ctx.commit.dag)
         return commit_ref
 
-    def _validate_index_ref(self, index_ref: Ref) -> Ref:
-        if index_ref is None:
-            raise DmlRepoError("No active index reference.")
-        if index_ref.ns() != "index":
-            raise DmlRepoError(f"Expected index ref, got: {index_ref}")
-        return index_ref
-
-    def current_dag_ref(self, index_ref: Ref) -> Ref:
-        self._validate_index_ref(index_ref)
+    def current_dag_ref(self, index_id: str) -> Ref:
         with self._tx(readonly=True) as txn:
-            return cast(Ref, txn.get_ctx(index_ref).commit.dag)
+            return cast(Ref, txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn)).commit.dag)
 
-    def resolve_dag_node(self, index_ref: Ref, dag_name: str, node_name: Optional[str] = None) -> tuple[Ref, Ref]:
-        self._validate_index_ref(index_ref)
+    def resolve_dag_node(self, index_id: str, dag_name: str, node_name: Optional[str] = None) -> tuple[Ref, Ref]:
         with self._tx(readonly=True) as txn:
-            ctx = txn.get_ctx(index_ref)
+            ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
             tree: Tree = txn.get(ctx.commit.tree)
             dag_ref = tree.dags.get(dag_name)
             if dag_ref is None:
@@ -418,9 +394,9 @@ class IndexOps(BaseOps):
         node = txn.get(node_ref)
         return node.datum_ref(txn)
 
-    def _make_codec_ctx(self, index_ref: Ref) -> CodecContext:
+    def _make_codec_ctx(self, index_id: str) -> CodecContext:
         return CodecContext(
-            index_ref=index_ref,
+            index_id=index_id,
             index_ops=self,
         )
 
@@ -439,9 +415,10 @@ class IndexOps(BaseOps):
             return Runnable(target=target, adapter=value.adapter, kwargs=kwargs, sub=sub)
         return value
 
-    def _put_node(self, node: Node, txn, index_ref: Ref, name: Optional[str] = None) -> Ref:
-        self._validate_index_ref(index_ref)
-        ctx = txn.get_ctx(index_ref)
+    def _put_node(self, node: Node, txn, index_id: str, name: Optional[str] = None) -> Ref:
+        head_ops = HeadOps(_db=self._db)
+        old_commit = head_ops.get_index_commit(index_id, txn=txn)
+        ctx = txn.get_commit_ctx(old_commit)
         if ctx.dag is None:
             raise DmlRepoError("Index commit has no DAG.")
         node_ref = txn.put(node)
@@ -450,27 +427,25 @@ class IndexOps(BaseOps):
             ctx.dag.names[name] = node_ref
         ctx.commit.dag = txn.put(ctx.dag)
         ctx.commit.modified = now()
-        ctx.head.commit = txn.put(ctx.commit)
-        txn.put(ctx.head, to=index_ref)
+        new_commit = txn.put(ctx.commit)
+        head_ops.update_index_commit(index_id, old_commit, new_commit, txn=txn)
         return node_ref
 
     def _create(
         self,
         *,
-        head: Optional[Ref] = None,
+        commit: Optional[Ref] = None,
         author: Optional[str] = None,
         argv: Optional[Ref] = None,  # -> ArgvNode
         txn,
-    ) -> Ref:
+    ) -> str:
         nodes: list[Ref] = []
         kw: dict[str, Any] = {"author": author or "DaggerML User"}
-        if head is not None:
-            if head.ns() != "head":
-                raise DmlRepoError(f"Expected head ref, got: {head}")
+        if commit is not None:
             if argv is not None:
-                raise DmlRepoError("Cannot provide both head and argv.")
-            base_ctx = txn.get_ctx(head)
-            kw.update({"parents": [base_ctx.head.commit], "tree": base_ctx.commit.tree})
+                raise DmlRepoError("Cannot provide both commit and argv.")
+            base_ctx = txn.get_commit_ctx(commit)
+            kw.update({"parents": [commit], "tree": base_ctx.commit.tree})
         elif argv is not None:
             argv_obj: ArgvNode = txn.get(argv)
             if not isinstance(argv_obj, ArgvNode):
@@ -479,11 +454,10 @@ class IndexOps(BaseOps):
             nodes.append(self._kwargv_from_argv(argv, txn))
             kw.update({"parents": [], "tree": txn.put(Tree(dags={}))})
         else:
-            raise DmlRepoError("Either head or argv must be provided.")
+            raise DmlRepoError("Either commit or argv must be provided.")
         dag_ref = txn.put(Dag(nodes=nodes, names={}, result=None, argv=argv))
         commit_ref = txn.put(Commit(message="", dag=dag_ref, **kw))
-        idx = txn.put(Index(commit=commit_ref), to=_random_ref("index"))
-        return idx
+        return HeadOps(_db=self._db).create_index(commit_ref, txn=txn)
 
     # ~~~~~~~~~~~ START_FN ~~~~~~~~~~~
     def _runnable_chain(self, runnable_ref: Ref, txn) -> list[tuple[Ref, RunnableDatum]]:
@@ -517,8 +491,8 @@ class IndexOps(BaseOps):
         runnable = self._innermost_runnable(runnable_ref, txn)
         return txn.put(KwargvNode(value=runnable.kwargs))
 
-    def _resolve_runnable_kwargs(self, runnable_ref: Ref, kwargv: dict[str, Ref], index_ref: Ref, txn) -> Ref:
-        ctx = txn.get_ctx(index_ref)
+    def _resolve_runnable_kwargs(self, runnable_ref: Ref, kwargv: dict[str, Ref], index_id: str, txn) -> Ref:
+        ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
         if ctx.dag is None:
             raise DmlRepoError("Index commit has no DAG.")
         chain = self._runnable_chain(runnable_ref, txn)
@@ -557,7 +531,7 @@ class IndexOps(BaseOps):
 
     def _prepare_fn(
         self,
-        index_ref: Ref,
+        index_id: str,
         argv: list[Ref],
         kwargv: dict[str, Ref],
         txn,
@@ -565,7 +539,7 @@ class IndexOps(BaseOps):
         if len(argv) == 0:
             raise DmlRepoError("argv is empty")
         [require_ref(arg, ["node"], "start_fn argv elements") for arg in argv]
-        ctx = txn.get_ctx(index_ref)
+        ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
         if ctx.dag is None:
             raise DmlRepoError("Index commit has no DAG.")
         if not set(argv).issubset(set(ctx.dag.nodes)):
@@ -576,7 +550,7 @@ class IndexOps(BaseOps):
         fn_datum: Datum = txn.get(fn_datum_ref)
         if not isinstance(fn_datum, RunnableDatum):
             raise DmlRepoError("First arg must resolve to a Runnable datum")
-        runnable_ref = self._resolve_runnable_kwargs(fn_datum_ref, kwargv, index_ref, txn)
+        runnable_ref = self._resolve_runnable_kwargs(fn_datum_ref, kwargv, index_id, txn)
         argv_ref = txn.put(ListDatum([runnable_ref, *[self._resolve_node_value_ref(arg, txn) for arg in argv[1:]]]))
         return txn.put(ArgvNode(value=argv_ref))
 
@@ -608,22 +582,28 @@ class IndexOps(BaseOps):
         args = [node_ops._unroll_datum_ref(arg, txn) for arg in argv_datum.data[1:]]
         result = BUILTIN_FNS[fpath](*args)
         # Create a new index for the function DAG within the current txn
-        fn_index_ref = self._create(argv=argv_ref, txn=txn)
+        fn_index_id = self._create(argv=argv_ref, txn=txn)
         # Insert the result node into the newly created index using the same txn
-        result_node_ref = self._put_literal(result, name=None, txn=txn, index_ref=fn_index_ref)
+        result_node_ref = self._put_literal(result, name=None, txn=txn, index_id=fn_index_id)
         # Finalize the commit for the function index within the same txn (avoid opening new txns)
-        idx_ctx = txn.get_ctx(fn_index_ref)
+        idx_ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(fn_index_id, txn=txn))
         if idx_ctx.dag is None:
             raise DmlRepoError("Function index has no DAG.")
         idx_ctx.dag.result = result_node_ref
         idx_ctx.commit.dag = txn.put(idx_ctx.dag)
         idx_ctx.commit.modified = now()
         commit_ref = txn.put(idx_ctx.commit)
+        HeadOps(_db=self._db).update_index_commit(
+            fn_index_id,
+            HeadOps(_db=self._db).get_index_commit(fn_index_id, txn=txn),
+            commit_ref,
+            txn=txn,
+        )
         commit_obj: Commit = txn.get(commit_ref)
         if commit_obj.dag is None:
             raise DmlRepoError("Function commit has no DAG.")
         # clean up the temporary index object to avoid unbounded DB growth
-        txn.delete(fn_index_ref)
+        HeadOps(_db=self._db).delete_index(fn_index_id, txn=txn)
         return commit_obj.dag
 
     def _runnable_envelope(self, runnable_ref: Ref, txn, node_ops: NodeOps) -> dict[str, Any]:
@@ -672,16 +652,15 @@ class IndexOps(BaseOps):
                 raise DmlRepoError("Adapter output schema invalid: running requires state")
         return payload
 
-    @staticmethod
-    def _caller_identity(index_ref: Ref, txn) -> tuple[str | None, str | None]:
-        ctx = txn.get_ctx(index_ref)
+    def _caller_identity(self, index_id: str, txn) -> tuple[str | None, str | None]:
+        ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id, txn=txn))
         if ctx.dag is None:
             raise DmlRepoError("Index commit has no DAG.")
         if ctx.dag.argv is None:
-            return index_ref.id(), None
+            return index_id, None
         return None, ctx.dag.argv.id()
 
-    def _prepare_adapter_call(self, index_ref: Ref, argv_ref: Ref, txn) -> _PreparedAdapterCall:
+    def _prepare_adapter_call(self, index_id: str, argv_ref: Ref, txn) -> _PreparedAdapterCall:
         argv_node: ArgvNode = txn.get(argv_ref)
         argv_datum: ListDatum = txn.get(argv_node.datum_ref(txn))
         if len(argv_datum.data) == 0:
@@ -721,7 +700,7 @@ class IndexOps(BaseOps):
                 ),
             )
         node_ops = NodeOps(_db=self._db)
-        caller_index_id, caller_cache_key = self._caller_identity(index_ref=index_ref, txn=txn)
+        caller_index_id, caller_cache_key = self._caller_identity(index_id=index_id, txn=txn)
         return _PreparedAdapterCall(
             argv_ref=argv_ref,
             adapter_path=adapter_path,
@@ -739,18 +718,24 @@ class IndexOps(BaseOps):
 
     def _build_failed_execution_dag(self, argv_ref: Ref, error_message: str) -> Ref:
         with self._tx(readonly=False) as txn:
-            fn_index_ref = self._create(argv=argv_ref, txn=txn)
-            idx_ctx = txn.get_ctx(fn_index_ref)
+            fn_index_id = self._create(argv=argv_ref, txn=txn)
+            idx_ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(fn_index_id, txn=txn))
             if idx_ctx.dag is None:
                 raise DmlRepoError("Function index has no DAG.")
             idx_ctx.dag.error = txn.put(Error.from_ex(DmlRepoError(error_message)))
             idx_ctx.commit.dag = txn.put(idx_ctx.dag)
             idx_ctx.commit.modified = now()
             commit_ref = txn.put(idx_ctx.commit)
+            HeadOps(_db=self._db).update_index_commit(
+                fn_index_id,
+                HeadOps(_db=self._db).get_index_commit(fn_index_id, txn=txn),
+                commit_ref,
+                txn=txn,
+            )
             commit_obj: Commit = txn.get(commit_ref)
             if commit_obj.dag is None:
                 raise DmlRepoError("Function commit has no DAG.")
-            txn.delete(fn_index_ref)
+            HeadOps(_db=self._db).delete_index(fn_index_id, txn=txn)
             return commit_obj.dag
 
     def _publish_terminal_state(self, argv_ref: Ref, state: Mapping[str, Any]) -> None:
@@ -809,19 +794,20 @@ class IndexOps(BaseOps):
             raise DmlRepoError("Adapter output must be JSON") from e
         return self._validate_adapter_output(stdout)
 
-    def _finish_fn_result(self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_ref: Ref) -> Ref:
+    def _finish_fn_result(self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_id: str) -> Ref:
         dag_obj: Dag = txn.get(dag_ref)
         if dag_obj.result is None and dag_obj.error is None:
             raise DmlRepoError("Function DAG has no result node.")
-        out = self._put_node(FnNode(argv, dag_ref), name=name, txn=txn, index_ref=index_ref)
+        out = self._put_node(FnNode(argv, dag_ref), name=name, txn=txn, index_id=index_id)
         if dag_obj.error is not None:
             err = txn.get(dag_obj.error)
             raise err
         return out
 
-    def _put_literal(self, value: Any, txn, index_ref: Ref, name: Optional[str] = None) -> Ref:
-        self._validate_index_ref(index_ref)
-        idx_ctx = txn.get_ctx(index_ref)
+    def _put_literal(self, value: Any, txn, index_id: str, name: Optional[str] = None) -> Ref:
+        head_ops = HeadOps(_db=self._db)
+        old_commit = head_ops.get_index_commit(index_id, txn=txn)
+        idx_ctx = txn.get_commit_ctx(old_commit)
         if idx_ctx.dag is None:
             raise DmlRepoError("Index commit has no DAG.")
 
@@ -830,7 +816,7 @@ class IndexOps(BaseOps):
                 if not txn.exists(x):
                     raise DmlRepoError(f"Referenced object does not exist: {x}")
                 if x.nss()[0] == "node":
-                    latest_ctx = txn.get_ctx(index_ref)
+                    latest_ctx = txn.get_commit_ctx(head_ops.get_index_commit(index_id, txn=txn))
                     if latest_ctx.dag is None:
                         raise DmlRepoError("Index commit has no DAG.")
                     if x not in latest_ctx.dag.nodes:
@@ -873,20 +859,20 @@ class IndexOps(BaseOps):
             if isinstance(x, list):
                 ys = [_put(v) for v in x]
                 if any(isinstance(v, Ref) and v.nss()[0] == "node" for v in ys):
-                    ys = [self._put_literal(v, txn, index_ref) if v.nss()[0] != "node" else v for v in ys]
+                    ys = [self._put_literal(v, txn, index_id) if v.nss()[0] != "node" else v for v in ys]
                     fn_uri = txn.put(Uri("daggerml:list"))
                     fn_kwargs = txn.put(DictDatum(data={}))
                     fn = self._put_literal(
-                        RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""), txn, index_ref
+                        RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""), txn, index_id
                     )
                     argv_refs = [fn, *ys]
-                    argv_ref = self._prepare_fn(index_ref, argv_refs, {}, txn)
+                    argv_ref = self._prepare_fn(index_id, argv_refs, {}, txn)
                     dag_ref = self._run_builtin(argv_ref, txn)
                     assert dag_ref is not None
                     dag_obj: Dag = txn.get(dag_ref)
                     if dag_obj.result is None and dag_obj.error is None:
                         raise DmlRepoError("Function DAG has no result node.")
-                    resp = self._put_node(FnNode(argv_refs, dag_ref), name=None, txn=txn, index_ref=index_ref)
+                    resp = self._put_node(FnNode(argv_refs, dag_ref), name=None, txn=txn, index_id=index_id)
                     if dag_obj.error is not None:
                         raise txn.get(dag_obj.error)
                     return resp
@@ -894,21 +880,21 @@ class IndexOps(BaseOps):
             if isinstance(x, dict):
                 ys = {k: _put(v) for k, v in x.items()}
                 if any(isinstance(v, Ref) and v.nss()[0] == "node" for v in ys.values()):
-                    yks = [self._put_literal(k, txn, index_ref) for k in ys.keys()]
-                    yvs = [self._put_literal(v, txn, index_ref) if v.nss()[0] != "node" else v for v in ys.values()]
+                    yks = [self._put_literal(k, txn, index_id) for k in ys.keys()]
+                    yvs = [self._put_literal(v, txn, index_id) if v.nss()[0] != "node" else v for v in ys.values()]
                     fn_uri = txn.put(Uri("daggerml:dict"))
                     fn_kwargs = txn.put(DictDatum(data={}))
                     fn = self._put_literal(
-                        RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""), txn, index_ref
+                        RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""), txn, index_id
                     )
                     argv_refs = [fn, *unnest(zip(yks, yvs, strict=True))]
-                    argv_ref = self._prepare_fn(index_ref, argv_refs, {}, txn)
+                    argv_ref = self._prepare_fn(index_id, argv_refs, {}, txn)
                     dag_ref = self._run_builtin(argv_ref, txn)
                     assert dag_ref is not None
                     dag_obj: Dag = txn.get(dag_ref)
                     if dag_obj.result is None and dag_obj.error is None:
                         raise DmlRepoError("Function DAG has no result node.")
-                    resp = self._put_node(FnNode(argv_refs, dag_ref), name=None, txn=txn, index_ref=index_ref)
+                    resp = self._put_node(FnNode(argv_refs, dag_ref), name=None, txn=txn, index_id=index_id)
                     if dag_obj.error is not None:
                         raise txn.get(dag_obj.error)
                     return resp
@@ -918,15 +904,15 @@ class IndexOps(BaseOps):
         result_ref = _put(value)
         if result_ref.nss()[0] == "node":
             if name is not None:
-                latest = txn.get_ctx(index_ref)
+                latest_commit = head_ops.get_index_commit(index_id, txn=txn)
+                latest = txn.get_commit_ctx(latest_commit)
                 if latest.dag is None:
                     raise DmlRepoError("Index commit has no DAG.")
                 latest.dag.nodes = sorted({result_ref, *latest.dag.nodes})
                 latest.dag.names[name] = result_ref
                 latest.commit.dag = txn.put(latest.dag)
                 latest.commit.modified = now()
-                latest.head.commit = txn.put(latest.commit)
-                txn.put(latest.head, to=index_ref)
+                head_ops.update_index_commit(index_id, latest_commit, txn.put(latest.commit), txn=txn)
             return result_ref
         # Create literal node directly in transaction
         node_ref = txn.put(LiteralNode(value=result_ref))
@@ -935,6 +921,7 @@ class IndexOps(BaseOps):
             idx_ctx.dag.names[name] = node_ref
         idx_ctx.commit.dag = txn.put(idx_ctx.dag)
         idx_ctx.commit.modified = now()
-        idx_ctx.head.commit = txn.put(idx_ctx.commit)
-        txn.put(idx_ctx.head, to=index_ref)
+        # Re-read current index commit in case other updates occurred in this txn
+        latest_commit = head_ops.get_index_commit(index_id, txn=txn)
+        head_ops.update_index_commit(index_id, latest_commit, txn.put(idx_ctx.commit), txn=txn)
         return node_ref

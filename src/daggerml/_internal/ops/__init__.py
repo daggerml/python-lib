@@ -201,16 +201,16 @@ class DmlOps:
     def pull_project(
         self,
         remote_or_uri: str,
-        branch: str | None,
+        remote_branch: str | None,
         *,
-        head: Ref,
+        branch: str,
         user: str,
         s3_client: Any | None = None,
     ) -> Ref:
         client = s3_client or self._create_s3_client()
-        return self.remote(client=client).pull_uri_into_head(
-            self._project_remote_uri(remote_or_uri, branch),
-            head,
+        return self.remote(client=client).pull_uri_into_branch(
+            self._project_remote_uri(remote_or_uri, remote_branch),
+            branch,
             user=user,
         )
 
@@ -218,7 +218,7 @@ class DmlOps:
         self,
         tag: str | None,
         *,
-        head: Ref,
+        branch: str,
         create: bool,
         force: bool,
         s3_client: Any | None = None,
@@ -229,10 +229,11 @@ class DmlOps:
         client = s3_client or self._create_s3_client()
         remote = self.remote(client=client)
         if tag:
-            return remote.push_project_tag(stringify_revision_uri(RevisionUri(project.owner, project.name, tag=tag)), head)
+            tag_uri = stringify_revision_uri(RevisionUri(project.owner, project.name, tag=tag))
+            return remote.push_project_tag(tag_uri, branch)
         return remote.push_project_branch(
             stringify_revision_uri(RevisionUri(project.owner, project.name, branch=project.branch)),
-            head,
+            branch,
             create=create,
             force=force,
         )
@@ -244,7 +245,6 @@ class DmlOps:
         *,
         target_name: str | None = None,
         replace: bool = False,
-        head: Ref | None = None,
         branch: str | None = None,
         user: str | None = None,
     ) -> Ref:
@@ -253,7 +253,7 @@ class DmlOps:
         effective_user = user or DmlConfig.resolve(explicit={"project.home": self.path}).user
         if not effective_user:
             raise DmlRepoError("user is required for dag checkout; pass --user or set DML_USER/config user.name")
-        head_ref = head or Ref(f"head:{current_branch}")
+        target_branch = branch or current_branch
         commit_ops = self.commit()
         source_commit = commit_ops.resolve_revision_ref(
             revision,
@@ -261,7 +261,7 @@ class DmlOps:
             project_dir=self.path,
         )
         return commit_ops.checkout_dag(
-            head_ref,
+            target_branch,
             source_commit,
             source_name,
             target_name=target_name,
@@ -286,27 +286,27 @@ class DmlOps:
             return {
                 "commit": str(resolution.commit),
                 "mode": "attached",
-                "head": f"head:{resolution.branch}",
+                "branch": resolution.branch,
                 "target": resolution.branch,
                 "message": f"Checked out branch '{resolution.branch}' (attached)",
             }
         return {
             "commit": str(resolution.commit),
             "mode": "detached",
-            "head": None,
+            "branch": None,
             "target": revision,
             "message": f"Checked out {revision!r} in detached scratch mode",
         }
 
-    def merge_project(self, revision: str, head: Ref, user: str) -> Ref:
+    def merge_project(self, revision: str, branch: str, user: str) -> Ref:
         commit_ops = self.commit()
         other = commit_ops.resolve_revision_ref(revision, project_dir=self.path)
-        return commit_ops.merge_into_head(head, other, user)
+        return commit_ops.merge_into_head(branch, other, user)
 
-    def revert_project(self, revision: str, head: Ref, user: str) -> Ref:
+    def revert_project(self, revision: str, branch: str, user: str) -> Ref:
         commit_ops = self.commit()
         commit_ref = commit_ops.resolve_revision_ref(revision, project_dir=self.path)
-        return commit_ops.revert(head, commit_ref, user)
+        return commit_ops.revert(branch, commit_ref, user)
 
     @staticmethod
     def _db_path(path: str) -> str:
@@ -436,7 +436,7 @@ class DmlOps:
             s3_client = cls._create_s3_client()
             with cls.open(str(root), remote_root=cfg.remote.uri) as ops:
                 recovered_ref = ops.pull_project(
-                    "origin", None, head=Ref(f"head:{cfg.branch}"), user=cfg.user, s3_client=s3_client
+                    "origin", None, branch=cfg.branch, user=cfg.user, s3_client=s3_client
                 ).to
 
         project_cfg = DmlProjectConfig.load(root)
@@ -453,7 +453,7 @@ class DmlOps:
             "name": name,
             "repo_path": str(root),
             "db_path": str(db_path),
-            "head": f"head:{cfg.branch}",
+            "branch": cfg.branch,
             "recovered": recovered_ref,
         }
 
@@ -472,7 +472,7 @@ class DmlOps:
         Path(db_path).mkdir(parents=True, exist_ok=True)
         db = DmlDbEnv.create(db_path, namespaces=sorted(NAMESPACES), map_size=1024**3)
         self = cls(_db=db, path=path, remote_root=remote_root)
-        self.head().create(branch)
+        self.head().create_branch(branch)
         return self
 
     @classmethod

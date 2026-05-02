@@ -1,6 +1,5 @@
 import pytest
 
-from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlProjectConfig, init_project_layout
 from daggerml._internal.ops import DmlOps
 
@@ -27,8 +26,8 @@ def test_push_lifecycle_uses_configured_uri_and_optional_tag(tmp_path, aws_serve
         pass
 
     with DmlOps.open(str(repo_dir), remote_root="s3://test-bucket/test-prefix") as ops:
-        branch_ref_path = ops.push_project(None, head=Ref("head:main"), create=True, force=False, s3_client=s3)
-        tag_ref_path = ops.push_project("v1.0", head=Ref("head:main"), create=False, force=False, s3_client=s3)
+        branch_ref_path = ops.push_project(None, branch="main", create=True, force=False, s3_client=s3)
+        tag_ref_path = ops.push_project("v1.0", branch="main", create=False, force=False, s3_client=s3)
 
     assert branch_ref_path == "projects/alice/demo/heads/main.json"
     assert tag_ref_path == "projects/alice/demo/tags/v1.0.json"

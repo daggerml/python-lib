@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Iterator, Protocol
 from daggerml._internal.types import DmlRepoError
 
 if TYPE_CHECKING:
-    from daggerml._internal._db import Ref
     from daggerml._internal.ops.index import IndexOps
 
 LITERAL_CODEC_ENTRYPOINT_GROUP = "daggerml.codecs"
@@ -24,7 +23,7 @@ class LiteralCodec(Protocol):
 
 @dataclass(frozen=True)
 class CodecContext:
-    index_ref: "Ref"
+    index_id: str
     index_ops: "IndexOps"
 
 

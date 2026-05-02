@@ -20,7 +20,7 @@ class TestSetupRemoteParser:
         parser = ArgumentParser()
         setup_remote_parser(parser)
 
-        args = parser.parse_args(["push", "commit:abc"])
+        args = parser.parse_args(["push", "main"])
         assert args.method == "push"
 
         args = parser.parse_args(["pull", "tags/main/v1.json"])

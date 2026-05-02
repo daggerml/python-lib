@@ -66,14 +66,14 @@ def _seed_project_commit_history(temp_bo_fn, tmp_path: Path) -> tuple[CommitOps,
     head_ops = HeadOps(_db=temp_bo_fn._db)
     commit_ops = CommitOps(_db=temp_bo_fn._db)
 
-    main_head = head_ops.create("main")
-    initial = head_ops.describe(main_head)["commit"]
+    main_head = head_ops.create_branch("main")
+    initial = head_ops.get_branch_commit(main_head)
     with commit_ops._tx(readonly=False) as txn:
         tree = txn.get(txn.get(initial).tree)
         next_tree = txn.put(Tree(dags=dict(tree.dags)))
         next_commit = txn.put(Commit(parents=[initial], tree=next_tree, author="alice", message="next"))
-        txn.put(type(txn.get(main_head))(commit=next_commit), to=main_head)
-        txn.put(type(txn.get(main_head))(commit=initial), to=Ref("head:dml://alice/demo@v1.0"))
+        txn.put(type(txn.get(Ref(f"head:{main_head}")))(commit=next_commit), to=Ref(f"head:{main_head}"))
+        txn.put(type(txn.get(Ref(f"head:{main_head}")))(commit=initial), to=Ref("head:dml://alice/demo@v1.0"))
 
     return commit_ops, initial, next_commit
 

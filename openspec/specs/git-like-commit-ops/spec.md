@@ -122,6 +122,21 @@ The system SHALL remove DAG names from the current branch tree only through an e
 #### Scenario: Checkout absent DAG
 - **WHEN** DAG checkout targets a commit that does not contain the requested DAG name
 - **THEN** the command fails without deleting the target name from the current branch
+
+### Requirement: Branch-targeted commit workflows update branches through HeadOps
+The system SHALL perform branch advancement in git-like commit workflows through `HeadOps` public methods rather than direct head storage access.
+
+#### Scenario: Merge updates branch through HeadOps
+- **WHEN** a branch-targeted merge needs to fast-forward or store a merge commit
+- **THEN** the workflow advances the branch through `HeadOps` using the expected current commit and the new commit
+
+#### Scenario: Revert updates branch through HeadOps
+- **WHEN** a branch-targeted revert creates a new commit
+- **THEN** the workflow advances the branch through `HeadOps` rather than writing the head object directly
+
+#### Scenario: DAG checkout updates branch through HeadOps
+- **WHEN** DAG checkout creates a new commit on a branch
+- **THEN** the workflow advances the branch through `HeadOps` rather than writing the head object directly
 ## Requirements
 ### Requirement: Git-like project workflows are owned by DmlOps orchestration
 Git-like project command workflows SHALL execute through `DmlOps` orchestration methods that coordinate commit and remote operations without requiring CLI-owned business logic.

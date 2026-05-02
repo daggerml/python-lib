@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from argparse import ArgumentParser
 
-from daggerml._cli.base import apply_help_config, parse_ref
+from daggerml._cli.base import apply_help_config
 from daggerml._internal import DmlOps
 
 
@@ -25,7 +25,7 @@ def setup_project_alias_parser(parser: ArgumentParser, name: str) -> None:
         )
         parser.add_argument("revision")
     if name in {"pull", "merge", "revert", "push"}:
-        parser.add_argument("--head", default="head:main")
+        parser.add_argument("--branch", dest="branch_name", default="main")
     if name in {"pull", "merge", "revert"}:
         parser.add_argument("--user", required=True)
     if name == "push":
@@ -47,7 +47,7 @@ class ProjectAliasHandlers:
             ops.pull_project(
                 args.remote_or_uri,
                 args.branch,
-                head=parse_ref(args.head),
+                branch=args.branch_name,
                 user=args.user,
             )
         )
@@ -56,7 +56,7 @@ class ProjectAliasHandlers:
     def push(ops: DmlOps, args) -> str:
         return ops.push_project(
             args.tag,
-            head=parse_ref(args.head),
+            branch=args.branch_name,
             create=args.create,
             force=args.force,
         )
@@ -67,8 +67,8 @@ class ProjectAliasHandlers:
 
     @staticmethod
     def merge(ops: DmlOps, args) -> str:
-        return str(ops.merge_project(args.revision, parse_ref(args.head), args.user))
+        return str(ops.merge_project(args.revision, args.branch_name, args.user))
 
     @staticmethod
     def revert(ops: DmlOps, args) -> str:
-        return str(ops.revert_project(args.revision, parse_ref(args.head), args.user))
+        return str(ops.revert_project(args.revision, args.branch_name, args.user))
