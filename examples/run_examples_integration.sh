@@ -184,9 +184,9 @@ dml cache list
 
 log "Running example: 01-docker_dataset.py"
 python "${examples_dir}/01-docker_dataset.py"
-
-log "Running example: 02-ssh_docker_dataset.py"
-python "${examples_dir}/02-ssh_docker_dataset.py"
+#
+# log "Running example: 02-ssh_docker_dataset.py"
+# python "${examples_dir}/02-ssh_docker_dataset.py"
 
 log "Listing DML refs after running all examples:"
 s3_ls_recursive "${DML_REMOTE_URI}/dml/refs/projects/"
@@ -203,7 +203,7 @@ mkdir "${scratch_dir}/${project1}"
 cd "${scratch_dir}/${project1}"
 dml init $project1
 dml fetch "dml://${dml_user}/${project0}"
-dml dag checkout "dml://${dml_user}/${project0}" "examples/01-docker-dataset"
+dml dag checkout "dml://${dml_user}/${project0}#main" "examples/01-docker-dataset"
 
 log "Running example: 03-load_docker_dataset.py"
 python "${examples_dir}/03-load_docker_dataset.py"

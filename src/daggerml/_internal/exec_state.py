@@ -17,10 +17,12 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import boto3
+from botocore.config import Config
 
 from daggerml._internal.types import DmlRepoError
 
 LOCK_TTL: float = 300.0
+S3_MAX_POOL_CONNECTIONS = 20
 
 
 class LockRecord(TypedDict):
@@ -134,7 +136,7 @@ class ExecutionState:
 
     @staticmethod
     def _s3():
-        return boto3.client("s3")
+        return boto3.client("s3", config=Config(max_pool_connections=S3_MAX_POOL_CONNECTIONS))
 
     def _execution_records_prefix(self) -> str:
         return f"{self._exec_prefix}/records/{self.cache_key}/"

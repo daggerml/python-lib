@@ -13,8 +13,8 @@ from daggerml._internal.types import DmlRepoError
 SCOPE_GLOBAL = "global"
 SCOPE_LOCAL = "local"
 
-GLOBAL_KEYS = {"user", "default_branch", "hooks.post-init"}
-LOCAL_KEYS = {"project.uri", "remote.uri"}
+GLOBAL_KEYS = {"user", "default_branch", "hooks.post-init", "remote.fetch_workers"}
+LOCAL_KEYS = {"project.uri", "remote.uri", "remote.fetch_workers"}
 ALL_KEYS = GLOBAL_KEYS | LOCAL_KEYS
 
 
@@ -27,6 +27,8 @@ def _read_toml(path: Path) -> dict[str, Any]:
 def _toml_value(value: Any) -> str:
     if isinstance(value, str):
         return json.dumps(value)
+    if isinstance(value, int):
+        return str(value)
     if isinstance(value, list):
         return f"[{', '.join(_toml_value(item) for item in value)}]"
     raise DmlRepoError(f"Unsupported config value type: {type(value).__name__}")
@@ -86,6 +88,9 @@ class ConfigOps:
         if key == "remote.uri":
             value = (data.get("remote") or {}).get("uri")
             return str(value) if value else None
+        if key == "remote.fetch_workers":
+            value = (data.get("remote") or {}).get("fetch_workers")
+            return str(value) if value is not None else None
         if key == "user":
             value = (data.get("user") or {}).get("name")
             return str(value) if value else None
@@ -118,6 +123,14 @@ class ConfigOps:
             value = validate_remote_uri(str(value))
         elif key == "default_branch":
             _validate_ref_name("branch", str(value))
+        elif key == "remote.fetch_workers":
+            try:
+                workers = int(str(value), 10)
+            except ValueError as exc:
+                raise DmlRepoError("remote.fetch_workers must be a positive integer") from exc
+            if workers <= 0:
+                raise DmlRepoError("remote.fetch_workers must be a positive integer")
+            value = str(workers)
         elif key == "user" and not str(value):
             raise DmlRepoError("user must be a non-empty string")
 
@@ -127,6 +140,8 @@ class ConfigOps:
             _set_nested(data, "project", "uri", value)
         elif key == "remote.uri":
             _set_nested(data, "remote", "uri", value)
+        elif key == "remote.fetch_workers":
+            _set_nested(data, "remote", "fetch_workers", int(str(value)))
         elif key == "user":
             _set_nested(data, "user", "name", value)
         elif key == "default_branch":

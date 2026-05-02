@@ -55,6 +55,21 @@ def test_remote_config_from_canonical_env():
     assert cfg.remote.uri == "s3://bucket/project"
 
 
+def test_remote_fetch_workers_defaults_to_16():
+    cfg = DmlConfig.resolve(env={})
+    assert cfg.remote.fetch_workers == 16
+
+
+def test_remote_fetch_workers_can_be_set_from_env():
+    cfg = DmlConfig.resolve(env={"DML_REMOTE_FETCH_WORKERS": "24"})
+    assert cfg.remote.fetch_workers == 24
+
+
+def test_remote_fetch_workers_rejects_invalid_values():
+    with pytest.raises(ValueError, match="remote.fetch_workers must be a positive integer"):
+        DmlConfig.resolve(env={"DML_REMOTE_FETCH_WORKERS": "0"})
+
+
 def test_project_uri_normalizes_branch_and_db_path():
     cfg = DmlConfig.resolve(
         explicit={
@@ -167,3 +182,17 @@ def test_dml_ops_allows_local_access_without_remote(mock_open, monkeypatch):
     dml = Dml(repo="/tmp/test-repo")
     _ = dml.ops
     mock_open.assert_called_once_with("/tmp/test-repo", remote_root="")
+
+
+@patch("daggerml._internal.ops.remote.RemoteOps")
+def test_dml_ops_remote_uses_configured_fetch_workers(mock_remote_ops):
+    from daggerml._internal.ops import DmlOps
+
+    ops = DmlOps(path="/tmp/repo", remote_root="s3://bucket/prefix", _db=Mock())
+    with patch("daggerml._internal.ops.DmlConfig.resolve", return_value=Mock(remote=Mock(fetch_workers=9))):
+        ops.remote(client=object())
+
+    kwargs = mock_remote_ops.call_args.kwargs
+    assert kwargs["bucket"] == "bucket"
+    assert kwargs["prefix"] == "prefix/dml"
+    assert kwargs["fetch_workers"] == 9

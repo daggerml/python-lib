@@ -45,7 +45,8 @@ Rules:
     "path": "string-or-null"
   },
   "remote": {
-    "uri": "string-or-empty"
+    "uri": "string-or-empty",
+    "fetch_workers": "positive-integer"
   },
   "user": "string-or-null",
   "default_branch": "string",
@@ -58,7 +59,7 @@ Rules:
 
 Rules:
 
-- canonical config parameters are `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
+- canonical config parameters are `project.home`, `project.uri`, `db.path`, `remote.uri`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
 - `project.branch` is a helper derived from resolved `project.uri` when a project URI is present; runtime callers MAY also observe the effective branch helper when only branch override inputs are available.
 - config key names MUST remain stable across API, CLI, runtime, and ops boundaries.
 
@@ -85,6 +86,7 @@ Rules:
 - `project.uri`: `DML_PROJECT_URI`
 - `db.path`: `DML_DB_PATH`
 - `remote.uri`: `DML_REMOTE_URI`
+- `remote.fetch_workers`: `DML_REMOTE_FETCH_WORKERS`
 - `user`: `DML_USER`
 - `default_branch`: `DML_DEFAULT_BRANCH`
 - `config_home`: `DML_CONFIG_HOME`
@@ -99,6 +101,7 @@ Rules:
 - `default_branch` default MUST be `main` unless explicitly overridden.
 - `project.uri`, when resolved for project/runtime use, MUST include a branch selector and MUST NOT use a tag selector.
 - `remote.uri`, when present, MUST be an `s3://bucket` or `s3://bucket/prefix` URI designating the project root.
+- `remote.fetch_workers` MUST be a positive integer and defaults to `16`.
 
 ## Project Config
 

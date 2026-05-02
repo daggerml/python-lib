@@ -26,6 +26,8 @@ from daggerml._internal.config import (
 )
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
 
+S3_MAX_POOL_CONNECTIONS = 20
+
 if TYPE_CHECKING:
     from daggerml._internal.ops.cache import CacheOps
     from daggerml._internal.ops.commit import CommitOps
@@ -163,7 +165,12 @@ class DmlOps:
         from daggerml._internal.ops.remote import RemoteOps
 
         bucket, prefix = self._split_remote_root(self.remote_root)
-        remote_kwargs: dict[str, Any] = {"bucket": bucket, "prefix": prefix}
+        cfg = DmlConfig.resolve(explicit={"project.home": self.path})
+        remote_kwargs: dict[str, Any] = {
+            "bucket": bucket,
+            "prefix": prefix,
+            "fetch_workers": cfg.remote.fetch_workers,
+        }
         if client is not None:
             remote_kwargs["client"] = client
 
@@ -312,9 +319,10 @@ class DmlOps:
     def _create_s3_client() -> Any:
         try:
             boto3 = importlib.import_module("boto3")
+            botocore_config = importlib.import_module("botocore.config")
         except ImportError as exc:
             raise DmlRepoError("Remote commands require boto3; install boto3 to continue") from exc
-        return boto3.client("s3")
+        return boto3.client("s3", config=botocore_config.Config(max_pool_connections=S3_MAX_POOL_CONNECTIONS))
 
     @classmethod
     def init(

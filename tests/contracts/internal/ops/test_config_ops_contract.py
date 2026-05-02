@@ -30,3 +30,15 @@ def test_config_ops_hooks_accept_multiple_values(tmp_path):
     ops = ConfigOps(project_home=str(tmp_path), config_home=str(tmp_path / "cfg"))
     ops.set("hooks.post-init", ["echo one", "echo two"], scope=SCOPE_GLOBAL)
     assert ops.get("hooks.post-init", scope=SCOPE_GLOBAL) == ["echo one", "echo two"]
+
+
+def test_config_ops_remote_fetch_workers_set_get_local(tmp_path):
+    ops = ConfigOps(project_home=str(tmp_path), config_home=str(tmp_path / "cfg"))
+    ops.set("remote.fetch_workers", ["12"], scope=SCOPE_LOCAL)
+    assert ops.get("remote.fetch_workers", scope=SCOPE_LOCAL) == "12"
+
+
+def test_config_ops_remote_fetch_workers_rejects_invalid(tmp_path):
+    ops = ConfigOps(project_home=str(tmp_path), config_home=str(tmp_path / "cfg"))
+    with pytest.raises(DmlRepoError, match="positive integer"):
+        ops.set("remote.fetch_workers", ["0"], scope=SCOPE_LOCAL)

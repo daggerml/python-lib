@@ -157,5 +157,10 @@ def get_client(name, region=None, default_region="us-east-1"):
     if not region:
         logger.warning(f"falling back to default region '{default_region}'")
         region = default_region
-    config = Config(region_name=region, connect_timeout=5, retries={"max_attempts": 5, "mode": "adaptive"})
+    config = Config(
+        region_name=region,
+        connect_timeout=5,
+        retries={"max_attempts": 5, "mode": "adaptive"},
+        max_pool_connections=20,
+    )
     return boto3.client(name, config=config)

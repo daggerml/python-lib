@@ -7,7 +7,7 @@ execution, remote cache publication, and S3-backed artifact exchange between
 DAG nodes.
 """
 
-import polars as pl
+import json
 
 import daggerml as dml
 
@@ -26,10 +26,7 @@ def main() -> None:
         print("Committing DAG to persist artifacts...")
         dag.commit(predictions)
     print("Reading predictions parquet from S3...")
-    df = pl.read_parquet(predictions.value().uri)
-    print(f"\nPredictions parquet URI: {predictions.value().uri}")
-    print("\nPredictions:")
-    print(df.head())
+    print(json.dumps(predictions.value(), indent=2))
 
 
 if __name__ == "__main__":

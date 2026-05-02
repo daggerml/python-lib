@@ -9,12 +9,11 @@ DAG nodes.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from time import time
 from urllib.parse import urlparse
-
-import polars as pl
 
 import daggerml as dml
 from daggerml.contrib import api
@@ -32,35 +31,6 @@ EXCLUDE_PATTERNS = (
     "tests/*",
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-@api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
-@api.funkify
-def download_dataset(dag):
-    from sklearn.datasets import load_iris  # pyright:ignore[reportMissingImports] # noqa:F401
-
-    return load_iris(as_frame=True).frame.dropna()
-
-
-@api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
-@api.funkify
-def predict_target(dag, dataset_uri, params):
-    import io
-
-    import pandas as pd  # pyright:ignore[reportMissingImports] # noqa:F401
-    from sklearn.linear_model import LogisticRegression  # pyright:ignore[reportMissingImports] # noqa:F401
-
-    from daggerml.contrib.s3 import S3Store
-
-    payload = S3Store().get(dataset_uri.value())
-    df = pd.read_parquet(io.BytesIO(payload))
-    features = df.drop(columns=["target"])
-    target = df["target"]
-    model = LogisticRegression(**params.value())
-    model.fit(features, target)
-    out = df.copy()
-    out["prediction"] = model.predict(features)
-    return out
 
 
 def _docker_run_flags() -> list[str]:
@@ -87,6 +57,33 @@ def _docker_run_flags() -> list[str]:
         if value:
             flags.extend(["-e", f"{key}={value}"])
     return flags
+
+
+@api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
+@api.funkify
+def download_dataset(dag):
+    from sklearn.datasets import load_iris  # pyright:ignore[reportMissingImports] # noqa:F401
+
+    return load_iris(as_frame=True).frame.dropna()
+
+
+@api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
+@api.funkify
+def predict_target(dag, dataset, params):
+    import pandas as pd  # pyright:ignore[reportMissingImports] # noqa:F401
+    from sklearn.linear_model import LogisticRegression  # pyright:ignore[reportMissingImports] # noqa:F401
+    from sklearn.metrics import r2_score  # pyright:ignore[reportMissingImports] # noqa:F401
+    from sklearn.model_selection import train_test_split  # pyright:ignore[reportMissingImports] # noqa:F401
+
+    df = pd.read_parquet(dataset.value().uri)
+    X = df.drop(columns=["target"])
+    y = df["target"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.4, random_state=42)
+    model = LogisticRegression(**params.value())
+    model.fit(X_train, y_train)
+    train_r2 = r2_score(y_train, model.predict(X_train))
+    test_r2 = r2_score(y_test, model.predict(X_test))
+    return {"train": train_r2, "test": test_r2}
 
 
 def main() -> None:
@@ -120,11 +117,7 @@ def main() -> None:
         print("Committing DAG to persist artifacts...")
         dag.commit(predictions)
     print("Reading predictions parquet from S3...")
-    df = pl.read_parquet(predictions.value().uri)
-    print(f"Dataset parquet URI: {dataset.value()}")
-    print(f"\nPredictions parquet URI: {predictions.value().uri}")
-    print("\nPredictions:")
-    print(df.head())
+    print(json.dumps(predictions.value(), indent=2))
     print(f"\nBuild time: {t1 - t0:.2f}s")
 
 

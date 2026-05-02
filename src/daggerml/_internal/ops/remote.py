@@ -16,6 +16,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import boto3
+from botocore.config import Config
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
@@ -23,7 +24,7 @@ from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 
 
 def _get_s3_client():
-    return boto3.client("s3")
+    return boto3.client("s3", config=Config(max_pool_connections=20))
 
 
 class RemoteError(Exception):
@@ -119,7 +120,13 @@ class DmlProjectUri:
         return uri
 
 
-_REMOTE_FETCH_WORKERS = 32
+_REMOTE_FETCH_WORKERS_DEFAULT = 16
+
+
+def _resolve_fetch_workers(configured: int) -> int:
+    if not isinstance(configured, int) or configured <= 0:
+        raise ValueError("Remote fetch workers must be a positive integer")
+    return configured
 
 
 def _remote_boundary(action: str):
@@ -150,6 +157,7 @@ class RemoteOps(BaseOps):
 
     bucket: str
     prefix: str
+    fetch_workers: int = _REMOTE_FETCH_WORKERS_DEFAULT
     client: Any = field(default_factory=_get_s3_client)
     _IO_INVOKE_PRUNE_AGE_SECONDS: int = 24 * 3600
 
@@ -159,6 +167,7 @@ class RemoteOps(BaseOps):
             raise ValueError("Remote bucket is required")
         if not isinstance(self.prefix, str):
             raise ValueError("Remote prefix must be a string")
+        self.fetch_workers = _resolve_fetch_workers(self.fetch_workers)
         self._ensure_remote_descriptor()
         super().__post_init__()
 
@@ -1069,7 +1078,7 @@ class RemoteOps(BaseOps):
             seen_objects.add(key)
             pending.add(pool.submit(self._fetch_cas_result, ns, oid))
 
-        with ThreadPoolExecutor(max_workers=_REMOTE_FETCH_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=self.fetch_workers) as pool:
             submit_manifest(pool, manifest_oid)
 
             while pending:

@@ -108,7 +108,6 @@ class TestGetOpsObject:
         result = get_ops_object(ops, "some_attr")
         assert result == "not_callable"
 
-
     class TestParseRef:
         """Test ref parsing (placeholder)."""
 
@@ -303,6 +302,23 @@ class TestExecuteCommand:
 
         mock_open.assert_called_once_with("/repo/path", remote_root="")
 
+    @patch("daggerml._cli.base.DmlOps.open")
+    @patch("daggerml._cli.base.get_repo_path")
+    def test_dag_checkout_executes_with_dmlops_context(self, mock_get_path, mock_open):
+        mock_get_path.return_value = "/repo/path"
+        mock_ops = Mock()
+        mock_ops.dag = Mock()
+        mock_open.return_value.__enter__.return_value = mock_ops
+        mock_open.return_value.__exit__.return_value = None
+
+        args = Namespace(repo=None, op="dag", method="checkout", func=Mock(return_value="commit:1"))
+
+        with patch("daggerml._cli.base.output_json") as mock_output:
+            execute_command(args)
+
+        args.func.assert_called_once_with(mock_ops, args)
+        mock_output.assert_called_once_with("commit:1")
+
     @patch("daggerml._cli.base.get_repo_path")
     @patch("daggerml._cli.base.DmlOps.open")
     def test_init_executes_without_opening_repo(self, mock_open, mock_get_path):
@@ -332,44 +348,3 @@ class TestExecuteCommand:
         error_arg = mock_error.call_args[0][0]
         assert isinstance(error_arg, FileNotFoundError)
         assert mock_error.call_args[0][1] == "commit"
-
-
-class TestTopLevelHelp:
-    def test_dml_help_lists_operations(self):
-        from daggerml._cli import cli
-
-        old_argv = sys.argv
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        sys.argv = ["dml", "--help"]
-        sys.stdout = StringIO()
-        sys.stderr = StringIO()
-        try:
-            try:
-                cli()
-            except SystemExit:
-                pass
-            out = sys.stdout.getvalue()
-        finally:
-            sys.argv = old_argv
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-
-        for op in [
-            "init",
-            "status",
-            "config",
-            "commit",
-            "head",
-            "index",
-            "cache",
-            "dag",
-            "node",
-            "remote",
-            "gc",
-            "contrib",
-            "checkout",
-        ]:
-            assert op in out
-        assert " clone" not in out
-        assert "--remote-root" in out

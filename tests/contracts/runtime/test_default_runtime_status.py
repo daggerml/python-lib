@@ -34,7 +34,7 @@ def test_default_runtime_status_DRT_STS_001_reports_implicit_default_creation_so
     assert set(cfg.keys()) == {"project", "db", "remote", "user", "default_branch", "hooks", "config_home"}
     assert set(cfg["project"].keys()) == {"home", "uri", "branch"}
     assert set(cfg["db"].keys()) == {"path"}
-    assert set(cfg["remote"].keys()) == {"uri"}
+    assert set(cfg["remote"].keys()) == {"uri", "fetch_workers"}
 
     runtime = _runtime_info(status)
     assert runtime["ops_initialized"] is False

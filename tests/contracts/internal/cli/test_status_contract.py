@@ -23,6 +23,7 @@ class TestExecuteStatus:
         assert set(result.keys()) == {"project", "db", "remote", "user", "default_branch", "hooks", "config_home"}
         assert result["project"]["home"] == str(tmp_path)
         assert result["remote"]["uri"] == "s3://bucket/project"
+        assert result["remote"]["fetch_workers"] == 16
 
 
 class TestTopLevelStatusCli:

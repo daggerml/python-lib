@@ -21,6 +21,7 @@ _ENV_KEYS: dict[str, tuple[str, ...]] = {
     "project.uri": ("DML_PROJECT_URI",),
     "db.path": ("DML_DB_PATH",),
     "remote.uri": ("DML_REMOTE_URI",),
+    "remote.fetch_workers": ("DML_REMOTE_FETCH_WORKERS",),
     "user": ("DML_USER",),
     "default_branch": ("DML_DEFAULT_BRANCH",),
     "config_home": ("DML_CONFIG_HOME",),
@@ -171,6 +172,28 @@ def _coerce_commands(value: object) -> tuple[str, ...] | None:
     raise ValueError("Hook commands must be a string or sequence of strings")
 
 
+def _coerce_positive_int(value: object, *, key: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{key} must be a positive integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = int(text, 10)
+        except ValueError as exc:
+            raise ValueError(f"{key} must be a positive integer") from exc
+    else:
+        raise ValueError(f"{key} must be a positive integer")
+    if parsed <= 0:
+        raise ValueError(f"{key} must be a positive integer")
+    return parsed
+
+
 def _load_global_layer(config_home: str, env: Mapping[str, str]) -> dict[str, object]:
     path = Path(config_home) / "config.toml"
     layer: dict[str, object] = {"config_home": config_home}
@@ -179,10 +202,12 @@ def _load_global_layer(config_home: str, env: Mapping[str, str]) -> dict[str, ob
     data = _read_toml(path)
     hooks = data.get("hooks", {}) or {}
     defaults = data.get("defaults", {}) or {}
+    remote = data.get("remote", {}) or {}
     user = data.get("user", {}) or {}
     layer["user"] = user.get("name")
     layer["default_branch"] = defaults.get("branch")
     layer["hooks.post-init"] = hooks.get("post-init")
+    layer["remote.fetch_workers"] = remote.get("fetch_workers")
     return layer
 
 
@@ -200,6 +225,8 @@ def _load_project_layer(project_home: str | None) -> dict[str, object]:
         layer["project.uri"] = str(project["uri"])
     if remote.get("uri"):
         layer["remote.uri"] = remote.get("uri")
+    if remote.get("fetch_workers") is not None:
+        layer["remote.fetch_workers"] = remote.get("fetch_workers")
     return layer
 
 
@@ -260,6 +287,7 @@ class DmlDbSettings:
 @dataclass(frozen=True)
 class DmlRemoteSettings:
     uri: str = ""
+    fetch_workers: int = 16
 
     @property
     def root(self) -> str:
@@ -369,6 +397,10 @@ class DmlConfig:
                 raise ValueError("remote.uri must be a string")
             remote_uri_s = validate_remote_uri(remote_uri)
 
+        remote_fetch_workers = _coerce_positive_int(merged.get("remote.fetch_workers"), key="remote.fetch_workers")
+        if remote_fetch_workers is None:
+            remote_fetch_workers = 16
+
         user_value = merged.get("user")
         user = str(user_value) if user_value else default_user(env_map)
 
@@ -378,7 +410,7 @@ class DmlConfig:
         return cls(
             project=DmlProjectSettings(home=project_home, uri=project_uri),
             db=DmlDbSettings(path=db_path),
-            remote=DmlRemoteSettings(uri=remote_uri_s),
+            remote=DmlRemoteSettings(uri=remote_uri_s, fetch_workers=remote_fetch_workers),
             user=user,
             default_branch=default_branch,
             hooks=hooks,
@@ -393,6 +425,7 @@ class DmlConfig:
             "DML_CONFIG_HOME": self.config_home,
             "DML_DB_PATH": self.db.path,
             "DML_REMOTE_URI": self.remote.uri,
+            "DML_REMOTE_FETCH_WORKERS": str(self.remote.fetch_workers),
             "DML_PROJECT_HOME": self.project.home,
             "DML_PROJECT_URI": self.project.uri,
         }
@@ -410,6 +443,7 @@ class DmlConfig:
             },
             "remote": {
                 "uri": self.remote.uri,
+                "fetch_workers": self.remote.fetch_workers,
             },
             "user": self.user,
             "default_branch": self.default_branch,

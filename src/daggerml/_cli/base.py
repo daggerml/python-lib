@@ -212,6 +212,8 @@ def execute_command(args) -> None:
         )
         with DmlOps.open(repo_path, remote_root=cfg.remote.uri) as ops:
             ops_obj = get_ops_object(ops, args.op)
+            if args.op == "dag" and getattr(args, "method", None) == "checkout":
+                ops_obj = ops
             result = args.func(ops_obj, args)
             output_json(result)
     except Exception as e:
