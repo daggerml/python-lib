@@ -130,13 +130,15 @@ uri = "dml://alice/demo#project"
     assert cfg.project.uri == "dml://alice/demo#explicit"
 
 
-def test_project_uri_rejects_tag_form():
-    with pytest.raises(ValueError, match="branch, not a tag"):
-        DmlConfig.resolve(explicit={"project.uri": "dml://alice/demo@v1"})
+def test_project_uri_accepts_tag_form():
+    cfg = DmlConfig.resolve(explicit={"project.uri": "dml://alice/demo@v1"})
+    assert cfg.project.uri == "dml://alice/demo@v1"
+    assert cfg.project.branch is None
+    assert cfg.branch == "main"
 
 
 def test_branch_override_does_not_mask_tag_project_uri():
-    with pytest.raises(ValueError, match="branch, not a tag"):
+    with pytest.raises(ValueError, match="cannot be combined"):
         DmlConfig.resolve(explicit={"project.uri": "dml://alice/demo@v1", "project.branch": "main"})
 
 

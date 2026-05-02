@@ -19,6 +19,7 @@ except ImportError:
 from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlProjectConfig
 from daggerml._internal.ops.base_ops import BaseOps
+from daggerml._internal.revision_uri import RevisionUri, stringify_revision_uri
 from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 from daggerml._internal.util import now
 
@@ -184,7 +185,7 @@ class CommitOps(BaseOps):
             if remote_name != "origin":
                 raise DmlRepoError(f"Unknown remote: {remote_name}")
             project = DmlProjectConfig.load(project_dir)
-            tracking_uri = f"{project.uri}#{branch}"
+            tracking_uri = stringify_revision_uri(RevisionUri(project.owner, project.name, branch=branch))
             tracking = Ref(f"head:{tracking_uri}")
             if not txn.exists(tracking):
                 raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first")
@@ -193,7 +194,7 @@ class CommitOps(BaseOps):
         if txn.exists(head_ref):
             return txn.get(head_ref).commit, "branch", head_ref.id()
         project = DmlProjectConfig.load(project_dir)
-        tag_tracking = Ref(f"head:{project.uri}@{base}")
+        tag_tracking = Ref(f"head:{stringify_revision_uri(RevisionUri(project.owner, project.name, tag=base))}")
         if txn.exists(tag_tracking):
             return txn.get(tag_tracking).commit, "tag", None
         raise DmlRepoError(f"Revision {base!r} cannot be resolved locally")

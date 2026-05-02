@@ -12,6 +12,12 @@ def test_config_ops_set_get_local_project_uri(tmp_path):
     assert ops.get("project.uri", scope=SCOPE_LOCAL) == "dml://alice/demo#main"
 
 
+def test_config_ops_set_get_local_project_uri_tag(tmp_path):
+    ops = ConfigOps(project_home=str(tmp_path), config_home=str(tmp_path / "cfg"))
+    ops.set("project.uri", ["dml://alice/demo@v1"], scope=SCOPE_LOCAL)
+    assert ops.get("project.uri", scope=SCOPE_LOCAL) == "dml://alice/demo@v1"
+
+
 def test_config_ops_set_get_global_user(tmp_path):
     ops = ConfigOps(project_home=str(tmp_path), config_home=str(tmp_path / "cfg"))
     ops.set("user", ["alice@host"], scope=SCOPE_GLOBAL)

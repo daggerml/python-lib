@@ -3,10 +3,12 @@ from pathlib import Path
 import pytest
 
 from daggerml._internal._db import Ref
-from daggerml._internal.config import DmlProjectConfig, init_project_layout
+from daggerml._internal.config import DmlProjectConfig, init_project_layout, normalize_project_uri
 from daggerml._internal.ops.commit import CommitOps
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps
+from daggerml._internal.ops.remote import RemoteOps
+from daggerml._internal.revision_uri import canonicalize_revision_uri, parse_revision_uri, stringify_revision_uri
 from daggerml._internal.types import DmlRepoError
 
 
@@ -15,6 +17,15 @@ def test_project_ref_paths_and_dml_uri_validation(remote_ops):
         "projects/alice/demo/heads/feature/x.json"
     )
     assert remote_ops._project_tag_ref_path("alice", "demo", "v1.0") == "projects/alice/demo/tags/v1.0.json"
+
+
+def test_shared_revision_uri_helpers_and_wrappers_are_compatible():
+    parsed = parse_revision_uri("dml://alice/demo", default_branch="main")
+    assert stringify_revision_uri(parsed) == "dml://alice/demo#main"
+    assert canonicalize_revision_uri("dml://alice/demo", default_branch="main") == "dml://alice/demo#main"
+    assert normalize_project_uri("dml://alice/demo", default_branch="main", require_branch=True) == "dml://alice/demo#main"
+    assert normalize_project_uri("dml://alice/demo@v1", require_branch=False) == "dml://alice/demo@v1"
+    assert RemoteOps.canonical_dml_uri("dml://alice/demo@v1", require_identifier=True) == "dml://alice/demo@v1"
 
 
 def test_project_config_layout_roundtrip(tmp_path: Path):

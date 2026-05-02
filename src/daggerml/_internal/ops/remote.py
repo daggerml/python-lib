@@ -13,13 +13,19 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, fields, is_dataclass
 from functools import wraps
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 import boto3
 from botocore.config import Config
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
+from daggerml._internal.revision_uri import (
+    RevisionUri,
+    canonicalize_revision_uri,
+    parse_revision_uri,
+    validate_ref_name,
+    validate_segment,
+)
 from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
 
 
@@ -102,22 +108,7 @@ class RemoteRefRead:
     etag: str | None
 
 
-@dataclass(frozen=True)
-class DmlProjectUri:
-    """Canonical DML project URI plus optional branch/tag identifier."""
-
-    owner: str
-    project: str
-    branch: str | None = None
-    tag: str | None = None
-
-    def canonical(self) -> str:
-        uri = f"dml://{self.owner}/{self.project}"
-        if self.branch is not None:
-            return f"{uri}#{self.branch}"
-        if self.tag is not None:
-            return f"{uri}@{self.tag}"
-        return uri
+DmlProjectUri = RevisionUri
 
 
 _REMOTE_FETCH_WORKERS_DEFAULT = 16
@@ -216,60 +207,19 @@ class RemoteOps(BaseOps):
 
     @staticmethod
     def _validate_project_segment(label: str, value: str) -> str:
-        if not isinstance(value, str) or not re.match(r"^[a-z0-9][a-z0-9._-]{0,127}$", value):
-            raise ValueError(f"Invalid project {label}: {value!r}")
-        return value
+        return validate_segment(f"project {label}", value)
 
     @staticmethod
     def _validate_ref_name(label: str, value: str) -> str:
-        if not isinstance(value, str) or not value:
-            raise ValueError(f"Invalid {label}: must be a non-empty string")
-        if value in {".", ".."} or "\\" in value:
-            raise ValueError(f"Invalid {label}: {value!r}")
-        parts = value.split("/")
-        if any(part in {"", ".", ".."} for part in parts):
-            raise ValueError(f"Invalid {label}: {value!r}")
-        seg_re = r"^[a-z0-9][a-z0-9._-]{0,127}$"
-        for part in parts:
-            if not re.match(seg_re, part):
-                raise ValueError(f"Invalid {label} segment: {part!r}")
-        return value
+        return validate_ref_name(label, value)
 
     @classmethod
     def parse_dml_uri(cls, uri: str, *, require_identifier: bool = False) -> DmlProjectUri:
-        if not isinstance(uri, str) or not uri.startswith("dml://"):
-            raise ValueError(f"Invalid DML URI: {uri!r}")
-        tag: str | None = None
-        branch: str | None = None
-        base = uri
-        if "#" in uri and "@" in uri:
-            raise ValueError(f"Invalid DML URI: cannot include both branch and tag: {uri!r}")
-        if "#" in uri:
-            base, branch = uri.split("#", 1)
-        elif "@" in uri:
-            base, tag = uri.split("@", 1)
-        parsed = urlsplit(base)
-        if parsed.scheme != "dml" or parsed.netloc == "" or parsed.query or parsed.fragment:
-            raise ValueError(f"Invalid DML URI: {uri!r}")
-        project = parsed.path.strip("/")
-        if "/" in project or not project:
-            raise ValueError(f"Invalid DML URI project path: {uri!r}")
-        parsed_uri = DmlProjectUri(
-            owner=cls._validate_project_segment("owner", parsed.netloc),
-            project=cls._validate_project_segment("name", project),
-            branch=cls._validate_ref_name("branch", branch) if branch is not None else None,
-            tag=cls._validate_ref_name("tag", tag) if tag is not None else None,
-        )
-        if require_identifier and parsed_uri.branch is None and parsed_uri.tag is None:
-            raise ValueError(f"DML URI must include a branch or tag: {uri!r}")
-        return parsed_uri
+        return parse_revision_uri(uri, require_identifier=require_identifier)
 
     @classmethod
     def canonical_dml_uri(cls, uri: str, *, require_identifier: bool = False) -> str:
-        canonical = cls.parse_dml_uri(uri, require_identifier=require_identifier).canonical()
-        if len(canonical.encode("utf-8")) > 64:
-            raise ValueError("Canonical DML URI exceeds 64-byte ref limit")
-        return canonical
+        return canonicalize_revision_uri(uri, require_identifier=require_identifier)
 
     def _project_branch_ref_path(self, owner: str, project: str, branch: str) -> str:
         owner = self._validate_project_segment("owner", owner)

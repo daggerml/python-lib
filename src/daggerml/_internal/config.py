@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 from dataclasses import dataclass, field
 from getpass import getuser
@@ -12,7 +11,15 @@ from urllib.parse import urlsplit
 
 import tomllib
 
-_SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
+from daggerml._internal.revision_uri import (
+    RevisionUri,
+    canonicalize_revision_uri,
+    parse_revision_uri,
+    stringify_revision_uri,
+    validate_ref_name,
+    validate_segment,
+)
+
 _PROJECT_SCOPE = "project/runtime"
 _GLOBAL_SCOPE = "global"
 _PATH_KEYS = {"project.home", "db.path", "config_home"}
@@ -45,63 +52,43 @@ class ParsedProjectUri:
 
 
 def _validate_segment(label: str, value: str) -> str:
-    if not isinstance(value, str) or not _SEGMENT_RE.match(value):
-        raise ValueError(f"Invalid {label}: {value!r}")
-    return value
+    return validate_segment(label, value)
 
 
 def _validate_ref_name(label: str, value: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"Invalid {label}: must be a non-empty string")
-    if value in {".", ".."} or "\\" in value:
-        raise ValueError(f"Invalid {label}: {value!r}")
-    parts = value.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
-        raise ValueError(f"Invalid {label}: {value!r}")
-    for part in parts:
-        _validate_segment(f"{label} segment", part)
-    return value
+    return validate_ref_name(label, value)
 
 
 def parse_dml_project_uri(uri: str, *, require_identifier: bool = False) -> ParsedProjectUri:
+    if require_identifier:
+        parsed = parse_revision_uri(uri, require_identifier=True)
+        return ParsedProjectUri(parsed.owner, parsed.project, branch=parsed.branch, tag=parsed.tag)
+    if "#" in uri or "@" in uri:
+        parsed = parse_revision_uri(uri, require_identifier=True)
+        return ParsedProjectUri(parsed.owner, parsed.project, branch=parsed.branch, tag=parsed.tag)
     if not isinstance(uri, str) or not uri.startswith("dml://"):
         raise ValueError(f"Invalid DML URI: {uri!r}")
-    if "#" in uri and "@" in uri:
-        raise ValueError(f"Invalid DML URI: cannot include both branch and tag: {uri!r}")
-    base = uri
-    branch: str | None = None
-    tag: str | None = None
-    if "#" in uri:
-        base, branch = uri.split("#", 1)
-    elif "@" in uri:
-        base, tag = uri.split("@", 1)
-    parsed = urlsplit(base)
+    parsed = urlsplit(uri)
     if parsed.scheme != "dml" or not parsed.netloc or parsed.query or parsed.fragment:
         raise ValueError(f"Invalid DML URI: {uri!r}")
     project = parsed.path.strip("/")
     if "/" in project or not project:
         raise ValueError(f"Invalid DML URI project path: {uri!r}")
-    result = ParsedProjectUri(
-        owner=_validate_segment("project owner", parsed.netloc),
-        project=_validate_segment("project name", project),
-        branch=_validate_ref_name("branch", branch) if branch is not None else None,
-        tag=_validate_ref_name("tag", tag) if tag is not None else None,
+    return ParsedProjectUri(
+        owner=validate_segment("project owner", parsed.netloc),
+        project=validate_segment("project name", project),
+        branch=None,
+        tag=None,
     )
-    if require_identifier and result.branch is None and result.tag is None:
-        raise ValueError(f"DML URI must include a branch or tag: {uri!r}")
-    if len(result.canonical().encode("utf-8")) > 64:
-        raise ValueError("Canonical DML URI exceeds 64-byte ref limit")
-    return result
 
 
 def normalize_project_uri(uri: str, *, default_branch: str | None = None, require_branch: bool = False) -> str:
-    parsed = parse_dml_project_uri(uri, require_identifier=False)
-    if parsed.tag is not None:
-        raise ValueError(f"Project URI must target a branch, not a tag: {uri!r}")
-    branch = parsed.branch or default_branch
-    if require_branch and not branch:
-        raise ValueError(f"Project URI must include a branch: {uri!r}")
-    return ParsedProjectUri(parsed.owner, parsed.project, branch=branch).canonical()
+    parsed = parse_revision_uri(
+        uri,
+        default_branch=default_branch,
+        require_identifier=require_branch,
+    )
+    return canonicalize_revision_uri(stringify_revision_uri(parsed), require_identifier=True)
 
 
 def validate_remote_uri(value: str) -> str:
@@ -374,15 +361,19 @@ class DmlConfig:
         if raw_project_uri is not None:
             if not isinstance(raw_project_uri, str):
                 raise ValueError("project.uri must be a string")
-            parsed_project = parse_dml_project_uri(raw_project_uri, require_identifier=False)
-            if parsed_project.tag is not None:
-                raise ValueError(f"Project URI must target a branch, not a tag: {raw_project_uri!r}")
-            if branch_override is not None:
-                raw_project_uri = f"dml://{parsed_project.owner}/{parsed_project.project}#{branch_override}"
-            project_uri = normalize_project_uri(
+            parsed_project = parse_revision_uri(
                 raw_project_uri,
                 default_branch=default_branch,
-                require_branch=True,
+                require_identifier=False,
+            )
+            if branch_override is not None:
+                if parsed_project.tag is not None:
+                    raise ValueError("project.branch cannot be combined with tag-based project.uri")
+                parsed_project = RevisionUri(parsed_project.owner, parsed_project.project, branch=branch_override)
+            project_uri = normalize_project_uri(
+                stringify_revision_uri(parsed_project),
+                default_branch=default_branch,
+                require_branch=False,
             )
 
         db_path = _coerce_path(merged.get("db.path"))
@@ -455,9 +446,7 @@ class DmlConfig:
 
 
 def _validate_name(label: str, value: str) -> str:
-    if not isinstance(value, str) or not re.match(r"^[a-z0-9][a-z0-9._-]{0,127}$", value):
-        raise ValueError(f"Invalid {label}: {value!r}")
-    return value
+    return validate_segment(label, value)
 
 
 def _validate_branch(value: str) -> str:
@@ -505,6 +494,7 @@ class DmlProjectConfig:
     name: str
     owner: str
     branch: str = "main"
+    tag: str | None = None
     remote_uri: str = ""
 
     @property
@@ -513,12 +503,17 @@ class DmlProjectConfig:
 
     @property
     def project_uri(self) -> str:
+        if self.tag is not None:
+            return normalize_project_uri(f"{self.uri}@{self.tag}", require_branch=False)
         return normalize_project_uri(f"{self.uri}#{self.branch}", require_branch=True)
 
     def __post_init__(self) -> None:
         _validate_name("project name", self.name)
         _validate_name("project owner", self.owner)
-        _validate_branch(self.branch)
+        if self.tag is not None:
+            _validate_ref_name("tag", self.tag)
+        else:
+            _validate_branch(self.branch)
         if self.remote_uri:
             validate_remote_uri(self.remote_uri)
 
@@ -527,9 +522,19 @@ class DmlProjectConfig:
         resolved = DmlConfig.resolve(explicit={"project.home": str(project_dir)}, env={})
         if not resolved.project.uri:
             raise ValueError("Project config must define project.uri")
-        parsed = parse_dml_project_uri(resolved.project.uri, require_identifier=True)
+        parsed = parse_revision_uri(
+            resolved.project.uri,
+            default_branch=resolved.branch,
+            require_identifier=True,
+        )
         if parsed.tag is not None:
-            raise ValueError(f"Project URI must not include a tag: {resolved.project.uri!r}")
+            return cls(
+                name=parsed.project,
+                owner=parsed.owner,
+                branch=resolved.branch,
+                tag=parsed.tag,
+                remote_uri=resolved.remote.uri,
+            )
         assert parsed.branch is not None
         return cls(name=parsed.project, owner=parsed.owner, branch=parsed.branch, remote_uri=resolved.remote.uri)
 

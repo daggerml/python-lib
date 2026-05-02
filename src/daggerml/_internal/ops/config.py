@@ -118,7 +118,7 @@ class ConfigOps:
             value = values[0]
 
         if key == "project.uri":
-            value = normalize_project_uri(str(value), require_branch=True)
+            value = normalize_project_uri(str(value), require_branch=False)
         elif key == "remote.uri":
             value = validate_remote_uri(str(value))
         elif key == "default_branch":

@@ -51,19 +51,19 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **THEN** `DmlOps.init` resolves them through the shared internal resolver before mutating project state
 
 ### Requirement: Project URI is normalized and exposes helper accessors
-The system SHALL normalize `project.uri` so that resolved project configuration always includes a branch and never a tag. The resolved config object SHALL expose a `project.branch` helper derived from the normalized URI.
+The system SHALL normalize and canonicalize `project.uri` through shared revision URI utilities. Resolved project configuration MAY target a branch or a tag. The resolved config object SHALL continue to expose helper accessors for the effective project selector.
 
-#### Scenario: Missing branch normalizes from default branch
-- **WHEN** `project.uri` is provided without a branch in `project/runtime` scope
-- **THEN** the resolver appends the effective default branch to the normalized `project.uri`
+#### Scenario: Missing selector parses as default branch
+- **WHEN** `project.uri` is provided without a branch or tag in `project/runtime` scope
+- **THEN** shared revision URI parsing resolves it to a fully realized branch selector using the effective default branch
 
-#### Scenario: Tag URI is rejected for project context
+#### Scenario: Tag URI is accepted for project context
 - **WHEN** `project.uri` is provided with a tag selector
-- **THEN** project configuration resolution fails because active project context must target a branch, not an immutable tag
+- **THEN** project configuration resolution succeeds and preserves canonical tag form
 
-#### Scenario: Project branch helper is derived from normalized URI
+#### Scenario: Project helper accessors derive from canonical URI
 - **WHEN** resolved configuration includes `project.uri`
-- **THEN** `project.branch` returns the branch encoded in the normalized URI rather than reading a standalone branch config parameter
+- **THEN** helper accessors derive selector values from canonical parsed URI rather than standalone duplicated parsing logic
 
 #### Scenario: Init fails when required project URI cannot resolve validly
 - **WHEN** init flow requires `project.uri` for bootstrap behavior but resolver output leaves it invalid or unresolved

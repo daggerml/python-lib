@@ -21,9 +21,9 @@ from daggerml._internal.config import (
     DmlConfig,
     DmlProjectConfig,
     init_project_layout,
-    parse_dml_project_uri,
     run_project_hooks,
 )
+from daggerml._internal.revision_uri import RevisionUri, parse_revision_uri, stringify_revision_uri
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
 
 S3_MAX_POOL_CONNECTIONS = 20
@@ -184,10 +184,15 @@ class DmlOps:
         if remote_or_uri.startswith("dml://"):
             if "#" in remote_or_uri or "@" in remote_or_uri:
                 return remote_or_uri
-            return f"{remote_or_uri}#{branch or project.branch}"
+            selector = parse_revision_uri(remote_or_uri, default_branch=branch or project.branch)
+            return stringify_revision_uri(selector)
         if remote_or_uri != "origin":
             raise DmlRepoError(f"Unknown remote: {remote_or_uri}")
-        return f"{project.uri}#{branch or project.branch}"
+        if project.tag is not None:
+            if branch is not None and branch != project.branch:
+                raise DmlRepoError("Cannot override branch when project.uri is tag-based")
+            return stringify_revision_uri(RevisionUri(project.owner, project.name, tag=project.tag))
+        return stringify_revision_uri(RevisionUri(project.owner, project.name, branch=branch or project.branch))
 
     def fetch_project(self, remote_or_uri: str, branch: str | None, *, s3_client: Any | None = None) -> Ref:
         client = s3_client or self._create_s3_client()
@@ -219,12 +224,14 @@ class DmlOps:
         s3_client: Any | None = None,
     ) -> str:
         project = self._load_project_config()
+        if not tag and project.tag is not None:
+            raise DmlRepoError("Project branch push requires a branch-based project.uri")
         client = s3_client or self._create_s3_client()
         remote = self.remote(client=client)
         if tag:
-            return remote.push_project_tag(f"{project.uri}@{tag}", head)
+            return remote.push_project_tag(stringify_revision_uri(RevisionUri(project.owner, project.name, tag=tag)), head)
         return remote.push_project_branch(
-            f"{project.uri}#{project.branch}",
+            stringify_revision_uri(RevisionUri(project.owner, project.name, branch=project.branch)),
             head,
             create=create,
             force=force,
@@ -372,9 +379,9 @@ class DmlOps:
                     "user is required to derive project URI from NAME; set DML_USER or configure global user.name"
                 )
             owner_name = cls._default_owner(global_cfg.user)
-            project_uri = f"dml://{owner_name}/{project_name}#{branch_name}"
+            project_uri = stringify_revision_uri(RevisionUri(owner_name, project_name, branch=branch_name))
         elif not project_uri and not config_exists:
-            project_uri = f"dml://{owner_name}/{project_name}#{branch_name}"
+            project_uri = stringify_revision_uri(RevisionUri(owner_name, project_name, branch=branch_name))
         if remote_uri is None:
             remote_uri = global_cfg.remote.uri
 
@@ -408,13 +415,12 @@ class DmlOps:
                 project_uri_value = cfg.project.uri
                 if not project_uri_value:
                     raise DmlRepoError("project.uri is required for init")
-                project_ref = parse_dml_project_uri(project_uri_value, require_identifier=True)
-                if project_ref.branch is None:
-                    raise DmlRepoError("project.uri is required for init")
+                project_ref = parse_revision_uri(project_uri_value, default_branch=cfg.branch, require_identifier=False)
                 layout_cfg = DmlProjectConfig(
                     name=project_ref.project,
                     owner=project_ref.owner,
-                    branch=project_ref.branch,
+                    branch=project_ref.branch or cfg.branch,
+                    tag=project_ref.tag,
                     remote_uri=cfg.remote.uri,
                 )
             init_project_layout(root, layout_cfg)

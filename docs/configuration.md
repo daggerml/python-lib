@@ -99,7 +99,7 @@ Rules:
 ## Field Constraints
 
 - `default_branch` default MUST be `main` unless explicitly overridden.
-- `project.uri`, when resolved for project/runtime use, MUST include a branch selector and MUST NOT use a tag selector.
+- `project.uri`, when resolved for project/runtime use, MUST include a branch or tag selector.
 - `remote.uri`, when present, MUST be an `s3://bucket` or `s3://bucket/prefix` URI designating the project root.
 - `remote.fetch_workers` MUST be a positive integer and defaults to `16`.
 
@@ -120,7 +120,7 @@ Project command resolution uses the shared internal resolver instead of frontend
 ## Derived Defaults
 
 - when `db.path` is unset and `project.home` is present in `project/runtime` scope, `db.path` defaults to `<project.home>/.dml/db/`.
-- when `project.uri` omits a branch, the resolver appends the effective `default_branch`.
+- when `project.uri` omits a selector, the resolver appends the effective `default_branch` as a branch selector.
 - when `remote.uri` is present, runtime derives the protocol root as `<remote.uri>/dml/`.
 
 ## CLI Limitations

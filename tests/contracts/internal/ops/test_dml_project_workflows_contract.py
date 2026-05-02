@@ -16,7 +16,7 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
         patch.object(
             ops,
             "_load_project_config",
-            return_value=SimpleNamespace(branch="main", uri="dml://alice/demo"),
+            return_value=SimpleNamespace(branch="main", tag=None, owner="alice", name="demo", uri="dml://alice/demo"),
         ),
         patch.object(ops, "remote", return_value=remote_ops),
     ):
@@ -50,7 +50,7 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
         patch.object(
             ops,
             "_load_project_config",
-            return_value=SimpleNamespace(branch="main", uri="dml://alice/demo"),
+            return_value=SimpleNamespace(branch="main", tag=None, owner="alice", name="demo", uri="dml://alice/demo"),
         ),
         patch.object(ops, "remote", return_value=remote_ops),
         patch.object(ops, "_create_s3_client", return_value=s3_client) as mock_create_s3,
@@ -72,6 +72,37 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
     assert fetched == Ref("commit:1")
     assert pulled == Ref("commit:2")
     assert pushed == "projects/alice/demo/heads/main.json"
+
+
+def test_fetch_project_origin_with_tag_based_project_uri_uses_tag_uri():
+    ops = DmlOps(path="/repo", remote_root="s3://bucket/prefix", _db=Mock())
+    remote_ops = Mock()
+    with (
+        patch.object(
+            ops,
+            "_load_project_config",
+            return_value=SimpleNamespace(branch="main", tag="v1.0", owner="alice", name="demo", uri="dml://alice/demo"),
+        ),
+        patch.object(ops, "remote", return_value=remote_ops),
+    ):
+        remote_ops.fetch_uri.return_value = Ref("commit:1")
+        fetched = ops.fetch_project("origin", None, s3_client=object())
+
+    remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo@v1.0")
+    assert fetched == Ref("commit:1")
+
+
+def test_push_project_branch_rejects_tag_based_project_uri():
+    ops = DmlOps(path="/repo", remote_root="s3://bucket/prefix", _db=Mock())
+    with (
+        patch.object(
+            ops,
+            "_load_project_config",
+            return_value=SimpleNamespace(branch="main", tag="v1.0", owner="alice", name="demo", uri="dml://alice/demo"),
+        ),
+    ):
+        with pytest.raises(DmlRepoError, match="branch-based"):
+            ops.push_project(None, head=Ref("head:main"), create=False, force=False, s3_client=object())
 
 
 def test_checkout_merge_revert_workflows_delegate_to_commit_ops():

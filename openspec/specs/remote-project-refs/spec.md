@@ -246,19 +246,19 @@ The system SHALL track fetched remote branches and tags locally by canonical nor
 - **THEN** the command resolves it locally through the tracking ref for `dml://alice/tools#main`
 
 ### Requirement: Remote operations parse DML URIs
-The system SHALL parse canonical DML URIs into structured remote project ref paths for remote operations.
+The system SHALL parse and canonicalize DML revision URIs through one centralized shared revision URI parser/stringifier boundary before deriving remote project ref paths.
 
-#### Scenario: Push parses branch URI
+#### Scenario: Push parses branch URI through shared parser
 - **WHEN** push targets canonical URI `dml://alice/demo#main`
-- **THEN** the remote branch path is `refs/projects/alice/demo/heads/main.json`
+- **THEN** remote operations derive `refs/projects/alice/demo/heads/main.json` from the shared parsed revision object
 
-#### Scenario: Fetch parses tag URI
+#### Scenario: Fetch parses tag URI through shared parser
 - **WHEN** fetch targets canonical URI `dml://alice/demo@v1.0`
-- **THEN** the remote tag path is `refs/projects/alice/demo/tags/v1.0.json`
+- **THEN** remote operations derive `refs/projects/alice/demo/tags/v1.0.json` from the shared parsed revision object
 
-#### Scenario: Raw URI is not used as remote path
-- **WHEN** a remote operation handles `dml://alice/demo#main`
-- **THEN** it does not use `dml://alice/demo#main` as a raw remote object path segment
+#### Scenario: Branch/tag capability checks remain operation-specific
+- **WHEN** a mutation operation targets the wrong selector type (branch op with tag URI, or tag op with branch URI)
+- **THEN** the operation fails at method boundary capability checks even though URI parsing/canonicalization succeeds
 
 ### Requirement: Project creation owner default
 The system SHALL default project owner to the configured current user when project creation omits an owner.
