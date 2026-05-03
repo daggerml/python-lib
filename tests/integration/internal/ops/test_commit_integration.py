@@ -5,7 +5,8 @@ from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from daggerml._internal.ops.commit import CommitOps
-from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
+from daggerml._internal.ops.head import HeadOps
+from daggerml._internal.types import Commit, DmlRepoError, Tree
 from tests.contracts.internal.support.test_db_support import _gen_ref
 from tests.contracts.internal.test_types_contract import _commit_strategy, _tree_strategy
 
@@ -25,9 +26,13 @@ class TestCommitOps:
             tree_ref = txn.put(tree)
             commit = Commit(parents=[], tree=tree_ref, author="test_user", message="Initial commit")
             commit_ref = txn.put(commit)
-            head = Head(commit=commit_ref)
-            head_ref = txn.put(head)
-        return ops, head_ref
+        head_ops = HeadOps(_db=temp_db)
+        try:
+            head_ops.delete_branch("main")
+        except DmlRepoError:
+            pass
+        head_ops.create_branch("main", commit_ref)
+        return ops, "main"
 
     def test_list_commits_integration(self, ops):
         """Test listing commit history with real database."""
@@ -92,11 +97,9 @@ class TestCommitOps:
 
     def test_delete_dag_integration(self, ops):
         """Test delete_dag with real database."""
-        from daggerml._internal._db import Ref
 
-        ops, _head_ref = ops
+        ops, _branch_name = ops
         branch = "main"
-        head_ref = Ref(f"head:{branch}")
         # Create tree with multiple DAGs and store as head
         keep1_ref = _gen_ref("dag")
         delete_ref = _gen_ref("dag")
@@ -106,11 +109,7 @@ class TestCommitOps:
             tree_ref = txn.put(original_tree)
             commit = Commit(parents=[], tree=tree_ref, author="test_user", message="Original commit")
             commit_ref = txn.put(commit)
-            # Update head to point to this commit
-            from daggerml._internal.types import Head
-
-            head = Head(commit=commit_ref)
-            txn.put(head, to=head_ref)
+        HeadOps(_db=ops._db).update_branch_commit(branch, HeadOps(_db=ops._db).get_branch_commit(branch), commit_ref)
 
         # Test delete_dag operation (note: returns self for chaining now)
         result = ops.delete_dag("delete_me", branch, "test_user")
@@ -118,8 +117,7 @@ class TestCommitOps:
 
         # Get updated context to verify changes
         with ops._tx(readonly=True) as txn:
-            head = txn.get(head_ref)
-            ctx = txn.get_commit_ctx(head.commit)
+            ctx = txn.get_commit_ctx(HeadOps(_db=ops._db).get_branch_commit(branch, txn=txn))
 
         # Verify DAG was removed from tree
         assert "keep1" in ctx.tree.dags

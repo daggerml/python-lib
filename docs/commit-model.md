@@ -18,15 +18,15 @@ The commit model defines immutable snapshots, branch pointers, and staging state
 
 - `Commit`: immutable snapshot with `parents`, `tree`, metadata, and optional DAG ref.
 - `Tree`: mapping from DAG names to DAG refs.
-- `Head`: branch pointer to a commit.
-- `Index`: mutable staging pointer rooted from a commit.
+- Branch refs: file-backed pointers to commits managed by `HeadOps`.
+- Index refs: file-backed mutable staging pointers rooted from commits.
 
 ## Flow
 
-1. `Head` selects the current branch commit.
-2. `Index` stages DAG mutations from that base.
+1. A branch ref selects the current branch commit.
+2. An index ref stages DAG mutations from that base.
 3. `commit(...)` writes a new commit.
-4. Head-backed index commits move the addressed head pointer.
+4. Branch-backed index commits move the addressed branch pointer.
 5. Function commits produce detached commits (returned via pointer/publication flow) unless a head is explicitly provided.
 6. `Tree` stores named DAG references for that commit.
 
@@ -38,7 +38,7 @@ The commit model defines immutable snapshots, branch pointers, and staging state
 ## Invariants
 
 - Commits are immutable once written.
-- Head movement is explicit through head and index operations.
+- Branch and index movement is explicit through `HeadOps` pointer updates.
 - Commit ancestry fully determines history.
 
 ## Scope

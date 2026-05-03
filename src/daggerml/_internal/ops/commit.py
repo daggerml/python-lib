@@ -9,6 +9,7 @@ Public API:
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterator, Optional
 
 try:
@@ -182,7 +183,7 @@ class CommitOps(BaseOps):
                 return head_ops.get_branch_commit(base, txn=txn), ("tag" if "@" in base else "remote-branch"), None
             except DmlRepoError:
                 raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first") from None
-        if "/" in base and not base.startswith("head:"):
+        if "/" in base:
             remote_name, branch = base.split("/", 1)
             if remote_name != "origin":
                 raise DmlRepoError(f"Unknown remote: {remote_name}")
@@ -192,7 +193,7 @@ class CommitOps(BaseOps):
                 return head_ops.get_branch_commit(tracking_uri, txn=txn), "remote-branch", None
             except DmlRepoError:
                 raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first") from None
-        branch_name = base.split(":", 1)[1] if base.startswith("head:") else base
+        branch_name = base
         try:
             return head_ops.get_branch_commit(branch_name, txn=txn), "branch", branch_name
         except DmlRepoError:
@@ -234,7 +235,13 @@ class CommitOps(BaseOps):
     def resolve_revision_ref(self, value: str, *, current_branch: str = "main", project_dir: str = ".") -> Ref:
         return self.resolve_revision(value, current_branch=current_branch, project_dir=project_dir).commit
 
-    def list(self, head: Ref, limit: Optional[int] = None) -> Iterator[Ref]:
+    def _project_dir(self) -> str:
+        db_path = Path(self._db.path).resolve()
+        if db_path.name == "db" and db_path.parent.name == ".dml":
+            return str(db_path.parent.parent)
+        return str(db_path)
+
+    def list(self, head: Ref | str, limit: Optional[int] = None) -> Iterator[Ref]:
         """Get commit history starting from head.
 
         Walks the commit history following parent references from the given
@@ -260,7 +267,9 @@ class CommitOps(BaseOps):
         """
         count = 0
         try:
-            current = head
+            current = (
+                self.resolve_revision_ref(head, project_dir=self._project_dir()) if isinstance(head, str) else head
+            )
             while current and (limit is None or count < limit):
                 if current.ns() != "commit":
                     raise DmlRepoError(f"Expected commit reference, got: {current}")

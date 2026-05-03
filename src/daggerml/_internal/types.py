@@ -4,7 +4,7 @@ Contains all data classes, type aliases, constants, and helper functions
 without any repository logic or LMDB dependencies.
 
 Public API:
-    Data classes - Datum, Error, Dag, Node types, Commit, Tree, Head, Index
+    Data classes - Datum, Error, Dag, Node types, Commit, Tree
     Constants - NONE, DEFAULT_HEAD, DEFAULT_USER
     Type aliases - Scalar, MaybeRef*, Collection types
     Exception - DmlRepoError
@@ -40,7 +40,7 @@ RefCollection = Union[list[Ref], dict[str, Ref]]
 
 # Constants
 NONE = uuid4()
-DEFAULT_HEAD = Ref("head:main")
+DEFAULT_HEAD = "main"
 DEFAULT_USER = getuser()
 
 # Registries for object namespaces and node types
@@ -822,39 +822,3 @@ class Commit(DmlBase):
             msg = f"{self.__class__.__name__}.modified must be an ISO timestamp string, got: {self.modified!r}"
             raise TypeError(msg)
 
-
-@_register_dml_obj
-class Head(DmlBase):
-    """Named reference to a commit.
-
-    A head (like a Git branch) tracks the current commit for a line of work.
-
-    Attributes
-    ----------
-    commit : Ref
-        Reference to the current commit.
-    """
-
-    commit: Ref  # -> commit
-
-    def _validate(self) -> None:
-        require_ref(self.commit, expected_ns=["commit"], context=f"{self.__class__.__name__}.commit")
-
-
-@_register_dml_obj
-class Index(DmlBase):
-    """Working index for uncommitted changes.
-
-    An index represents the current state of changes before they are committed.
-    It tracks the current commit that the index is based on.
-
-    Attributes
-    ----------
-    commit : Ref
-        Reference to the base commit.
-    """
-
-    commit: Ref  # -> commit
-
-    def _validate(self) -> None:
-        require_ref(self.commit, expected_ns=["commit"], context=f"{self.__class__.__name__}.commit")

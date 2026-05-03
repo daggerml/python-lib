@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +19,7 @@ class TmpEnv(DmlDbEnv):
                     for ns in NAMESPACES:
                         for obj, _ in txn.iter(ns):
                             txn.delete(obj)
+                shutil.rmtree(Path(self.path) / ".dml", ignore_errors=True)
                 return
             except DmlDbMapFullError:
                 self.resize(self.get_size() * 2)

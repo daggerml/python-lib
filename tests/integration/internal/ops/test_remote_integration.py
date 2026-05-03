@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from daggerml._internal._db import Ref
+from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.remote import (
     InvalidManifest,
     InvalidOid,
@@ -18,7 +19,7 @@ from daggerml._internal.ops.remote import (
     RemoteOps,
     ShaMismatch,
 )
-from daggerml._internal.types import Commit, DmlRepoError, Head, Tree
+from daggerml._internal.types import Commit, DmlRepoError, Tree
 from tests.contracts.internal.support.conftest_support import FakeDb, FakeTxn, remote_bucket_and_prefix_from_env
 
 pytestmark = pytest.mark.slow
@@ -606,7 +607,7 @@ class TestLocalHelpers:
         assert remote_ops._local_has(mock_txn, "commit", "testid")
 
     def test_local_put_head_writes_expected_key_and_value(self, remote_ops):
-        """Test that _local_put_head writes the correct head key and value."""
+        """Test that _local_put_head writes the expected local tracking file."""
         mock_txn = Mock()
         remote_name = "s3://test-bucket/test-prefix"
         ref_path = "tags/main/abc123.json"
@@ -619,9 +620,9 @@ class TestLocalHelpers:
 
         remote_ops._local_put_head(mock_txn, remote_name, ref_path, commit_id)
 
-        expected_value = Head(commit=Ref(f"commit:{commit_id}"))
-        expected_key = Ref(f"head:{remote_name}/{ref_path}")
-        mock_txn.put.assert_called_once_with(expected_value, to=expected_key)
+        branch_name = f"{remote_name}/{ref_path}"
+        pointer_path = HeadOps(_db=remote_ops._db)._external_tracking_path(branch_name)
+        assert pointer_path.read_text(encoding="utf-8") == commit_id
 
 
 class TestBuildRemoteManifest:
@@ -904,14 +905,16 @@ class TestPush:
                 "blob": {blob_oid: base64.b64encode(blob_data).decode("ascii")},
             },
         }
-        with remote_ops._tx(readonly=False) as txn:
-            txn.put(Head(commit=Ref(f"commit:{commit_oid}")), to=Ref("head:main"))
-
         # Mock _local_dump_dict to return our local manifest
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest) as mock_dump:
             with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
-                # Push the head ref
-                ref_path = remote_ops.push("main")
+                with patch.object(
+                    remote_ops,
+                    "_resolve_branch_push_target",
+                    return_value=(Ref(f"commit:{commit_oid}"), f"tags/main/{commit_oid}.json"),
+                ):
+                    # Push the head ref
+                    ref_path = remote_ops.push("main")
 
             # Verify _local_dump_dict was called
             mock_dump.assert_called_once()
@@ -960,11 +963,14 @@ class TestPush:
                 "commit": {commit_oid: base64.b64encode(commit_data).decode("ascii")},
             },
         }
-        with remote_ops._tx(readonly=False) as txn:
-            txn.put(Head(commit=Ref(f"commit:{commit_oid}")), to=Ref("head:main"))
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest) as mock_dump:
             with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
-                ref_path = remote_ops.push("main")
+                with patch.object(
+                    remote_ops,
+                    "_resolve_branch_push_target",
+                    return_value=(Ref(f"commit:{commit_oid}"), f"tags/main/{commit_oid}.json"),
+                ):
+                    ref_path = remote_ops.push("main")
 
         assert ref_path == f"tags/main/{commit_oid}.json"
         assert mock_dump.call_args.args[1] == Ref(f"commit:{commit_oid}")
@@ -1072,19 +1078,21 @@ class TestPush:
                 "commit": {commit_oid: base64.b64encode(commit_data).decode("ascii")},
             },
         }
-        with remote_ops._tx(readonly=False) as txn:
-            txn.put(Head(commit=Ref(f"commit:{commit_oid}")), to=Ref("head:main"))
-
         # Mock _local_dump_dict
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest):
             with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
-                # First push should succeed
-                ref_path = remote_ops.push("main")
-                assert ref_path == f"tags/main/{commit_oid}.json"
+                with patch.object(
+                    remote_ops,
+                    "_resolve_branch_push_target",
+                    return_value=(Ref(f"commit:{commit_oid}"), f"tags/main/{commit_oid}.json"),
+                ):
+                    # First push should succeed
+                    ref_path = remote_ops.push("main")
+                    assert ref_path == f"tags/main/{commit_oid}.json"
 
-                # Public API wraps remote errors at subsystem boundary
-                with pytest.raises(DmlRepoError, match="already exists"):
-                    remote_ops.push("main")
+                    # Public API wraps remote errors at subsystem boundary
+                    with pytest.raises(DmlRepoError, match="already exists"):
+                        remote_ops.push("main")
 
     def test_push_manifest_uploaded_and_addressable(self, integration_remote_ops_fn):
         """Test that the manifest is uploaded and can be retrieved via its hash."""
@@ -1106,14 +1114,16 @@ class TestPush:
                 "blob": {blob_oid: base64.b64encode(blob_data).decode("ascii")},
             },
         }
-        with remote_ops._tx(readonly=False) as txn:
-            txn.put(Head(commit=Ref(f"commit:{commit_oid}")), to=Ref("head:main"))
-
         # Mock _local_dump_dict
         with patch.object(remote_ops, "_local_dump_dict", return_value=local_manifest):
             with patch.object(remote_ops, "_direct_dag_ids", return_value=[]):
-                # Push
-                remote_ops.push("main")
+                with patch.object(
+                    remote_ops,
+                    "_resolve_branch_push_target",
+                    return_value=(Ref(f"commit:{commit_oid}"), f"tags/main/{commit_oid}.json"),
+                ):
+                    # Push
+                    remote_ops.push("main")
 
         # Build expected remote manifest to get its hash
         remote_manifest_dict, remote_manifest_bytes = remote_ops._build_remote_manifest(local_manifest)
@@ -1526,14 +1536,10 @@ class TestPull:
         remote_name = f"s3://{remote_ops.bucket}"
         if remote_ops.prefix:
             remote_name = f"s3://{remote_ops.bucket}/{remote_ops.prefix}"
-        expected_head_key = f"head:{remote_name}/{ref_path}"
+        branch_name = f"{remote_name}/{ref_path}"
 
-        # Check that the head was written by trying to read it
-        with remote_ops._tx(readonly=True) as txn:
-            head_obj = txn.get(Ref(expected_head_key))
-            assert head_obj is not None
-            assert isinstance(head_obj, Head)
-            assert head_obj.commit == Ref(f"commit:{commit_oid}")
+        pointer_path = HeadOps(_db=remote_ops._db)._external_tracking_path(branch_name)
+        assert pointer_path.read_text(encoding="utf-8") == commit_oid
 
 
 class TestTask17PublicApiPolish:

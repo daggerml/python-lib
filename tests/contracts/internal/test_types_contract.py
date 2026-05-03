@@ -6,7 +6,6 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
-from daggerml._internal._db import Ref
 from daggerml._internal.types import (
     DEFAULT_HEAD,
     NAMESPACES,
@@ -21,9 +20,7 @@ from daggerml._internal.types import (
     DmlRepoError,
     Error,
     FnNode,
-    Head,
     ImportNode,
-    Index,
     KwargvNode,
     ListDatum,
     LiteralNode,
@@ -116,16 +113,6 @@ def _commit_strategy():
         message=st.text(alphabet=REF_ALPHABET, max_size=64),
         dag=st.one_of(st.none(), _refs("dag")),
     )
-
-
-def _head_strategy():
-    return st.builds(Head, commit=_refs("commit"))
-
-
-def _index_strategy():
-    return st.builds(Index, commit=_refs("commit"))
-
-
 def _deletable_strategy():
     return st.builds(
         Deletable,
@@ -218,8 +205,6 @@ def _dml_obj_strategy():
         _dag_strategy(),
         _tree_strategy(),
         _commit_strategy(),
-        _head_strategy(),
-        _index_strategy(),
         _node_strategy(),
     )
 
@@ -373,9 +358,7 @@ class TestConstants:
     def test_constants_defined(self):
         """Test that required constants are defined."""
         assert NONE is not None
-        assert isinstance(DEFAULT_HEAD, Ref)
-        assert DEFAULT_HEAD.ns() == "head"
-        assert DEFAULT_HEAD.id() == "main"
+        assert DEFAULT_HEAD == "main"
 
     """Test type alias definitions."""
 
@@ -405,8 +388,6 @@ class TestRegistries:
             "datum-runnable",
             "deletable",
             "error",
-            "head",
-            "index",
             "tree",
         }
         for namespace in expected_namespaces:

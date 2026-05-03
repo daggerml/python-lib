@@ -216,9 +216,9 @@ class Dml:
         # Create repository and initialize
         with DmlOps.create(repo_path, user=user, remote_root="") as ops:
             # DmlOps.create initializes the default head; only add a new branch when requested.
-            if branch != DEFAULT_HEAD.id():
+            if branch != DEFAULT_HEAD:
                 head_ops = ops.head()
-                head_ops.create_branch(branch, head_ops.get_branch_commit(DEFAULT_HEAD.id()))
+                head_ops.create_branch(branch, head_ops.get_branch_commit(DEFAULT_HEAD))
 
         return cls(repo=repo_path, user=user, branch=branch, tmpdirs={"repo": tmpdir})
 
@@ -318,7 +318,7 @@ class Dag:
     message: str = ""  # Commit message
 
     def __repr__(self):
-        to = self.ref.to if self.ref else (f"index:{self.token}" if self.token is not None else "NA")
+        to = self.ref.to if self.ref else (self.token if self.token is not None else "NA")
         return f"Dag({to})"
 
     def __hash__(self):

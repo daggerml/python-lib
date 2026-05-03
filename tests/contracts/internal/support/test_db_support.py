@@ -435,18 +435,19 @@ class TestIterationTruncation:
         Ref then fails with DmlDbKeyNotFoundError.
         """
         with temp_db.tx(readonly=False) as txn:
-            original = Ref("head:ab\x00cd")
+            # Use a real DB namespace ("head" is no longer a DB namespace).
+            original = Ref("commit:ab\x00cd")
             txn.put({"x": 1}, to=original)
-            listed = [r for r, _ in txn.iter("head")]
+            listed = [r for r, _ in txn.iter("commit")]
             assert any(isinstance(r, Ref) for r in listed), "no refs yielded"
             listed_strs = [r.to for r in listed]
             # Fixed behavior: full key is preserved, deletion should succeed
-            assert "head:ab\x00cd" in listed_strs
+            assert "commit:ab\x00cd" in listed_strs
             txn.delete(original)
             with pytest.raises(DmlDbKeyNotFoundError):
                 txn.get(original)
 
-    @given(_refs("head", full=True))
+    @given(_refs("commit", full=True))
     def test_any_chars(self, temp_db, ref):
         """
         Demonstrate that keys containing NUL bytes are truncated by the iterator
@@ -455,7 +456,7 @@ class TestIterationTruncation:
         """
         with temp_db.tx(readonly=False) as txn:
             txn.put({"x": 1}, to=ref)
-            listed = [r for r, _ in txn.iter("head")]
+            listed = [r for r, _ in txn.iter("commit")]
             assert any(isinstance(r, Ref) for r in listed), "no refs yielded"
             # Historically the iterator used strlen and produced a truncated id
             # 'head@ab'. New behavior preserves binary keys (NULs included).

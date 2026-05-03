@@ -5,15 +5,16 @@ from uuid import uuid4
 
 from daggerml._internal._db import DmlDbEnv
 from daggerml._internal.ops.base_ops import BaseOps
+from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps
-from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, Commit, Head, Tree
+from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, Commit, Tree
 
 
 def _init_repo(db: DmlDbEnv) -> None:
     with BaseOps(db)._tx(readonly=False) as txn:
         tree_ref = txn.put(Tree(dags={}))
         commit_ref = txn.put(Commit(parents=[], tree=tree_ref, author="test", message="initial"))
-        txn.put(Head(commit=commit_ref), to=DEFAULT_HEAD)
+    HeadOps(_db=db).create_branch(DEFAULT_HEAD, commit_ref)
 
 
 if __name__ == "__main__":

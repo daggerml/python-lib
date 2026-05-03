@@ -3,9 +3,11 @@
 import base64
 import hashlib
 import os
+import shutil
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import patch
 
@@ -257,6 +259,7 @@ class TmpEnv(DmlDbEnv):
                     for ns in NAMESPACES:
                         for obj, _ in txn.iter(ns):
                             txn.delete(obj)
+                shutil.rmtree(Path(self.path) / ".dml", ignore_errors=True)
                 return
             except DmlDbMapFullError:
                 self.resize(self.get_size() * 2)

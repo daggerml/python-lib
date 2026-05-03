@@ -4,13 +4,13 @@ from hypothesis import strategies as st
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.dag import DagOps
+from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.types import (
     ArgvNode,
     Commit,
     Dag,
     DictDatum,
     DmlRepoError,
-    Head,
     KwargvNode,
     ListDatum,
     LiteralNode,
@@ -37,7 +37,12 @@ def setup(temp_bo, dag, data):
     with temp_bo._tx(readonly=False) as txn:
         txn.put(Tree(dags={"main": dag_ref} if dag_ref else {}), to=tree_ref)
         txn.put(Commit(parents=[], tree=tree_ref, author="test", message="test commit"), to=commit_ref)
-        txn.put(Head(commit=commit_ref), to=head_ref)
+    head_ops = HeadOps(_db=temp_bo._db)
+    try:
+        head_ops.delete_branch(head_ref.id())
+    except DmlRepoError:
+        pass
+    head_ops.create_branch(head_ref.id(), commit_ref)
     return dag_ref, tree_ref, commit_ref, head_ref
 
 
@@ -59,8 +64,8 @@ class TestDagOps:
             dag_ref = txn.put(dag)
             tree_ref = txn.put(Tree(dags={"main": dag_ref}))
             commit_ref = txn.put(Commit(parents=[], tree=tree_ref, author="test", message="test commit"))
-            head_ref = txn.put(Head(commit=commit_ref))
-        refs = dag_ref, tree_ref, commit_ref, head_ref
+        HeadOps(_db=temp_bo._db).create_branch("main", commit_ref)
+        refs = dag_ref, tree_ref, commit_ref
         ops = DagOps(temp_bo._db)
         # List DAGs in this commit
         dags = ops.list()
@@ -115,8 +120,9 @@ class TestDagOps:
             node_ref = ops.get_node(dag_ref, name)
             assert node_ref == dag.names[name]
         finally:
+            HeadOps(_db=temp_bo._db).delete_branch(head_ref.id())
             with temp_bo._tx(readonly=False) as txn:
-                for ref in {dag_ref, tree_ref, commit_ref, head_ref}:
+                for ref in {dag_ref, tree_ref, commit_ref}:
                     if ref:
                         txn.delete(ref)
 

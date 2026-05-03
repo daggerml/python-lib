@@ -29,7 +29,7 @@ Type-system contracts define namespace-bound object families and validation inva
 
 - `Datum` hierarchy: scalar/list/dict/uri/runnable payloads.
 - `Node` hierarchy: literal/import/function and argument nodes.
-- Graph/history structures: `Dag`, `Tree`, `Commit`, `Head`, `Index`.
+- Graph/history structures: `Dag`, `Tree`, `Commit`.
 
 ## Critical Invariants
 

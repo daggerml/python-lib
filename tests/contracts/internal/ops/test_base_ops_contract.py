@@ -63,7 +63,8 @@ class TestBaseOps:
         """Test private _get operation with error."""
         with pytest.raises(DmlRepoError, match="Object not found:"):
             with temp_bo._tx(readonly=True) as ctx:
-                ctx.get(_gen_ref("head"))
+                # Use a valid namespace so we exercise the not-found path.
+                ctx.get(_gen_ref("commit"))
 
     def test_with_retry_retries_whole_transaction_on_map_full(self):
         """Map-full should resize and retry the whole operation, not a single put."""

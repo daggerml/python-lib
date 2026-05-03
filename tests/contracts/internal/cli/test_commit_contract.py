@@ -79,8 +79,6 @@ class TestExecuteCommitHandlers:
 
     def test_execute_commit_list(self):
         """Test execute_commit_list handler."""
-        from daggerml._internal._db import Ref
-
         mock_ops = Mock()
         mock_ref1 = Mock()
         mock_ref1.__str__ = Mock(return_value="commit:abc123")
@@ -91,7 +89,7 @@ class TestExecuteCommitHandlers:
         args = Namespace(head="head-ref", limit=10)
         result = execute_commit_list(mock_ops, args)
 
-        mock_ops.list.assert_called_once_with(Ref("head-ref"), 10)
+        mock_ops.list.assert_called_once_with("head-ref", 10)
         assert result == ["commit:abc123", "commit:def456"]
 
     def test_execute_commit_merge(self):

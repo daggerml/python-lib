@@ -28,7 +28,7 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
         description="List commits reachable from a branch/commit ref or the special value HEAD.",
         examples=["dml commit list HEAD --limit 10"],
     )
-    list_parser.add_argument("head", help="Branch/commit ref (e.g. head:main, commit:<id>) or HEAD")
+    list_parser.add_argument("head", help="Branch name, commit ref, revision, or HEAD")
     list_parser.add_argument("--limit", type=int, help="Maximum number of commits to return")
     list_parser.set_defaults(func=execute_commit_list)
 
@@ -110,8 +110,7 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
 
 def execute_commit_list(ops_obj, args) -> List[str]:
     """Execute commit list command, return JSON-serializable result."""
-    head = parse_ref(args.head)
-    result = ops_obj.list(head, args.limit)
+    result = ops_obj.list(args.head, args.limit)
     return [str(ref) for ref in result]
 
 

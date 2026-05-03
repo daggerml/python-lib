@@ -137,9 +137,6 @@ def normalize_error_message(error: Exception, *, command: str | None) -> str:
         base = "Invalid ref format (expected namespace:id)"
         message = f"{base}: {offending}" if offending else base
 
-    if "Head reference must start with 'head:'" in message:
-        message = "Invalid head ref (expected head:<name>)"
-
     # JSON parsing errors: surface the underlying decoder context if available.
     if isinstance(error, ValueError) and isinstance(getattr(error, "__cause__", None), json.JSONDecodeError):
         cause: json.JSONDecodeError = error.__cause__  # type: ignore[assignment]

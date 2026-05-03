@@ -14,11 +14,9 @@ from daggerml._internal.types import Commit, DmlRepoError, Tree
 @pytest.mark.parametrize(
     "contract_id,label,ref_string",
     [
-        ("revision-parse-ref-roundtrip", "head-ref", "head:main"),
         ("revision-parse-ref-roundtrip", "index-ref", "index:default"),
     ],
     ids=[
-        "revision-parse-ref-roundtrip:head-ref",
         "revision-parse-ref-roundtrip:index-ref",
     ],
 )
@@ -72,8 +70,8 @@ def _seed_project_commit_history(temp_bo_fn, tmp_path: Path) -> tuple[CommitOps,
         tree = txn.get(txn.get(initial).tree)
         next_tree = txn.put(Tree(dags=dict(tree.dags)))
         next_commit = txn.put(Commit(parents=[initial], tree=next_tree, author="alice", message="next"))
-        txn.put(type(txn.get(Ref(f"head:{main_head}")))(commit=next_commit), to=Ref(f"head:{main_head}"))
-        txn.put(type(txn.get(Ref(f"head:{main_head}")))(commit=initial), to=Ref("head:dml://alice/demo@v1.0"))
+    head_ops.update_branch_commit(main_head, initial, next_commit)
+    head_ops.create_branch("dml://alice/demo@v1_0", initial)
 
     return commit_ops, initial, next_commit
 
@@ -91,7 +89,7 @@ def _seed_project_commit_history(temp_bo_fn, tmp_path: Path) -> tuple[CommitOps,
         (
             "revision-form-classification",
             "tag",
-            lambda initial, next_commit: "v1.0",
+            lambda initial, next_commit: "v1_0",
             "tag",
             lambda initial, next_commit: initial,
         ),

@@ -12,6 +12,7 @@ from daggerml._cli.gc import (
     setup_gc_parser,
 )
 from daggerml._internal._db import Ref
+from daggerml._internal.types import DmlRepoError
 
 
 class TestSetupGcParser:
@@ -25,8 +26,8 @@ class TestSetupGcParser:
         assert args.heads is None
         args = parser.parse_args(["list-orphans", "--heads"])
         assert args.heads == []
-        args = parser.parse_args(["list-orphans", "--heads", "head:main", "head:feature"])
-        assert args.heads == ["head:main", "head:feature"]
+        args = parser.parse_args(["list-orphans", "--heads", "main", "feature"])
+        assert args.heads == ["main", "feature"]
 
 
 class TestParseHeads:
@@ -34,22 +35,28 @@ class TestParseHeads:
 
     def test_parse_heads_none(self):
         """Test parse_heads returns None when omitted."""
-        assert parse_heads(None) is None
+        assert parse_heads(Mock(), None) is None
 
     def test_parse_heads_empty(self):
         """Test parse_heads returns empty list for explicit empty heads."""
-        assert parse_heads([]) == []
+        assert parse_heads(Mock(), []) == []
 
     def test_parse_heads_valid(self):
         """Test parse_heads returns Ref list for valid refs."""
-        refs = parse_heads(["head:main", "index:default"])
+        ops = Mock()
+        ops.head.return_value.get_branch_commit.side_effect = [Ref("commit:main"), DmlRepoError("missing")]
+        ops.head.return_value.get_index_commit.return_value = Ref("commit:index")
+        refs = parse_heads(ops, ["main", "default"])
         assert refs is not None
-        assert [ref.to for ref in refs] == ["head:main", "index:default"]
+        assert [ref.to for ref in refs] == ["commit:main", "commit:index"]
 
     def test_parse_heads_invalid(self):
         """Test parse_heads raises for invalid refs."""
+        ops = Mock()
+        ops.head.return_value.get_branch_commit.side_effect = DmlRepoError("missing")
+        ops.head.return_value.get_index_commit.side_effect = DmlRepoError("missing")
         with pytest.raises(ValueError):
-            parse_heads(["invalid-ref"])
+            parse_heads(ops, ["invalid-ref"])
 
 
 class TestExecuteGcHandlers:
@@ -68,10 +75,11 @@ class TestExecuteGcHandlers:
     def test_execute_gc_list_orphans(self):
         """Test execute_gc_list_orphans handler."""
         mock_ops = Mock()
+        mock_ops.head.return_value.get_branch_commit.return_value = Ref("commit:abc")
         mock_ops.list_orphans.return_value = [Ref("datum-scalar:abc")]
 
-        args = Namespace(heads=["head:main"])
+        args = Namespace(heads=["main"])
         result = execute_gc_list_orphans(mock_ops, args)
 
-        mock_ops.list_orphans.assert_called_once_with([Ref("head:main")])
+        mock_ops.list_orphans.assert_called_once_with([Ref("commit:abc")])
         assert result == [Ref("datum-scalar:abc")]

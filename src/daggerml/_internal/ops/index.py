@@ -95,16 +95,29 @@ class IndexOps(BaseOps):
         argv = [self._normalize_codec_value(arg, ctx=codec_ctx) for arg in argv]
         kwargv = kwargv or {}
         kwargv = {k: self._normalize_codec_value(v, ctx=codec_ctx) for k, v in kwargv.items()}
+        # Important: if the called function produced a DaggerML Error, we still
+        # want any DB + pointer updates performed while finishing the call to be
+        # committed. We therefore capture the error inside the transaction and
+        # raise it only after the txn scope exits successfully.
         with self._tx(readonly=False) as txn:
             argv_ref = self._prepare_fn(index_id, argv, kwargv, txn)
             dag_ref = self._run_builtin(argv_ref, txn)
             if dag_ref is not None:
-                return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                try:
+                    return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                except Error as e:
+                    deferred_error = e
             cops = CacheOps(_db=self._db, remote_root=self.remote_root)
             dag_ref = cops._get(argv_ref, txn)
             if dag_ref is not None:
-                return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                try:
+                    return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                except Error as e:
+                    deferred_error = e
             prepared = self._prepare_adapter_call(index_id, argv_ref, txn)
+
+        if 'deferred_error' in locals():
+            raise deferred_error
         argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
         es = ExecutionState(prepared.cache_key, remote_root=self.remote_root)
 
@@ -119,7 +132,15 @@ class IndexOps(BaseOps):
             dag_ref = cops._get(prepared.argv_ref, txn)
             if dag_ref is not None:
                 es.unlock()
-                return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                try:
+                    deferred_out = self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                except Error as e:
+                    deferred_error = e
+                # exit txn before raising Error (if any)
+        if 'deferred_out' in locals() or 'deferred_error' in locals():
+            if 'deferred_error' in locals():
+                raise deferred_error
+            return deferred_out
 
         execution_number = es.read_active_execution_number()
         execution_record = None
@@ -159,7 +180,14 @@ class IndexOps(BaseOps):
                 cops = CacheOps(_db=self._db, remote_root=self.remote_root)
                 dag_ref = cops._get(prepared.argv_ref, txn)
                 if dag_ref is not None:
-                    return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                    try:
+                        deferred_out = self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                    except Error as e:
+                        deferred_error = e
+            if 'deferred_out' in locals() or 'deferred_error' in locals():
+                if 'deferred_error' in locals():
+                    raise deferred_error
+                return deferred_out
             raise DmlRepoError("Adapter reported success but no cached DAG was published")
         elif status == "failed":
             self._publish_terminal_state(prepared.argv_ref, result)
@@ -169,7 +197,14 @@ class IndexOps(BaseOps):
                 cops = CacheOps(_db=self._db, remote_root=self.remote_root)
                 dag_ref = cops._get(prepared.argv_ref, txn)
                 if dag_ref is not None:
-                    return self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                    try:
+                        deferred_out = self._finish_fn_result(dag_ref, argv, name, txn, index_id)
+                    except Error as e:
+                        deferred_error = e
+            if 'deferred_out' in locals() or 'deferred_error' in locals():
+                if 'deferred_error' in locals():
+                    raise deferred_error
+                return deferred_out
             raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
         else:
             if state is None:
@@ -794,13 +829,25 @@ class IndexOps(BaseOps):
             raise DmlRepoError("Adapter output must be JSON") from e
         return self._validate_adapter_output(stdout)
 
-    def _finish_fn_result(self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_id: str) -> Ref:
+    def _finish_fn_result_in_txn(
+        self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_id: str
+    ) -> tuple[Ref, Error | None]:
         dag_obj: Dag = txn.get(dag_ref)
         if dag_obj.result is None and dag_obj.error is None:
             raise DmlRepoError("Function DAG has no result node.")
         out = self._put_node(FnNode(argv, dag_ref), name=name, txn=txn, index_id=index_id)
         if dag_obj.error is not None:
             err = txn.get(dag_obj.error)
+            if not isinstance(err, Error):
+                raise DmlRepoError(f"Expected Error object, got: {type(err).__name__}")
+            return out, err
+        return out, None
+
+    # Compatibility: tests monkeypatch this helper and some callers expect the
+    # historic name.
+    def _finish_fn_result(self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_id: str) -> Ref:
+        out, err = self._finish_fn_result_in_txn(dag_ref, argv, name, txn, index_id)
+        if err is not None:
             raise err
         return out
 

@@ -467,7 +467,7 @@ class DmlOps:
         branch: str | None = None,
     ) -> Self:
         """Create new repository at path (instantiates db instance)."""
-        branch = branch or DEFAULT_HEAD.id()
+        branch = branch or DEFAULT_HEAD
         db_path = cls._db_path(path)
         Path(db_path).mkdir(parents=True, exist_ok=True)
         db = DmlDbEnv.create(db_path, namespaces=sorted(NAMESPACES), map_size=1024**3)

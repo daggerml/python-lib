@@ -15,7 +15,7 @@ def setup_remote_parser(parser: ArgumentParser) -> None:
         parser,
         description="Remote operations backed by S3 (requires boto3 at runtime for remote commands).",
         examples=[
-            "dml --remote-root s3://bucket/project remote push head:main",
+            "dml --remote-root s3://bucket/project remote push main",
             "dml --remote-root s3://bucket/project remote pull tags/main/v1.json",
         ],
     )

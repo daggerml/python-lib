@@ -26,7 +26,7 @@ The object model defines DaggerML's core datum, node, and versioning object fami
 - Graph nodes:
   - `LiteralNode`, `FnNode`, `ImportNode`, `ArgvNode`, `KwargvNode`.
 - Versioning objects:
-  - `Dag`, `Commit`, `Tree`, `Head`, `Index`.
+  - `Dag`, `Commit`, `Tree`.
 
 ## Runnable Types
 
