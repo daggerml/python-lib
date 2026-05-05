@@ -35,7 +35,8 @@ If related docs conflict on this scope, this document is the source of truth.
 - Pointer payloads resolve to `commit` refs.
 - Duplicate branch names are rejected.
 - Invalid source refs or identifiers fail with `DmlRepoError`.
-- Branch and index advancement requires an existing pointer, an existing commit, and the expected current commit for mutation paths.
+- Branch and index advancement requires an existing pointer and the expected current commit for mutation paths.
+- Non-bootstrap `HeadOps` pointer methods do not validate that referenced commits currently exist in LMDB.
 
 ## Non-goals
 

@@ -338,16 +338,18 @@ class CommitOps(BaseOps):
 
     def merge_into_head(self, branch: str, other: Ref, user: str) -> Ref:
         hops = HeadOps(_db=self._db)
+        fast_forward = False
         with self._tx(readonly=False) as txn:
             current = hops.get_branch_commit(branch, txn=txn)
             if self._is_ancestor_in_txn(current, other, txn):
-                hops.update_branch_commit(branch, current, other, txn=txn)
-                return other
+                fast_forward = True
             if self._is_ancestor_in_txn(other, current, txn):
                 return current
+        if fast_forward:
+            hops.update_branch_commit(branch, current, other)
+            return other
         merged = self.merge(current, other, user)
-        with self._tx(readonly=False) as txn:
-            hops.update_branch_commit(branch, current, merged, txn=txn)
+        hops.update_branch_commit(branch, current, merged)
         return merged
 
     def revert(self, branch: str, commit: Ref, user: str) -> Ref:
@@ -382,8 +384,8 @@ class CommitOps(BaseOps):
             new_commit = txn.put(
                 Commit(parents=[current_head], tree=new_tree, author=user, message=f"Revert {commit.id()[:8]}")
             )
-            hops.update_branch_commit(branch, current_head, new_commit, txn=txn)
-            return new_commit
+        hops.update_branch_commit(branch, current_head, new_commit)
+        return new_commit
 
     def checkout_dag(
         self,
@@ -419,8 +421,8 @@ class CommitOps(BaseOps):
                     dag=dag_ref,
                 )
             )
-            hops.update_branch_commit(branch, current_commit_ref, new_commit, txn=txn)
-            return new_commit
+        hops.update_branch_commit(branch, current_commit_ref, new_commit)
+        return new_commit
 
     def rebase(self, source, target, user: str):
         """Rebase source commit onto target.
@@ -561,7 +563,7 @@ class CommitOps(BaseOps):
                 ctx.commit.parents = [current_commit_ref]
                 ctx.commit.message = f"Delete DAG '{name}'"
                 new_commit_ref = txn.put(ctx.commit)
-                hops.update_branch_commit(branch, current_commit_ref, new_commit_ref, txn=txn)
+            hops.update_branch_commit(branch, current_commit_ref, new_commit_ref)
             return self
         except Exception as e:
             raise DmlRepoError(f"Failed to delete DAG '{name}': {e}") from e

@@ -129,6 +129,32 @@ class TestCommitOps:
         assert ctx.commit.author == "test_user"
         assert len(ctx.commit.parents) == 1
 
+    def test_delete_dag_updates_branch_after_new_commit_is_visible(self, ops, monkeypatch):
+        ops, _branch_name = ops
+        branch = "main"
+        original_tree = Tree(dags={"delete_me": _gen_ref("dag")})
+        with ops._tx(readonly=False) as txn:
+            tree_ref = txn.put(original_tree)
+            commit_ref = txn.put(Commit(parents=[], tree=tree_ref, author="test_user", message="Original commit"))
+        head_ops = HeadOps(_db=ops._db)
+        head_ops.update_branch_commit(branch, head_ops.get_branch_commit(branch), commit_ref)
+
+        seen = {}
+        original_update = HeadOps.update_branch_commit
+
+        def _spy(self, branch_name, old_commit, new_commit, txn=None):
+            del txn
+            with ops._tx(readonly=True) as read_txn:
+                seen["exists"] = read_txn.exists(new_commit)
+            return original_update(self, branch_name, old_commit, new_commit)
+
+        monkeypatch.setattr(HeadOps, "update_branch_commit", _spy)
+
+        result = ops.delete_dag("delete_me", branch, "test_user")
+
+        assert result is ops
+        assert seen["exists"] is True
+
     def test_topo_sort_integration(self, ops):
         """Test _topo_sort with real commit chain."""
         ops, _ = ops

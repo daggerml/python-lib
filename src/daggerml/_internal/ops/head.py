@@ -30,13 +30,19 @@ class HeadOps(BaseOps):
         if txn is not None:
             target_commit_ref = from_commit
             if target_commit_ref is None:
-                tree_ref = txn.put(Tree(dags={}))
-                target_commit_ref = txn.put(Commit(tree=tree_ref, parents=[], author="dml", message="Initial commit"))
-            self._require_commit(target_commit_ref, txn)
+                raise DmlRepoError("Bootstrap branch creation does not support caller-owned transactions")
             self._create_pointer(self._branch_path(branch_name), target_commit_ref)
             return branch_name
-        with self._tx(readonly=False) as owned_txn:
-            return self.create_branch(branch_name, from_commit, txn=owned_txn)
+        target_commit_ref = from_commit
+        if target_commit_ref is None:
+            with self._tx(readonly=False) as owned_txn:
+                tree_ref = owned_txn.put(Tree(dags={}))
+                target_commit_ref = owned_txn.put(
+                    Commit(tree=tree_ref, parents=[], author="dml", message="Initial commit")
+                )
+        assert target_commit_ref is not None
+        self._create_pointer(self._branch_path(branch_name), target_commit_ref)
+        return branch_name
 
     def delete_branch(self, branch_name: str, *, txn=None) -> None:
         if txn is not None:
@@ -46,56 +52,41 @@ class HeadOps(BaseOps):
             self.delete_branch(branch_name, txn=owned_txn)
 
     def get_branch_commit(self, branch_name: str, *, txn=None) -> Ref:
-        if txn is not None:
-            return self._get_pointer_commit(self._branch_path(branch_name), txn)
-        with self._tx(readonly=True) as owned_txn:
-            return self.get_branch_commit(branch_name, txn=owned_txn)
+        del txn
+        return self._get_pointer_commit(self._branch_path(branch_name))
 
     def update_branch_commit(self, branch_name: str, old_commit: Ref, new_commit: Ref, *, txn=None) -> Ref:
-        if txn is not None:
-            return self._update_pointer_commit(self._branch_path(branch_name), old_commit, new_commit, txn)
-        with self._tx(readonly=False) as owned_txn:
-            return self.update_branch_commit(branch_name, old_commit, new_commit, txn=owned_txn)
+        del txn
+        return self._update_pointer_commit(self._branch_path(branch_name), old_commit, new_commit)
 
     def create_index(self, commit_ref: Ref, *, txn=None) -> str:
-        if txn is not None:
-            self._require_commit(commit_ref, txn)
-            while True:
-                index_id = f"{uuid4().hex}{uuid4().hex}"
-                index_path = self._index_path(index_id)
-                if not index_path.exists():
-                    self._create_pointer(index_path, commit_ref)
-                    return index_id
-        with self._tx(readonly=False) as owned_txn:
-            return self.create_index(commit_ref, txn=owned_txn)
+        del txn
+        while True:
+            index_id = f"{uuid4().hex}{uuid4().hex}"
+            index_path = self._index_path(index_id)
+            if not index_path.exists():
+                self._create_pointer(index_path, commit_ref)
+                return index_id
 
     def delete_index(self, index_id: str, *, txn=None) -> None:
-        if txn is not None:
-            self._delete_pointer(self._index_path(index_id))
-            return None
-        with self._tx(readonly=False) as owned_txn:
-            self.delete_index(index_id, txn=owned_txn)
+        del txn
+        self._delete_pointer(self._index_path(index_id))
+        return None
 
     def get_index_commit(self, index_id: str, *, txn=None) -> Ref:
-        if txn is not None:
-            return self._get_pointer_commit(self._index_path(index_id), txn)
-        with self._tx(readonly=True) as owned_txn:
-            return self.get_index_commit(index_id, txn=owned_txn)
+        del txn
+        return self._get_pointer_commit(self._index_path(index_id))
 
     def list_pointer_roots(self, *, txn=None) -> list[Ref]:
-        if txn is not None:
-            return [
-                *[self._get_pointer_commit(self._local_branch_path(branch_name), txn) for branch_name in self.list_branches()],
-                *[self._get_pointer_commit(self._index_path(index_id), txn) for index_id in self.list_indexes()],
-            ]
-        with self._tx(readonly=True) as owned_txn:
-            return self.list_pointer_roots(txn=owned_txn)
+        del txn
+        return [
+            *[self._get_pointer_commit(self._local_branch_path(branch_name)) for branch_name in self.list_branches()],
+            *[self._get_pointer_commit(self._index_path(index_id)) for index_id in self.list_indexes()],
+        ]
 
     def update_index_commit(self, index_id: str, old_commit: Ref, new_commit: Ref, *, txn=None) -> Ref:
-        if txn is not None:
-            return self._update_pointer_commit(self._index_path(index_id), old_commit, new_commit, txn)
-        with self._tx(readonly=False) as owned_txn:
-            return self.update_index_commit(index_id, old_commit, new_commit, txn=owned_txn)
+        del txn
+        return self._update_pointer_commit(self._index_path(index_id), old_commit, new_commit)
 
     def _branch_path(self, branch_name: str) -> Path:
         if branch_name.startswith("dml://"):
@@ -177,14 +168,14 @@ class HeadOps(BaseOps):
                 raise DmlRepoError(f"Pointer does not exist: {pointer_path}")
             pointer_path.unlink()
 
-    def _get_pointer_commit(self, pointer_path: Path, txn) -> Ref:
-        commit_ref = self._read_pointer_commit(pointer_path)
-        self._require_commit(commit_ref, txn)
-        return commit_ref
+    def _get_pointer_commit(self, pointer_path: Path) -> Ref:
+        return self._read_pointer_commit(pointer_path)
 
-    def _update_pointer_commit(self, pointer_path: Path, old_commit: Ref, new_commit: Ref, txn) -> Ref:
-        self._require_commit(old_commit, txn)
-        self._require_commit(new_commit, txn)
+    def _update_pointer_commit(self, pointer_path: Path, old_commit: Ref, new_commit: Ref) -> Ref:
+        if old_commit.ns() != "commit":
+            raise DmlRepoError(f"Expected commit ref, got: {old_commit}")
+        if new_commit.ns() != "commit":
+            raise DmlRepoError(f"Expected commit ref, got: {new_commit}")
         self._mutate_pointer(pointer_path, expected_old_commit=old_commit, new_commit=new_commit)
         return new_commit
 

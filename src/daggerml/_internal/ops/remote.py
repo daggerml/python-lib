@@ -527,23 +527,23 @@ class RemoteOps(BaseOps):
         """
         self.client.delete_object(Bucket=self.bucket, Key=self._ref_key(ref_path))
 
-    def _local_put_head(self, txn, remote_name: str, ref_path: str, commit_id: str) -> None:
+    def _local_put_head(self, remote_name: str, ref_path: str, commit_id: str) -> None:
         branch = f"{remote_name}/{ref_path}"
-        self._local_put_tracking_branch(txn, branch, Ref(f"commit:{commit_id}"))
+        self._local_put_tracking_branch(branch, Ref(f"commit:{commit_id}"))
 
-    def _local_put_tracking_head(self, txn, uri: str, commit_id: str) -> None:
+    def _local_put_tracking_head(self, uri: str, commit_id: str) -> None:
         canonical = self.canonical_dml_uri(uri, require_identifier=True)
-        self._local_put_tracking_branch(txn, canonical, Ref(f"commit:{commit_id}"))
+        self._local_put_tracking_branch(canonical, Ref(f"commit:{commit_id}"))
 
-    def _local_put_tracking_branch(self, txn, branch: str, commit_ref: Ref) -> None:
+    def _local_put_tracking_branch(self, branch: str, commit_ref: Ref) -> None:
         head_ops = HeadOps(_db=self._db)
         try:
-            current = head_ops.get_branch_commit(branch, txn=txn)
-            head_ops.update_branch_commit(branch, current, commit_ref, txn=txn)
+            current = head_ops.get_branch_commit(branch)
+            head_ops.update_branch_commit(branch, current, commit_ref)
             return
         except DmlRepoError:
             pass
-        head_ops.create_branch(branch, commit_ref, txn=txn)
+        head_ops.create_branch(branch, commit_ref)
 
     def _resolve_branch_push_target(self, branch: str) -> tuple[Ref, str]:
         commit_ref = HeadOps(_db=self._db).get_branch_commit(branch)
@@ -1272,7 +1272,7 @@ class RemoteOps(BaseOps):
 
         with self._tx(readonly=False) as txn:
             root_ref = self.load_ptr_in_txn(ref_obj["target"], txn, expected_root_ns="commit")
-            self._local_put_head(txn, remote_name, ref_path, root_ref.id())
+        self._local_put_head(remote_name, ref_path, root_ref.id())
 
     @_remote_boundary("fetch")
     def fetch_uri(self, uri: str) -> Ref:
@@ -1282,8 +1282,8 @@ class RemoteOps(BaseOps):
         self._require_manifest_ref_targets(ref_obj, ref_path)
         with self._tx(readonly=False) as txn:
             root_ref = self.load_ptr_in_txn(ref_obj["target"], txn, expected_root_ns="commit")
-            self._local_put_tracking_head(txn, canonical, root_ref.id())
-            return root_ref
+        self._local_put_tracking_head(canonical, root_ref.id())
+        return root_ref
 
     @_remote_boundary("push branch")
     def push_project_branch(self, uri: str, branch: str, *, create: bool = False, force: bool = False) -> str:

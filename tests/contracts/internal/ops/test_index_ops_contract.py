@@ -18,6 +18,7 @@ from daggerml._internal.types import (
     Commit,
     Dag,
     DictDatum,
+    DmlPointerConflictError,
     DmlRepoError,
     Error,
     ImportNode,
@@ -227,14 +228,34 @@ class TestIndexOps:
     def test_start_fn_builtins(self, temp_bo, builtin, args, expected):
         ops, _head_ref, index = _mk_repo_state(temp_bo)
         try:
+            before_indexes = set(HeadOps(_db=temp_bo._db).list_indexes())
             fn_node = _put_runnable_literal(ops, index, uri=f"daggerml:{builtin}", adapter="")
             arg_nodes = [ops.put_literal(index, arg) for arg in args]
             result = ops.start_fn(index, [fn_node, *arg_nodes])
             assert result is not None
             nv = NodeOps(_db=temp_bo._db).unroll(result)
             assert nv == expected
+            assert set(HeadOps(_db=temp_bo._db).list_indexes()) == before_indexes
         finally:
             ops.delete(index)
+
+    def test_failed_execution_helper_does_not_publish_temp_index_ref(self, temp_bo):
+        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
+        try:
+            fn_node = _put_runnable_literal(ops, index_ref, uri="noop://failed", adapter="dummy-adapter")
+            arg_node = ops.put_literal(index_ref, 1)
+            with ops._tx(readonly=False) as txn:
+                argv_ref = ops._prepare_fn(index_ref, [fn_node, arg_node], {}, txn)
+
+            before_indexes = set(HeadOps(_db=temp_bo._db).list_indexes())
+            dag_ref = ops._build_failed_execution_dag(argv_ref, "boom")
+
+            with ops._tx(readonly=True) as txn:
+                dag = txn.get(dag_ref)
+                assert dag.error is not None
+            assert set(HeadOps(_db=temp_bo._db).list_indexes()) == before_indexes
+        finally:
+            ops.delete(index_ref)
 
     @pytest.mark.slow
     @pytest.mark.parametrize(
@@ -1303,6 +1324,52 @@ class TestIndexOps:
             assert ops.get_node(index_ref, "answer") == node_ref
         finally:
             ops.delete(index_ref)
+
+    def test_put_literal_retries_from_pointer_conflict_current_commit(self, temp_bo, monkeypatch):
+        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
+        original = HeadOps.update_index_commit
+        calls = {"count": 0}
+
+        def _conflict_once(self, idx, old_commit, new_commit, txn=None):
+            del txn
+            calls["count"] += 1
+            if calls["count"] == 1:
+                current_commit = original(self, idx, old_commit, new_commit)
+                raise DmlPointerConflictError("stale", current_commit=current_commit)
+            return original(self, idx, old_commit, new_commit)
+
+        monkeypatch.setattr(HeadOps, "update_index_commit", _conflict_once)
+
+        try:
+            node_ref = ops.put_literal(index_ref, 42, name="answer")
+            assert calls["count"] >= 2
+            assert ops.get_node(index_ref, "answer") == node_ref
+        finally:
+            ops.delete(index_ref)
+
+    def test_commit_retries_branch_publication_from_pointer_conflict_current_commit(self, temp_bo, monkeypatch):
+        ops, head_ref, index_ref = _mk_repo_state(temp_bo)
+        original = HeadOps.update_branch_commit
+        calls = {"count": 0}
+
+        def _conflict_once(self, branch_name, old_commit, new_commit, txn=None):
+            del txn
+            calls["count"] += 1
+            if calls["count"] == 1:
+                current_commit = original(self, branch_name, old_commit, new_commit)
+                raise DmlPointerConflictError("stale", current_commit=current_commit)
+            return original(self, branch_name, old_commit, new_commit)
+
+        monkeypatch.setattr(HeadOps, "update_branch_commit", _conflict_once)
+
+        try:
+            node_ref = ops.put_literal(index_ref, 42, name="answer")
+            commit_ref = ops.commit(index_ref, node_ref, head=head_ref, message="done")
+            assert calls["count"] >= 2
+            assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) == commit_ref
+        finally:
+            if index_ref in HeadOps(_db=temp_bo._db).list_indexes():
+                ops.delete(index_ref)
 
     def test_get_node_raises_when_name_not_found(self, temp_bo):
         """get_node raises DmlRepoError when the name doesn't exist in the DAG."""
