@@ -249,6 +249,10 @@ def run_payload(argv_ptr: str) -> dict[str, Any]:
     def succeeded_result(dag) -> dict[str, Any]:
         if dag.ref is None:
             raise DmlRepoError("Script worker succeeded without committed DAG")
+        dag_info = dag.dml.dag.describe(dag.ref)
+        if dag_info.get("error") is not None:
+            err = dag.dml.node.unroll(cast(Any, dag_info["error"]))
+            return {"status": "failed", "error": str(err)}
         return {"status": "succeeded", "error": None, "dag_id": dag.ref.id()}
 
     with dml.temporary() as dml_instance:

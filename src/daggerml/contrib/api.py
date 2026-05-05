@@ -611,7 +611,7 @@ def run(instance, *args, name: str | None = None, entrypoint: str | None = None,
     dag = dml.new(run_name, run_name)
     for member_name, member_value in _iter_dagclass_members(instance):
         dag.put(cast(Any, member_value), name=member_name)
-    result = dag.call(cast(Any, dag[entry]), *args, name=_DAGCLASS_CALL_NODE_NAME, **kwargs)
+    result = dag.call(cast(Any, fn), *args, name=_DAGCLASS_CALL_NODE_NAME, **kwargs)
     dag.commit(result)
 
 

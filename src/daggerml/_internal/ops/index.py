@@ -333,7 +333,13 @@ class IndexOps(BaseOps):
         value = self._normalize_codec_value(value, ctx=codec_ctx)
         return self._retry_index_publication(
             index_id,
-            lambda old_commit, txn: self._put_literal_retry(value, name=name, txn=txn, index_id=index_id, old_commit=old_commit),
+            lambda old_commit, txn: self._put_literal_retry(
+                value,
+                name=name,
+                txn=txn,
+                index_id=index_id,
+                old_commit=old_commit,
+            ),
         )
 
     @with_retry
@@ -385,6 +391,7 @@ class IndexOps(BaseOps):
             if branch_name is None:
                 break
             try:
+                assert branch_commit is not None
                 head_ops.update_branch_commit(branch_name, branch_commit, commit_ref)
                 break
             except DmlPointerConflictError as err:
@@ -447,8 +454,24 @@ class IndexOps(BaseOps):
         return value
 
     def _put_node(self, node: Node, txn, index_id: str, name: Optional[str] = None) -> Ref:
-        del txn
-        return self._retry_index_publication(index_id, lambda old_commit, retry_txn: self._put_node_retry(node, name, old_commit, retry_txn))
+        if txn is not None:
+            old_commit = HeadOps(_db=self._db).get_index_commit(index_id, txn=txn)
+            ctx = txn.get_commit_ctx(old_commit)
+            if ctx.dag is None:
+                raise DmlRepoError("Index commit has no DAG.")
+            node_ref = self._put_node_in_ctx(ctx, txn, node, name=name)
+            ctx.commit.modified = now()
+            txn.put(ctx.commit, to=old_commit)
+            return node_ref
+        return self._retry_index_publication(
+            index_id,
+            lambda old_commit, retry_txn: self._put_node_retry(
+                node,
+                name,
+                old_commit,
+                retry_txn,
+            ),
+        )
 
     def _create(
         self,
@@ -858,11 +881,19 @@ class IndexOps(BaseOps):
             if isinstance(x, list):
                 ys = [_put(v) for v in x]
                 if any(isinstance(v, Ref) and v.nss()[0] == "node" for v in ys):
-                    ys = [self._put_literal(v, txn, index_id, idx_ctx=idx_ctx) if v.nss()[0] != "node" else v for v in ys]
+                    ys = [
+                        self._put_literal(v, txn, index_id, idx_ctx=idx_ctx)
+                        if v.nss()[0] != "node"
+                        else v
+                        for v in ys
+                    ]
                     fn_uri = txn.put(Uri("daggerml:list"))
                     fn_kwargs = txn.put(DictDatum(data={}))
                     fn = self._put_literal(
-                        RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""), txn, index_id, idx_ctx=idx_ctx
+                        RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""),
+                        txn,
+                        index_id,
+                        idx_ctx=idx_ctx,
                     )
                     argv_refs = [fn, *ys]
                     argv_ref = self._prepare_fn(index_id, argv_refs, {}, txn, ctx=idx_ctx)
@@ -880,11 +911,19 @@ class IndexOps(BaseOps):
                 ys = {k: _put(v) for k, v in x.items()}
                 if any(isinstance(v, Ref) and v.nss()[0] == "node" for v in ys.values()):
                     yks = [self._put_literal(k, txn, index_id, idx_ctx=idx_ctx) for k in ys.keys()]
-                    yvs = [self._put_literal(v, txn, index_id, idx_ctx=idx_ctx) if v.nss()[0] != "node" else v for v in ys.values()]
+                    yvs = [
+                        self._put_literal(v, txn, index_id, idx_ctx=idx_ctx)
+                        if v.nss()[0] != "node"
+                        else v
+                        for v in ys.values()
+                    ]
                     fn_uri = txn.put(Uri("daggerml:dict"))
                     fn_kwargs = txn.put(DictDatum(data={}))
                     fn = self._put_literal(
-                        RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""), txn, index_id, idx_ctx=idx_ctx
+                        RunnableDatum(target=fn_uri, sub=None, kwargs=fn_kwargs, adapter=""),
+                        txn,
+                        index_id,
+                        idx_ctx=idx_ctx,
                     )
                     argv_refs = [fn, *unnest(zip(yks, yvs, strict=True))]
                     argv_ref = self._prepare_fn(index_id, argv_refs, {}, txn, ctx=idx_ctx)
@@ -916,7 +955,14 @@ class IndexOps(BaseOps):
         idx_ctx.commit.dag = txn.put(idx_ctx.dag)
         return node_ref
 
-    def _put_literal_retry(self, value: Any, txn, index_id: str, old_commit: Ref, name: Optional[str] = None) -> tuple[Ref, Ref]:
+    def _put_literal_retry(
+        self,
+        value: Any,
+        txn,
+        index_id: str,
+        old_commit: Ref,
+        name: Optional[str] = None,
+    ) -> tuple[Ref, Ref]:
         idx_ctx = txn.get_commit_ctx(old_commit)
         node_ref = self._put_literal(value, txn, index_id, name=name, idx_ctx=idx_ctx)
         idx_ctx.commit.modified = now()
@@ -953,6 +999,19 @@ class IndexOps(BaseOps):
     def _store_scratch_value(self, value: Any, txn) -> Ref:
         if isinstance(value, Datum):
             return txn.put(value)
+        if isinstance(value, Runnable):
+            target_ref = self._store_scratch_value(value.target, txn)
+            if target_ref.ns() != "datum-uri":
+                raise DmlRepoError("Runnable target must resolve to a Uri datum.")
+            sub_ref = None
+            if value.sub is not None:
+                sub_ref = self._store_scratch_value(value.sub, txn)
+                if sub_ref.ns() != "datum-runnable":
+                    raise DmlRepoError("Runnable sub must resolve to a Runnable datum.")
+            kwargs_ref = self._store_scratch_value(value.kwargs, txn)
+            if kwargs_ref.ns() != "datum-dict":
+                raise DmlRepoError("Runnable kwargs must resolve to a Dict datum.")
+            return txn.put(RunnableDatum(target=target_ref, sub=sub_ref, kwargs=kwargs_ref, adapter=value.adapter))
         if isinstance(value, set):
             raise DmlRepoError("Set literals are not supported.")
         if isinstance(value, tuple):

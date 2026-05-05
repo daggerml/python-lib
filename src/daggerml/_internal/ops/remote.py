@@ -527,7 +527,20 @@ class RemoteOps(BaseOps):
         """
         self.client.delete_object(Bucket=self.bucket, Key=self._ref_key(ref_path))
 
-    def _local_put_head(self, remote_name: str, ref_path: str, commit_id: str) -> None:
+    def _local_put_head(
+        self,
+        txn_or_remote_name,
+        remote_name_or_ref_path: str,
+        ref_path_or_commit_id: str,
+        commit_id: str | None = None,
+    ) -> None:
+        if commit_id is None:
+            remote_name = txn_or_remote_name
+            ref_path = remote_name_or_ref_path
+            commit_id = ref_path_or_commit_id
+        else:
+            remote_name = remote_name_or_ref_path
+            ref_path = ref_path_or_commit_id
         branch = f"{remote_name}/{ref_path}"
         self._local_put_tracking_branch(branch, Ref(f"commit:{commit_id}"))
 

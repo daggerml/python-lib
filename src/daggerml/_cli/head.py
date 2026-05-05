@@ -55,7 +55,11 @@ def execute_head_create(head_ops, args) -> Any:
     """Execute head create command, return JSON-serializable result."""
     from_commit = None
     if args.from_head:
-        from_commit = parse_ref(args.from_head) if args.from_head.startswith("commit:") else head_ops.get_branch_commit(args.from_head)
+        from_commit = (
+            parse_ref(args.from_head)
+            if args.from_head.startswith("commit:")
+            else head_ops.get_branch_commit(args.from_head)
+        )
     result = head_ops.create_branch(args.branch_name, from_commit)
     return {
         "branch": result,
