@@ -83,7 +83,7 @@ class TestExecuteInit:
                 repo=None,
                 owner=None,
                 branch=None,
-                project_uri="dml://alice/demo#main",
+                project_uri="dml://alice/demo",
                 remote_uri="s3://test-bucket/test-prefix",
                 no_hooks=True,
             )
@@ -98,7 +98,7 @@ class TestExecuteInit:
             repo=None,
             owner=None,
             branch=None,
-            project_uri="dml://alice/demo#main",
+            project_uri="dml://alice/demo",
             remote_uri="s3://test-bucket/test-prefix",
             no_hooks=True,
         )
@@ -179,7 +179,7 @@ class TestExecuteInit:
                 repo=None,
                 owner=None,
                 branch=None,
-                project_uri="dml://alice/demo#main",
+                project_uri="dml://alice/demo",
                 remote_uri="",
                 no_hooks=True,
             )
@@ -191,7 +191,7 @@ class TestExecuteInit:
             root = Path(temp_dir)
             dml = root / ".dml"
             dml.mkdir(parents=True)
-            (dml / "config.toml").write_text('[project]\nuri = "dml://alice/demo#main"\n[remote]\nuri = "s3://bucket/prefix"\n')
+            (dml / "config.toml").write_text('[project]\nuri = "dml://alice/demo"\n[remote]\nuri = "s3://bucket/prefix"\n')
             monkeypatch.chdir(temp_dir)
             args = Namespace(
                 name="demo",

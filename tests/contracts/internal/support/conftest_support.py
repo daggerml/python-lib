@@ -164,12 +164,16 @@ def integration_remote_ops(temp_bo, aws_server):
 def temp_db_fn():
     """Function-scoped fixture providing a temporary DmlDbEnv for integration tests."""
     with tempfile.TemporaryDirectory() as temp_dir:
+        db_env = None
         try:
-            db_env = TmpEnv.create(temp_dir, namespaces=sorted(NAMESPACES))
+            db_path = Path(temp_dir) / ".dml" / "db"
+            db_path.mkdir(parents=True, exist_ok=True)
+            db_env = TmpEnv.create(str(db_path), namespaces=sorted(NAMESPACES))
             yield db_env
         finally:
-            db_env.clear_all()
-            db_env.close()
+            if db_env is not None:
+                db_env.clear_all()
+                db_env.close()
 
 
 @pytest.fixture
@@ -243,6 +247,7 @@ class FakeDb:
 
     kv: Dict[str, Any] = field(default_factory=dict)
     namespaces: list = field(default_factory=lambda: sorted(NAMESPACES))
+    path: str = "/tmp/daggerml-fake/.dml/db"
 
     @contextmanager
     def tx(self, readonly=False):
@@ -259,7 +264,10 @@ class TmpEnv(DmlDbEnv):
                     for ns in NAMESPACES:
                         for obj, _ in txn.iter(ns):
                             txn.delete(obj)
-                shutil.rmtree(Path(self.path) / ".dml", ignore_errors=True)
+                db_path = Path(self.path)
+                repo_root = db_path.parent.parent if db_path.name == "db" and db_path.parent.name == ".dml" else db_path
+                shutil.rmtree(repo_root / ".dml", ignore_errors=True)
+                db_path.mkdir(parents=True, exist_ok=True)
                 return
             except DmlDbMapFullError:
                 self.resize(self.get_size() * 2)
@@ -269,12 +277,16 @@ class TmpEnv(DmlDbEnv):
 def temp_db():
     """Provides a temporary DmlDbEnv for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
+        db_env = None
         try:
-            db_env = TmpEnv.create(temp_dir, namespaces=sorted(NAMESPACES))
+            db_path = Path(temp_dir) / ".dml" / "db"
+            db_path.mkdir(parents=True, exist_ok=True)
+            db_env = TmpEnv.create(str(db_path), namespaces=sorted(NAMESPACES))
             yield db_env
         finally:
-            db_env.clear_all()
-            db_env.close()
+            if db_env is not None:
+                db_env.clear_all()
+                db_env.close()
 
 
 @pytest.fixture(scope="class")

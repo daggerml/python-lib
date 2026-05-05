@@ -19,7 +19,10 @@ class TmpEnv(DmlDbEnv):
                     for ns in NAMESPACES:
                         for obj, _ in txn.iter(ns):
                             txn.delete(obj)
-                shutil.rmtree(Path(self.path) / ".dml", ignore_errors=True)
+                db_path = Path(self.path)
+                repo_root = db_path.parent.parent if db_path.name == "db" and db_path.parent.name == ".dml" else db_path
+                shutil.rmtree(repo_root / ".dml", ignore_errors=True)
+                db_path.mkdir(parents=True, exist_ok=True)
                 return
             except DmlDbMapFullError:
                 self.resize(self.get_size() * 2)
@@ -28,7 +31,9 @@ class TmpEnv(DmlDbEnv):
 @pytest.fixture(scope="module")
 def temp_bo():
     with tempfile.TemporaryDirectory() as temp_dir:
-        db_env = TmpEnv.create(temp_dir, namespaces=sorted(NAMESPACES))
+        db_path = Path(temp_dir) / ".dml" / "db"
+        db_path.mkdir(parents=True, exist_ok=True)
+        db_env = TmpEnv.create(str(db_path), namespaces=sorted(NAMESPACES))
         try:
             yield BaseOps(db_env)
         finally:

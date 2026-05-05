@@ -31,7 +31,6 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     cfg = DmlProjectConfig(
         name="demo",
         owner="alice",
-        branch="main",
         remote_uri="s3://bucket/team/dml",
     )
     db_path = init_project_layout(tmp_path, cfg)
@@ -42,6 +41,7 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     assert loaded.name == "demo"
     assert loaded.owner == "alice"
     assert loaded.remote_uri == "s3://bucket/team/dml"
+    assert loaded.project_uri == "dml://alice/demo"
 
 
 def test_head_advance_and_revision_resolution(temp_bo_fn):

@@ -10,10 +10,18 @@ from uuid import uuid4
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
-from daggerml._internal.revision_uri import parse_revision_uri
+from daggerml._internal.revision_uri import parse_revision_uri, validate_ref_name, validate_segment
 from daggerml._internal.types import Commit, DmlPointerConflictError, DmlRepoError, Tree
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9\-\*\|_]+$")
+_HEAD_ATTACHED_PREFIX = "ref: refs/local/heads/"
+
+
+@dataclass(frozen=True)
+class HeadState:
+    mode: str
+    commit: Ref
+    branch: str | None = None
 
 
 @dataclass
@@ -79,37 +87,80 @@ class HeadOps(BaseOps):
 
     def list_pointer_roots(self, *, txn=None) -> list[Ref]:
         del txn
-        return [
+        roots = [
             *[self._get_pointer_commit(self._local_branch_path(branch_name)) for branch_name in self.list_branches()],
             *[self._get_pointer_commit(self._index_path(index_id)) for index_id in self.list_indexes()],
         ]
+        try:
+            return [self.resolve_head_commit(), *roots]
+        except DmlRepoError:
+            return roots
 
     def update_index_commit(self, index_id: str, old_commit: Ref, new_commit: Ref, *, txn=None) -> Ref:
         del txn
         return self._update_pointer_commit(self._index_path(index_id), old_commit, new_commit)
 
+    def get_head_state(self, *, txn=None) -> HeadState:
+        payload = self._read_head_payload()
+        if payload.startswith(_HEAD_ATTACHED_PREFIX):
+            branch = self._validate_branch_name(payload[len(_HEAD_ATTACHED_PREFIX) :])
+            commit = self.get_branch_commit(branch, txn=txn)
+            return HeadState(mode="attached", branch=branch, commit=commit)
+        if payload.startswith("commit:"):
+            commit = Ref(payload)
+            if commit.ns() != "commit":
+                raise DmlRepoError(f"Invalid HEAD payload in {self._head_path()}")
+            return HeadState(mode="detached", branch=None, commit=commit)
+        raise DmlRepoError(f"Invalid HEAD payload in {self._head_path()}")
+
+    def resolve_head_commit(self, *, txn=None) -> Ref:
+        return self.get_head_state(txn=txn).commit
+
+    def get_attached_head_branch(self, *, txn=None) -> str | None:
+        state = self.get_head_state(txn=txn)
+        return state.branch
+
+    def require_attached_head_branch(self, *, txn=None) -> str:
+        branch = self.get_attached_head_branch(txn=txn)
+        if branch is None:
+            raise DmlRepoError("Current checkout is detached; attach HEAD or pass an explicit branch")
+        return branch
+
+    def write_attached_head(self, branch_name: str, *, txn=None) -> str:
+        del txn
+        branch = self._validate_branch_name(branch_name)
+        self._write_head_payload(f"{_HEAD_ATTACHED_PREFIX}{branch}")
+        return branch
+
+    def write_detached_head(self, commit_ref: Ref, *, txn=None) -> Ref:
+        del txn
+        if commit_ref.ns() != "commit":
+            raise DmlRepoError(f"Expected commit ref, got: {commit_ref}")
+        self._write_head_payload(commit_ref.to)
+        return commit_ref
+
     def _branch_path(self, branch_name: str) -> Path:
         if branch_name.startswith("dml://"):
             parsed = parse_revision_uri(branch_name, require_identifier=True)
             return self._remote_ref_path(parsed.owner, parsed.project, parsed.branch, parsed.tag)
-        if "://" in branch_name or "/" in branch_name:
+        if "://" in branch_name:
             return self._external_tracking_path(branch_name)
         return self._local_branch_path(branch_name)
 
     def _local_branch_path(self, branch_name: str) -> Path:
-        return self._local_heads_dir() / self._validate_identifier("branch", branch_name)
+        return self._local_heads_dir() / self._validate_branch_name(branch_name)
 
     def _index_path(self, index_id: str) -> Path:
         return self._local_indexes_dir() / self._validate_index_id(index_id)
 
     def _remote_ref_path(self, owner: str, project: str, branch: str | None, tag: str | None) -> Path:
         remote_root = self._refs_root() / "remote"
-        owner_name = self._validate_identifier("owner", owner)
-        project_name = self._validate_identifier("project", project)
+        owner_name = self._validate_segment("owner", owner)
+        project_name = self._validate_segment("project", project)
         if branch is not None:
-            return remote_root / owner_name / project_name / "heads" / self._validate_identifier("branch", branch)
+            return remote_root / owner_name / project_name / "heads" / self._validate_branch_name(branch)
         if tag is not None:
-            return remote_root / owner_name / project_name / "tags" / self._validate_identifier("tag", tag)
+            return remote_root / owner_name / project_name / "tags" / self._validate_branch_name(tag)
         raise DmlRepoError("Remote tracking refs require a branch or tag")
 
     def _external_tracking_path(self, branch_name: str) -> Path:
@@ -118,20 +169,18 @@ class HeadOps(BaseOps):
 
     def _project_home(self) -> Path:
         db_path_value = getattr(self._db, "path", None)
-        if not db_path_value:
-            fallback = getattr(self, "_fallback_project_home", None)
-            if fallback is None:
-                fallback = Path(tempfile.gettempdir()) / "daggerml-headops" / str(id(self._db))
-                fallback.mkdir(parents=True, exist_ok=True)
-                self._fallback_project_home = fallback
-            return Path(fallback)
+        if not db_path_value or not isinstance(db_path_value, (str, os.PathLike)):
+            raise DmlRepoError("Cannot resolve project home from database path")
         db_path = Path(db_path_value).resolve()
         if db_path.name == "db" and db_path.parent.name == ".dml":
             return db_path.parent.parent
-        return db_path
+        raise DmlRepoError(f"Cannot resolve project home from database path: {db_path}")
 
     def _refs_root(self) -> Path:
         return self._project_home() / ".dml" / "refs"
+
+    def _head_path(self) -> Path:
+        return self._project_home() / ".dml" / "HEAD"
 
     def _local_heads_dir(self) -> Path:
         return self._refs_root() / "local" / "heads"
@@ -146,6 +195,20 @@ class HeadOps(BaseOps):
         return value
 
     @staticmethod
+    def _validate_segment(label: str, value: str) -> str:
+        try:
+            return validate_segment(label, value)
+        except ValueError as exc:
+            raise DmlRepoError(str(exc)) from exc
+
+    @staticmethod
+    def _validate_branch_name(value: str) -> str:
+        try:
+            return validate_ref_name("branch", value)
+        except ValueError as exc:
+            raise DmlRepoError(str(exc)) from exc
+
+    @staticmethod
     def _validate_index_id(index_id: str) -> str:
         if not isinstance(index_id, str) or not index_id or "/" in index_id or "\\" in index_id:
             raise DmlRepoError(f"Invalid index id: {index_id!r}")
@@ -157,7 +220,28 @@ class HeadOps(BaseOps):
     def _list_ref_names(ref_dir: Path) -> list[str]:
         if not ref_dir.exists():
             return []
-        return sorted(entry.name for entry in ref_dir.iterdir() if entry.is_file() and not entry.name.endswith(".lock"))
+        return sorted(
+            str(entry.relative_to(ref_dir))
+            for entry in ref_dir.rglob("*")
+            if entry.is_file() and not entry.name.endswith(".lock")
+        )
+
+    def _read_head_payload(self) -> str:
+        head_path = self._head_path()
+        if not head_path.exists():
+            raise DmlRepoError(f"Pointer does not exist: {head_path}")
+        payload = head_path.read_text(encoding="utf-8").strip()
+        if not payload:
+            raise DmlRepoError(f"Invalid HEAD payload in {head_path}")
+        return payload
+
+    def _write_head_payload(self, payload: str) -> None:
+        head_path = self._head_path()
+        head_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=head_path.parent, delete=False) as tmp:
+            tmp.write(payload)
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, head_path)
 
     def _create_pointer(self, pointer_path: Path, commit_ref: Ref) -> None:
         self._mutate_pointer(pointer_path, expected_old_commit=None, new_commit=commit_ref, create_only=True)

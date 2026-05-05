@@ -14,7 +14,7 @@ def setup_config_parser(parser: ArgumentParser) -> None:
         description="Get or set supported DML configuration values.",
         examples=[
             "dml config project.uri",
-            "dml config project.uri dml://alice/demo#main",
+            "dml config project.uri dml://alice/demo",
             "dml config --global user alice@example",
             "dml config --global hooks.post-init 'echo hi' 'echo done'",
         ],

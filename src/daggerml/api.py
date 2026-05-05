@@ -94,7 +94,6 @@ def status() -> dict[str, object]:
             explicit={
                 "project.home": dml.repo,
                 "user": dml.user,
-                "project.branch": dml.branch,
             }
         )
     )
@@ -107,7 +106,7 @@ def status() -> dict[str, object]:
         "config": cfg.to_dict(),
         "runtime": {
             "ops_initialized": dml._ops is not None,
-            "branch": dml.branch,
+            "branch_override": dml.branch,
         },
     }
 
@@ -131,13 +130,11 @@ class Dml:
             explicit={
                 "project.home": self.repo,
                 "user": self.user,
-                "project.branch": self.branch,
             }
         )
         self._config = resolved
         self.repo = resolved.project.home
         self.user = resolved.user
-        self.branch = resolved.branch
 
     @property
     def ops(self) -> DmlOps:
@@ -192,6 +189,17 @@ class Dml:
             tmpdir.cleanup()
         self.tmpdirs.clear()
 
+    def _runtime_branch(self) -> str | None:
+        if self.branch is not None:
+            return self.branch
+        if self._ops is None:
+            if not self.repo:
+                return None
+            remote_root = self._config.remote.uri if self._config is not None else ""
+            with DmlOps.open(self.repo, remote_root=remote_root) as ops:
+                return ops.head().get_attached_head_branch()
+        return self.ops.head().get_attached_head_branch()
+
     @classmethod
     def temporary(cls, repo="test", user="user", branch="main") -> "Dml":
         """Create a temporary Dml instance with a temporary repository.
@@ -219,8 +227,9 @@ class Dml:
             if branch != DEFAULT_HEAD:
                 head_ops = ops.head()
                 head_ops.create_branch(branch, head_ops.get_branch_commit(DEFAULT_HEAD))
+                head_ops.write_attached_head(branch)
 
-        return cls(repo=repo_path, user=user, branch=branch, tmpdirs={"repo": tmpdir})
+        return cls(repo=repo_path, user=user, branch=None, tmpdirs={"repo": tmpdir})
 
     def new(self, name="", message="", argv_ptr=None) -> "Dag":
         """Create a new DAG.
@@ -241,7 +250,11 @@ class Dml:
         if argv_ptr is not None:
             index_id = self.ops.index().create(argv_ptr=argv_ptr)
         else:
-            index_id = self.ops.index().create(head=self.branch)
+            runtime_branch = self._runtime_branch()
+            if runtime_branch is not None:
+                index_id = self.ops.index().create(head=runtime_branch)
+            else:
+                index_id = self.ops.index().create(commit=self.ops.head().resolve_head_commit())
 
         return Dag(dml=self, token=index_id, ref=None, name=name, message=message)
 
@@ -266,7 +279,11 @@ class Dml:
         else:
             dag_name = name
 
-        commit_ref = self.ops.head().get_branch_commit(cast(str, self.branch))
+        runtime_branch = self._runtime_branch()
+        if runtime_branch is not None:
+            commit_ref = self.ops.head().get_branch_commit(cast(str, runtime_branch))
+        else:
+            commit_ref = self.ops.head().resolve_head_commit()
         dag_ref = self.ops.commit().get_dag(commit_ref, str(dag_name))
 
         if dag_ref is None:
@@ -591,7 +608,11 @@ class Dag:
         # For Errors, pass directly to _commit (don't try to store as literal)
         if isinstance(value, Error):
             commit_ref = self.dml.index.commit(
-                self._require_index_ref(), value, head=self.dml.branch, message=self.message, dag_name=self.name
+                self._require_index_ref(),
+                value,
+                head=self.dml._runtime_branch(),
+                message=self.message,
+                dag_name=self.name,
             )
         else:
             # For other values, ensure it's a Node and get its ref
@@ -600,7 +621,7 @@ class Dag:
             commit_ref = self.dml.index.commit(
                 self._require_index_ref(),
                 value_ref,
-                head=self.dml.branch,
+                head=self.dml._runtime_branch(),
                 message=self.message,
                 dag_name=self.name,
             )

@@ -32,13 +32,13 @@ def test_default_runtime_status_DRT_STS_001_reports_implicit_default_creation_so
 
     cfg = _config_info(status)
     assert set(cfg.keys()) == {"project", "db", "remote", "user", "default_branch", "hooks", "config_home"}
-    assert set(cfg["project"].keys()) == {"home", "uri", "branch"}
+    assert set(cfg["project"].keys()) == {"home", "uri"}
     assert set(cfg["db"].keys()) == {"path"}
     assert set(cfg["remote"].keys()) == {"uri", "fetch_workers"}
 
     runtime = _runtime_info(status)
     assert runtime["ops_initialized"] is False
-    assert isinstance(runtime["branch"], str)
+    assert runtime["branch_override"] is None
 
 
 def test_default_runtime_status_DRT_STS_002_get_default_dml_is_cached_process_default():
@@ -77,3 +77,9 @@ def test_default_runtime_status_DRT_STS_004_top_level_new_and_load_delegate_to_d
         loaded = dml.load("d0")
         assert loaded.result.value() == "ok"
         assert loaded["n0"].value() == 42
+
+
+def test_temporary_runtime_uses_head_state_instead_of_branch_override():
+    with dml.Dml.temporary(repo="temp-head", branch="feature") as runtime:
+        assert runtime.branch is None
+        assert runtime.head.get_attached_head_branch() == "feature"

@@ -30,10 +30,11 @@ This document defines the `DmlOps` facade surface and subsystem accessor contrac
 
 - `self._db is None` means subsystem access is invalid and raises `RuntimeError`.
 - every ops instance created by `DmlOps` references the same DB handle.
-- `create(...)` initializes the default head through `HeadOps`.
+- `create(...)` initializes the default branch and attaches `.dml/HEAD` through `HeadOps`.
 - `remote_root` is always a configured remote-root string when a `DmlOps` instance exists.
 - `cache()` forwards remote-root context without redefining cache semantics.
 - `remote(...)` forwards remote context without redefining remote semantics.
+- mutable project workflows default their destination branch from attached `.dml/HEAD` when the caller does not pass an explicit branch.
 - runtime callers are responsible for mapping config key `remote.root` onto `DmlOps.remote_root` consistently with [../../configuration.md](../../configuration.md).
 
 ## Non-goals

@@ -12,7 +12,6 @@ from urllib.parse import urlsplit
 import tomllib
 
 from daggerml._internal.revision_uri import (
-    RevisionUri,
     canonicalize_revision_uri,
     parse_revision_uri,
     stringify_revision_uri,
@@ -259,12 +258,6 @@ class DmlProjectSettings:
     home: str | None = None
     uri: str | None = None
 
-    @property
-    def branch(self) -> str | None:
-        if not self.uri:
-            return None
-        return parse_dml_project_uri(self.uri, require_identifier=True).branch
-
 
 @dataclass(frozen=True)
 class DmlDbSettings:
@@ -295,7 +288,6 @@ class DmlConfig:
     default_branch: str = "main"
     hooks: DmlHookSettings = field(default_factory=DmlHookSettings)
     config_home: str = ""
-    branch_name: str | None = None
 
     @property
     def repo(self) -> str | None:
@@ -303,7 +295,7 @@ class DmlConfig:
 
     @property
     def branch(self) -> str:
-        return self.project.branch or self.branch_name or self.default_branch
+        return self.default_branch
 
     @property
     def db_path(self) -> str | None:
@@ -352,29 +344,11 @@ class DmlConfig:
         _validate_ref_name("branch", default_branch)
 
         project_uri: str | None = None
-        branch_override: str | None = None
-        raw_project_branch = merged.get("project.branch")
-        if raw_project_branch is not None:
-            branch_override = str(raw_project_branch)
-            _validate_ref_name("branch", branch_override)
         raw_project_uri = merged.get("project.uri")
         if raw_project_uri is not None:
             if not isinstance(raw_project_uri, str):
                 raise ValueError("project.uri must be a string")
-            parsed_project = parse_revision_uri(
-                raw_project_uri,
-                default_branch=default_branch,
-                require_identifier=False,
-            )
-            if branch_override is not None:
-                if parsed_project.tag is not None:
-                    raise ValueError("project.branch cannot be combined with tag-based project.uri")
-                parsed_project = RevisionUri(parsed_project.owner, parsed_project.project, branch=branch_override)
-            project_uri = normalize_project_uri(
-                stringify_revision_uri(parsed_project),
-                default_branch=default_branch,
-                require_branch=False,
-            )
+            project_uri = validate_dml_project_uri(raw_project_uri)
 
         db_path = _coerce_path(merged.get("db.path"))
         if db_path is None and project_home and scope == _PROJECT_SCOPE:
@@ -406,7 +380,6 @@ class DmlConfig:
             default_branch=default_branch,
             hooks=hooks,
             config_home=config_home,
-            branch_name=branch_override,
         )
 
     def envvars(self) -> dict[str, object]:
@@ -427,7 +400,6 @@ class DmlConfig:
             "project": {
                 "home": self.project.home,
                 "uri": self.project.uri,
-                "branch": self.branch,
             },
             "db": {
                 "path": self.db.path,
@@ -493,8 +465,6 @@ class DmlGlobalConfig:
 class DmlProjectConfig:
     name: str
     owner: str
-    branch: str = "main"
-    tag: str | None = None
     remote_uri: str = ""
 
     @property
@@ -503,17 +473,11 @@ class DmlProjectConfig:
 
     @property
     def project_uri(self) -> str:
-        if self.tag is not None:
-            return normalize_project_uri(f"{self.uri}@{self.tag}", require_branch=False)
-        return normalize_project_uri(f"{self.uri}#{self.branch}", require_branch=True)
+        return self.uri
 
     def __post_init__(self) -> None:
         _validate_name("project name", self.name)
         _validate_name("project owner", self.owner)
-        if self.tag is not None:
-            _validate_ref_name("tag", self.tag)
-        else:
-            _validate_branch(self.branch)
         if self.remote_uri:
             validate_remote_uri(self.remote_uri)
 
@@ -522,21 +486,8 @@ class DmlProjectConfig:
         resolved = DmlConfig.resolve(explicit={"project.home": str(project_dir)}, env={})
         if not resolved.project.uri:
             raise ValueError("Project config must define project.uri")
-        parsed = parse_revision_uri(
-            resolved.project.uri,
-            default_branch=resolved.branch,
-            require_identifier=True,
-        )
-        if parsed.tag is not None:
-            return cls(
-                name=parsed.project,
-                owner=parsed.owner,
-                branch=resolved.branch,
-                tag=parsed.tag,
-                remote_uri=resolved.remote.uri,
-            )
-        assert parsed.branch is not None
-        return cls(name=parsed.project, owner=parsed.owner, branch=parsed.branch, remote_uri=resolved.remote.uri)
+        parsed = parse_dml_project_uri(resolved.project.uri, require_identifier=False)
+        return cls(name=parsed.project, owner=parsed.owner, remote_uri=resolved.remote.uri)
 
     def save(self, project_dir: Path | str = ".") -> None:
         dml_dir = Path(project_dir) / ".dml"

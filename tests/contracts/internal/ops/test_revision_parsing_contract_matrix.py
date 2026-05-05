@@ -59,12 +59,13 @@ def test_uri_canonicalization_rejects_oversized_identifier(remote_ops):
 
 
 def _seed_project_commit_history(temp_bo_fn, tmp_path: Path) -> tuple[CommitOps, Ref, Ref]:
-    project = DmlProjectConfig(name="demo", owner="alice", branch="main", remote_uri="s3://bucket/prefix")
+    project = DmlProjectConfig(name="demo", owner="alice", remote_uri="s3://bucket/prefix")
     init_project_layout(tmp_path, project)
     head_ops = HeadOps(_db=temp_bo_fn._db)
     commit_ops = CommitOps(_db=temp_bo_fn._db)
 
     main_head = head_ops.create_branch("main")
+    head_ops.write_attached_head("main")
     initial = head_ops.get_branch_commit(main_head)
     with commit_ops._tx(readonly=False) as txn:
         tree = txn.get(txn.get(initial).tree)
@@ -135,7 +136,7 @@ def test_revision_form_classification_matrix(
     del contract_id, label
     commit_ops, initial, next_commit = _seed_project_commit_history(temp_bo_fn, tmp_path)
     revision = revision_builder(initial, next_commit)
-    resolved = commit_ops.resolve_revision(revision, current_branch="main", project_dir=str(tmp_path))
+    resolved = commit_ops.resolve_revision(revision, project_dir=str(tmp_path))
     assert resolved.kind == expected_kind
     assert resolved.commit == expected_commit(initial, next_commit)
 
@@ -144,3 +145,13 @@ def test_revision_rejects_unfetched_remote_uri_boundary(temp_bo_fn, tmp_path: Pa
     commit_ops, _initial, _next_commit = _seed_project_commit_history(temp_bo_fn, tmp_path)
     with pytest.raises(DmlRepoError, match="cannot be resolved locally"):
         commit_ops.resolve_revision("dml://alice/demo#main", project_dir=str(tmp_path))
+
+
+def test_detached_head_ancestry_resolves_from_head_file(temp_bo_fn, tmp_path: Path):
+    commit_ops, initial, next_commit = _seed_project_commit_history(temp_bo_fn, tmp_path)
+    HeadOps(_db=temp_bo_fn._db).write_detached_head(next_commit)
+
+    resolved = commit_ops.resolve_revision("HEAD~1", project_dir=str(tmp_path))
+
+    assert resolved.kind == "commit"
+    assert resolved.commit == initial

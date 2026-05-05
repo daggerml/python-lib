@@ -25,7 +25,7 @@ def setup_project_alias_parser(parser: ArgumentParser, name: str) -> None:
         )
         parser.add_argument("revision")
     if name in {"pull", "merge", "revert", "push"}:
-        parser.add_argument("--branch", dest="branch_name", default="main")
+        parser.add_argument("--branch", dest="branch_name")
     if name in {"pull", "merge", "revert"}:
         parser.add_argument("--user", required=True)
     if name == "push":

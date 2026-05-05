@@ -13,7 +13,7 @@ def test_push_lifecycle_uses_configured_uri_and_optional_tag(tmp_path, aws_serve
     repo_dir.mkdir()
     init_project_layout(
         repo_dir,
-        DmlProjectConfig(name="demo", owner="alice", branch="main", remote_uri="s3://test-bucket/test-prefix"),
+        DmlProjectConfig(name="demo", owner="alice", remote_uri="s3://test-bucket/test-prefix"),
     )
 
     s3 = boto3.client("s3", endpoint_url=aws_server["endpoint"])

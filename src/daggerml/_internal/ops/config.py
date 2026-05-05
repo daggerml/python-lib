@@ -7,7 +7,7 @@ from typing import Any
 
 import tomllib
 
-from daggerml._internal.config import _validate_ref_name, normalize_project_uri, validate_remote_uri
+from daggerml._internal.config import _validate_ref_name, validate_dml_project_uri, validate_remote_uri
 from daggerml._internal.types import DmlRepoError
 
 SCOPE_GLOBAL = "global"
@@ -118,7 +118,7 @@ class ConfigOps:
             value = values[0]
 
         if key == "project.uri":
-            value = normalize_project_uri(str(value), require_branch=False)
+            value = validate_dml_project_uri(str(value))
         elif key == "remote.uri":
             value = validate_remote_uri(str(value))
         elif key == "default_branch":

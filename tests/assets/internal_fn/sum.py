@@ -1,6 +1,7 @@
 import json
 import sys
 import tempfile
+from pathlib import Path
 from typing import cast
 
 from daggerml._internal._db import DmlDbEnv
@@ -14,7 +15,9 @@ if __name__ == "__main__":
     argv_ptr = envelope["argv_ptr"]
     remote_root = remote["root"]
     with tempfile.TemporaryDirectory(prefix="dml-fn-") as tmpdir:
-        db = DmlDbEnv.create(tmpdir, namespaces=sorted(NAMESPACES))
+        db_path = Path(tmpdir) / ".dml" / "db"
+        db_path.mkdir(parents=True, exist_ok=True)
+        db = DmlDbEnv.create(str(db_path), namespaces=sorted(NAMESPACES))
         try:
             ops = IndexOps(db, remote_root=remote_root)
             index_ref = ops.create(argv_ptr=argv_ptr)

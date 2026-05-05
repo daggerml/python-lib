@@ -40,7 +40,9 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
     with tempfile.TemporaryDirectory(prefix="dml-fn-") as tmprepo:
-        db = DmlDbEnv.create(tmprepo, namespaces=sorted(NAMESPACES))
+        db_path = Path(tmprepo) / ".dml" / "db"
+        db_path.mkdir(parents=True, exist_ok=True)
+        db = DmlDbEnv.create(str(db_path), namespaces=sorted(NAMESPACES))
         try:
             _init_repo(db)
             ops = IndexOps(db, remote_root=remote_root)

@@ -21,7 +21,9 @@ from daggerml._internal.config import (
     DmlConfig,
     DmlProjectConfig,
     init_project_layout,
+    parse_dml_project_uri,
     run_project_hooks,
+    validate_dml_project_uri,
 )
 from daggerml._internal.revision_uri import RevisionUri, parse_revision_uri, stringify_revision_uri
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
@@ -179,20 +181,30 @@ class DmlOps:
     def _load_project_config(self) -> DmlProjectConfig:
         return DmlProjectConfig.load(self.path)
 
+    def _default_branch(self) -> str:
+        return DmlConfig.resolve(explicit={"project.home": self.path}).default_branch
+
+    def _attached_head_branch(self) -> str | None:
+        return self.head().get_attached_head_branch()
+
+    def _mutable_branch(self, branch: str | None) -> str:
+        return branch or self.head().require_attached_head_branch()
+
+    def _default_project_branch(self, branch: str | None) -> str:
+        return branch or self._attached_head_branch() or self._default_branch()
+
     def _project_remote_uri(self, remote_or_uri: str, branch: str | None) -> str:
         project = self._load_project_config()
         if remote_or_uri.startswith("dml://"):
             if "#" in remote_or_uri or "@" in remote_or_uri:
                 return remote_or_uri
-            selector = parse_revision_uri(remote_or_uri, default_branch=branch or project.branch)
+            selector = parse_revision_uri(remote_or_uri, default_branch=branch or self._default_project_branch(None))
             return stringify_revision_uri(selector)
         if remote_or_uri != "origin":
             raise DmlRepoError(f"Unknown remote: {remote_or_uri}")
-        if project.tag is not None:
-            if branch is not None and branch != project.branch:
-                raise DmlRepoError("Cannot override branch when project.uri is tag-based")
-            return stringify_revision_uri(RevisionUri(project.owner, project.name, tag=project.tag))
-        return stringify_revision_uri(RevisionUri(project.owner, project.name, branch=branch or project.branch))
+        return stringify_revision_uri(
+            RevisionUri(project.owner, project.name, branch=branch or self._default_project_branch(None))
+        )
 
     def fetch_project(self, remote_or_uri: str, branch: str | None, *, s3_client: Any | None = None) -> Ref:
         client = s3_client or self._create_s3_client()
@@ -203,14 +215,15 @@ class DmlOps:
         remote_or_uri: str,
         remote_branch: str | None,
         *,
-        branch: str,
+        branch: str | None,
         user: str,
         s3_client: Any | None = None,
     ) -> Ref:
         client = s3_client or self._create_s3_client()
+        target_branch = self._mutable_branch(branch)
         return self.remote(client=client).pull_uri_into_branch(
-            self._project_remote_uri(remote_or_uri, remote_branch),
-            branch,
+            self._project_remote_uri(remote_or_uri, remote_branch or target_branch),
+            target_branch,
             user=user,
         )
 
@@ -218,22 +231,21 @@ class DmlOps:
         self,
         tag: str | None,
         *,
-        branch: str,
+        branch: str | None,
         create: bool,
         force: bool,
         s3_client: Any | None = None,
     ) -> str:
         project = self._load_project_config()
-        if not tag and project.tag is not None:
-            raise DmlRepoError("Project branch push requires a branch-based project.uri")
+        source_branch = self._mutable_branch(branch)
         client = s3_client or self._create_s3_client()
         remote = self.remote(client=client)
         if tag:
             tag_uri = stringify_revision_uri(RevisionUri(project.owner, project.name, tag=tag))
-            return remote.push_project_tag(tag_uri, branch)
+            return remote.push_project_tag(tag_uri, source_branch)
         return remote.push_project_branch(
-            stringify_revision_uri(RevisionUri(project.owner, project.name, branch=project.branch)),
-            branch,
+            stringify_revision_uri(RevisionUri(project.owner, project.name, branch=source_branch)),
+            source_branch,
             create=create,
             force=force,
         )
@@ -248,16 +260,13 @@ class DmlOps:
         branch: str | None = None,
         user: str | None = None,
     ) -> Ref:
-        project = self._load_project_config()
-        current_branch = branch or project.branch
         effective_user = user or DmlConfig.resolve(explicit={"project.home": self.path}).user
         if not effective_user:
             raise DmlRepoError("user is required for dag checkout; pass --user or set DML_USER/config user.name")
-        target_branch = branch or current_branch
+        target_branch = self._mutable_branch(branch)
         commit_ops = self.commit()
         source_commit = commit_ops.resolve_revision_ref(
             revision,
-            current_branch=current_branch,
             project_dir=self.path,
         )
         return commit_ops.checkout_dag(
@@ -270,19 +279,12 @@ class DmlOps:
         )
 
     def checkout_project(self, revision: str) -> dict[str, str | None]:
-        project = self._load_project_config()
         resolution = self.commit().resolve_revision(
             revision,
-            current_branch=project.branch,
             project_dir=self.path,
         )
         if resolution.kind == "branch" and resolution.branch is not None:
-            DmlProjectConfig(
-                name=project.name,
-                owner=project.owner,
-                branch=resolution.branch,
-                remote_uri=project.remote_uri,
-            ).save(self.path)
+            self.head().write_attached_head(resolution.branch)
             return {
                 "commit": str(resolution.commit),
                 "mode": "attached",
@@ -290,6 +292,7 @@ class DmlOps:
                 "target": resolution.branch,
                 "message": f"Checked out branch '{resolution.branch}' (attached)",
             }
+        self.head().write_detached_head(resolution.commit)
         return {
             "commit": str(resolution.commit),
             "mode": "detached",
@@ -298,15 +301,15 @@ class DmlOps:
             "message": f"Checked out {revision!r} in detached scratch mode",
         }
 
-    def merge_project(self, revision: str, branch: str, user: str) -> Ref:
+    def merge_project(self, revision: str, branch: str | None, user: str) -> Ref:
         commit_ops = self.commit()
         other = commit_ops.resolve_revision_ref(revision, project_dir=self.path)
-        return commit_ops.merge_into_head(branch, other, user)
+        return commit_ops.merge_into_head(self._mutable_branch(branch), other, user)
 
-    def revert_project(self, revision: str, branch: str, user: str) -> Ref:
+    def revert_project(self, revision: str, branch: str | None, user: str) -> Ref:
         commit_ops = self.commit()
         commit_ref = commit_ops.resolve_revision_ref(revision, project_dir=self.path)
-        return commit_ops.revert(branch, commit_ref, user)
+        return commit_ops.revert(self._mutable_branch(branch), commit_ref, user)
 
     @staticmethod
     def _db_path(path: str) -> str:
@@ -379,9 +382,9 @@ class DmlOps:
                     "user is required to derive project URI from NAME; set DML_USER or configure global user.name"
                 )
             owner_name = cls._default_owner(global_cfg.user)
-            project_uri = stringify_revision_uri(RevisionUri(owner_name, project_name, branch=branch_name))
+            project_uri = validate_dml_project_uri(f"dml://{owner_name}/{project_name}")
         elif not project_uri and not config_exists:
-            project_uri = stringify_revision_uri(RevisionUri(owner_name, project_name, branch=branch_name))
+            project_uri = validate_dml_project_uri(f"dml://{owner_name}/{project_name}")
         if remote_uri is None:
             remote_uri = global_cfg.remote.uri
 
@@ -415,18 +418,16 @@ class DmlOps:
                 project_uri_value = cfg.project.uri
                 if not project_uri_value:
                     raise DmlRepoError("project.uri is required for init")
-                project_ref = parse_revision_uri(project_uri_value, default_branch=cfg.branch, require_identifier=False)
+                project_ref = parse_dml_project_uri(project_uri_value, require_identifier=False)
                 layout_cfg = DmlProjectConfig(
                     name=project_ref.project,
                     owner=project_ref.owner,
-                    branch=project_ref.branch or cfg.branch,
-                    tag=project_ref.tag,
                     remote_uri=cfg.remote.uri,
                 )
             init_project_layout(root, layout_cfg)
 
         if not db_exists:
-            with cls.create(str(root), user=cfg.user, remote_root=cfg.remote.uri, branch=cfg.branch):
+            with cls.create(str(root), user=cfg.user, remote_root=cfg.remote.uri, branch=cfg.default_branch):
                 pass
 
         recovered_ref: str | None = None
@@ -436,7 +437,7 @@ class DmlOps:
             s3_client = cls._create_s3_client()
             with cls.open(str(root), remote_root=cfg.remote.uri) as ops:
                 recovered_ref = ops.pull_project(
-                    "origin", None, branch=cfg.branch, user=cfg.user, s3_client=s3_client
+                    "origin", None, branch=cfg.default_branch, user=cfg.user, s3_client=s3_client
                 ).to
 
         project_cfg = DmlProjectConfig.load(root)
@@ -453,7 +454,7 @@ class DmlOps:
             "name": name,
             "repo_path": str(root),
             "db_path": str(db_path),
-            "branch": cfg.branch,
+            "branch": branch_name,
             "recovered": recovered_ref,
         }
 
@@ -473,6 +474,7 @@ class DmlOps:
         db = DmlDbEnv.create(db_path, namespaces=sorted(NAMESPACES), map_size=1024**3)
         self = cls(_db=db, path=path, remote_root=remote_root)
         self.head().create_branch(branch)
+        self.head().write_attached_head(branch)
         return self
 
     @classmethod

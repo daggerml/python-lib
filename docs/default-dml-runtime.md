@@ -35,6 +35,7 @@ Rules:
 - implicit default creation occurs only when no scoped or process default is set,
 - the implicit default is cached as the process default after first creation,
 - constructing `DmlOps` from the default runtime requires `remote.uri` to be configured.
+- when no explicit `Dml(branch=...)` override is present, runtime checkout behavior derives from `.dml/HEAD`.
 
 ## Runtime API
 
@@ -63,7 +64,7 @@ These delegate to `get_default_dml()`.
   - `has_scoped_override`: `bool`
   - `has_process_default`: `bool`
 - `config`:
-  - `project` with `home`, `uri`, and derived `branch`
+  - `project` with `home` and branchless `uri`
   - `db` with `path`
   - `remote` with `uri`
   - `user`
@@ -72,7 +73,7 @@ These delegate to `get_default_dml()`.
   - `config_home`
 - `runtime`:
   - `ops_initialized`: `bool`
-  - `head_ref`: `str`
+  - `branch_override`: `str | null`
 
 Rules:
 

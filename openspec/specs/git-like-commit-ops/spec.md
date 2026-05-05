@@ -63,7 +63,7 @@ The system SHALL support checking out one DAG from a resolved revision into the 
 - **THEN** DAG checkout creates a new commit with the target name pointing to the checked-out DAG ref
 
 ### Requirement: Revision resolution
-The system SHALL resolve revision values used by git-like commands to concrete local commit refs without performing network fetches.
+The system SHALL resolve revision values used by git-like commands to concrete local commit refs without performing network fetches. `HEAD` and ancestry expressions based on `HEAD` SHALL resolve through the repository's `.dml/HEAD` file.
 
 #### Scenario: Resolve branch shorthand
 - **WHEN** a command receives `main` as a revision
@@ -85,32 +85,47 @@ The system SHALL resolve revision values used by git-like commands to concrete l
 - **WHEN** a command receives `dml://alice/tools#main` as a revision and no matching local tracking ref exists
 - **THEN** the command fails without contacting the remote
 
-#### Scenario: Resolve first-parent ancestry
+#### Scenario: Resolve first-parent ancestry from HEAD file
 - **WHEN** a command receives `HEAD~2` as a revision
-- **THEN** the system resolves it by walking two first-parent steps from the current head commit
+- **THEN** the system resolves `HEAD` through `.dml/HEAD` and walks two first-parent steps from that resolved commit
 
 #### Scenario: Resolve local tag shorthand
 - **WHEN** a command receives `v1.0` as a revision and `v1.0` resolves as a local tag
 - **THEN** the system resolves it to the commit referenced by that tag
 
 ### Requirement: Checkout repository state from revision
-The system SHALL support checking out repository state from a resolved revision and SHALL distinguish branch-attached from detached checkouts.
+The system SHALL support checking out repository state from a resolved revision and SHALL distinguish branch-attached from detached checkouts by rewriting `.dml/HEAD`.
 
 #### Scenario: Checkout branch attaches runtime
 - **WHEN** `dml checkout main` resolves `main` to a local branch
-- **THEN** the system sets active HEAD to branch `main` and reports branch-attached checkout
+- **THEN** the system writes `.dml/HEAD` as `ref: refs/local/heads/main` and reports branch-attached checkout
 
 #### Scenario: Checkout tag detaches runtime
 - **WHEN** `dml checkout v1.0` resolves `v1.0` to a tag target commit
-- **THEN** the system clears active HEAD and reports detached checkout at that commit
+- **THEN** the system writes `.dml/HEAD` as that detached commit and reports detached checkout at that commit
 
 #### Scenario: Checkout commit expression detaches runtime
 - **WHEN** `dml checkout HEAD~1` resolves to a concrete commit
-- **THEN** the system clears active HEAD and reports detached checkout at that commit
+- **THEN** the system writes `.dml/HEAD` as that detached commit and reports detached checkout at that commit
 
-#### Scenario: Commit while detached does not advance branch
+#### Scenario: Commit while detached does not advance branch or HEAD
 - **WHEN** a user checks out a non-branch revision and then runs commit flow through `IndexOps.commit`
-- **THEN** the system commits the index without advancing any branch head
+- **THEN** the system may create the new detached commit but does not advance any branch head and does not rewrite `.dml/HEAD`
+
+### Requirement: Mutable project workflows require an attached branch
+The system SHALL require `.dml/HEAD` to be attached to a local branch before default project workflows mutate branch history or publish a branch tip.
+
+#### Scenario: Push uses attached HEAD branch by default
+- **WHEN** `.dml/HEAD` is attached to local branch `foo` and the user runs project push without an explicit branch override
+- **THEN** the system pushes local branch `foo` to remote branch URI `dml://<owner>/<project>#foo`
+
+#### Scenario: Pull requires attached HEAD
+- **WHEN** `.dml/HEAD` is detached and the user runs project pull without an explicit mutable branch target
+- **THEN** the command fails instead of selecting a branch from config or environment
+
+#### Scenario: Merge requires attached HEAD when defaulting destination
+- **WHEN** `.dml/HEAD` is detached and the user runs a merge workflow that would otherwise target the current branch
+- **THEN** the command fails because the current checkout is not a mutable branch target
 
 #### Scenario: Checkout unresolved remote URI fails locally
 - **WHEN** `dml checkout dml://alice/tools#main` is requested and no local tracking ref exists for that URI

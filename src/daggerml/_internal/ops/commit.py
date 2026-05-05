@@ -210,14 +210,17 @@ class CommitOps(BaseOps):
         self,
         value: str,
         *,
-        current_branch: str = "main",
         project_dir: str = ".",
     ) -> RevisionResolution:
         base, sep, steps_s = value.partition("~")
-        if base == "HEAD":
-            base = current_branch
         with self._tx(readonly=True) as txn:
-            ref, kind, branch = self._resolve_base(base, project_dir=project_dir, txn=txn)
+            if base == "HEAD":
+                head_state = HeadOps(_db=self._db).get_head_state(txn=txn)
+                ref = head_state.commit
+                kind = "branch" if head_state.branch is not None else "commit"
+                branch = head_state.branch
+            else:
+                ref, kind, branch = self._resolve_base(base, project_dir=project_dir, txn=txn)
             if ref.ns() != "commit":
                 raise DmlRepoError(f"Resolved non-commit ref: {ref}")
             steps = int(steps_s) if sep else 0
@@ -232,8 +235,8 @@ class CommitOps(BaseOps):
                 return RevisionResolution(commit=ref, kind="branch", branch=branch)
             return RevisionResolution(commit=ref, kind=kind, branch=None)
 
-    def resolve_revision_ref(self, value: str, *, current_branch: str = "main", project_dir: str = ".") -> Ref:
-        return self.resolve_revision(value, current_branch=current_branch, project_dir=project_dir).commit
+    def resolve_revision_ref(self, value: str, *, project_dir: str = ".") -> Ref:
+        return self.resolve_revision(value, project_dir=project_dir).commit
 
     def _project_dir(self) -> str:
         db_path = Path(self._db.path).resolve()

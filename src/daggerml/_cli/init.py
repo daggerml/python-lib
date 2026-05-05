@@ -15,7 +15,7 @@ def setup_init_parser(parser: ArgumentParser) -> None:
         description="Initialize .dml-managed state in the current project directory.",
         examples=[
             "dml init my-project",
-            "dml init --project-uri dml://alice/my-project#main",
+            "dml init --project-uri dml://alice/my-project",
             "dml init --repo /path/to/project my-project",
             "dml --repo /path/to/project init",
         ],
@@ -26,7 +26,7 @@ def setup_init_parser(parser: ArgumentParser) -> None:
     parser.add_argument(
         "--project-uri",
         default=None,
-        help="Explicit project URI (dml://owner/project#branch). Mutually exclusive with NAME.",
+        help="Explicit project URI (dml://owner/project). Mutually exclusive with NAME.",
     )
     parser.add_argument(
         "--remote-uri",

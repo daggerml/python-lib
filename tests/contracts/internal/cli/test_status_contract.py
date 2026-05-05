@@ -22,6 +22,7 @@ class TestExecuteStatus:
         result = execute_status(args)
         assert set(result.keys()) == {"project", "db", "remote", "user", "default_branch", "hooks", "config_home"}
         assert result["project"]["home"] == str(tmp_path)
+        assert set(result["project"].keys()) == {"home", "uri"}
         assert result["remote"]["uri"] == "s3://bucket/project"
         assert result["remote"]["fetch_workers"] == 16
 

@@ -8,14 +8,14 @@ from daggerml._internal.types import DmlRepoError
 
 def test_config_ops_set_get_local_project_uri(tmp_path):
     ops = ConfigOps(project_home=str(tmp_path), config_home=str(tmp_path / "cfg"))
-    ops.set("project.uri", ["dml://alice/demo#main"], scope=SCOPE_LOCAL)
-    assert ops.get("project.uri", scope=SCOPE_LOCAL) == "dml://alice/demo#main"
+    ops.set("project.uri", ["dml://alice/demo"], scope=SCOPE_LOCAL)
+    assert ops.get("project.uri", scope=SCOPE_LOCAL) == "dml://alice/demo"
 
 
-def test_config_ops_set_get_local_project_uri_tag(tmp_path):
+def test_config_ops_rejects_selector_bearing_local_project_uri(tmp_path):
     ops = ConfigOps(project_home=str(tmp_path), config_home=str(tmp_path / "cfg"))
-    ops.set("project.uri", ["dml://alice/demo@v1"], scope=SCOPE_LOCAL)
-    assert ops.get("project.uri", scope=SCOPE_LOCAL) == "dml://alice/demo@v1"
+    with pytest.raises(ValueError, match="must not include a branch or tag"):
+        ops.set("project.uri", ["dml://alice/demo@v1"], scope=SCOPE_LOCAL)
 
 
 def test_config_ops_set_get_global_user(tmp_path):
@@ -27,7 +27,7 @@ def test_config_ops_set_get_global_user(tmp_path):
 def test_config_ops_validates_scope_restrictions(tmp_path):
     ops = ConfigOps(project_home=str(tmp_path), config_home=str(tmp_path / "cfg"))
     with pytest.raises(DmlRepoError, match="not valid in global scope"):
-        ops.set("project.uri", ["dml://alice/demo#main"], scope=SCOPE_GLOBAL)
+        ops.set("project.uri", ["dml://alice/demo"], scope=SCOPE_GLOBAL)
     with pytest.raises(DmlRepoError, match="not valid in local scope"):
         ops.set("user", ["alice@host"], scope=SCOPE_LOCAL)
 

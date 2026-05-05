@@ -23,9 +23,9 @@ The system SHALL expose one shared internal resolver that supports `project/runt
 ### Requirement: Canonical config parameters are reduced to one normalized set
 The system SHALL normalize supported configuration inputs into the canonical internal parameters `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`.
 
-#### Scenario: Legacy overlapping branch parameter is not canonical
+#### Scenario: Branch context is not a canonical config parameter
 - **WHEN** project configuration is resolved
-- **THEN** branch context is carried by normalized `project.uri` rather than by a separate canonical `branch` parameter
+- **THEN** the canonical internal model does not include a separate branch-selection parameter and does not derive the active checkout branch from configuration
 
 #### Scenario: Legacy overlapping remote parameters are not canonical
 - **WHEN** remote-backed configuration is resolved
@@ -51,23 +51,19 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **THEN** `DmlOps.init` resolves them through the shared internal resolver before mutating project state
 
 ### Requirement: Project URI is normalized and exposes helper accessors
-The system SHALL normalize and canonicalize `project.uri` through shared revision URI utilities. Resolved project configuration MAY target a branch or a tag. The resolved config object SHALL continue to expose helper accessors for the effective project selector.
+The system SHALL normalize and canonicalize local `project.uri` as a branchless project identity through shared revision URI utilities. Resolved configuration SHALL treat checkout state as repository state owned by `.dml/HEAD` rather than as a selector embedded in config.
 
-#### Scenario: Missing selector parses as default branch
-- **WHEN** `project.uri` is provided without a branch or tag in `project/runtime` scope
-- **THEN** shared revision URI parsing resolves it to a fully realized branch selector using the effective default branch
+#### Scenario: Local project URI remains branchless
+- **WHEN** `project.uri` is resolved for local project configuration
+- **THEN** shared configuration preserves canonical branchless form `dml://<owner>/<project>`
 
-#### Scenario: Tag URI is accepted for project context
-- **WHEN** `project.uri` is provided with a tag selector
-- **THEN** project configuration resolution succeeds and preserves canonical tag form
+#### Scenario: Tag or branch selector is not accepted for local project config
+- **WHEN** local project configuration provides `project.uri` with a branch or tag selector
+- **THEN** configuration resolution fails instead of translating that selector into checkout state
 
-#### Scenario: Project helper accessors derive from canonical URI
+#### Scenario: Project helper accessors do not expose current checkout branch
 - **WHEN** resolved configuration includes `project.uri`
-- **THEN** helper accessors derive selector values from canonical parsed URI rather than standalone duplicated parsing logic
-
-#### Scenario: Init fails when required project URI cannot resolve validly
-- **WHEN** init flow requires `project.uri` for bootstrap behavior but resolver output leaves it invalid or unresolved
-- **THEN** `DmlOps.init` fails before creating or mutating repository state
+- **THEN** helper accessors expose project identity only and do not treat config as the source of the active branch or detached commit
 
 ### Requirement: DB path can be overridden but defaults from project home
 The system SHALL resolve `db.path` with the same precedence as other `project/runtime` parameters, and when no higher-precedence value is provided it SHALL default to `<project.home>/.dml/db/`.

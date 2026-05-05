@@ -1,5 +1,7 @@
 """Comprehensive tests for head.py module with real database integration."""
 
+from pathlib import Path
+
 import pytest
 
 from daggerml._internal.ops.head import HeadOps
@@ -94,3 +96,50 @@ class TestHeadOps:
         ops.delete_index(index_id)
         with pytest.raises(DmlRepoError, match="Pointer does not exist"):
             ops.get_index_commit(index_id)
+
+    def test_head_roundtrip_supports_attached_and_detached_payloads(self, temp_bo):
+        ops = HeadOps(temp_bo._db)
+        branch = ops.create_branch("feature")
+        branch_commit = ops.get_branch_commit(branch)
+
+        ops.write_attached_head("feature")
+        attached = ops.get_head_state()
+        assert attached.mode == "attached"
+        assert attached.branch == "feature"
+        assert attached.commit == branch_commit
+
+        ops.write_detached_head(branch_commit)
+        detached = ops.get_head_state()
+        assert detached.mode == "detached"
+        assert detached.branch is None
+        assert detached.commit == branch_commit
+
+    def test_invalid_head_payload_fails_closed(self, temp_bo):
+        ops = HeadOps(temp_bo._db)
+        head_path = ops._head_path()
+        head_path.parent.mkdir(parents=True, exist_ok=True)
+        head_path.write_text("main\n")
+
+        with pytest.raises(DmlRepoError, match="Invalid HEAD payload"):
+            ops.get_head_state()
+
+    def test_attached_head_accepts_slash_and_dot_branch_names(self, temp_bo):
+        ops = HeadOps(temp_bo._db)
+        branch = ops.create_branch("topic/v1.0")
+        ops.write_attached_head(branch)
+
+        state = ops.get_head_state()
+
+        assert state.mode == "attached"
+        assert state.branch == "topic/v1.0"
+        assert "topic/v1.0" in ops.list_branches()
+
+    def test_project_home_requires_dml_db_layout(self, temp_bo):
+        ops = HeadOps(temp_bo._db)
+        original_path = ops._db.path
+        ops._db.path = str(Path(temp_bo._db.path).parent.parent)
+        try:
+            with pytest.raises(DmlRepoError, match="Cannot resolve project home"):
+                ops.get_head_state()
+        finally:
+            ops._db.path = original_path

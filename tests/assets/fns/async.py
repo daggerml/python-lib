@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 from daggerml._internal._db import DmlDbEnv
 from daggerml._internal.ops.index import IndexOps
@@ -33,7 +34,9 @@ if __name__ == "__main__":
         raise SystemExit(0)
 
     with tempfile.TemporaryDirectory(prefix="dml-fn-") as tmpdir:
-        db = DmlDbEnv.create(tmpdir, namespaces=sorted(NAMESPACES))
+        db_path = Path(tmpdir) / ".dml" / "db"
+        db_path.mkdir(parents=True, exist_ok=True)
+        db = DmlDbEnv.create(str(db_path), namespaces=sorted(NAMESPACES))
         try:
             ops = IndexOps(db, remote_root=remote_root)
             index_ref = ops.create(argv_ptr=argv_ptr)
