@@ -59,8 +59,8 @@ class HeadOps(BaseOps):
         with self._tx(readonly=False) as owned_txn:
             self.delete_branch(branch_name, txn=owned_txn)
 
-    def get_branch_commit(self, branch_name: str, *, txn=None) -> Ref:
-        del txn
+    def get_branch_commit(self, branch_name: str | None, *, txn=None) -> Ref:
+        branch_name = branch_name or self.require_attached_head_branch(txn=txn)
         return self._get_pointer_commit(self._branch_path(branch_name))
 
     def update_branch_commit(self, branch_name: str, old_commit: Ref, new_commit: Ref, *, txn=None) -> Ref:

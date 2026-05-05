@@ -526,7 +526,7 @@ class CommitOps(BaseOps):
         }
 
     # FIXME: Move to HeadOps.delete_dag.
-    def delete_dag(self, name: str, branch: str, user: str) -> Self:
+    def delete_dag(self, name: str, branch: str | None, user: str) -> Self:
         """Remove DAG from head's tree and create new commit.
 
         Creates a new commit with the specified DAG removed from the tree.
@@ -553,8 +553,9 @@ class CommitOps(BaseOps):
         """
         try:
             hops = HeadOps(_db=self._db)
+            branch_name = branch or hops.require_attached_head_branch()
             with self._tx(readonly=False) as txn:
-                current_commit_ref = hops.get_branch_commit(branch, txn=txn)
+                current_commit_ref = hops.get_branch_commit(branch_name, txn=txn)
                 ctx = txn.get_commit_ctx(current_commit_ref)
                 # Check if DAG exists
                 if name not in ctx.tree.dags:
@@ -566,7 +567,7 @@ class CommitOps(BaseOps):
                 ctx.commit.parents = [current_commit_ref]
                 ctx.commit.message = f"Delete DAG '{name}'"
                 new_commit_ref = txn.put(ctx.commit)
-            hops.update_branch_commit(branch, current_commit_ref, new_commit_ref)
+            hops.update_branch_commit(branch_name, current_commit_ref, new_commit_ref)
             return self
         except Exception as e:
             raise DmlRepoError(f"Failed to delete DAG '{name}': {e}") from e
