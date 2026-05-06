@@ -455,7 +455,7 @@ class IndexOps(BaseOps):
 
     def _put_node(self, node: Node, txn, index_id: str, name: Optional[str] = None) -> Ref:
         if txn is not None:
-            old_commit = HeadOps(_db=self._db).get_index_commit(index_id, txn=txn)
+            old_commit = HeadOps(_db=self._db).get_index_commit(index_id)
             ctx = txn.get_commit_ctx(old_commit)
             if ctx.dag is None:
                 raise DmlRepoError("Index commit has no DAG.")

@@ -117,7 +117,7 @@ class TestCommitOps:
 
         # Get updated context to verify changes
         with ops._tx(readonly=True) as txn:
-            ctx = txn.get_commit_ctx(HeadOps(_db=ops._db).get_branch_commit(branch, txn=txn))
+            ctx = txn.get_commit_ctx(HeadOps(_db=ops._db).get_branch_commit(branch))
 
         # Verify DAG was removed from tree
         assert "keep1" in ctx.tree.dags

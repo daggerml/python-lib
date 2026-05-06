@@ -304,7 +304,7 @@ class TestIndexOps:
         ops.put_literal(index_ref, {"a": n0}, name="v1")
         nops = NodeOps(_db=temp_bo._db)
         with ops._tx(readonly=True) as txn:
-            dag: Dag = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn)).dag
+            dag: Dag = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref)).dag
         vals = [nops.unroll(v) for v in dag.nodes]
         vals = [str(v) if isinstance(v, dict) else v for v in vals]
         vals = [x for x in vals if not isinstance(x, (Uri, Runnable))]
@@ -317,7 +317,7 @@ class TestIndexOps:
         ops.put_literal(index_ref, [1, n0], name="v1")
         nops = NodeOps(_db=temp_bo._db)
         with ops._tx(readonly=True) as txn:
-            dag: Dag = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn)).dag
+            dag: Dag = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref)).dag
         vals = [nops.unroll(v) for v in dag.nodes]
         vals = [tuple(v) if isinstance(v, list) else v for v in vals]
         vals = [x for x in vals if not isinstance(x, (Uri, Runnable))]
@@ -660,7 +660,7 @@ class TestIndexOps:
         with ops._tx(readonly=True) as txn:
             caller_cache_key = (
                 txn.get_commit_ctx(
-                    HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn)
+                    HeadOps(_db=temp_bo._db).get_index_commit(index_ref)
                 )
                 .dag.argv
                 .id()
@@ -819,7 +819,7 @@ class TestIndexOps:
         try:
             node_ref = ops.put_literal(index_ref, value, name=name)
             with ops._tx(readonly=True) as txn:
-                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn))
+                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref))
                 assert node_ref in ctx.dag.nodes
                 assert ctx.dag.names[name] == node_ref
                 node = txn.get(node_ref)
@@ -1415,7 +1415,7 @@ class TestIndexOps:
         ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         try:
             with ops._tx(readonly=True) as txn:
-                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn))
+                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref))
                 with pytest.raises(DmlRepoError, match="Cannot import from a DAG with no result node"):
                     ops.put_import(index_ref, cast(Ref, ctx.commit.dag))
         finally:
@@ -1438,7 +1438,7 @@ class TestIndexOps:
                 assert isinstance(node, ImportNode)
                 assert node.dag == other_dag_ref
                 assert node.node == other_node_ref
-                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref, txn=txn))
+                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref))
                 assert imported_ref in ctx.dag.nodes
         finally:
             ops.delete(index_ref)
@@ -1502,7 +1502,7 @@ class TestIndexOps:
             created_index = remote_index_ops.create(argv_ptr=argv_ptr)
 
             with remote_index_ops._tx(readonly=True) as txn:
-                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(created_index, txn=txn))
+                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(created_index))
                 assert ctx.dag is not None
                 assert ctx.dag.argv == argv_ref
                 kwargv_ref = remote_index_ops._kwargv_ref_from_nodes(ctx.dag, txn)
@@ -1519,14 +1519,14 @@ class TestIndexOps:
     def test_commit_deletes_index_and_updates_head(self, temp_bo, value, dag_name):
         ops, head_ref, index_ref = _mk_repo_state(temp_bo)
         with ops._tx(readonly=True) as txn:
-            before = HeadOps(_db=temp_bo._db).get_branch_commit(head_ref, txn=txn)
+            before = HeadOps(_db=temp_bo._db).get_branch_commit(head_ref)
         node_ref = ops.put_literal(index_ref, value, name="result")
         commit_ref = ops.commit(index_ref, node_ref, message="done", dag_name=dag_name, head=head_ref)
 
         with ops._tx(readonly=True) as txn:
             assert index_ref not in HeadOps(_db=temp_bo._db).list_indexes()
-            assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref, txn=txn) == commit_ref
-            assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref, txn=txn) != before
+            assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) == commit_ref
+            assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) != before
 
             commit_obj = txn.get(commit_ref)
             assert isinstance(commit_obj, Commit)

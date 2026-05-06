@@ -26,12 +26,10 @@ class HeadState:
 
 @dataclass
 class HeadOps(BaseOps):
-    def list_branches(self, *, txn=None) -> list[str]:
-        del txn
+    def list_branches(self) -> list[str]:
         return self._list_ref_names(self._local_heads_dir())
 
-    def list_indexes(self, *, txn=None) -> list[str]:
-        del txn
+    def list_indexes(self) -> list[str]:
         return self._list_ref_names(self._local_indexes_dir())
 
     def create_branch(self, branch_name: str, from_commit: Ref | None = None, *, txn=None) -> str:
@@ -52,23 +50,17 @@ class HeadOps(BaseOps):
         self._create_pointer(self._branch_path(branch_name), target_commit_ref)
         return branch_name
 
-    def delete_branch(self, branch_name: str, *, txn=None) -> None:
-        if txn is not None:
-            self._delete_pointer(self._branch_path(branch_name))
-            return None
-        with self._tx(readonly=False) as owned_txn:
-            self.delete_branch(branch_name, txn=owned_txn)
+    def delete_branch(self, branch_name: str) -> None:
+        self._delete_pointer(self._branch_path(branch_name))
 
-    def get_branch_commit(self, branch_name: str | None, *, txn=None) -> Ref:
-        branch_name = branch_name or self.require_attached_head_branch(txn=txn)
+    def get_branch_commit(self, branch_name: str | None) -> Ref:
+        branch_name = branch_name or self.require_attached_head_branch()
         return self._get_pointer_commit(self._branch_path(branch_name))
 
-    def update_branch_commit(self, branch_name: str, old_commit: Ref, new_commit: Ref, *, txn=None) -> Ref:
-        del txn
+    def update_branch_commit(self, branch_name: str, old_commit: Ref, new_commit: Ref) -> Ref:
         return self._update_pointer_commit(self._branch_path(branch_name), old_commit, new_commit)
 
-    def create_index(self, commit_ref: Ref, *, txn=None) -> str:
-        del txn
+    def create_index(self, commit_ref: Ref) -> str:
         while True:
             index_id = f"{uuid4().hex}{uuid4().hex}"
             index_path = self._index_path(index_id)
@@ -76,17 +68,14 @@ class HeadOps(BaseOps):
                 self._create_pointer(index_path, commit_ref)
                 return index_id
 
-    def delete_index(self, index_id: str, *, txn=None) -> None:
-        del txn
+    def delete_index(self, index_id: str) -> None:
         self._delete_pointer(self._index_path(index_id))
         return None
 
-    def get_index_commit(self, index_id: str, *, txn=None) -> Ref:
-        del txn
+    def get_index_commit(self, index_id: str) -> Ref:
         return self._get_pointer_commit(self._index_path(index_id))
 
-    def list_pointer_roots(self, *, txn=None) -> list[Ref]:
-        del txn
+    def list_pointer_roots(self) -> list[Ref]:
         roots = [
             *[self._get_pointer_commit(self._local_branch_path(branch_name)) for branch_name in self.list_branches()],
             *[self._get_pointer_commit(self._index_path(index_id)) for index_id in self.list_indexes()],
@@ -96,15 +85,14 @@ class HeadOps(BaseOps):
         except DmlRepoError:
             return roots
 
-    def update_index_commit(self, index_id: str, old_commit: Ref, new_commit: Ref, *, txn=None) -> Ref:
-        del txn
+    def update_index_commit(self, index_id: str, old_commit: Ref, new_commit: Ref) -> Ref:
         return self._update_pointer_commit(self._index_path(index_id), old_commit, new_commit)
 
-    def get_head_state(self, *, txn=None) -> HeadState:
+    def get_head_state(self) -> HeadState:
         payload = self._read_head_payload()
         if payload.startswith(_HEAD_ATTACHED_PREFIX):
-            branch = self._validate_branch_name(payload[len(_HEAD_ATTACHED_PREFIX) :])
-            commit = self.get_branch_commit(branch, txn=txn)
+            branch = self._validate_branch_name(payload[len(_HEAD_ATTACHED_PREFIX):])
+            commit = self.get_branch_commit(branch)
             return HeadState(mode="attached", branch=branch, commit=commit)
         if payload.startswith("commit:"):
             commit = Ref(payload)
@@ -113,27 +101,25 @@ class HeadOps(BaseOps):
             return HeadState(mode="detached", branch=None, commit=commit)
         raise DmlRepoError(f"Invalid HEAD payload in {self._head_path()}")
 
-    def resolve_head_commit(self, *, txn=None) -> Ref:
-        return self.get_head_state(txn=txn).commit
+    def resolve_head_commit(self) -> Ref:
+        return self.get_head_state().commit
 
-    def get_attached_head_branch(self, *, txn=None) -> str | None:
-        state = self.get_head_state(txn=txn)
+    def get_attached_head_branch(self) -> str | None:
+        state = self.get_head_state()
         return state.branch
 
-    def require_attached_head_branch(self, *, txn=None) -> str:
-        branch = self.get_attached_head_branch(txn=txn)
+    def require_attached_head_branch(self) -> str:
+        branch = self.get_attached_head_branch()
         if branch is None:
             raise DmlRepoError("Current checkout is detached; attach HEAD or pass an explicit branch")
         return branch
 
-    def write_attached_head(self, branch_name: str, *, txn=None) -> str:
-        del txn
+    def write_attached_head(self, branch_name: str) -> str:
         branch = self._validate_branch_name(branch_name)
         self._write_head_payload(f"{_HEAD_ATTACHED_PREFIX}{branch}")
         return branch
 
-    def write_detached_head(self, commit_ref: Ref, *, txn=None) -> Ref:
-        del txn
+    def write_detached_head(self, commit_ref: Ref) -> Ref:
         if commit_ref.ns() != "commit":
             raise DmlRepoError(f"Expected commit ref, got: {commit_ref}")
         self._write_head_payload(commit_ref.to)

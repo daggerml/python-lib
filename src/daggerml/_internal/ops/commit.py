@@ -180,7 +180,7 @@ class CommitOps(BaseOps):
             return Ref(f"commit:{base}"), "commit", None
         if base.startswith("dml://"):
             try:
-                return head_ops.get_branch_commit(base, txn=txn), ("tag" if "@" in base else "remote-branch"), None
+                return head_ops.get_branch_commit(base), ("tag" if "@" in base else "remote-branch"), None
             except DmlRepoError:
                 raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first") from None
         if "/" in base:
@@ -190,18 +190,18 @@ class CommitOps(BaseOps):
             project = DmlProjectConfig.load(project_dir)
             tracking_uri = stringify_revision_uri(RevisionUri(project.owner, project.name, branch=branch))
             try:
-                return head_ops.get_branch_commit(tracking_uri, txn=txn), "remote-branch", None
+                return head_ops.get_branch_commit(tracking_uri), "remote-branch", None
             except DmlRepoError:
                 raise DmlRepoError(f"Revision {base!r} cannot be resolved locally; run fetch first") from None
         branch_name = base
         try:
-            return head_ops.get_branch_commit(branch_name, txn=txn), "branch", branch_name
+            return head_ops.get_branch_commit(branch_name), "branch", branch_name
         except DmlRepoError:
             pass
         project = DmlProjectConfig.load(project_dir)
         tag_tracking_uri = stringify_revision_uri(RevisionUri(project.owner, project.name, tag=base))
         try:
-            return head_ops.get_branch_commit(tag_tracking_uri, txn=txn), "tag", None
+            return head_ops.get_branch_commit(tag_tracking_uri), "tag", None
         except DmlRepoError:
             pass
         raise DmlRepoError(f"Revision {base!r} cannot be resolved locally")
@@ -215,7 +215,7 @@ class CommitOps(BaseOps):
         base, sep, steps_s = value.partition("~")
         with self._tx(readonly=True) as txn:
             if base == "HEAD":
-                head_state = HeadOps(_db=self._db).get_head_state(txn=txn)
+                head_state = HeadOps(_db=self._db).get_head_state()
                 ref = head_state.commit
                 kind = "branch" if head_state.branch is not None else "commit"
                 branch = head_state.branch
@@ -343,7 +343,7 @@ class CommitOps(BaseOps):
         hops = HeadOps(_db=self._db)
         fast_forward = False
         with self._tx(readonly=False) as txn:
-            current = hops.get_branch_commit(branch, txn=txn)
+            current = hops.get_branch_commit(branch)
             if self._is_ancestor_in_txn(current, other, txn):
                 fast_forward = True
             if self._is_ancestor_in_txn(other, current, txn):
@@ -360,7 +360,7 @@ class CommitOps(BaseOps):
             raise DmlRepoError("Revert expects head and commit refs")
         hops = HeadOps(_db=self._db)
         with self._tx(readonly=False) as txn:
-            current_head = hops.get_branch_commit(branch, txn=txn)
+            current_head = hops.get_branch_commit(branch)
             target = txn.get(commit)
             if len(target.parents) != 1:
                 raise DmlRepoError("Can only revert commits with exactly one parent")
@@ -403,7 +403,7 @@ class CommitOps(BaseOps):
         hops = HeadOps(_db=self._db)
         target_name = target_name or source_name
         with self._tx(readonly=False) as txn:
-            current_commit_ref = hops.get_branch_commit(branch, txn=txn)
+            current_commit_ref = hops.get_branch_commit(branch)
             current_commit = txn.get(current_commit_ref)
             source_tree = txn.get(txn.get(source_commit).tree)
             if source_name not in source_tree.dags:
@@ -555,7 +555,7 @@ class CommitOps(BaseOps):
             hops = HeadOps(_db=self._db)
             branch_name = branch or hops.require_attached_head_branch()
             with self._tx(readonly=False) as txn:
-                current_commit_ref = hops.get_branch_commit(branch_name, txn=txn)
+                current_commit_ref = hops.get_branch_commit(branch_name)
                 ctx = txn.get_commit_ctx(current_commit_ref)
                 # Check if DAG exists
                 if name not in ctx.tree.dags:

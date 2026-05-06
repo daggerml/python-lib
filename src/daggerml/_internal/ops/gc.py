@@ -64,7 +64,7 @@ class GcOps(BaseOps):
         try:
             with self._tx(readonly=True) as txn:
                 if heads is None:
-                    heads = HeadOps(_db=self._db).list_pointer_roots(txn=txn)
+                    heads = HeadOps(_db=self._db).list_pointer_roots()
                 if not heads:
                     logger.warning("Listing orphans with no heads; this will clear the repo.")
                 # Call the raw DB transaction helper directly (no BaseOps edits required)
