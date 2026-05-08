@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import sys
 import time
@@ -10,6 +11,8 @@ from urllib.parse import urlparse
 
 import boto3
 
+from daggerml._internal.exec_state import ExecutionState
+from daggerml._internal.execution_context import execution_context
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib.executor_registry import get_executor
 from daggerml.contrib.s3 import S3Store, is_s3_uri
@@ -37,6 +40,8 @@ class AdapterBase:
         execution_id: str,
         remote: dict[str, str],
         state: dict[str, Any] | None,
+        execution_status: str | None,
+        cancel_requested_by: str | None,
     ):
         raise NotImplementedError("Adapter send method is not implemented")
 
@@ -50,6 +55,8 @@ class AdapterBase:
         execution_id: str,
         remote: dict[str, str],
         state: dict[str, Any] | None,
+        execution_status: str | None = None,
+        cancel_requested_by: str | None = None,
     ) -> bytes:
         def _encode(value: Any) -> Any:
             if isinstance(value, Runnable):
@@ -76,8 +83,18 @@ class AdapterBase:
             "execution_id": execution_id,
             "remote": _encode(remote),
             "state": _encode(state),
+            "execution_status": execution_status,
+            "cancel_requested_by": cancel_requested_by,
         }
         return json.dumps(payload).encode("utf-8")
+
+    @staticmethod
+    def _call_with_supported_kwargs(fn, **kwargs):
+        signature = inspect.signature(fn)
+        if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+            return fn(**kwargs)
+        supported = {name: value for name, value in kwargs.items() if name in signature.parameters}
+        return fn(**supported)
 
     @staticmethod
     def _decode_runnable(value: Any) -> Runnable:
@@ -103,12 +120,16 @@ class AdapterBase:
         )
 
     @classmethod
-    def _parse_payload(cls, payload: dict) -> tuple[str, str, str, Runnable, dict[str, str], dict[str, Any] | None]:
+    def _parse_payload(
+        cls, payload: dict
+    ) -> tuple[str, str, str, Runnable, dict[str, str], dict[str, Any] | None, str | None, str | None]:
         argv_ptr = payload["argv_ptr"]
         cache_key = payload["cache_key"]
         execution_id = payload["execution_id"]
         remote = payload["remote"]
         state = payload.get("state")
+        execution_status = payload.get("execution_status")
+        cancel_requested_by = payload.get("cancel_requested_by")
         if not isinstance(argv_ptr, str):
             raise DmlRepoError("Adapter payload argv_ptr must be a string")
         if not isinstance(cache_key, str):
@@ -119,7 +140,20 @@ class AdapterBase:
             raise DmlRepoError("Adapter payload remote must be a dict")
         if state is not None and not isinstance(state, dict):
             raise DmlRepoError("Adapter payload state must be a dict or null")
-        return argv_ptr, cache_key, execution_id, cls._decode_runnable(payload["runnable"]), remote, state
+        if execution_status is not None and not isinstance(execution_status, str):
+            raise DmlRepoError("Adapter payload execution_status must be a string or null")
+        if cancel_requested_by is not None and not isinstance(cancel_requested_by, str):
+            raise DmlRepoError("Adapter payload cancel_requested_by must be a string or null")
+        return (
+            argv_ptr,
+            cache_key,
+            execution_id,
+            cls._decode_runnable(payload["runnable"]),
+            remote,
+            state,
+            execution_status,
+            cancel_requested_by,
+        )
 
     @staticmethod
     def _validate_output(result):
@@ -183,6 +217,15 @@ class AdapterBase:
             return
         Path(output_path).write_text(data)
 
+    @staticmethod
+    def _refresh_execution_payload(
+        *, cache_key: str, execution_id: str, remote: dict[str, str], fallback_state: dict[str, Any] | None
+    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+        record = ExecutionState(cache_key, remote_root=remote["root"]).read_execution_record(execution_id)
+        if record is None:
+            return fallback_state, None, None
+        return record.get("state"), record.get("status"), record.get("cancel_requested_by")
+
     @classmethod
     def cli(cls, argv: list[str] | None = None) -> int:
         parser = argparse.ArgumentParser(description=f"{cls.__name__} CLI")
@@ -193,28 +236,48 @@ class AdapterBase:
 
         raw = cls._read_input(args.input)
         payload = json.loads(raw)
-        argv_ptr, cache_key, execution_id, runnable, remote, state = cls._parse_payload(payload)
-        result = cls.send(
-            runnable=runnable,
-            argv_ptr=argv_ptr,
-            cache_key=cache_key,
-            execution_id=execution_id,
-            remote=remote,
-            state=state,
-        )
-        persisted_state = state
-        while args.poll and result.get("status") not in {"succeeded", "failed"}:
-            if persisted_state is None:
-                persisted_state = result.get("state")
-            time.sleep(0.05)
+        (
+            argv_ptr,
+            cache_key,
+            execution_id,
+            runnable,
+            remote,
+            state,
+            execution_status,
+            cancel_requested_by,
+        ) = cls._parse_payload(payload)
+        with execution_context(execution_id, cache_key):
             result = cls.send(
                 runnable=runnable,
                 argv_ptr=argv_ptr,
                 cache_key=cache_key,
                 execution_id=execution_id,
                 remote=remote,
-                state=persisted_state,
+                state=state,
+                execution_status=execution_status,
+                cancel_requested_by=cancel_requested_by,
             )
+            persisted_state = state
+            current_status = execution_status
+            current_cancel_requested_by = cancel_requested_by
+            while args.poll and result.get("status") not in {"succeeded", "failed"}:
+                persisted_state, current_status, current_cancel_requested_by = cls._refresh_execution_payload(
+                    cache_key=cache_key,
+                    execution_id=execution_id,
+                    remote=remote,
+                    fallback_state=persisted_state if persisted_state is not None else result.get("state"),
+                )
+                time.sleep(0.05)
+                result = cls.send(
+                    runnable=runnable,
+                    argv_ptr=argv_ptr,
+                    cache_key=cache_key,
+                    execution_id=execution_id,
+                    remote=remote,
+                    state=persisted_state,
+                    execution_status=current_status,
+                    cancel_requested_by=current_cancel_requested_by,
+                )
         cls._write_output(args.output, json.dumps(result))
         return 0
 
@@ -233,6 +296,8 @@ class LocalAdapter(AdapterBase):
         execution_id: str,
         remote: dict[str, str],
         state: dict[str, Any] | None,
+        execution_status: str | None = None,
+        cancel_requested_by: str | None = None,
     ):
         spec = get_executor("local", runnable.target.uri)
         if not hasattr(spec, "handle"):
@@ -241,6 +306,8 @@ class LocalAdapter(AdapterBase):
             cache_key=cache_key,
             execution_id=execution_id,
             state=state,
+            execution_status=execution_status,
+            cancel_requested_by=cancel_requested_by,
             runnable=runnable,
             argv_ptr=argv_ptr,
             remote=remote,
@@ -262,6 +329,8 @@ class LambdaAdapter(AdapterBase):
         execution_id: str,
         remote: dict[str, str],
         state: dict[str, Any] | None,
+        execution_status: str | None = None,
+        cancel_requested_by: str | None = None,
     ):
         client = get_client("lambda")
         response = client.invoke(
@@ -274,6 +343,8 @@ class LambdaAdapter(AdapterBase):
                 execution_id=execution_id,
                 remote=remote,
                 state=state,
+                execution_status=execution_status,
+                cancel_requested_by=cancel_requested_by,
             ),
         )
         stream = response.get("Payload")

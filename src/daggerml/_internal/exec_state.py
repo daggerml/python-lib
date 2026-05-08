@@ -3,7 +3,7 @@
 Public API:
     AdapterIO       - Scoped S3 stdin/stdout surrogate for fire-and-monitor executors
     ExecutionState  - S3-backed lock + execution metadata helper
-    ExecutionRecord - TypedDict for immutable execution records
+    ExecutionRecord - TypedDict for mutable execution state objects
     LockRecord      - TypedDict for the lock file contents
     LOCK_TTL        - Default lock time-to-live in seconds
 """
@@ -31,11 +31,14 @@ class LockRecord(TypedDict):
 
 
 class ExecutionRecord(TypedDict):
-    execution_number: int
     execution_id: str
     cache_key: str
-    status: Literal["running"]
-    state: dict[str, Any]
+    created_at: int
+    status: Literal["running", "cancel-requested", "cancelled", "succeeded", "failed"]
+    state: dict[str, Any] | None
+    dependencies: list[str]
+    updated_at: int
+    cancel_requested_by: str | None
 
 
 class AdapterIO:
@@ -47,7 +50,7 @@ class AdapterIO:
     name)`` so both ``start()`` and ``poll()`` can access the same objects
     without storing URIs in executor state.
 
-    All keys live under ``{fn-exec-prefix}/io/{cache_key}/{exec_id}/{name}/``.
+    All keys live under ``{protocol-prefix}/io/{cache_key}/{exec_id}/{name}/``.
 
     Obtain via ``ExecutionState.adapter_io(exec_id, name)`` — do not construct
     directly.
@@ -92,12 +95,13 @@ class AdapterIO:
 class ExecutionState:
     """S3-backed advisory mutex for function execution.
 
-    Function-execution coordination lives under ``{prefix}/fn-exec/`` with:
+    Function-execution coordination lives under ``{prefix}/dml/`` with:
 
     - ``locks/{cache_key}.json`` for the advisory mutex,
-    - ``active/{cache_key}`` for the active execution number,
-    - ``records/{cache_key}/{execution_number}.json`` for immutable execution records,
-    - ``calls/...`` for caller/callee lineage,
+    - ``active/{cache_key}`` for the active execution id,
+    - ``exec/state/{execution_id}.json`` for mutable execution state,
+    - ``exec/edges/<callee_execution_id>/<caller_execution_id>.json`` for canonical lineage,
+    - ``exec/invalidate/{execution_id}.json`` for invalidation tombstones,
     - ``io/{cache_key}/{exec_id}/{name}/`` for adapter I/O (see :class:`AdapterIO`).
 
     Lock lifecycle is create-only (``If-None-Match: *``) then delete — no
@@ -122,7 +126,7 @@ class ExecutionState:
             )
         bucket = parsed.netloc
         prefix = parsed.path.strip("/")
-        exec_prefix = f"{prefix}/fn-exec" if prefix else "fn-exec"
+        exec_prefix = f"{prefix}/dml" if prefix else "dml"
         self.cache_key = cache_key
         self._bucket = bucket
         self._exec_prefix = exec_prefix
@@ -138,20 +142,14 @@ class ExecutionState:
     def _s3():
         return boto3.client("s3", config=Config(max_pool_connections=S3_MAX_POOL_CONNECTIONS))
 
-    def _execution_records_prefix(self) -> str:
-        return f"{self._exec_prefix}/records/{self.cache_key}/"
+    def _key_for_execution(self, execution_id: str) -> str:
+        return f"{self._exec_prefix}/exec/state/{execution_id}.json"
 
-    def _key_for_execution(self, execution_number: int) -> str:
-        return f"{self._execution_records_prefix()}{execution_number}.json"
+    def _key_for_edge(self, callee_execution_id: str, caller_execution_id: str) -> str:
+        return f"{self._exec_prefix}/exec/edges/{callee_execution_id}/{caller_execution_id}.json"
 
-    def _key_for_calls_from_index(self, index_id: str) -> str:
-        return f"{self._exec_prefix}/calls/from/index/{index_id}.json"
-
-    def _key_for_calls_from_cache(self, caller_cache_key: str) -> str:
-        return f"{self._exec_prefix}/calls/from/cache/{caller_cache_key}.json"
-
-    def _key_for_calls_to_cache(self, callee_cache_key: str) -> str:
-        return f"{self._exec_prefix}/calls/to/cache/{callee_cache_key}.json"
+    def _key_for_invalidation(self, execution_id: str) -> str:
+        return f"{self._exec_prefix}/exec/invalidate/{execution_id}.json"
 
     def _get_object_bytes(self, key: str) -> tuple[bytes, str] | None:
         """Return object bytes and ETag, or None if the file does not exist."""
@@ -228,6 +226,39 @@ class ExecutionState:
             if_match=etag,
         )
 
+    @staticmethod
+    def _status_rank(status: str) -> int:
+        ranks = {
+            "running": 0,
+            "cancel-requested": 1,
+            "cancelled": 2,
+            "succeeded": 3,
+            "failed": 3,
+        }
+        if status not in ranks:
+            raise DmlRepoError(f"Invalid execution status: {status}")
+        return ranks[status]
+
+    def _merge_execution_record(self, current: ExecutionRecord, incoming: ExecutionRecord) -> ExecutionRecord:
+        state = current["state"] if current["state"] is not None else incoming["state"]
+        status = current["status"]
+        if self._status_rank(incoming["status"]) > self._status_rank(current["status"]):
+            status = incoming["status"]
+        created_at = current["created_at"]
+        dependencies = sorted({*current.get("dependencies", []), *incoming.get("dependencies", [])})
+        cancel_requested_by = current["cancel_requested_by"] or incoming["cancel_requested_by"]
+        merged: ExecutionRecord = {
+            "execution_id": current["execution_id"],
+            "cache_key": current["cache_key"],
+            "created_at": created_at,
+            "status": cast(Any, status),
+            "state": state,
+            "dependencies": dependencies,
+            "updated_at": max(current["updated_at"], incoming["updated_at"]),
+            "cancel_requested_by": cancel_requested_by,
+        }
+        return merged
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -288,105 +319,77 @@ class ExecutionState:
         self._lock_token = None
         self._delete_object(self._lock_key)
 
-    def read_active_execution_number(self) -> int | None:
+    def read_active_execution_id(self) -> str | None:
         payload = self._get_object_bytes(self._active_key)
         if payload is None:
             return None
         raw = payload[0].decode().strip()
         if not raw:
             return None
-        try:
-            return int(raw)
-        except ValueError as e:
-            raise DmlRepoError(f"Invalid active execution number for cache key {self.cache_key!r}: {raw!r}") from e
+        return raw
 
-    def create_active_execution(self, execution_number: int) -> bool:
-        return self._put_object(self._active_key, str(execution_number).encode(), if_none_match=True)
+    def create_active_execution(self, execution_id: str) -> bool:
+        return self._put_object(self._active_key, execution_id.encode(), if_none_match=True)
 
     def delete_active_execution(self) -> None:
         self._delete_object(self._active_key)
 
-    def read_execution_record(self, execution_number: int) -> ExecutionRecord | None:
-        payload = self._get_object_bytes(self._key_for_execution(execution_number))
+    def read_execution_record(self, execution_id: str) -> ExecutionRecord | None:
+        payload = self._get_object_bytes(self._key_for_execution(execution_id))
         if payload is None:
             return None
         return json.loads(payload[0])
 
-    def create_execution_record(self, execution_number: int, record: ExecutionRecord) -> bool:
-        return self._write_json_if_absent(self._key_for_execution(execution_number), record)
+    def create_execution_record(self, record: ExecutionRecord) -> bool:
+        return self._write_json_if_absent(self._key_for_execution(record["execution_id"]), record)
 
-    def next_execution_number(self) -> int:
-        prefix = self._execution_records_prefix()
-        token: str | None = None
-        max_number = -1
-        while True:
-            kwargs: dict[str, Any] = {"Bucket": self._bucket, "Prefix": prefix, "MaxKeys": 1000}
-            if token is not None:
-                kwargs["ContinuationToken"] = token
-            resp = self._s3().list_objects_v2(**kwargs)
-            for item in resp.get("Contents", []):
-                key = item.get("Key", "")
-                suffix = key.removeprefix(prefix)
-                if not suffix.endswith(".json") or "/" in suffix:
-                    continue
-                stem = suffix[:-5]
-                if stem.isdigit():
-                    max_number = max(max_number, int(stem))
-            if not resp.get("IsTruncated"):
-                break
-            token = resp.get("NextContinuationToken")
-        return max_number + 1
-
-    def record_index_call(self, *, index_id: str, callee_cache_key: str, retries: int = 8) -> None:
-        self._append_sorted_unique_string(self._key_for_calls_from_index(index_id), callee_cache_key, retries=retries)
-        self._append_sorted_unique_member(
-            self._key_for_calls_to_cache(callee_cache_key),
-            member_key="indexes",
-            value=index_id,
-            retries=retries,
-        )
-
-    def record_fn_call(self, *, caller_cache_key: str, callee_cache_key: str, retries: int = 8) -> None:
-        self._append_sorted_unique_string(
-            self._key_for_calls_from_cache(caller_cache_key),
-            callee_cache_key,
-            retries=retries,
-        )
-        self._append_sorted_unique_member(
-            self._key_for_calls_to_cache(callee_cache_key),
-            member_key="cache_keys",
-            value=caller_cache_key,
-            retries=retries,
-        )
-
-    def _append_sorted_unique_string(self, key: str, value: str, *, retries: int) -> None:
-        for _ in range(retries):
-            current, etag = self._read_json(key)
-            data = [] if current is None else list(current)
-            merged = sorted({*data, value})
-            if current is None:
-                if self._write_json_if_absent(key, merged):
-                    return
-            else:
-                if self._write_json_if_match(key, merged, cast(str, etag)):
-                    return
-        raise DmlRepoError(f"Failed to update execution lineage object: {key}")
-
-    def _append_sorted_unique_member(self, key: str, *, member_key: str, value: str, retries: int) -> None:
+    def update_execution_record(self, record: ExecutionRecord, *, retries: int = 8) -> ExecutionRecord:
+        key = self._key_for_execution(record["execution_id"])
         for _ in range(retries):
             current, etag = self._read_json(key)
             if current is None:
-                merged = {"indexes": [], "cache_keys": []}
+                if self._write_json_if_absent(key, record):
+                    return record
             else:
-                merged = {
-                    "indexes": list(current.get("indexes", [])),
-                    "cache_keys": list(current.get("cache_keys", [])),
-                }
-            merged[member_key] = sorted({*merged[member_key], value})
-            if current is None:
-                if self._write_json_if_absent(key, merged):
-                    return
-            else:
+                merged = self._merge_execution_record(cast(ExecutionRecord, current), record)
                 if self._write_json_if_match(key, merged, cast(str, etag)):
-                    return
-        raise DmlRepoError(f"Failed to update execution lineage object: {key}")
+                    return merged
+        raise DmlRepoError(f"Failed to update execution state object: {key}")
+
+    def record_execution_dependency(
+        self,
+        *,
+        caller_execution_id: str,
+        callee_execution_id: str,
+        retries: int = 8,
+    ) -> None:
+        edge = {
+            "caller_execution_id": caller_execution_id,
+            "callee_execution_id": callee_execution_id,
+        }
+        key = self._key_for_edge(callee_execution_id, caller_execution_id)
+        for _ in range(retries):
+            if self._write_json_if_absent(key, edge):
+                return
+            existing, _etag = self._read_json(key)
+            if existing == edge:
+                return
+        raise DmlRepoError(f"Failed to write execution edge object: {key}")
+
+    def create_invalidation_record(
+        self,
+        *,
+        execution_id: str,
+        cache_key: str,
+        requested_by: str,
+        requested_at: int,
+    ) -> bool:
+        return self._write_json_if_absent(
+            self._key_for_invalidation(execution_id),
+            {
+                "execution_id": execution_id,
+                "cache_key": cache_key,
+                "requested_by": requested_by,
+                "requested_at": requested_at,
+            },
+        )

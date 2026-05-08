@@ -39,7 +39,7 @@ This spec exists so concept ownership stays explicit and stable across the docum
 - **Contrib**: term owned by the mapped `docs/contrib/*.md` authority documents for contrib module behavior.
 - **DAG**: term owned by `docs/dag-model.md` for directed acyclic graph semantics referenced by this mapping index.
 - **DaggerML**: repository and product name used by this mapping index.
-- **Dag.cache()**: term owned by `docs/api.md` and `docs/internal/ops/cache-ops.md` for cache-publication behavior.
+- **Cache publication**: term owned by `docs/internal/ops/cache-ops.md` and `docs/adapter-execution-contract.md` for runtime cache-publication behavior.
 - **Spec Suite**: the set of DaggerML documents that define normative behavior and contracts.
 - **Document Set**: a fixed set of documents that together own one concept when a single document is insufficient.
 - **GC**: term owned by `docs/internal/storage.md` and `docs/internal/storage-and-refs.md` for storage cleanup behavior.
@@ -71,7 +71,7 @@ When a concept is not listed in this document, callers MUST treat it as unresolv
 | Public API behavior | `docs/api.md`, `docs/object-model.md`, `docs/errors.md` | Public Python API semantics, node-wrapper selection, DAG-call staging behavior, and user-visible API errors. |
 | CLI behavior | `docs/cli.md` | User-visible CLI commands, arguments, and CLI semantics. |
 | Execution and runtime behavior | `docs/configuration.md`, `docs/execution-model.md`, `docs/adapter-execution-contract.md` | Runtime configuration, execution flow, and adapter execution contracts. |
-| Cache publication and cache identity | `docs/api.md`, `docs/internal/ops/cache-ops.md`, `docs/adapter-execution-contract.md` | `Dag.cache()` behavior, argv-derived cache identity, and adapter-facing cache contract details. |
+| Cache publication and cache identity | `docs/internal/ops/cache-ops.md`, `docs/adapter-execution-contract.md` | Runtime cache publication behavior, argv-derived cache identity, and adapter-facing cache contract details. |
 | Storage and object persistence | `docs/internal/storage.md`, `docs/internal/storage-and-refs.md`, `docs/storing-and-retrieving-external-data.md` | Storage model, reference handling, GC-adjacent storage behavior, and external data persistence semantics. |
 | Commit and DAG semantics | `docs/commit-model.md`, `docs/dag-model.md`, `docs/internal/ops/commit-ops.md`, `docs/internal/ops/dag-ops.md` | Commit objects, DAG model semantics, and operation-layer commit/DAG behavior. |
 | Remote sync and protocol | `docs/remote-sync.md`, `docs/remote-data-model.md`, `docs/remote-protocol.md`, `docs/internal/ops/remote-ops.md` | Remote lifecycle, remote schemas, sync protocol semantics, and remote operations behavior. |

@@ -58,7 +58,7 @@ def test_status_reports_runtime_registrations(monkeypatch):
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by):
             return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
@@ -140,7 +140,7 @@ def test_status_reports_best_effort_plugin_failures(monkeypatch):
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by):
             return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod

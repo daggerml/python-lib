@@ -33,6 +33,10 @@ def setup_remote_parser(parser: ArgumentParser) -> None:
     )
     setup_remote_pull_parser(subparsers.add_parser("pull", help="Pull a ref path from remote"))
     setup_remote_list_parser(subparsers.add_parser("list", help="List remote refs under a prefix"))
+    setup_remote_invalidate_cache_parser(subparsers.add_parser("invalidate-cache", help="Invalidate cached executions"))
+    setup_remote_cancel_execution_parser(
+        subparsers.add_parser("cancel-execution", help="Request execution cancellation")
+    )
     setup_remote_prune_parser(subparsers.add_parser("prune", help="Prune remote io/invoke transport blobs"))
     setup_remote_gc_parser(subparsers.add_parser("gc", help="Run remote garbage collection"))
 
@@ -93,6 +97,20 @@ def setup_remote_list_parser(parser: ArgumentParser) -> None:
     )
     parser.add_argument("prefix", help="Remote prefix to list (e.g. tags, cache)")
     parser.set_defaults(method="list", func=execute_remote_list)
+
+
+def setup_remote_invalidate_cache_parser(parser: ArgumentParser) -> None:
+    apply_help_config(parser, description="Invalidate cache refs by cache key using execution-graph planning.")
+    parser.add_argument("cache_keys", nargs="+", help="Cache keys to invalidate")
+    parser.add_argument("--user", required=True)
+    parser.set_defaults(method="invalidate-cache", func=execute_remote_invalidate_cache)
+
+
+def setup_remote_cancel_execution_parser(parser: ArgumentParser) -> None:
+    apply_help_config(parser, description="Request cancellation for executions by execution id.")
+    parser.add_argument("execution_ids", nargs="+", help="Execution ids to cancel")
+    parser.add_argument("--user", required=True)
+    parser.set_defaults(method="cancel-execution", func=execute_remote_cancel_execution)
 
 
 def setup_remote_prune_parser(parser: ArgumentParser) -> None:
@@ -185,6 +203,20 @@ def execute_remote_list(ops, args) -> list[dict]:
     s3_client = create_s3_client(boto3)
     remote_ops = get_remote_ops(ops, s3_client)
     return remote_ops.list(args.prefix)
+
+
+def execute_remote_invalidate_cache(ops, args) -> dict[str, Any]:
+    boto3 = require_boto3()
+    s3_client = create_s3_client(boto3)
+    remote_ops = get_remote_ops(ops, s3_client)
+    return remote_ops.invalidate_cache(list(args.cache_keys), requested_by=args.user)
+
+
+def execute_remote_cancel_execution(ops, args) -> dict[str, Any]:
+    boto3 = require_boto3()
+    s3_client = create_s3_client(boto3)
+    remote_ops = get_remote_ops(ops, s3_client)
+    return remote_ops.cancel_executions(list(args.execution_ids), requested_by=args.user)
 
 
 def execute_remote_prune(ops, args) -> int:

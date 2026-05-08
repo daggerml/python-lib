@@ -19,6 +19,8 @@ class ExecutorBase:
 
     name: str = ""
     adapter: str = ""
+    execution_status: str | None = None
+    cancel_requested_by: str | None = None
 
     # ------------------------------------------------------------------
     # Subclass interface
@@ -77,12 +79,16 @@ class ExecutorBase:
         cache_key: str,
         execution_id: str,
         state: dict[str, Any] | None,
+        execution_status: str | None,
+        cancel_requested_by: str | None,
         runnable: Runnable,
         argv_ptr: str,
         remote: dict[str, str],
     ) -> dict[str, Any]:
         """Call start or poll depending on whether immutable state exists."""
         executor = cls()
+        executor.execution_status = execution_status
+        executor.cancel_requested_by = cancel_requested_by
         if state is None:
             return executor.start(
                 cache_key=cache_key,

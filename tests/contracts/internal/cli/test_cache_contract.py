@@ -8,7 +8,6 @@ from daggerml._cli.cache import (
     execute_cache_delete,
     execute_cache_get,
     execute_cache_list,
-    execute_cache_put,
     setup_cache_parser,
 )
 from daggerml._internal._db import Ref
@@ -16,14 +15,6 @@ from daggerml._internal._db import Ref
 
 class TestSetupCacheParser:
     """Test cache parser setup."""
-
-    def test_put_parser_args(self):
-        """Test put subcommand arguments."""
-        parser = ArgumentParser()
-        setup_cache_parser(parser)
-        args = parser.parse_args(["put", "dag:abc123"])
-        assert args.subcommand == "put"
-        assert args.dag_ref == "dag:abc123"
 
     def test_get_parser_args(self):
         """Test get subcommand arguments."""
@@ -61,17 +52,6 @@ class TestSetupCacheParser:
 
 class TestExecuteCacheHandlers:
     """Test cache handler functions."""
-
-    def test_execute_cache_put(self):
-        """Test execute_cache_put handler."""
-        mock_ops = Mock()
-        mock_ops.put.return_value = "cache123"
-
-        args = Namespace(dag_ref="dag:abc123")
-        result = execute_cache_put(mock_ops, args)
-
-        mock_ops.put.assert_called_once_with(Ref("dag:abc123"))
-        assert result == "cache123"
 
     def test_execute_cache_get_found(self):
         """Test execute_cache_get when entry found."""

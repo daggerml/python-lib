@@ -13,7 +13,6 @@ def setup_cache_parser(parser: ArgumentParser) -> None:
         parser,
         description="Cache operations: store and retrieve cached DAG results keyed by argv node.",
         examples=[
-            "dml cache put dag:<id>",
             "dml cache get node-argv:<id>",
             "dml cache delete node-argv:<id>",
             "dml cache list --limit 10",
@@ -22,22 +21,10 @@ def setup_cache_parser(parser: ArgumentParser) -> None:
     )
     subparsers = parser.add_subparsers(dest="subcommand", metavar="<method>", help="Methods")
 
-    setup_cache_put_parser(subparsers.add_parser("put", help="Store cache entry for a DAG"))
     setup_cache_get_parser(subparsers.add_parser("get", help="Get cached DAG for argv"))
     setup_cache_delete_parser(subparsers.add_parser("delete", help="Delete cache entry for argv"))
     setup_cache_list_parser(subparsers.add_parser("list", help="List cache entries"))
     setup_cache_clear_parser(subparsers.add_parser("clear", help="Clear all cache entries"))
-
-
-def setup_cache_put_parser(put_parser: ArgumentParser) -> None:
-    """Setup cache put subcommand parser."""
-    apply_help_config(
-        put_parser,
-        description="Store a cache entry for a DAG.",
-        examples=["dml cache put dag:abc123"],
-    )
-    put_parser.add_argument("dag_ref", help="DAG ref (dag:<id>)")
-    put_parser.set_defaults(func=execute_cache_put)
 
 
 def setup_cache_get_parser(get_parser: ArgumentParser) -> None:
@@ -81,13 +68,6 @@ def setup_cache_clear_parser(clear_parser: ArgumentParser) -> None:
         examples=["dml cache clear"],
     )
     clear_parser.set_defaults(func=execute_cache_clear)
-
-
-def execute_cache_put(ops_obj, args):
-    """Execute cache put command, return JSON-serializable result."""
-    dag_ref = parse_ref(args.dag_ref)
-    return ops_obj.put(dag_ref)
-
 
 def execute_cache_get(ops_obj, args) -> Optional[object]:
     """Execute cache get command, return JSON-serializable result."""

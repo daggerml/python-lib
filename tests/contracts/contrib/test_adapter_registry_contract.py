@@ -19,7 +19,7 @@ class AdapterSpec:
         return (uri, kwargs, sub)
 
     @staticmethod
-    def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+    def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by):
         return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     @staticmethod
@@ -51,7 +51,7 @@ def test_register_adapter_accepts_class_object():
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by):
             return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
@@ -134,6 +134,8 @@ def test_lambda_adapter_invokes_runnable_target(monkeypatch):
         execution_id="exec-ck",
         remote={},
         state=None,
+        execution_status=None,
+        cancel_requested_by=None,
     )
 
     assert result == {"status": "succeeded", "error": None, "dag_id": "d" * 64}

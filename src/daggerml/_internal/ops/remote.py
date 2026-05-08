@@ -8,11 +8,12 @@ import base64
 import hashlib
 import json
 import re
+import sqlite3
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, fields, is_dataclass
 from functools import wraps
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import boto3
 from botocore.config import Config
@@ -502,6 +503,44 @@ class RemoteOps(BaseOps):
         except self.client.exceptions.ClientError as e:
             if e.response["Error"]["Code"] in ("PreconditionFailed", "412"):
                 raise RefAlreadyExists(f"Ref {ref_path} already exists") from None
+            raise
+
+    def _put_json_key_if_absent(self, key: str, value: dict[str, Any]) -> bool:
+        data = json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        try:
+            self.__put(key, data, ContentType="application/json", IfNoneMatch="*")
+            return True
+        except self.client.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+                return False
+            raise
+
+    def _get_json_key_with_etag(self, key: str) -> tuple[dict[str, Any] | None, str | None]:
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+        except self.client.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("NoSuchKey", "404"):
+                return None, None
+            raise
+        return json.loads(response["Body"].read()), response.get("ETag")
+
+    def _put_json_key_if_match(self, key: str, value: dict[str, Any], etag: str) -> bool:
+        data = json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        try:
+            self.__put(key, data, ContentType="application/json", IfMatch=etag)
+            return True
+        except self.client.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("PreconditionFailed", "412"):
+                return False
+            raise
+
+    def _delete_key_if_match(self, key: str, etag: str) -> bool:
+        try:
+            self.client.delete_object(Bucket=self.bucket, Key=key, IfMatch=etag)
+            return True
+        except self.client.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] in ("PreconditionFailed", "412", "NoSuchKey", "404"):
+                return False
             raise
 
     def _remote_put_dag_ref(self, dag_id: str, data: bytes) -> None:
@@ -1118,39 +1157,47 @@ class RemoteOps(BaseOps):
         self._require_manifest_ref_targets(ref_obj, ref_path)
         return ref_obj["target"]
 
+    @_remote_boundary("cache read")
+    def get_cache_ref_info(self, cache_key: str) -> dict[str, Any] | None:
+        ref_path = self._cache_ref_path(cache_key)
+        try:
+            ref_bytes = self._remote_get_ref(ref_path)
+        except RemoteError:
+            return None
+        ref_obj = self._decode_ref(ref_bytes)
+        self._require_manifest_ref_targets(ref_obj, ref_path)
+        execution_id = ref_obj.get("execution_id")
+        if not isinstance(execution_id, str) or not execution_id:
+            raise DmlRepoError(f"Cache ref missing execution_id: {ref_path}")
+        ref_obj["execution_id"] = execution_id
+        return ref_obj
+
     @_remote_boundary("cache put")
     def put_cache_ref(
-        self, cache_key: str, target: str, *, overwrite: bool = False, targets: dict[str, list[str]]
+        self,
+        cache_key: str,
+        target: str,
+        *,
+        targets: dict[str, list[str]],
+        execution_id: str,
     ) -> None:
-        """Create or update a cache ref.
-
-        Create when missing. If present:
-        - no-op when existing target matches.
-        - conflict unless overwrite=True.
-        """
+        """Create a cache ref only when no current ref exists."""
         target = self._validate_manifest_oid(target)
         targets = self._validate_targets(targets)
+        if not isinstance(execution_id, str) or not execution_id:
+            raise ValueError("execution_id must be a non-empty string")
         ref_path = self._cache_ref_path(cache_key)
         ref_obj = {
             "kind": "ref",
             "schema": 0,
             "target": target,
+            "execution_id": execution_id,
             "created_at": int(time.time()),
             "targets": targets,
             "meta": {},
         }
         ref_bytes = json.dumps(ref_obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        try:
-            self._remote_put_ref(ref_path, ref_bytes)
-            return
-        except RefAlreadyExists:
-            existing_obj = self._decode_ref(self._remote_get_ref(ref_path))
-            if existing_obj["target"] == target:
-                return
-            if not overwrite:
-                raise
-            self._remote_delete_ref(ref_path)
-            self._remote_put_ref(ref_path, ref_bytes)
+        self._remote_put_ref_if_absent(ref_path, ref_bytes)
 
     @_remote_boundary("cache delete")
     def delete_cache_ref(self, cache_key: str) -> bool:
@@ -1162,6 +1209,17 @@ class RemoteOps(BaseOps):
             return False
         self._remote_delete_ref(ref_path)
         return True
+
+    @_remote_boundary("cache compare-and-delete")
+    def delete_cache_ref_if_execution_id(self, cache_key: str, execution_id: str) -> bool:
+        ref_path = self._cache_ref_path(cache_key)
+        try:
+            observed = self._remote_get_ref_with_etag(ref_path)
+        except RemoteError:
+            return False
+        if observed.ref.get("execution_id") != execution_id or not observed.etag:
+            return False
+        return self._delete_key_if_match(self._ref_key(ref_path), observed.etag)
 
     @_remote_boundary("cache list")
     def list_cache_refs(self, limit: int | None = None) -> list[tuple[str, str]]:
@@ -1178,6 +1236,234 @@ class RemoteOps(BaseOps):
             if limit is not None and len(out) >= limit:
                 break
         return out
+
+    def _execution_state_key(self, execution_id: str) -> str:
+        return self._prefixed_key(f"exec/state/{execution_id}.json")
+
+    def _execution_invalidate_key(self, execution_id: str) -> str:
+        return self._prefixed_key(f"exec/invalidate/{execution_id}.json")
+
+    def _list_json_prefix(self, relative_prefix: str) -> list[tuple[str, dict[str, Any]]]:
+        prefix = self._prefixed_key(relative_prefix)
+        out: list[tuple[str, dict[str, Any]]] = []
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith(".json"):
+                    continue
+                body, _etag = self._get_json_key_with_etag(key)
+                if body is not None:
+                    out.append((key, body))
+        return out
+
+    def _ingest_execution_graph(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            create table states (
+                execution_id text primary key,
+                cache_key text not null,
+                status text not null,
+                created_at integer not null,
+                updated_at integer not null,
+                cancel_requested_by text,
+                dependencies_json text not null
+            );
+            create table edges (
+                callee_execution_id text not null,
+                caller_execution_id text not null,
+                primary key (callee_execution_id, caller_execution_id)
+            );
+            create table invalidations (
+                execution_id text primary key,
+                cache_key text not null,
+                requested_by text not null,
+                requested_at integer not null
+            );
+            create table cache_refs (
+                cache_key text primary key,
+                execution_id text not null,
+                target text not null,
+                created_at integer not null
+            );
+            """
+        )
+        for _key, state in self._list_json_prefix("exec/state/"):
+            conn.execute(
+                "insert or replace into states values (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    state["execution_id"],
+                    state["cache_key"],
+                    state["status"],
+                    state["created_at"],
+                    state["updated_at"],
+                    state.get("cancel_requested_by"),
+                    json.dumps(state.get("dependencies", []), separators=(",", ":"), sort_keys=True),
+                ),
+            )
+        for _key, edge in self._list_json_prefix("exec/edges/"):
+            conn.execute(
+                "insert or replace into edges values (?, ?)",
+                (edge["callee_execution_id"], edge["caller_execution_id"]),
+            )
+        for _key, invalidation in self._list_json_prefix("exec/invalidate/"):
+            conn.execute(
+                "insert or replace into invalidations values (?, ?, ?, ?)",
+                (
+                    invalidation["execution_id"],
+                    invalidation["cache_key"],
+                    invalidation["requested_by"],
+                    invalidation["requested_at"],
+                ),
+            )
+        for ref in self.list("cache"):
+            ref_path = ref["ref_path"]
+            cache_key = ref_path.split("/")[-1][: -len(".json")]
+            conn.execute(
+                "insert or replace into cache_refs values (?, ?, ?, ?)",
+                (cache_key, ref.get("execution_id"), ref["target"], ref["created_at"]),
+            )
+        conn.commit()
+        return conn
+
+    def _update_execution_state_record(
+        self,
+        execution_id: str,
+        *,
+        status: str | None = None,
+        dependencies: list[str] | None = None,
+        cancel_requested_by: str | None = None,
+        retries: int = 8,
+    ) -> dict[str, Any] | None:
+        key = self._execution_state_key(execution_id)
+        status_rank = {"running": 0, "cancel-requested": 1, "cancelled": 2, "succeeded": 3, "failed": 3}
+        for _ in range(retries):
+            current, etag = self._get_json_key_with_etag(key)
+            if current is None or etag is None:
+                return None
+            merged = dict(current)
+            if status is not None and status_rank[status] > status_rank[merged["status"]]:
+                merged["status"] = status
+            if dependencies:
+                merged["dependencies"] = sorted({*merged.get("dependencies", []), *dependencies})
+            if cancel_requested_by is not None and merged.get("cancel_requested_by") is None:
+                merged["cancel_requested_by"] = cancel_requested_by
+            merged["updated_at"] = int(time.time())
+            if self._put_json_key_if_match(key, merged, etag):
+                return merged
+        raise DmlRepoError(f"Remote execution state update failed for {execution_id}")
+
+    @_remote_boundary("invalidate cache")
+    def invalidate_cache(self, cache_keys: list[str], *, requested_by: str) -> dict[str, Any]:
+        conn = self._ingest_execution_graph()
+        seen: list[str] = []
+        seen_set: set[str] = set()
+        unseen: set[str] = set()
+        for cache_key in cache_keys:
+            row = conn.execute(
+                "select execution_id from cache_refs where cache_key = ?",
+                (cache_key,),
+            ).fetchone()
+            if row and row[0]:
+                unseen.add(cast(str, row[0]))
+        while unseen:
+            exec_id = unseen.pop()
+            state_row = conn.execute(
+                "select cache_key from states where execution_id = ?",
+                (exec_id,),
+            ).fetchone()
+            if state_row is None:
+                continue
+            cache_row = conn.execute(
+                "select execution_id from cache_refs where cache_key = ?",
+                (state_row[0],),
+            ).fetchone()
+            if cache_row is None or cache_row[0] != exec_id:
+                continue
+            if exec_id in seen_set:
+                continue
+            seen.append(exec_id)
+            seen_set.add(exec_id)
+            for caller_row in conn.execute(
+                "select caller_execution_id from edges where callee_execution_id = ?",
+                (exec_id,),
+            ):
+                if caller_row[0] not in seen_set:
+                    unseen.add(caller_row[0])
+        requested_at = int(time.time())
+        committed: list[str] = []
+        for exec_id in reversed(seen):
+            row = conn.execute(
+                "select cache_key from states where execution_id = ?",
+                (exec_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            tombstone = {
+                "execution_id": exec_id,
+                "cache_key": row[0],
+                "requested_by": requested_by,
+                "requested_at": requested_at,
+            }
+            self._put_json_key_if_absent(self._execution_invalidate_key(exec_id), tombstone)
+            self.delete_cache_ref_if_execution_id(cast(str, row[0]), exec_id)
+            committed.append(exec_id)
+        return {"requested": cache_keys, "invalidated_execution_ids": committed}
+
+    @_remote_boundary("cancel executions")
+    def cancel_executions(self, execution_ids: list[str], *, requested_by: str) -> dict[str, Any]:
+        conn = self._ingest_execution_graph()
+        seen: list[str] = []
+        seen_set: set[str] = set()
+        unseen = set(execution_ids)
+        terminal = {"succeeded", "failed", "cancelled"}
+        inactive = terminal | {"cancel-requested"}
+        while unseen:
+            exec_id = unseen.pop()
+            row = conn.execute(
+                "select status, dependencies_json from states where execution_id = ?",
+                (exec_id,),
+            ).fetchone()
+            if row is None or row[0] in terminal or exec_id in seen_set:
+                continue
+            seen.append(exec_id)
+            seen_set.add(exec_id)
+            unseen.update(dep for dep in json.loads(row[1]) if dep not in seen_set)
+        committed: list[str] = []
+        for exec_id in reversed(seen):
+            row = conn.execute(
+                "select status from states where execution_id = ?",
+                (exec_id,),
+            ).fetchone()
+            if row is None or row[0] in terminal:
+                continue
+            caller_count = 0
+            for caller_row in conn.execute(
+                "select caller_execution_id from edges where callee_execution_id = ?",
+                (exec_id,),
+            ):
+                caller_state = conn.execute(
+                    "select status from states where execution_id = ?",
+                    (caller_row[0],),
+                ).fetchone()
+                if caller_state is not None and caller_state[0] not in inactive:
+                    caller_count += 1
+            if caller_count > 1:
+                continue
+            updated = self._update_execution_state_record(
+                exec_id,
+                status="cancel-requested",
+                cancel_requested_by=requested_by,
+            )
+            if updated is not None:
+                conn.execute(
+                    "update states set status = ?, cancel_requested_by = ? where execution_id = ?",
+                    (updated["status"], updated.get("cancel_requested_by"), exec_id),
+                )
+                committed.append(exec_id)
+        conn.commit()
+        return {"requested": execution_ids, "cancel_requested_execution_ids": committed}
 
     def _push_upload_objects(self, local_manifest: dict) -> None:
         """Upload missing CAS objects from local manifest closure.

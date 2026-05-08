@@ -32,10 +32,13 @@ class SshExecutor(ExecutorBase):
         cache_key: str,
         execution_id: str,
         state: dict[str, Any] | None,
+        execution_status: str | None = None,
+        cancel_requested_by: str | None = None,
         runnable: Runnable,
         argv_ptr: str,
         remote: dict[str, str],
     ) -> dict[str, Any]:
+        del execution_status, cancel_requested_by
         if runnable is None or runnable.sub is None:
             raise DmlRepoError("ssh executor handle requires runnable with sub runnable")
         kw = cls._validate_kw(runnable.kwargs)

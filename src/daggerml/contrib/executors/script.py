@@ -17,6 +17,7 @@ from textwrap import dedent
 from typing import Any, cast
 
 import daggerml as dml
+from daggerml._internal.execution_context import execution_context
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store
@@ -136,11 +137,20 @@ class ScriptExecutor(ExecutorBase):
             "version": 2,
             "cache_key": cache_key,
             "execution_id": execution_id,
-            "cmd": [sys.executable, "-m", "daggerml.contrib.executors.script", argv_ptr],
+            "cmd": [
+                sys.executable,
+                "-m",
+                "daggerml.contrib.executors.script",
+                "--execution-id",
+                execution_id,
+                "--cache-key",
+                cache_key,
+                "--remote-root",
+                remote["root"],
+                argv_ptr,
+            ],
             "remote": remote,
-            "env": {
-                "DML_REMOTE_URI": remote["root"],
-            },
+            "env": {},
         }
         payload_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         with stdout_path.open("w") as stdout_f, stderr_path.open("w") as stderr_f:
@@ -226,7 +236,7 @@ def _terminal_runnable(root: Runnable) -> Runnable:
     return current
 
 
-def run_payload(argv_ptr: str) -> dict[str, Any]:
+def run_payload(argv_ptr: str, *, execution_id: str, cache_key: str, remote_root: str) -> dict[str, Any]:
     namespace: dict[str, Any] = {"logger": logging.getLogger("daggerml.contrib.script")}
 
     def runit(dag):
@@ -255,28 +265,37 @@ def run_payload(argv_ptr: str) -> dict[str, Any]:
             return {"status": "failed", "error": str(err)}
         return {"status": "succeeded", "error": None, "dag_id": dag.ref.id()}
 
-    with dml.temporary() as dml_instance:
-        try:
-            dag = dml_instance.new(argv_ptr=argv_ptr)
-        except Exception as e:
-            return {"status": "failed", "error": str(e)}
-        with TemporaryDirectory(prefix="dml-script-worker-") as tmpd, chdir(tmpd):
+    with execution_context(execution_id, cache_key):
+        with dml.Dml.temporary(remote_root=remote_root) as dml_instance:
             try:
-                with dag:
-                    runit(dag)
-                return succeeded_result(dag)
+                dag = dml_instance.new(argv_ptr=argv_ptr)
             except Exception as e:
-                if dag.ref is not None:
-                    return succeeded_result(dag)
                 return {"status": "failed", "error": str(e)}
+            with TemporaryDirectory(prefix="dml-script-worker-") as tmpd, chdir(tmpd):
+                try:
+                    with dag:
+                        runit(dag)
+                    return succeeded_result(dag)
+                except Exception as e:
+                    if dag.ref is not None:
+                        return succeeded_result(dag)
+                    return {"status": "failed", "error": str(e)}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="daggerml script worker")
     parser.add_argument("-o", "--output", default="result.json", help="JSON result path or '-' for stdout")
+    parser.add_argument("--execution-id", required=True)
+    parser.add_argument("--cache-key", required=True)
+    parser.add_argument("--remote-root", required=True)
     parser.add_argument("argv_ptr")
     args = parser.parse_args(argv or sys.argv[1:])
-    result = run_payload(args.argv_ptr)
+    result = run_payload(
+        args.argv_ptr,
+        execution_id=args.execution_id,
+        cache_key=args.cache_key,
+        remote_root=args.remote_root,
+    )
     encoded = json.dumps(result, separators=(",", ":"), sort_keys=True)
     if args.output == "-":
         sys.stdout.write(encoded)

@@ -53,11 +53,13 @@ class CacheOps(BaseOps):
             return None
         return remote_ops.load_ptr_in_txn(target, txn, expected_root_ns="dag")
 
-    def put(self, dag_ref: Ref) -> str:
+    def put(self, dag_ref: Ref, *, execution_id: str) -> str:
         """Create or overwrite a cache entry for `dag_ref`."""
         try:
             if dag_ref.ns() != "dag":
                 raise DmlRepoError(f"Expected dag ref for cache value, got: {dag_ref}")
+            if not isinstance(execution_id, str) or not execution_id:
+                raise DmlRepoError("Execution id required for cache entry publication")
             remote_ops = self._require_remote_context()
             with self._tx(readonly=True) as txn:
                 dag = txn.get(dag_ref)
@@ -67,7 +69,7 @@ class CacheOps(BaseOps):
                 cache_key = self._cache_key(argv_ref, txn)
                 targets = remote_ops._targets_for_root(txn, dag_ref)
             target = remote_ops.put_ref_manifest(dag_ref)
-            remote_ops.put_cache_ref(cache_key, target, overwrite=True, targets=targets)
+            remote_ops.put_cache_ref(cache_key, target, targets=targets, execution_id=execution_id)
             return cache_key
         except Exception as e:
             raise DmlRepoError(f"Failed to put cache entry: {e}") from e

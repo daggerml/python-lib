@@ -29,7 +29,7 @@ Define the canonical external adapter invocation contract used by runtime execut
 
 - Adapter invocation payload:
   - location: adapter stdin payload,
-  - schema: JSON object containing `argv_ptr`, `cache_key`, `execution_id`, `remote`, `runnable`, and `state`,
+  - schema: JSON object containing `argv_ptr`, `cache_key`, `execution_id`, `remote`, `runnable`, `state`, `execution_status`, and `cancel_requested_by`,
   - `remote` MUST contain `root`.
 - Runnable model at the execution boundary:
   - `target` (`Uri`),
@@ -48,6 +48,8 @@ Define the canonical external adapter invocation contract used by runtime execut
 - `argv_ptr` is opaque at the adapter and executor boundary and is forwarded unchanged.
 - `execution_id` identifies the current in-flight execution attempt and is runtime-assigned.
 - `state` in the adapter payload is `null` on first launch and the immutable stored launch-time state on later polls.
+- `execution_status` in the adapter payload is `null` on first launch and the last stored execution status on later polls.
+- `cancel_requested_by` in the adapter payload is `null` unless cancellation has been requested for that execution.
 - Internal execution-state `done` is not an adapter-boundary status and MUST NOT be emitted by adapters.
 - Adapter and executor invocation is kickoff-or-poll and must be bounded.
 - Long-running execution is asynchronous and resumed by repeated invocations using `execution_id` plus the immutable stored launch-time `state`.

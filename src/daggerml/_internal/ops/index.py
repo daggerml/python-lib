@@ -9,15 +9,18 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 from subprocess import run
 from typing import Any, Mapping, Optional, cast
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from daggerml._internal._db import Ref
 from daggerml._internal.builtins import BUILTIN_FNS
 from daggerml._internal.codec import CodecContext, apply_codec
 from daggerml._internal.exec_state import ExecutionRecord, ExecutionState
+from daggerml._internal.execution_context import get_current_execution_context
 from daggerml._internal.ops.base_ops import BaseOps, with_retry
 from daggerml._internal.ops.cache import CacheOps
 from daggerml._internal.ops.dag import DagOps
@@ -55,7 +58,7 @@ class _PreparedAdapterCall:
     cache_key: str
     runnable: dict[str, Any]
     adapter_cmd: tuple[str, ...] | None = None
-    caller_index_id: str | None = None
+    caller_execution_id: str | None = None
     caller_cache_key: str | None = None
 
 
@@ -133,38 +136,53 @@ class IndexOps(BaseOps):
         if 'post_lock_dag_ref' in locals():
             return self._finish_fn_result(post_lock_dag_ref, argv, name, None, index_id)
 
-        execution_number = es.read_active_execution_number()
+        execution_id = es.read_active_execution_id()
         execution_record = None
-        if execution_number is not None:
-            # get execution record
-            execution_record = es.read_execution_record(execution_number)
-            # start over if record is missing
-            if execution_record is None:
+        if execution_id is not None:
+            execution_record = es.read_execution_record(execution_id)
+            if execution_record is None or execution_record["status"] in {"succeeded", "failed", "cancelled"}:
                 es.delete_active_execution()
-                execution_number = None
-        # submit new or check existing?
-        if execution_number is None:
+                execution_id = None
+        if execution_id is None:
             assert execution_record is None
-            self._record_call_edges(prepared, es)
-            execution_number = es.next_execution_number()
-            execution_id = f"{prepared.cache_key}-{execution_number}"
+            execution_id = str(uuid4())
             state = None
         else:
             assert execution_record is not None
-            execution_id = cast(str, execution_record["execution_id"])
-            state = cast(dict[str, Any], execution_record["state"])
+            state = cast(dict[str, Any] | None, execution_record["state"])
 
         # Step 3: call adapter (holding the lock)
         try:
-            result = self._call_adapter(prepared, argv_ptr, execution_id=execution_id, state=state)
+            result = self._call_adapter(
+                prepared,
+                argv_ptr,
+                execution_id=execution_id,
+                state=state,
+                execution_status=(cast(str, execution_record["status"]) if execution_record is not None else None),
+                cancel_requested_by=(
+                    cast(str | None, execution_record["cancel_requested_by"]) if execution_record is not None else None
+                ),
+            )
         except Exception:
             es.unlock()
             raise
 
+        self._record_call_edges(prepared, es, execution_id=execution_id)
+
         # Step 4: handle adapter result
         status = result["status"]
+        execution_state: ExecutionRecord = {
+            "execution_id": execution_id,
+            "cache_key": prepared.cache_key,
+            "created_at": int(execution_record["created_at"]) if execution_record is not None else int(time.time()),
+            "status": cast(Any, status),
+            "state": result.get("state") if (status == "running" and state is None) else None,
+            "dependencies": [],
+            "updated_at": int(time.time()),
+            "cancel_requested_by": execution_record["cancel_requested_by"] if execution_record is not None else None,
+        }
+        execution_state = es.update_execution_record(execution_state)
         if status == "succeeded":
-            self._publish_terminal_state(prepared.argv_ref, result)
             es.delete_active_execution()
             es.unlock()
             with self._tx(readonly=False) as txn:
@@ -176,7 +194,7 @@ class IndexOps(BaseOps):
                 return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
             raise DmlRepoError("Adapter reported success but no cached DAG was published")
         elif status == "failed":
-            self._publish_terminal_state(prepared.argv_ref, result)
+            self._publish_terminal_state(prepared.argv_ref, result, execution_id=execution_id)
             es.delete_active_execution()
             es.unlock()
             with self._tx(readonly=False) as txn:
@@ -189,17 +207,7 @@ class IndexOps(BaseOps):
             raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
         else:
             if state is None:
-                record: ExecutionRecord = {
-                    "execution_number": execution_number,
-                    "execution_id": execution_id,
-                    "cache_key": prepared.cache_key,
-                    "status": "running",
-                    "state": result["state"],
-                }
-                if not es.create_execution_record(execution_number, record):
-                    es.unlock()
-                    raise DmlRepoError(f"Execution record already exists: {prepared.cache_key}/{execution_number}")
-                if not es.create_active_execution(execution_number):
+                if not es.create_active_execution(execution_id):
                     es.unlock()
                     raise DmlRepoError(f"Active execution already exists for cache key: {prepared.cache_key}")
             # running — adapter is still working asynchronously
@@ -399,8 +407,11 @@ class IndexOps(BaseOps):
         head_ops.delete_index(index_id)
         if ctx.dag.argv is not None:
             # automatically cache the DAG if it has an argv (i.e. is runnable)
+            execution_id, _cache_key = get_current_execution_context()
+            if execution_id is None:
+                raise DmlRepoError("Execution id required for runnable DAG cache publication")
             cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-            cops.put(ctx.commit.dag)
+            cops.put(ctx.commit.dag, execution_id=execution_id)
         return commit_ref
 
     def current_dag_ref(self, index_id: str) -> Ref:
@@ -673,12 +684,13 @@ class IndexOps(BaseOps):
         return payload
 
     def _caller_identity(self, index_id: str, txn) -> tuple[str | None, str | None]:
+        caller_execution_id, caller_cache_key = get_current_execution_context()
+        if caller_execution_id:
+            return caller_execution_id, caller_cache_key
         ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id))
         if ctx.dag is None:
             raise DmlRepoError("Index commit has no DAG.")
-        if ctx.dag.argv is None:
-            return index_id, None
-        return None, ctx.dag.argv.id()
+        return None, None
 
     def _prepare_adapter_call(self, index_id: str, argv_ref: Ref, txn) -> _PreparedAdapterCall:
         argv_node: ArgvNode = txn.get(argv_ref)
@@ -720,14 +732,14 @@ class IndexOps(BaseOps):
                 ),
             )
         node_ops = NodeOps(_db=self._db)
-        caller_index_id, caller_cache_key = self._caller_identity(index_id=index_id, txn=txn)
+        caller_execution_id, caller_cache_key = self._caller_identity(index_id=index_id, txn=txn)
         return _PreparedAdapterCall(
             argv_ref=argv_ref,
             adapter_path=adapter_path,
             adapter_cmd=adapter_cmd,
             cache_key=argv_ref.id(),
             runnable=self._runnable_envelope(fn_runnable_ref, txn, node_ops),
-            caller_index_id=caller_index_id,
+            caller_execution_id=caller_execution_id,
             caller_cache_key=caller_cache_key,
         )
 
@@ -739,7 +751,7 @@ class IndexOps(BaseOps):
     def _build_failed_execution_dag(self, argv_ref: Ref, error_message: str) -> Ref:
         return self._build_scratch_dag(argv_ref, error=Error.from_ex(DmlRepoError(error_message)))
 
-    def _publish_terminal_state(self, argv_ref: Ref, state: Mapping[str, Any]) -> None:
+    def _publish_terminal_state(self, argv_ref: Ref, state: Mapping[str, Any], *, execution_id: str) -> None:
         cops = CacheOps(_db=self._db, remote_root=self.remote_root)
         if state["status"] == "succeeded":
             dag_id = state.get("dag_id")
@@ -750,15 +762,29 @@ class IndexOps(BaseOps):
             dag_ref = self._build_failed_execution_dag(argv_ref, state.get("error") or "Adapter reported failure")
         else:
             raise DmlRepoError(f"Cannot publish non-terminal execution state: {state['status']}")
-        cops.put(dag_ref)
+        cops.put(dag_ref, execution_id=execution_id)
 
     @staticmethod
-    def _record_call_edges(prepared: _PreparedAdapterCall, state: ExecutionState) -> None:
-        if prepared.caller_index_id is not None:
-            state.record_index_call(index_id=prepared.caller_index_id, callee_cache_key=prepared.cache_key)
+    def _record_call_edges(prepared: _PreparedAdapterCall, state: ExecutionState, *, execution_id: str) -> None:
+        if prepared.caller_execution_id is None:
             return
-        if prepared.caller_cache_key is not None:
-            state.record_fn_call(caller_cache_key=prepared.caller_cache_key, callee_cache_key=prepared.cache_key)
+        state.record_execution_dependency(
+            caller_execution_id=prepared.caller_execution_id,
+            callee_execution_id=execution_id,
+        )
+        if prepared.caller_cache_key:
+            state.update_execution_record(
+                {
+                    "execution_id": prepared.caller_execution_id,
+                    "cache_key": prepared.caller_cache_key,
+                    "created_at": int(time.time()),
+                    "status": "running",
+                    "state": None,
+                    "dependencies": [execution_id],
+                    "updated_at": int(time.time()),
+                    "cancel_requested_by": None,
+                }
+            )
 
     def _call_adapter(
         self,
@@ -767,6 +793,8 @@ class IndexOps(BaseOps):
         *,
         execution_id: str,
         state: dict[str, Any] | None,
+        execution_status: str | None,
+        cancel_requested_by: str | None,
     ) -> dict[str, Any]:
         envelope = {
             "argv_ptr": argv_ptr,
@@ -777,6 +805,8 @@ class IndexOps(BaseOps):
             },
             "runnable": prepared.runnable,
             "state": state,
+            "execution_status": execution_status,
+            "cancel_requested_by": cancel_requested_by,
         }
         cmd = list(prepared.adapter_cmd) if prepared.adapter_cmd is not None else [prepared.adapter_path]
         if prepared.adapter_cmd is None and prepared.adapter_path.endswith(".py"):

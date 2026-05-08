@@ -115,12 +115,10 @@ Rules:
 - protocol implementations MUST support cache-ref enumeration over `refs/cache/`.
 - protocol implementations MUST support cache-ref read/write/delete by cache key.
 - cache-ref writes MUST create when absent.
-- cache-ref writes MUST be no-op success when existing `target` matches.
-- cache-ref writes MUST fail deterministically on target conflict unless explicit overwrite behavior is requested by caller.
-- protocol implementations MAY support explicit overwrite behavior for cache-ref writes.
+- cache-ref writes MUST fail deterministically when the cache-key path already exists.
 - cache ref writes MUST be deterministic for a given cache key.
 - cache-ref writes MUST include top-level `targets` for the direct DAG ids of the referenced manifest.
-- if `overwrite` is false and an existing cache ref points to a different manifest OID, the write MUST fail.
+- reruns that want to publish the same cache key MUST invalidate or delete the current cache ref before a later write can succeed.
 
 
 ## Prune/GC Protocol

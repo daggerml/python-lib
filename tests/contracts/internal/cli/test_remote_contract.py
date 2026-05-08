@@ -29,6 +29,12 @@ class TestSetupRemoteParser:
         args = parser.parse_args(["list", "commits"])
         assert args.method == "list"
 
+        args = parser.parse_args(["invalidate-cache", "ck1", "--user", "alice"])
+        assert args.method == "invalidate-cache"
+
+        args = parser.parse_args(["cancel-execution", "exec-1", "--user", "alice"])
+        assert args.method == "cancel-execution"
+
         args = parser.parse_args(["prune"])
         assert args.method == "prune"
 

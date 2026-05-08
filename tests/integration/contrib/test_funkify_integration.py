@@ -36,7 +36,18 @@ def _reset_registry(tmp_path, monkeypatch):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @classmethod
-        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
+        def handle(
+            cls,
+            *,
+            cache_key,
+            execution_id,
+            state,
+            execution_status,
+            cancel_requested_by,
+            runnable,
+            argv_ptr,
+            remote,
+        ):
             return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     class CustomExecutor:
@@ -48,7 +59,18 @@ def _reset_registry(tmp_path, monkeypatch):
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
 
         @classmethod
-        def handle(cls, *, cache_key, execution_id, state, runnable, argv_ptr, remote):
+        def handle(
+            cls,
+            *,
+            cache_key,
+            execution_id,
+            state,
+            execution_status,
+            cancel_requested_by,
+            runnable,
+            argv_ptr,
+            remote,
+        ):
             return {"status": "running", "error": None, "state": {"token": execution_id}}
 
     ereg.register_executor(ScriptExecutor)
@@ -88,6 +110,8 @@ def _poll_until_terminal(
             execution_id=execution_id,
             remote=_remote(),
             state=state,
+            execution_status=None,
+            cancel_requested_by=None,
         )
         if state is None and result.get("status") == "running":
             state = cast(dict[str, Any], result.get("state"))
@@ -181,9 +205,15 @@ def test_funkify_script_runnable_contains_executable_fn_script():
 @pytest.mark.parametrize(
     "contract_id,stage,use_prepop,cache_key",
     [
-        pytest.param("FKY-LFC-001", "kickoff", False, "ck-funkify-int-1", id="FKY-LFC-001:kickoff-returns-running"),
-        pytest.param("FKY-LFC-002", "resume", False, "ck-funkify-int-1", id="FKY-LFC-002:resume-poll-returns-running"),
-        pytest.param("FKY-LFC-003", "terminal", False, "ck-funkify-int-1", id="FKY-LFC-003:terminal-succeeded"),
+        pytest.param(
+            "FKY-LFC-001", "kickoff", False, "ck-funkify-int-1-kickoff", id="FKY-LFC-001:kickoff-returns-running"
+        ),
+        pytest.param(
+            "FKY-LFC-002", "resume", False, "ck-funkify-int-1-resume", id="FKY-LFC-002:resume-poll-returns-running"
+        ),
+        pytest.param(
+            "FKY-LFC-003", "terminal", False, "ck-funkify-int-1-terminal", id="FKY-LFC-003:terminal-succeeded"
+        ),
         pytest.param(
             "FKY-LFC-004",
             "terminal",
@@ -196,6 +226,7 @@ def test_funkify_script_runnable_contains_executable_fn_script():
 def test_funkify_script_lifecycle_stage_matrix_FKY_LFC_001_to_FKY_LFC_004(contract_id, stage, use_prepop, cache_key):
     del contract_id
     decorate = api.funkify(uri="script", adapter="local")
+    nonce = {"kickoff": 1, "resume": 2, "terminal": 3}[stage]
 
     if use_prepop:
         @decorate
@@ -203,7 +234,7 @@ def test_funkify_script_lifecycle_stage_matrix_FKY_LFC_001_to_FKY_LFC_004(contra
             return dag.seed.value() * 2
     else:
         @decorate
-        def fn(dag, x, y=2, *, z=3):
+        def fn(dag, x, y=2, *, z=3, nonce=nonce):
             return x.value() + y.value() + z.value()  # pyright: ignore[reportAttributeAccessIssue]
 
     with Dml.temporary() as dml:
@@ -237,6 +268,8 @@ def test_funkify_script_lifecycle_stage_matrix_FKY_LFC_001_to_FKY_LFC_004(contra
             execution_id=f"exec-{cache_key}",
             remote=_remote(),
             state=None,
+            execution_status=None,
+            cancel_requested_by=None,
         )
         assert kickoff["status"] == "running"
 
@@ -250,6 +283,8 @@ def test_funkify_script_lifecycle_stage_matrix_FKY_LFC_001_to_FKY_LFC_004(contra
             execution_id=f"exec-{cache_key}",
             remote=_remote(),
             state=cast(dict[str, Any], kickoff["state"]),
+            execution_status=None,
+            cancel_requested_by=None,
         )
         assert resumed["status"] == "running"
         if stage == "resume":
@@ -287,7 +322,9 @@ def test_dagclass_compiled_method_executes_through_local_script_runtime():
 
 
 def test_funkify_script_runtime_executes_generated_source_with_args_and_kwargs(tmp_path):
-    def fn(dag, x, y=2, *, z=3):
+    nonce = len(str(tmp_path))
+
+    def fn(dag, x, y=2, *, z=3, nonce=nonce):
         return x.value() + y.value() + z.value()  # pyright: ignore[reportAttributeAccessIssue]
 
     delayed = api.funkify(fn, uri="script", adapter="local")
@@ -296,7 +333,12 @@ def test_funkify_script_runtime_executes_generated_source_with_args_and_kwargs(t
         runnable = cast(Runnable, dag.put(cast(Any, delayed)).value())
         os.environ["DML_PROJECT_HOME"] = cast(str, dml.repo)
         try:
-            result = run_payload(_mk_argv_ptr(4, argv0=runnable))
+            result = run_payload(
+                _mk_argv_ptr(4, argv0=runnable),
+                execution_id="exec-worker",
+                cache_key="ck-worker",
+                remote_root=_remote()["root"],
+            )
         finally:
             os.environ.pop("DML_PROJECT_HOME", None)
 
@@ -317,7 +359,9 @@ def test_funkify_resolve_runnable_requires_runnable_return():
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(*, runnable, argv_ptr, cache_key, execution_id, remote, state):
+        def send(
+            *, runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by
+        ):
             return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod

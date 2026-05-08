@@ -119,6 +119,7 @@ class Dml:
     repo: Optional[str] = None  # Repository path
     user: Optional[str] = None
     branch: Optional[str] = None
+    remote_root: Optional[str] = None
 
     # Internal state
     _ops: Optional[DmlOps] = field(default=None, init=False, repr=False)
@@ -130,11 +131,13 @@ class Dml:
             explicit={
                 "project.home": self.repo,
                 "user": self.user,
+                "remote.uri": self.remote_root,
             }
         )
         self._config = resolved
         self.repo = resolved.project.home
         self.user = resolved.user
+        self.remote_root = resolved.remote.uri
 
     @property
     def ops(self) -> DmlOps:
@@ -201,7 +204,7 @@ class Dml:
         return self.ops.head().get_attached_head_branch()
 
     @classmethod
-    def temporary(cls, repo="test", user="user", branch="main") -> "Dml":
+    def temporary(cls, repo="test", user="user", branch="main", remote_root: str | None = None) -> "Dml":
         """Create a temporary Dml instance with a temporary repository.
 
         Parameters
@@ -222,14 +225,14 @@ class Dml:
         repo_path = os.path.join(tmpdir.name, repo)
 
         # Create repository and initialize
-        with DmlOps.create(repo_path, user=user, remote_root="") as ops:
+        with DmlOps.create(repo_path, user=user, remote_root=remote_root or "") as ops:
             # DmlOps.create initializes the default head; only add a new branch when requested.
             if branch != DEFAULT_HEAD:
                 head_ops = ops.head()
                 head_ops.create_branch(branch, head_ops.get_branch_commit(DEFAULT_HEAD))
                 head_ops.write_attached_head(branch)
 
-        return cls(repo=repo_path, user=user, branch=None, tmpdirs={"repo": tmpdir})
+        return cls(repo=repo_path, user=user, branch=None, remote_root=remote_root, tmpdirs={"repo": tmpdir})
 
     def new(self, name="", message="", argv_ptr=None) -> "Dag":
         """Create a new DAG.
@@ -628,13 +631,6 @@ class Dag:
 
         # Extract the dag ref from the commit
         self.ref = self.dml.ops.commit().describe(commit_ref)["dag"]
-
-    def cache(self) -> str:
-        """Publish this committed DAG to the configured remote cache ref."""
-        if self.ref is None:
-            raise DmlRepoError("DAG must be committed before caching")
-        return self.dml.cache.put(self.ref)
-
 
 @dataclass(frozen=True)
 class Node:  # noqa: F811

@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
@@ -132,10 +133,9 @@ def _put_runnable_literal(ops: IndexOps, index_ref: Ref, *, uri: str, adapter: s
 class _FakeExecutionState:
     lock_calls: list[str] = []
     unlock_calls: list[str] = []
-    active: dict[str, int] = {}
-    records: dict[tuple[str, int], dict[str, Any]] = {}
-    index_edges: list[tuple[str, str]] = []
-    fn_edges: list[tuple[str, str]] = []
+    active: dict[str, str] = {}
+    records: dict[str, dict[str, Any]] = {}
+    execution_edges: list[tuple[str, str]] = []
 
     def __init__(self, cache_key: str, *, remote_root: str = ""):
         self.cache_key = cache_key
@@ -146,8 +146,7 @@ class _FakeExecutionState:
         cls.unlock_calls = []
         cls.active = {}
         cls.records = {}
-        cls.index_edges = []
-        cls.fn_edges = []
+        cls.execution_edges = []
 
     def lock(self):
         type(self).lock_calls.append(self.cache_key)
@@ -157,39 +156,39 @@ class _FakeExecutionState:
         type(self).unlock_calls.append(self.cache_key)
         return True
 
-    def read_active_execution_number(self):
+    def read_active_execution_id(self):
         return type(self).active.get(self.cache_key)
 
-    def create_active_execution(self, execution_number: int):
+    def create_active_execution(self, execution_id: str):
         if self.cache_key in type(self).active:
             return False
-        type(self).active[self.cache_key] = execution_number
+        type(self).active[self.cache_key] = execution_id
         return True
 
     def delete_active_execution(self):
         type(self).active.pop(self.cache_key, None)
 
-    def read_execution_record(self, execution_number: int):
-        return type(self).records.get((self.cache_key, execution_number))
+    def read_execution_record(self, execution_id: str):
+        return type(self).records.get(execution_id)
 
-    def create_execution_record(self, execution_number: int, record: dict[str, Any]):
-        key = (self.cache_key, execution_number)
-        if key in type(self).records:
-            return False
-        type(self).records[key] = record
-        return True
-
-    def next_execution_number(self):
-        numbers = [number for (cache_key, number) in type(self).records if cache_key == self.cache_key]
-        return max(numbers, default=-1) + 1
-
-    def record_index_call(self, *, index_id: str, callee_cache_key: str, retries: int = 8):
+    def update_execution_record(self, record: dict[str, Any], *, retries: int = 8):
         del retries
-        type(self).index_edges.append((index_id, callee_cache_key))
+        current = type(self).records.get(record["execution_id"])
+        if current is None:
+            type(self).records[record["execution_id"]] = record
+            return record
+        merged = dict(current)
+        merged["status"] = record["status"] if current["status"] == "running" else current["status"]
+        merged["state"] = current.get("state") if current.get("state") is not None else record.get("state")
+        merged["dependencies"] = sorted({*current.get("dependencies", []), *record.get("dependencies", [])})
+        merged["updated_at"] = max(current.get("updated_at", 0), record.get("updated_at", 0))
+        merged["cancel_requested_by"] = current.get("cancel_requested_by") or record.get("cancel_requested_by")
+        type(self).records[record["execution_id"]] = merged
+        return merged
 
-    def record_fn_call(self, *, caller_cache_key: str, callee_cache_key: str, retries: int = 8):
+    def record_execution_dependency(self, *, caller_execution_id: str, callee_execution_id: str, retries: int = 8):
         del retries
-        type(self).fn_edges.append((caller_cache_key, callee_cache_key))
+        type(self).execution_edges.append((caller_execution_id, callee_execution_id))
 
 
 class TestIndexOps:
@@ -367,6 +366,9 @@ class TestIndexOps:
         ops = _mk_remote_index_ops(temp_bo)
         try:
             with patch.dict(__import__("os").environ, DML_TMP_DIR=ops._db.path):
+                completion_flag = Path(ops._db.path) / "completion.flag"
+                if completion_flag.exists():
+                    completion_flag.unlink()
                 fn_node = _put_runnable_literal(ops, index, uri=DELAYED_FN_URI, adapter=FN_ADAPTER)
                 arg_nodes = [ops.put_literal(index, arg) for arg in args]
                 # First call returns None (job not done yet)
@@ -503,10 +505,10 @@ class TestIndexOps:
             assert ops.start_fn(index_ref, [fn_node]) is None
             assert calls == [(prepared, "argv-ptr")]
             assert len(_FakeExecutionState.lock_calls) == 1
-            assert _FakeExecutionState.active[prepared.cache_key] == 0
-            record = _FakeExecutionState.records[(prepared.cache_key, 0)]
-            assert record["execution_number"] == 0
+            record = next(iter(_FakeExecutionState.records.values()))
+            assert _FakeExecutionState.active[prepared.cache_key] == record["execution_id"]
             assert record["state"] == {"token": record["execution_id"]}
+            assert record["dependencies"] == []
         finally:
             ops.delete(index_ref)
 
@@ -523,7 +525,6 @@ class TestIndexOps:
         hit_dag_ref = Ref(f"dag:{'d' * 64}")
         sentinel = object()
         adapter_calls: list[tuple[_PreparedAdapterCall, str]] = []
-        published: list[tuple[Ref, str]] = []
         cache_hits = iter([None, None, hit_dag_ref])
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
@@ -538,17 +539,11 @@ class TestIndexOps:
             lambda self, prepared_arg, argv_ptr, **kwargs: adapter_calls.append((prepared_arg, argv_ptr))
             or {"status": "succeeded", "error": None, "dag_id": "e" * 64},
         )
-        monkeypatch.setattr(
-            IndexOps,
-            "_publish_terminal_state",
-            lambda self, argv_ref, state: published.append((argv_ref, state["status"])),
-        )
         monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, txn, index_ref: sentinel)
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is sentinel
             assert len(adapter_calls) == 1
-            assert published == [(prepared.argv_ref, "succeeded")]
         finally:
             ops.delete(index_ref)
 
@@ -563,13 +558,16 @@ class TestIndexOps:
             runnable={"target": "noop://resume", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
         )
         _FakeExecutionState.reset()
-        _FakeExecutionState.active[prepared.cache_key] = 4
-        _FakeExecutionState.records[(prepared.cache_key, 4)] = {
-            "execution_number": 4,
-            "execution_id": f"{prepared.cache_key}-4",
+        _FakeExecutionState.active[prepared.cache_key] = f"{prepared.cache_key}-4"
+        _FakeExecutionState.records[f"{prepared.cache_key}-4"] = {
             "cache_key": prepared.cache_key,
+            "created_at": 1,
             "status": "running",
             "state": {"token": "original"},
+            "dependencies": [],
+            "updated_at": 1,
+            "cancel_requested_by": None,
+            "execution_id": f"{prepared.cache_key}-4",
         }
         seen: list[dict[str, Any] | None] = []
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
@@ -588,8 +586,8 @@ class TestIndexOps:
         try:
             assert ops.start_fn(index_ref, [fn_node]) is None
             assert seen == [{"token": "original"}]
-            assert _FakeExecutionState.records[(prepared.cache_key, 4)]["state"] == {"token": "original"}
-            assert _FakeExecutionState.active[prepared.cache_key] == 4
+            assert _FakeExecutionState.records[f"{prepared.cache_key}-4"]["state"] == {"token": "original"}
+            assert _FakeExecutionState.active[prepared.cache_key] == f"{prepared.cache_key}-4"
         finally:
             ops.delete(index_ref)
 
@@ -602,7 +600,6 @@ class TestIndexOps:
             adapter_path="dummy-adapter",
             cache_key="cache-key-lineage",
             runnable={"target": "noop://lineage", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
-            caller_index_id=index_ref,
         )
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
@@ -619,7 +616,7 @@ class TestIndexOps:
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is None
-            assert _FakeExecutionState.index_edges == [(index_ref, prepared.cache_key)]
+            assert _FakeExecutionState.execution_edges == []
         finally:
             ops.delete(index_ref)
 
@@ -634,7 +631,7 @@ class TestIndexOps:
             runnable={"target": "noop://stale-active", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
         )
         _FakeExecutionState.reset()
-        _FakeExecutionState.active[prepared.cache_key] = 7
+        _FakeExecutionState.active[prepared.cache_key] = "stale-execution"
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
@@ -649,7 +646,7 @@ class TestIndexOps:
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is None
-            assert _FakeExecutionState.active[prepared.cache_key] != 7
+            assert _FakeExecutionState.active[prepared.cache_key] != "stale-execution"
         finally:
             ops.delete(index_ref)
 
@@ -657,22 +654,25 @@ class TestIndexOps:
         ops = _mk_remote_index_ops(temp_bo)
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo, with_argv=True)
         fn_node = _put_runnable_literal(ops, index_ref, uri="noop://lineage-fn", adapter="dummy-adapter")
-        with ops._tx(readonly=True) as txn:
-            caller_cache_key = (
-                txn.get_commit_ctx(
-                    HeadOps(_db=temp_bo._db).get_index_commit(index_ref)
-                )
-                .dag.argv
-                .id()
-            )
         prepared = _PreparedAdapterCall(
             argv_ref=Ref(f"node-argv:{'8' * 64}"),
             adapter_path="dummy-adapter",
             cache_key="cache-key-lineage-fn",
             runnable={"target": "noop://lineage-fn", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
-            caller_cache_key=caller_cache_key,
+            caller_execution_id="caller-exec-1",
+            caller_cache_key="caller-cache",
         )
         _FakeExecutionState.reset()
+        _FakeExecutionState.records["caller-exec-1"] = {
+            "execution_id": "caller-exec-1",
+            "cache_key": "caller-cache",
+            "created_at": 1,
+            "status": "running",
+            "state": {"token": "caller"},
+            "dependencies": [],
+            "updated_at": 1,
+            "cancel_requested_by": None,
+        }
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
@@ -687,7 +687,9 @@ class TestIndexOps:
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is None
-            assert _FakeExecutionState.fn_edges == [(caller_cache_key, prepared.cache_key)]
+            created = next(value for key, value in _FakeExecutionState.records.items() if key != "caller-exec-1")
+            assert _FakeExecutionState.execution_edges == [("caller-exec-1", created["execution_id"])]
+            assert _FakeExecutionState.records["caller-exec-1"]["dependencies"] == [created["execution_id"]]
         finally:
             ops.delete(index_ref)
 
@@ -725,7 +727,7 @@ class TestIndexOps:
         monkeypatch.setattr(
             IndexOps,
             "_publish_terminal_state",
-            lambda self, argv_ref, state: published.append((argv_ref, state["status"])),
+            lambda self, argv_ref, state, execution_id: published.append((argv_ref, state["status"], execution_id)),
         )
         monkeypatch.setattr(
             IndexOps,
@@ -737,7 +739,7 @@ class TestIndexOps:
             with pytest.raises(DmlRepoError, match="boom"):
                 ops.start_fn(index_ref, [fn_node])
             assert len(adapter_calls) == 1
-            assert published == [(prepared.argv_ref, "failed")]
+            assert published == [(prepared.argv_ref, "failed", next(iter(_FakeExecutionState.records)))]
         finally:
             ops.delete(index_ref)
 
@@ -1204,8 +1206,12 @@ class TestIndexOps:
                 "forwarded = {\n"
                 "    'argv_ptr': payload.get('argv_ptr'),\n"
                 "    'cache_key': payload.get('cache_key'),\n"
+                "    'execution_id': payload.get('execution_id'),\n"
                 "    'remote': payload.get('remote'),\n"
                 "    'runnable': sub,\n"
+                "    'state': payload.get('state'),\n"
+                "    'execution_status': payload.get('execution_status'),\n"
+                "    'cancel_requested_by': payload.get('cancel_requested_by'),\n"
                 "}\n"
                 "completed = subprocess.run(\n"
                 "    cmd,\n"
@@ -1267,7 +1273,7 @@ class TestIndexOps:
         finally:
             ops.delete(index_ref)
 
-    def test_call_adapter_envelope_includes_only_remote_root(self, temp_bo, monkeypatch):
+    def test_call_adapter_envelope_includes_execution_status(self, temp_bo, monkeypatch):
         ops = IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env())
         prepared = _PreparedAdapterCall(
             argv_ref=Ref(f"node-argv:{'1' * 64}"),
@@ -1284,7 +1290,14 @@ class TestIndexOps:
 
         monkeypatch.setattr("daggerml._internal.ops.index.run", _fake_run)
 
-        result = ops._call_adapter(prepared, "a" * 64, execution_id="exec-1", state=None)
+        result = ops._call_adapter(
+            prepared,
+            "a" * 64,
+            execution_id="exec-1",
+            state=None,
+            execution_status="cancel-requested",
+            cancel_requested_by="alice@example.com",
+        )
         assert result == {"status": "running", "error": None, "state": {}}
         payload = seen["payload"]
         assert isinstance(payload, dict)
@@ -1292,6 +1305,8 @@ class TestIndexOps:
         assert payload["argv_ptr"] == "a" * 64
         assert payload["execution_id"] == "exec-1"
         assert payload["state"] is None
+        assert payload["execution_status"] == "cancel-requested"
+        assert payload["cancel_requested_by"] == "alice@example.com"
         assert payload["remote"] == {"root": _remote_root_from_env()}
         assert "comms" not in payload
 

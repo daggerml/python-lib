@@ -178,18 +178,6 @@ class TestSetAttrs:
             dag.commit(nodes[0])
         assert dag.result.value() == 3
 
-    def test_dag_cache_requires_commit(self, dml):
-        dag = dml.new("d0", "d0")
-        with pytest.raises(DmlRepoError, match="committed"):
-            dag.cache()
-
-    def test_dag_cache_publishes_function_dag(self, dml):
-        with dml.new("d0", "d0") as dag:
-            result = dag.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), 1, 2, 3)
-            dag.commit(result)
-        fn_dag = result.load()
-        assert isinstance(fn_dag.cache(), str)
-
     def test_async_fn_ok(self, dml):
         debug_file = os.path.join(dml.repo, "debug")
         with dml.new("d0", "d0") as dag:

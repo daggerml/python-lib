@@ -91,15 +91,15 @@ class TestConstructor:
         es = _es("ck-valid")
         assert es.cache_key == "ck-valid"
         assert es._bucket == BUCKET
-        assert "fn-exec/locks/ck-valid.json" in es._lock_key
+        assert "dml/locks/ck-valid.json" in es._lock_key
 
     def test_key_derived_from_prefix(self):
         es = ExecutionState("ck", remote_root="s3://mybucket/my/prefix")
-        assert es._lock_key == "my/prefix/fn-exec/locks/ck.json"
+        assert es._lock_key == "my/prefix/dml/locks/ck.json"
 
     def test_key_no_prefix(self):
         es = ExecutionState("ck", remote_root="s3://mybucket")
-        assert es._lock_key == "fn-exec/locks/ck.json"
+        assert es._lock_key == "dml/locks/ck.json"
 
 
 # ---------------------------------------------------------------------------
@@ -236,68 +236,85 @@ def test_lock_ttl_is_positive():
 
 def test_active_execution_pointer_round_trip():
     es = _es("active-1")
-    assert es.read_active_execution_number() is None
-    assert es.create_active_execution(3) is True
-    assert es.read_active_execution_number() == 3
+    assert es.read_active_execution_id() is None
+    assert es.create_active_execution("exec-3") is True
+    assert es.read_active_execution_id() == "exec-3"
     es.delete_active_execution()
-    assert es.read_active_execution_number() is None
+    assert es.read_active_execution_id() is None
 
 
 def test_execution_record_is_create_only():
     es = _es("record-1")
     record = {
-        "execution_number": 0,
         "execution_id": "exec-1",
         "cache_key": "record-1",
+        "created_at": 1,
         "status": "running",
         "state": {"pid": 1},
+        "dependencies": [],
+        "updated_at": 1,
+        "cancel_requested_by": None,
     }
-    assert es.create_execution_record(0, record) is True
-    assert es.read_execution_record(0) == record
-    assert es.create_execution_record(0, record) is False
-    assert es._key_for_execution(0) == "test-prefix/fn-exec/records/record-1/0.json"
+    assert es.create_execution_record(record) is True
+    assert es.read_execution_record("exec-1") == record
+    assert es.create_execution_record(record) is False
+    assert es._key_for_execution("exec-1") == "test-prefix/dml/exec/state/exec-1.json"
 
 
-def test_next_execution_number_increments_with_existing_records():
+def test_execution_record_updates_merge_monotonically():
     es = _es("record-2")
-    assert es.next_execution_number() == 0
-    assert es.create_execution_record(
-        0,
+    created = {
+        "execution_id": "exec-0",
+        "cache_key": "record-2",
+        "created_at": 10,
+        "status": "running",
+        "state": {"token": "first"},
+        "dependencies": [],
+        "updated_at": 10,
+        "cancel_requested_by": None,
+    }
+    assert es.create_execution_record(created)
+    merged = es.update_execution_record(
         {
-            "execution_number": 0,
             "execution_id": "exec-0",
             "cache_key": "record-2",
-            "status": "running",
-            "state": {},
-        },
+            "created_at": 999,
+            "status": "cancel-requested",
+            "state": {"token": "replacement"},
+            "dependencies": ["exec-2"],
+            "updated_at": 11,
+            "cancel_requested_by": "user@example.com",
+        }
     )
-    assert es.create_execution_record(
-        2,
-        {
-            "execution_number": 2,
-            "execution_id": "exec-2",
-            "cache_key": "record-2",
-            "status": "running",
-            "state": {},
-        },
-    )
-    assert es.next_execution_number() == 3
+    assert merged["created_at"] == 10
+    assert merged["state"] == {"token": "first"}
+    assert merged["dependencies"] == ["exec-2"]
+    assert merged["status"] == "cancel-requested"
+    assert merged["cancel_requested_by"] == "user@example.com"
 
 
-def test_call_edge_indexes_are_sorted_and_deduped():
+def test_call_edge_records_are_canonical_and_idempotent():
     es = _es("callee")
-    es.record_index_call(index_id="idx-b", callee_cache_key="callee")
-    es.record_index_call(index_id="idx-a", callee_cache_key="callee")
-    es.record_index_call(index_id="idx-a", callee_cache_key="callee")
-    es.record_fn_call(caller_cache_key="ck-b", callee_cache_key="callee")
-    es.record_fn_call(caller_cache_key="ck-a", callee_cache_key="callee")
-    es.record_fn_call(caller_cache_key="ck-a", callee_cache_key="callee")
+    es.record_execution_dependency(caller_execution_id="caller-a", callee_execution_id="callee")
+    es.record_execution_dependency(caller_execution_id="caller-a", callee_execution_id="callee")
+    edge, _ = es._read_json(es._key_for_edge("callee", "caller-a"))
+    assert edge == {"caller_execution_id": "caller-a", "callee_execution_id": "callee"}
 
-    calls_from_index, _ = es._read_json(es._key_for_calls_from_index("idx-a"))
-    calls_to_cache, _ = es._read_json(es._key_for_calls_to_cache("callee"))
 
-    assert calls_from_index == ["callee"]
-    assert calls_to_cache == {"indexes": ["idx-a", "idx-b"], "cache_keys": ["ck-a", "ck-b"]}
+def test_invalidation_record_is_create_only():
+    es = _es("invalidate")
+    assert es.create_invalidation_record(
+        execution_id="exec-9",
+        cache_key="invalidate",
+        requested_by="user@example.com",
+        requested_at=123,
+    )
+    assert not es.create_invalidation_record(
+        execution_id="exec-9",
+        cache_key="invalidate",
+        requested_by="user@example.com",
+        requested_at=123,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -309,12 +326,12 @@ class TestAdapterIO:
     def test_input_uri_derived_correctly(self):
         es = _es("io-ck")
         io = es.adapter_io("exec-uuid", "local:docker")
-        assert io.input_uri == f"s3://{BUCKET}/test-prefix/fn-exec/io/io-ck/exec-uuid/local:docker/input.json"
+        assert io.input_uri == f"s3://{BUCKET}/test-prefix/dml/io/io-ck/exec-uuid/local:docker/input.json"
 
     def test_output_uri_derived_correctly(self):
         es = _es("io-ck")
         io = es.adapter_io("exec-uuid", "local:docker")
-        assert io.output_uri == f"s3://{BUCKET}/test-prefix/fn-exec/io/io-ck/exec-uuid/local:docker/output.json"
+        assert io.output_uri == f"s3://{BUCKET}/test-prefix/dml/io/io-ck/exec-uuid/local:docker/output.json"
 
     def test_uri_properties_make_no_s3_call(self, monkeypatch):
         calls = []
@@ -355,8 +372,8 @@ class TestAdapterIO:
     def test_paths_scoped_within_fn_exec_io(self):
         es = _es("io-scope")
         io = es.adapter_io("exec-y", "local:docker")
-        assert "fn-exec/io/" in io.input_uri
-        assert "fn-exec/io/" in io.output_uri
+        assert "dml/io/" in io.input_uri
+        assert "dml/io/" in io.output_uri
 
     def test_different_names_produce_different_paths(self):
         es = _es("io-names")
@@ -368,4 +385,4 @@ class TestAdapterIO:
     def test_no_prefix_remote_root(self):
         es = ExecutionState("io-np", remote_root=f"s3://{BUCKET}")
         io = es.adapter_io("exec-np", "local:docker")
-        assert io.input_uri == f"s3://{BUCKET}/fn-exec/io/io-np/exec-np/local:docker/input.json"
+        assert io.input_uri == f"s3://{BUCKET}/dml/io/io-np/exec-np/local:docker/input.json"

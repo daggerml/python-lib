@@ -37,7 +37,7 @@ If related docs conflict on this scope, this document is the source of truth.
 - Push/pull and cache ref operation semantics are defined in [../../remote-protocol.md](../../remote-protocol.md).
 - Cache ref namespace/layout constraints are defined in [../../remote-data-model.md](../../remote-data-model.md).
 - DAG ref namespace/layout constraints are defined in [../../remote-data-model.md](../../remote-data-model.md).
-- Cache conflict/idempotence/overwrite behavior is defined in [../../remote-protocol.md](../../remote-protocol.md).
+- Cache create-only publication and conflict behavior is defined in [../../remote-protocol.md](../../remote-protocol.md).
 - Remote prune/cache-retention behavior is defined in [../../remote-protocol.md](../../remote-protocol.md).
 
 ## Invariants

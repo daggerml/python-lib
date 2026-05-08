@@ -17,7 +17,6 @@ In scope:
 
 - public wrapper objects exposed by `daggerml.api`,
 - public `Dag` named-node access behavior,
-- public `Dag.cache()` behavior,
 - public DAG call-entry staging behavior,
 - public node-wrapper selection behavior for staged and persisted reads,
 - how these interfaces surface deterministic failures to callers.
@@ -32,7 +31,7 @@ Out of scope:
 
 ## Purpose
 
-Define the stable user-facing contract for DAG authoring, execution entry, cache publication, and node access through `daggerml.api`.
+Define the stable user-facing contract for DAG authoring, execution entry, and node access through `daggerml.api`.
 
 ## Glossary
 
@@ -58,12 +57,6 @@ Define the stable user-facing contract for DAG authoring, execution entry, cache
 - Wrapper exports:
   - `daggerml.api` MUST expose public wrapper objects for `Dml`, `Dag`, `Node`, `Ref`, `Uri`, and `Runnable`.
   - The API boundary MUST normalize caller-supplied Python values into the public wrapper and staging surfaces defined by this document before delegating to internal subsystems.
-- `Dag.cache() -> str`:
-  - `Dag.cache()` MUST publish the current committed DAG into remote cache and return the corresponding cache key.
-  - `Dag.cache()` MUST fail deterministically when called before the DAG has a committed identity.
-  - `Dag.cache()` MUST fail deterministically when required remote cache context is unavailable.
-  - Cache-identity derivation is authoritative in [adapter-execution-contract.md](adapter-execution-contract.md).
-  - This interface accepts no unspecified positional or keyword arguments.
 - `Dag` named-node access:
   - Public named-node access MUST be available directly on `Dag` by item access and attribute access.
   - `dag["name"]` MUST be the canonical named-node access surface and MUST always address the DAG name map.
@@ -101,13 +94,8 @@ Define the stable user-facing contract for DAG authoring, execution entry, cache
 
 ### Error Semantics
 
-- Invalid API-state errors:
-  - Applies to calling `Dag.cache()` before commit and to unresolved named-node lookups.
-  - Classification: non-retryable for unchanged inputs and state; terminal for the current invocation.
-  - Caller behavior: change the DAG state or requested name before retrying.
-  - Operator action: none required.
 - Missing remote-context errors:
-  - Applies when `Dag.cache()` or non-builtin public DAG-call execution requires remote context that is not configured.
+  - Applies when non-builtin public DAG-call execution requires remote context that is not configured.
   - Classification: non-retryable until configuration changes; terminal for the current invocation.
   - Caller behavior: provide the required remote configuration, then retry the call.
   - Operator action: ensure the runtime environment provides the configured remote root and cache context when that environment is externally managed.
@@ -123,9 +111,9 @@ Define the stable user-facing contract for DAG authoring, execution entry, cache
 
 ### Security Boundaries
 
-- `daggerml.api` is a caller-facing boundary that accepts local Python values and delegates cache publication and non-builtin execution to lower layers that may require remote context.
+- `daggerml.api` is a caller-facing boundary that accepts local Python values and delegates non-builtin execution to lower layers that may require remote context.
 - The public API MUST NOT redefine or bypass the remote-context requirements imposed by delegated execution and cache subsystems.
-- When remote context is required for `Dag.cache()` or non-builtin execution, the API boundary MUST require that context to be present before treating the operation as valid.
+- When remote context is required for non-builtin execution, the API boundary MUST require that context to be present before treating the operation as valid.
 - This document does not define authentication material, secret transport, or remote protocol trust rules.
 - Auth, secret handling, adapter payload trust, and remote transport requirements are authoritative in [adapter-execution-contract.md](adapter-execution-contract.md), [default-dml-runtime.md](default-dml-runtime.md), [remote-data-model.md](remote-data-model.md), and [remote-protocol.md](remote-protocol.md).
 
@@ -142,7 +130,7 @@ Define the stable user-facing contract for DAG authoring, execution entry, cache
 
 ## Compatibility
 
-- Backward compatibility: compatible releases MUST preserve the documented meaning of `Dag.cache()`, direct `Dag` named-node access, node-wrapper selection, and DAG-call staging behavior for existing callers.
+- Backward compatibility: compatible releases MUST preserve the documented meaning of direct `Dag` named-node access, node-wrapper selection, and DAG-call staging behavior for existing callers.
 - Forward compatibility: callers MAY rely only on the interfaces and semantics defined in this document; undocumented attributes, helper methods, and internal delegation details are not forward-compatible surfaces.
 - Versioning boundary: a release that changes the precedence, interpretation, required availability, or required error behavior of any interface in `### Interfaces` is a compatibility break for the public `daggerml.api` surface and MUST be accompanied by an intentional versioning boundary and spec update.
 - Versioning: additive public API growth is allowed in compatible releases, but new helpers or wrapper methods MUST NOT change the precedence, interpretation, or error behavior of the interfaces specified here.

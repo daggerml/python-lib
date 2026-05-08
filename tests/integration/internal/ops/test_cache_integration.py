@@ -58,7 +58,7 @@ def test_put_get_delete_roundtrip_remote(temp_bo, s3):
     cache_key = _cache_key_for_argv(temp_bo, argv_ref)
 
     assert ops.get(argv_ref) is None
-    assert ops.put(dag_ref) == cache_key
+    assert ops.put(dag_ref, execution_id="exec-1") == cache_key
     remote_ops = ops._require_remote_context()
     cache_ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref(f"cache/{cache_key}.json"))
     assert cache_ref_obj["targets"] == {"dag": []}
@@ -77,7 +77,7 @@ def test_list_limit_and_clear_remote(temp_bo, s3):
         argv_ref = _put_argv_node_hashed(temp_bo, datum_ref)
         dag_ref = _put_dag_hashed(temp_bo, argv_ref)
         cache_key = _cache_key_for_argv(temp_bo, argv_ref)
-        ops.put(dag_ref)
+        ops.put(dag_ref, execution_id=f"exec-{i}")
         entries.append((cache_key, dag_ref))
 
     limited = list(ops.list(limit=1))
@@ -100,7 +100,7 @@ def test_requires_remote_context(temp_bo):
     with pytest.raises(DmlRepoError, match="Remote cache context required"):
         ops.get(argv_ref)
     with pytest.raises(DmlRepoError, match="Remote cache context required"):
-        ops.put(dag_ref)
+        ops.put(dag_ref, execution_id="exec-1")
     with pytest.raises(DmlRepoError, match="Remote cache context required"):
         list(ops.list())
     with pytest.raises(DmlRepoError, match="Remote cache context required"):

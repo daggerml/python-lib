@@ -10,7 +10,7 @@ This document is authoritative for the `CacheOps` subsystem contract.
 
 ## Purpose
 
-`CacheOps` is the cache interface used by execution paths and callers for cache-keyed result lookup and publication.
+`CacheOps` is the cache interface used by execution paths for cache-keyed result lookup and publication.
 
 ## Responsibilities
 
@@ -27,15 +27,18 @@ This document is authoritative for the `CacheOps` subsystem contract.
 - cache-ref operation semantics are defined in [../../remote-protocol.md](../../remote-protocol.md),
 - `CacheOps` MUST NOT persist function-result cache entries in LMDB cache namespaces,
 - cache operations that require remote context MUST fail deterministically when that context is unavailable,
-- `CacheOps.put(dag_ref)` derives canonical cache identity from `dag.argv`,
+- `CacheOps.put(dag_ref, execution_id=...)` derives canonical cache identity from `dag.argv`,
+- `CacheOps.put(...)` requires a non-empty `execution_id` and publishes it into the remote cache ref,
 - `CacheOps.put(dag_ref)` MUST publish the referenced DAG manifest through `RemoteOps.put_ref_manifest(...)`,
+- `CacheOps.put(...)` MUST fail if `refs/cache/<cache_key>.json` already exists,
+- reruns MUST invalidate the existing cache ref before a new execution can publish for the same cache key,
 - `CacheOps.list()` yields `(cache_key, dag_ref)` pairs.
 
 ## Invariants
 
 - DAGs without `argv` are not cacheable,
 - cache publication is remote-backed and uses `refs/cache/<cache_key>.json`,
-- cache publication is idempotent for the same target subject to remote protocol rules,
+- cache publication is create-only per cache key until explicit invalidation or deletion,
 - cache keys are strings derived from `argv_ref.id()` and are not LMDB refs.
 
 ## Non-goals

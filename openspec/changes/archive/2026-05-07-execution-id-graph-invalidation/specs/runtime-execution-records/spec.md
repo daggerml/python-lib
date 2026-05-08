@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: Runtime SHALL separate cache identity from execution identity
 The runtime SHALL treat `cache_key` as the stable computation identity and `execution_id` as the stable identity of one execution attempt. The runtime SHALL acquire execution locks by `cache_key`, SHALL propagate `execution_id` in the adapter envelope, and SHALL use execution id as the identity for dependency edges, execution state objects, and invalidation records.
 
@@ -101,19 +103,6 @@ The adapter envelope SHALL include `argv_ptr`, `cache_key`, `execution_id`, `rem
 #### Scenario: Later adapter state is ignored after first write
 - **WHEN** the runtime invokes an adapter for an existing execution and the adapter returns `running` with a different `state`
 - **THEN** the runtime SHALL continue using the existing stored `state` from `exec/state/<execution_id>.json`
-
-#### Scenario: Pending is rejected
-- **WHEN** an adapter returns `pending`
-- **THEN** the runtime SHALL reject that result as invalid adapter output
-
-### Requirement: Stale lock recovery SHALL preserve active execution ownership
-The runtime SHALL use the lock for `cache_key` only to coordinate mutation of the active execution. If a lock is stale and an active execution record exists, the runtime SHALL recover the lock and resume that execution instead of creating a new one.
-
-#### Scenario: Stale lock with active execution resumes existing execution
-- **WHEN** the lock for a `cache_key` is stale and `active/<cache_key>` points to an existing execution record
-- **THEN** the runtime SHALL recover the lock
-- **AND** it SHALL resume the existing `execution_id`
-- **AND** it SHALL NOT launch a duplicate execution
 
 ### Requirement: Failed execution SHALL be cached as a terminal result
 If an adapter returns `failed`, the runtime SHALL complete the DAG with the error and SHALL publish that failed terminal outcome to cache for the `cache_key`.

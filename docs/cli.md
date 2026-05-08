@@ -38,7 +38,7 @@ CLI is an operational interface over `_internal` ops. It owns argument parsing a
 - project bootstrap runs through `init`; remote synchronization then uses explicit `fetch`, `checkout`, or `pull` flows,
 - `dag checkout <revision> <dag-name> [--as <name>] [--replace]` copies one DAG from history into the current branch as a new commit,
 - `contrib status` emits the structured contrib status report as compact JSON,
-- `cache` supports `list|get|put|delete|clear`,
+- `cache` supports `list|get|delete|clear`,
 - runtime config naming follows [configuration.md](configuration.md): `project.home`, `project.uri`, `db.path`, `remote.uri`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
 
 ## Serialization-Limited Gaps

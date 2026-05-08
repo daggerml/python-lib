@@ -74,7 +74,7 @@ Rules:
 
 - `refs/tags/**`: named publication paths for branch and tag style discovery.
 - `refs/projects/**`: project-scoped branch heads and tags for git-like remote operations.
-- `refs/cache/**`: mutable cache-key pointers for function-result memoization.
+- `refs/cache/**`: create-only cache-key refs for function-result memoization until explicit invalidation or deletion.
 - `refs/dags/**`: per-DAG indirection entries mapping logical DAG ids to DAG manifest OIDs.
 
 ## Transport Namespace Roles
@@ -150,6 +150,7 @@ Invariants:
   "kind": "ref",
   "schema": 0,
   "target": "<manifest-oid>",
+  "execution_id": "<execution-id>",
   "created_at": 1760000000,
   "targets": {"dag": ["<dag-id>"]},
   "meta": {}
@@ -160,11 +161,12 @@ Invariants:
 
 - `kind == "ref"` and `schema == 0`.
 - `target` is a manifest OID.
+- refs in `refs/cache/**` MUST include a non-empty `execution_id` string naming the execution that published the cache entry.
 - refs in `refs/tags/**` and `refs/cache/**` MUST include `targets`.
 - refs in `refs/projects/**` MUST include `targets` and MUST point at commit manifests.
 - `targets["dag"]` MUST be a sorted unique list of direct logical DAG ids for the referenced manifest.
 - `refs/tags/**` entries are write-once per path.
-- `refs/cache/**` entries are mutable.
+- `refs/cache/**` entries are create-only and require explicit deletion before republishing the same cache key path.
 - `refs/projects/**/heads/**` entries are mutable only through conditional update operations.
 - `refs/projects/**/tags/**` entries are write-once per path.
 - `refs/dags/**` entries are write-once per DAG id path.

@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import time
 from unittest.mock import Mock, patch
 
 import pytest
@@ -23,6 +24,15 @@ from daggerml._internal.types import Commit, DmlRepoError, Tree
 from tests.contracts.internal.support.conftest_support import FakeDb, FakeTxn, remote_bucket_and_prefix_from_env
 
 pytestmark = pytest.mark.slow
+
+
+def _put_remote_json(remote_ops, relative_key: str, value: dict) -> None:
+    remote_ops.client.put_object(
+        Bucket=remote_ops.bucket,
+        Key=remote_ops._prefixed_key(relative_key),
+        Body=json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        ContentType="application/json",
+    )
 
 
 class TestRemoteDescriptor:
@@ -1742,17 +1752,161 @@ class TestDagPublicationHelpers:
         """Test cache refs include validated targets."""
         target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         dag_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        remote_ops.put_cache_ref("cache:key", target, overwrite=False, targets={"dag": [dag_id]})
+        remote_ops.put_cache_ref("cache:key", target, targets={"dag": [dag_id]}, execution_id="exec-1")
 
         ref_obj = remote_ops._decode_ref(remote_ops._remote_get_ref("cache/cache:key.json"))
         assert ref_obj["target"] == target
         assert ref_obj["targets"] == {"dag": [dag_id]}
+        assert ref_obj["execution_id"] == "exec-1"
+
+    def test_put_cache_ref_rejects_existing_ref(self, remote_ops):
+        target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        remote_ops.put_cache_ref("cache:guarded", target, targets={"dag": []}, execution_id="exec-live")
+
+        with pytest.raises(DmlRepoError, match="already exists"):
+            remote_ops.put_cache_ref("cache:guarded", target, targets={"dag": []}, execution_id="exec-next")
+
+    def test_delete_cache_ref_if_execution_id_is_guarded(self, remote_ops):
+        target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        cache_key = "cache:guarded-delete"
+        remote_ops.put_cache_ref(cache_key, target, targets={"dag": []}, execution_id="exec-live")
+
+        assert remote_ops.delete_cache_ref_if_execution_id(cache_key, "exec-stale") is False
+        assert remote_ops.get_cache_ref_info(cache_key)["execution_id"] == "exec-live"
+
+    def test_invalidate_cache_plans_reverse_closure(self, remote_ops):
+        now = int(time.time())
+        _put_remote_json(
+            remote_ops,
+            "exec/state/e-root.json",
+            {
+                "execution_id": "e-root",
+                "cache_key": "ck-root",
+                "created_at": now,
+                "status": "succeeded",
+                "state": None,
+                "dependencies": [],
+                "updated_at": now,
+                "cancel_requested_by": None,
+            },
+        )
+        _put_remote_json(
+            remote_ops,
+            "exec/state/e-caller.json",
+            {
+                "execution_id": "e-caller",
+                "cache_key": "ck-caller",
+                "created_at": now,
+                "status": "succeeded",
+                "state": None,
+                "dependencies": ["e-root"],
+                "updated_at": now,
+                "cancel_requested_by": None,
+            },
+        )
+        _put_remote_json(
+            remote_ops,
+            "exec/edges/e-root/e-caller.json",
+            {"caller_execution_id": "e-caller", "callee_execution_id": "e-root"},
+        )
+        target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        remote_ops.put_cache_ref("ck-root", target, targets={"dag": []}, execution_id="e-root")
+        remote_ops.put_cache_ref("ck-caller", target, targets={"dag": []}, execution_id="e-caller")
+
+        result = remote_ops.invalidate_cache(["ck-root"], requested_by="alice@example.com")
+
+        assert result["invalidated_execution_ids"] == ["e-caller", "e-root"]
+        assert remote_ops.get_cache_ref_info("ck-root") is None
+        assert remote_ops.get_cache_ref_info("ck-caller") is None
+        root_tombstone, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_invalidate_key("e-root"))
+        caller_tombstone, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_invalidate_key("e-caller"))
+        assert root_tombstone["requested_by"] == "alice@example.com"
+        assert caller_tombstone["requested_by"] == "alice@example.com"
+
+    def test_cancel_executions_skips_shared_and_terminal_dependencies(self, remote_ops):
+        now = int(time.time())
+        for state in [
+            {
+                "execution_id": "e-root",
+                "cache_key": "ck-root",
+                "created_at": now,
+                "status": "running",
+                "state": {"token": "root"},
+                "dependencies": ["e-sole", "e-shared", "e-terminal"],
+                "updated_at": now,
+                "cancel_requested_by": None,
+            },
+            {
+                "execution_id": "e-sole",
+                "cache_key": "ck-sole",
+                "created_at": now,
+                "status": "running",
+                "state": {"token": "sole"},
+                "dependencies": [],
+                "updated_at": now,
+                "cancel_requested_by": None,
+            },
+            {
+                "execution_id": "e-shared",
+                "cache_key": "ck-shared",
+                "created_at": now,
+                "status": "running",
+                "state": {"token": "shared"},
+                "dependencies": [],
+                "updated_at": now,
+                "cancel_requested_by": None,
+            },
+            {
+                "execution_id": "e-other",
+                "cache_key": "ck-other",
+                "created_at": now,
+                "status": "running",
+                "state": {"token": "other"},
+                "dependencies": ["e-shared"],
+                "updated_at": now,
+                "cancel_requested_by": None,
+            },
+            {
+                "execution_id": "e-terminal",
+                "cache_key": "ck-terminal",
+                "created_at": now,
+                "status": "succeeded",
+                "state": None,
+                "dependencies": [],
+                "updated_at": now,
+                "cancel_requested_by": None,
+            },
+        ]:
+            _put_remote_json(remote_ops, f"exec/state/{state['execution_id']}.json", state)
+        for callee, caller in [
+            ("e-sole", "e-root"),
+            ("e-shared", "e-root"),
+            ("e-shared", "e-other"),
+            ("e-terminal", "e-root"),
+        ]:
+            _put_remote_json(
+                remote_ops,
+                f"exec/edges/{callee}/{caller}.json",
+                {"caller_execution_id": caller, "callee_execution_id": callee},
+            )
+
+        result = remote_ops.cancel_executions(["e-root"], requested_by="alice@example.com")
+
+        assert result["cancel_requested_execution_ids"] == ["e-sole", "e-root"]
+        root_state, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_state_key("e-root"))
+        sole_state, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_state_key("e-sole"))
+        shared_state, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_state_key("e-shared"))
+        terminal_state, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_state_key("e-terminal"))
+        assert root_state["status"] == "cancel-requested"
+        assert sole_state["status"] == "cancel-requested"
+        assert shared_state["status"] == "running"
+        assert terminal_state["status"] == "succeeded"
 
     def test_put_cache_ref_rejects_invalid_targets(self, remote_ops):
         """Test cache ref validation rejects malformed targets."""
         target = "2123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         with pytest.raises(DmlRepoError, match="Invalid targets"):
-            remote_ops.put_cache_ref("cache:key", target, overwrite=False, targets={"blob": []})
+            remote_ops.put_cache_ref("cache:key", target, targets={"blob": []}, execution_id="exec-1")
 
     def test_decode_manifest_raises_invalid_manifest(self, remote_ops):
         """Test that _decode_manifest raises InvalidManifest for invalid manifests."""
