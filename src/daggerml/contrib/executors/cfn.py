@@ -30,15 +30,15 @@ class CfnExecutor(ExecutorBase):
 
     @classmethod
     @contextmanager
-    def _tmpdag(cls, argv_ptr):
-        with Dml.temporary() as dml:
+    def _tmpdag(cls, argv_ptr, *, remote_root: str):
+        with Dml.temporary(remote_root=remote_root) as dml:
             with dml.new(argv_ptr=argv_ptr) as dag:
                 yield dag
 
     @classmethod
-    def _commit_dag(cls, metadata, stack, outputs):
+    def _commit_dag(cls, metadata, stack, outputs, *, remote_root: str):
         argv_ptr = metadata.get("argv_ptr")
-        with cls._tmpdag(argv_ptr) as dag:
+        with cls._tmpdag(argv_ptr, remote_root=remote_root) as dag:
             for k, v in outputs.items():
                 dag[k] = v
             dag.stack_id = stack["StackId"]
@@ -57,7 +57,7 @@ class CfnExecutor(ExecutorBase):
         remote: dict[str, str],
     ) -> dict[str, Any]:
         del runnable
-        with Dml.temporary() as dml_inst:
+        with Dml.temporary(remote_root=remote["root"]) as dml_inst:
             with dml_inst.new(argv_ptr=argv_ptr) as dag:
                 name, template, params = dag.argv[1:4].value()
 
@@ -107,7 +107,7 @@ class CfnExecutor(ExecutorBase):
         state: dict[str, Any],
         remote: dict[str, str],
     ) -> dict[str, Any]:
-        del cache_key, execution_id, remote
+        del cache_key, execution_id
         stack_name = state.get("stack_name")
         if not stack_name:
             return {"status": "failed", "error": "cfn poll: missing stack_name in job state"}
@@ -121,7 +121,7 @@ class CfnExecutor(ExecutorBase):
         raw_status = stack["StackStatus"]
         if raw_status in TERMINAL_SUCCESS_STATUSES:
             outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
-            dag_id = self._commit_dag(state, stack, outputs)
+            dag_id = self._commit_dag(state, stack, outputs, remote_root=remote["root"])
             return {"status": "succeeded", "error": None, "dag_id": dag_id}
         if raw_status in TERMINAL_FAILED_STATUSES:
             error = f"Stack {stack_name} failed: {raw_status}"

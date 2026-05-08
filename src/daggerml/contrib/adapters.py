@@ -224,7 +224,8 @@ class AdapterBase:
         record = ExecutionState(cache_key, remote_root=remote["root"]).read_execution_record(execution_id)
         if record is None:
             return fallback_state, None, None
-        return record.get("state"), record.get("status"), record.get("cancel_requested_by")
+        state = fallback_state if fallback_state is not None else record.get("state")
+        return state, record.get("status"), record.get("cancel_requested_by")
 
     @classmethod
     def cli(cls, argv: list[str] | None = None) -> int:

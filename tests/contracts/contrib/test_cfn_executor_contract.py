@@ -39,8 +39,8 @@ def test_cfn_tmpdag_is_context_manager(monkeypatch):
     calls = []
 
     @contextmanager
-    def _temporary():
-        calls.append(("temporary", None))
+    def _temporary(*, remote_root):
+        calls.append(("temporary", remote_root))
         yield _FakeDml(dag, calls)
 
     class _FakeDmlApi:
@@ -48,15 +48,16 @@ def test_cfn_tmpdag_is_context_manager(monkeypatch):
 
     monkeypatch.setattr("daggerml.contrib.executors.cfn.Dml", _FakeDmlApi)
 
-    with CfnExecutor._tmpdag("argv://ptr") as result:
+    with CfnExecutor._tmpdag("argv://ptr", remote_root=_REMOTE["root"]) as result:
         assert result is dag
 
-    assert calls == [("temporary", None), ("new", "argv://ptr")]
+    assert calls == [("temporary", _REMOTE["root"]), ("new", "argv://ptr")]
 
 
 def test_cfn_tmpdag_propagates_setup_errors(monkeypatch):
     @contextmanager
-    def _temporary():
+    def _temporary(*, remote_root):
+        assert remote_root == _REMOTE["root"]
         raise RuntimeError("boom")
         yield
 
@@ -66,7 +67,7 @@ def test_cfn_tmpdag_propagates_setup_errors(monkeypatch):
     monkeypatch.setattr("daggerml.contrib.executors.cfn.Dml", _FakeDmlApi)
 
     with pytest.raises(RuntimeError, match="boom"):
-        with CfnExecutor._tmpdag("argv://ptr"):
+        with CfnExecutor._tmpdag("argv://ptr", remote_root=_REMOTE["root"]):
             pass
 
 
@@ -99,7 +100,8 @@ def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
     dag = _ArgvDag((None, "stack-name", {"Resources": {}}, {"Param": "Value"}))
 
     @contextmanager
-    def _temporary():
+    def _temporary(*, remote_root):
+        assert remote_root == _REMOTE["root"]
         yield _StartDml(dag)
 
     class _FakeDmlApi:
@@ -157,15 +159,21 @@ def test_cfn_commit_dag_returns_committed_dag_id(monkeypatch):
     dag = _CommitDag()
 
     @contextmanager
-    def _tmpdag(_argv_ptr):
+    def _tmpdag(_argv_ptr, *, remote_root):
+        assert remote_root == _REMOTE["root"]
         yield dag
 
-    monkeypatch.setattr(CfnExecutor, "_tmpdag", classmethod(lambda cls, argv_ptr: _tmpdag(argv_ptr)))
+    monkeypatch.setattr(
+        CfnExecutor,
+        "_tmpdag",
+        classmethod(lambda cls, argv_ptr, remote_root: _tmpdag(argv_ptr, remote_root=remote_root)),
+    )
 
     dag_id = CfnExecutor._commit_dag(
         {"argv_ptr": "argv://ptr", "stack_name": "stack-name"},
         {"StackId": "stack-123"},
         {"OutputA": "value-a"},
+        remote_root=_REMOTE["root"],
     )
 
     assert dag_id == "dag-cfn-123"
@@ -192,7 +200,8 @@ def test_cfn_poll_marks_success_with_committed_dag_id(monkeypatch):
 
     commit_calls = []
 
-    def _commit_dag(cls, metadata, stack, outputs):
+    def _commit_dag(cls, metadata, stack, outputs, *, remote_root):
+        assert remote_root == _REMOTE["root"]
         commit_calls.append((metadata, stack, outputs))
         return "dag-cfn-success"
 

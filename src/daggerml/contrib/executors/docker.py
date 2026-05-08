@@ -143,6 +143,8 @@ class DockerExecutor(ExecutorBase):
             "run",
             "-d",
             *cast(list[str], runnable.kwargs.get("flags", [])),
+            "-e",
+            f"DML_REMOTE_URI={remote['root']}",
             image_ref,
             runnable.sub.adapter,
             "--poll",
