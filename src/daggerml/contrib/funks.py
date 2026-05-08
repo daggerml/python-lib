@@ -19,15 +19,14 @@ def _run(*cmd: str) -> None:
 
 @api.funkify(uri="script", adapter="local", extra_objs=(_run,))
 def docker_build(dag, context_tarball, build_flags=(), repo=None):
-    from uuid import uuid4
-
     from daggerml import Uri
+    from daggerml._internal.util import uuid7
     from daggerml.contrib.s3 import S3Store
 
     build_flags = tuple(build_flags.value())
 
     store = S3Store()
-    tag = uuid4().hex
+    tag = uuid7().hex
     local_image = f"dml:{tag}"
     store.untar(context_tarball.value(), ".")
     _run("docker", "build", *build_flags, "-t", local_image, ".")

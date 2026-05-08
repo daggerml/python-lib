@@ -6,12 +6,12 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
 
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
 from daggerml._internal.revision_uri import parse_revision_uri, validate_ref_name, validate_segment
 from daggerml._internal.types import Commit, DmlPointerConflictError, DmlRepoError, Tree
+from daggerml._internal.util import uuid7
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9\-\*\|_]+$")
 _HEAD_ATTACHED_PREFIX = "ref: refs/local/heads/"
@@ -62,7 +62,7 @@ class HeadOps(BaseOps):
 
     def create_index(self, commit_ref: Ref) -> str:
         while True:
-            index_id = f"{uuid4().hex}{uuid4().hex}"
+            index_id = str(uuid7())
             index_path = self._index_path(index_id)
             if not index_path.exists():
                 self._create_pointer(index_path, commit_ref)
@@ -91,7 +91,7 @@ class HeadOps(BaseOps):
     def get_head_state(self) -> HeadState:
         payload = self._read_head_payload()
         if payload.startswith(_HEAD_ATTACHED_PREFIX):
-            branch = self._validate_branch_name(payload[len(_HEAD_ATTACHED_PREFIX):])
+            branch = self._validate_branch_name(payload[len(_HEAD_ATTACHED_PREFIX) :])
             commit = self.get_branch_commit(branch)
             return HeadState(mode="attached", branch=branch, commit=commit)
         if payload.startswith("commit:"):

@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from subprocess import run
 from typing import Any, Mapping, Optional, cast
 from urllib.parse import urlparse
-from uuid import uuid4
 
 from daggerml._internal._db import Ref
 from daggerml._internal.builtins import BUILTIN_FNS
@@ -48,7 +47,7 @@ from daggerml._internal.types import (
     Uri,
     require_ref,
 )
-from daggerml._internal.util import now, unnest
+from daggerml._internal.util import now, unnest, uuid7
 
 
 @dataclass(frozen=True)
@@ -116,7 +115,7 @@ class IndexOps(BaseOps):
                 else:
                     prepared = self._prepare_adapter_call(index_id, argv_ref, txn)
 
-        if 'resolved_dag_ref' in locals():
+        if "resolved_dag_ref" in locals():
             return self._finish_fn_result(resolved_dag_ref, argv, name, None, index_id)
         argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
         es = ExecutionState(prepared.cache_key, remote_root=self.remote_root)
@@ -133,7 +132,7 @@ class IndexOps(BaseOps):
             if dag_ref is not None:
                 es.unlock()
                 post_lock_dag_ref = dag_ref
-        if 'post_lock_dag_ref' in locals():
+        if "post_lock_dag_ref" in locals():
             return self._finish_fn_result(post_lock_dag_ref, argv, name, None, index_id)
 
         execution_id = es.read_active_execution_id()
@@ -145,7 +144,7 @@ class IndexOps(BaseOps):
                 execution_id = None
         if execution_id is None:
             assert execution_record is None
-            execution_id = str(uuid4())
+            execution_id = str(uuid7())
             state = None
         else:
             assert execution_record is not None
@@ -190,7 +189,7 @@ class IndexOps(BaseOps):
                 dag_ref = cops._get(prepared.argv_ref, txn)
                 if dag_ref is not None:
                     terminal_dag_ref = dag_ref
-            if 'terminal_dag_ref' in locals():
+            if "terminal_dag_ref" in locals():
                 return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
             raise DmlRepoError("Adapter reported success but no cached DAG was published")
         elif status == "failed":
@@ -202,7 +201,7 @@ class IndexOps(BaseOps):
                 dag_ref = cops._get(prepared.argv_ref, txn)
                 if dag_ref is not None:
                     terminal_dag_ref = dag_ref
-            if 'terminal_dag_ref' in locals():
+            if "terminal_dag_ref" in locals():
                 return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
             raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
         else:
@@ -305,6 +304,7 @@ class IndexOps(BaseOps):
     def set_node_name(self, index_id: str, name: str, node_ref: Ref) -> Ref:
         """Set or replace a node name in the index DAG."""
         require_ref(node_ref, ["node"], "set_node_name node_ref")
+
         def _build(old_commit: Ref, txn):
             ctx = txn.get_commit_ctx(old_commit)
             if ctx.dag is None:
@@ -322,6 +322,7 @@ class IndexOps(BaseOps):
     @with_retry
     def put_import(self, index_id: str, dag: Ref, node: Optional[Ref] = None, name: Optional[str] = None) -> Ref:
         """Import a node from another DAG into the current index DAG."""
+
         def _build(old_commit: Ref, txn):
             ctx = txn.get_commit_ctx(old_commit)
             dag_obj: Dag = txn.get(dag)
@@ -912,10 +913,7 @@ class IndexOps(BaseOps):
                 ys = [_put(v) for v in x]
                 if any(isinstance(v, Ref) and v.nss()[0] == "node" for v in ys):
                     ys = [
-                        self._put_literal(v, txn, index_id, idx_ctx=idx_ctx)
-                        if v.nss()[0] != "node"
-                        else v
-                        for v in ys
+                        self._put_literal(v, txn, index_id, idx_ctx=idx_ctx) if v.nss()[0] != "node" else v for v in ys
                     ]
                     fn_uri = txn.put(Uri("daggerml:list"))
                     fn_kwargs = txn.put(DictDatum(data={}))
@@ -942,9 +940,7 @@ class IndexOps(BaseOps):
                 if any(isinstance(v, Ref) and v.nss()[0] == "node" for v in ys.values()):
                     yks = [self._put_literal(k, txn, index_id, idx_ctx=idx_ctx) for k in ys.keys()]
                     yvs = [
-                        self._put_literal(v, txn, index_id, idx_ctx=idx_ctx)
-                        if v.nss()[0] != "node"
-                        else v
+                        self._put_literal(v, txn, index_id, idx_ctx=idx_ctx) if v.nss()[0] != "node" else v
                         for v in ys.values()
                     ]
                     fn_uri = txn.put(Uri("daggerml:dict"))

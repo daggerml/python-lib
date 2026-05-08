@@ -5,7 +5,6 @@ import json
 import shutil
 import subprocess
 import tarfile
-import uuid
 from pathlib import Path
 
 import pytest
@@ -67,7 +66,7 @@ def test_docker_build_builds_and_uploads_image_tar(monkeypatch):
         hex = "abc123"
 
     monkeypatch.setattr("daggerml.contrib.s3.S3Store", FakeStore)
-    monkeypatch.setattr(uuid, "uuid4", lambda: FakeUuid())
+    monkeypatch.setattr("daggerml._internal.util.uuid7", lambda: FakeUuid())
     monkeypatch.setattr("daggerml.contrib.funks._run", lambda *cmd: calls.append(cmd))
 
     result = call(FakeDag(), Uri("s3://bucket/context.tar"), ["--platform=linux/amd64", "--no-cache"])
@@ -94,7 +93,7 @@ def test_docker_build_pushes_when_repo_is_provided(monkeypatch):
         hex = "abc123"
 
     monkeypatch.setattr("daggerml.contrib.s3.S3Store", FakeStore)
-    monkeypatch.setattr(uuid, "uuid4", lambda: FakeUuid())
+    monkeypatch.setattr("daggerml._internal.util.uuid7", lambda: FakeUuid())
     monkeypatch.setattr("daggerml.contrib.funks._run", lambda *cmd: calls.append(cmd))
 
     result = call(FakeDag(), Uri("s3://bucket/context.tar"), [], Uri("repo/name"))
