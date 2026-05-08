@@ -2,16 +2,167 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from daggerml._internal import DmlOps
 from daggerml._internal.types import DmlRepoError
+
+logger = logging.getLogger(__name__)
+
+_CLOUDWATCH_LOG_GROUP = "dml"
+_CLOUDWATCH_MAX_BATCH_BYTES = 1_048_576
+_CLOUDWATCH_MAX_MESSAGE_BYTES = 1_048_576
+_CLOUDWATCH_EVENT_OVERHEAD_BYTES = 26
+_CLOUDWATCH_MAX_BATCH_COUNT = 10_000
+
+
+def _create_logs_client() -> Any:
+    import boto3
+
+    endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
+    kwargs = {"endpoint_url": endpoint_url} if endpoint_url else {}
+    return boto3.client("logs", **kwargs)
+
+
+def _resource_already_exists(exc: Exception) -> bool:
+    return getattr(exc, "response", {}).get("Error", {}).get("Code") == "ResourceAlreadyExistsException"
+
+
+class _CloudWatchStream:
+    def __init__(self, *, cache_key: str, execution_id: str, stream_kind: str):
+        self.cache_key = cache_key
+        self.execution_id = execution_id
+        self.stream_kind = stream_kind
+        self.stream_name = f"/run/{cache_key}/{stream_kind}"
+        self._client: Any | None = None
+        self._enabled = True
+        self._sequence_token: str | None = None
+        self._pending_events: list[dict[str, Any]] = []
+        self._pending_bytes = 0
+        self._lock = threading.Lock()
+        self._init_client()
+        self.emit_lifecycle(event="start")
+
+    @staticmethod
+    def _event_bytes(message: str) -> int:
+        return len(message.encode("utf-8")) + _CLOUDWATCH_EVENT_OVERHEAD_BYTES
+
+    @staticmethod
+    def _split_message(message: str) -> list[str]:
+        encoded = message.encode("utf-8")
+        if len(encoded) <= _CLOUDWATCH_MAX_MESSAGE_BYTES:
+            return [message]
+
+        chunks: list[str] = []
+        start = 0
+        while start < len(encoded):
+            end = min(start + _CLOUDWATCH_MAX_MESSAGE_BYTES, len(encoded))
+            while end > start:
+                try:
+                    chunks.append(encoded[start:end].decode("utf-8"))
+                    start = end
+                    break
+                except UnicodeDecodeError:
+                    end -= 1
+            else:
+                raise AssertionError("failed to split UTF-8 message into valid chunks")
+        return chunks
+
+    def _flush_locked(self) -> None:
+        if not self._enabled or self._client is None or not self._pending_events:
+            return
+        params: dict[str, Any] = {
+            "logGroupName": _CLOUDWATCH_LOG_GROUP,
+            "logStreamName": self.stream_name,
+            "logEvents": list(self._pending_events),
+        }
+        if self._sequence_token is not None:
+            params["sequenceToken"] = self._sequence_token
+        try:
+            response = self._client.put_log_events(**params)
+            self._sequence_token = response.get("nextSequenceToken")
+            self._pending_events.clear()
+            self._pending_bytes = 0
+        except Exception as exc:
+            self._pending_events.clear()
+            self._pending_bytes = 0
+            self._disable(f"event delivery failed: {exc}")
+
+    def _init_client(self) -> None:
+        try:
+            client = _create_logs_client()
+            try:
+                client.create_log_group(logGroupName=_CLOUDWATCH_LOG_GROUP)
+            except Exception as exc:
+                if not _resource_already_exists(exc):
+                    raise
+            try:
+                client.create_log_stream(logGroupName=_CLOUDWATCH_LOG_GROUP, logStreamName=self.stream_name)
+            except Exception as exc:
+                if not _resource_already_exists(exc):
+                    raise
+            self._client = client
+        except Exception as exc:
+            self._disable(f"initialization failed: {exc}")
+
+    def _disable(self, reason: str) -> None:
+        if not self._enabled:
+            return
+        self._enabled = False
+        self._client = None
+        logger.warning("CloudWatch logging disabled for %s: %s", self.stream_name, reason)
+
+    def emit_lifecycle(self, *, event: str, terminal_status: str | None = None) -> None:
+        payload = {
+            "event": f"stream_{event}",
+            "execution_id": self.execution_id,
+            "cache_key": self.cache_key,
+            "stream": self.stream_kind,
+        }
+        if terminal_status is not None:
+            payload["terminal_status"] = terminal_status
+        self.emit(json.dumps(payload, sort_keys=True))
+
+    def emit(self, message: str) -> None:
+        if not self._enabled or self._client is None:
+            return
+        messages = self._split_message(message)
+        with self._lock:
+            for chunk in messages:
+                event_bytes = self._event_bytes(chunk)
+                if self._pending_events and (
+                    len(self._pending_events) >= _CLOUDWATCH_MAX_BATCH_COUNT
+                    or self._pending_bytes + event_bytes > _CLOUDWATCH_MAX_BATCH_BYTES
+                ):
+                    self._flush_locked()
+                    if not self._enabled:
+                        return
+                event = {"timestamp": round(time.time() * 1000), "message": chunk}
+                self._pending_events.append(event)
+                self._pending_bytes += event_bytes
+
+    def close(self, *, terminal_status: str) -> None:
+        self.emit_lifecycle(event="end", terminal_status=terminal_status)
+        with self._lock:
+            self._flush_locked()
+
+
+def _drain_pipe(pipe: Any, *, local_path: Path, sink: _CloudWatchStream) -> None:
+    with local_path.open("w") as local_file:
+        for line in pipe:
+            local_file.write(line)
+            local_file.flush()
+            sink.emit(line)
+    pipe.close()
 
 
 def _parse_cmd_payload(
@@ -23,8 +174,8 @@ def _parse_cmd_payload(
         raise DmlRepoError(f"Supervisor payload has unknown fields: {', '.join(unknown)}")
 
     version = payload.get("version")
-    if version != 2:
-        raise DmlRepoError("Supervisor payload version must be 2")
+    if version != 0:
+        raise DmlRepoError("Supervisor payload version must be 0")
 
     cache_key = payload.get("cache_key")
     if not isinstance(cache_key, str) or not cache_key:
@@ -95,37 +246,63 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     result_path = Path(workdir) / "result.json"
     stdout_path = Path(workdir) / "stdout.log"
     stderr_path = Path(workdir) / "stderr.log"
-    with stdout_path.open("w") as stdout_f, stderr_path.open("w") as stderr_f:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workdir,
-            env=env,
-            stdout=stdout_f,
-            stderr=stderr_f,
-            start_new_session=False,
-            close_fds=True,
-        )
-    # Wait synchronously for the worker to finish
+    stdout_sink = _CloudWatchStream(cache_key=cache_key, execution_id=execution_id, stream_kind="stdout")
+    stderr_sink = _CloudWatchStream(cache_key=cache_key, execution_id=execution_id, stream_kind="stderr")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=workdir,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+        start_new_session=False,
+        close_fds=True,
+    )
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+    stdout_thread = threading.Thread(
+        target=_drain_pipe,
+        kwargs={"pipe": proc.stdout, "local_path": stdout_path, "sink": stdout_sink},
+        name=f"dml-supervisor-{execution_id[:8]}-stdout",
+    )
+    stderr_thread = threading.Thread(
+        target=_drain_pipe,
+        kwargs={"pipe": proc.stderr, "local_path": stderr_path, "sink": stderr_sink},
+        name=f"dml-supervisor-{execution_id[:8]}-stderr",
+    )
+    stdout_thread.start()
+    stderr_thread.start()
     proc.wait()
+    stdout_thread.join()
+    stderr_thread.join()
 
+    result: dict[str, Any]
     if result_path.exists():
         try:
             parsed = json.loads(result_path.read_text())
-            return _validate_output(parsed)
+            result = _validate_output(parsed)
         except Exception as e:
-            return {"status": "failed", "error": f"Supervisor could not read worker result: {e}"}
-
-    if proc.returncode is not None and proc.returncode < 0:
+            result = {"status": "failed", "error": f"Supervisor could not read worker result: {e}"}
+    elif proc.returncode is not None and proc.returncode < 0:
         import signal as _signal
+
         sig = -proc.returncode
         try:
             sig_name = _signal.Signals(sig).name
         except ValueError:
             sig_name = str(sig)
-        return {"status": "failed", "error": f"Worker killed by signal {sig_name}"}
+        result = {"status": "failed", "error": f"Worker killed by signal {sig_name}"}
+    else:
+        code = proc.returncode if proc.returncode is not None else -1
+        result = {"status": "failed", "error": f"Worker exited without result (code={code})"}
 
-    code = proc.returncode if proc.returncode is not None else -1
-    return {"status": "failed", "error": f"Worker exited without result (code={code})"}
+    terminal_status = str(result.get("status", "failed"))
+    stdout_sink.close(terminal_status=terminal_status)
+    stderr_sink.close(terminal_status=terminal_status)
+    return result
 
 
 def _read(path: str) -> str:

@@ -360,7 +360,7 @@ def status() -> dict[str, object]:
     diagnostics.sort(key=lambda item: (item["scope"], item["code"], item["message"]))
 
     return {
-        "schema_version": 1,
+        "schema_version": 0,
         "summary": {
             "has_errors": any(item["severity"] == "error" for item in diagnostics),
             "diagnostic_count": len(diagnostics),

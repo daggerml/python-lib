@@ -20,9 +20,9 @@ class TestSetupContribParser:
 class TestExecuteContribStatus:
     @patch("daggerml._cli.contrib.contrib_status.status")
     def test_execute_contrib_status(self, mock_status):
-        mock_status.return_value = {"schema_version": 1}
+        mock_status.return_value = {"schema_version": 0}
         result = execute_contrib_status(Namespace())
-        assert result == {"schema_version": 1}
+        assert result == {"schema_version": 0}
 
 
 class TestTopLevelContribCli:
@@ -31,7 +31,7 @@ class TestTopLevelContribCli:
         from daggerml._cli import cli
 
         mock_status.return_value = {
-            "schema_version": 1,
+            "schema_version": 0,
             "summary": {"has_errors": False},
             "adapters": [],
             "executors": [],

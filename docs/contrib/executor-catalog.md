@@ -52,6 +52,7 @@ Define concise runtime contracts for each contrib executor.
 - Script executor starts supervisor in a detached process/session group and stores supervisor pid/paths in executor state.
 - Supervisor starts the script worker in the same process group, so process-group termination from script executor cleanup propagates to supervisor and worker subtree.
 - Supervisor, not the script worker, owns worker environment preparation.
+- Supervisor reads worker `stdout` and `stderr` from pipes, preserves local worker log files inside the supervisor workdir, and streams those channels best-effort to CloudWatch Logs while the worker is still running.
 - Script worker MUST create an isolated temporary working directory and change the worker current working directory to that location before user function execution.
 - Script worker resolves the script runnable from `argv_ptr` by following the runnable linked list (`runnable.sub`) to its terminal node.
 - Script worker reads script metadata from that terminal runnable (`script_uri`, `fn_name`, `prepop`).
@@ -240,6 +241,7 @@ None identified in this spec. Handled by generic execution environment assumptio
 ### Observability
 
 - Stateful executor status is observable via the runtime-owned immutable execution record plus executor-specific external handles.
+- `script` executor observability includes supervisor-owned local `stdout.log` and `stderr.log` files plus best-effort CloudWatch streams `/run/{cache_key}/stdout` and `/run/{cache_key}/stderr` in log group `dml`.
 - `batch` executor observability includes recorded Batch job id and job-definition arn in launch-time state; input/output S3 locations are derived from `AdapterIO` and not stored in state.
 - `ssh` executor observability includes the execution-scoped nested payload forwarded over SSH.
 

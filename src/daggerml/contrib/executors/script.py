@@ -134,7 +134,7 @@ class ScriptExecutor(ExecutorBase):
         stdout_path = workdir / "stdout.log"
         stderr_path = workdir / "stderr.log"
         payload = {
-            "version": 2,
+            "version": 0,
             "cache_key": cache_key,
             "execution_id": execution_id,
             "cmd": [

@@ -84,6 +84,10 @@ This document does not define:
   - `python -m daggerml.contrib.supervisor` MUST accept the same payload from stdin or a file,
   - worker success reporting MUST include `dag_id` in `result.json` as `{status,error,dag_id}` so the supervisor can mark success,
   - worker failure reporting MUST remain `{status,error}`,
+  - supervisor-managed worker `stdout` and `stderr` MUST be captured into local `stdout.log` and `stderr.log` files in the supervisor workdir,
+  - supervisor-managed worker `stdout` and `stderr` MUST also be streamed best-effort to CloudWatch Logs group `dml` using streams `/run/{cache_key}/stdout` and `/run/{cache_key}/stderr`,
+  - each CloudWatch stream MUST receive a start lifecycle event containing `execution_id`, `cache_key`, and stream kind before worker output, and an end lifecycle event containing the same metadata plus terminal status after worker exit,
+  - CloudWatch initialization or delivery failures MUST disable further CloudWatch writes for the affected stream without changing the supervisor terminal result,
   - non-terminal worker results MUST be rejected once the worker process has exited.
 
 ### Invariants
@@ -104,6 +108,7 @@ This document does not define:
 ### Observability
 
 - Executors SHOULD preserve enough launch-time metadata to identify runtime handles needed for polling, cleanup, and debugging.
+- Supervisor-backed executions preserve local worker log files for fallback debugging even when CloudWatch streaming is unavailable.
 - Runtime status and plugin discovery remain authoritative in [status.md](status.md).
 
 ### Authority Handoffs

@@ -98,7 +98,7 @@ def test_status_reports_runtime_registrations(monkeypatch):
 
     result = cast(dict[str, Any], cstatus.status())
 
-    assert result["schema_version"] == 1
+    assert result["schema_version"] == 0
     assert result["summary"] == {
         "has_errors": False,
         "diagnostic_count": 0,

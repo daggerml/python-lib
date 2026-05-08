@@ -302,6 +302,43 @@ def test_script_executor_start_returns_running_with_job_state():
     _cleanup_workdir(job_state)
 
 
+def test_script_executor_handles_worker_stdout_and_stderr():
+    script = "\n".join(
+        [
+            "import sys",
+            "def fn(dag):",
+            "    sys.stdout.write('script-stdout\\n')",
+            "    sys.stdout.flush()",
+            "    sys.stderr.write('script-stderr\\n')",
+            "    sys.stderr.flush()",
+            "    return 1",
+            "",
+        ]
+    )
+    runnable = _mk_script_runnable(script)
+    cache_key = "ck-mixed-worker-output"
+    argv_ptr = _mk_argv_ptr(argv0=runnable)
+    remote = _remote()
+
+    executor = ScriptExecutor()
+    kickoff = executor.start(
+        cache_key=cache_key,
+        execution_id="exec-mixed-worker-output",
+        runnable=runnable,
+        argv_ptr=argv_ptr,
+        remote=remote,
+    )
+    assert kickoff["status"] == "running"
+
+    state = cast(dict[str, Any], kickoff["state"])
+    result = executor.poll(cache_key=cache_key, execution_id="exec-mixed-worker-output", state=state, remote=remote)
+    while result["status"] == "running":
+        time.sleep(0.01)
+        result = executor.poll(cache_key=cache_key, execution_id="exec-mixed-worker-output", state=state, remote=remote)
+
+    assert result["status"] == "succeeded"
+
+
 def test_local_adapter_resolve_runnable_rejects_executor_for_other_adapter():
     class ForeignExecutor:
         name = "foreign"

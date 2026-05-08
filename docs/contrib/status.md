@@ -62,7 +62,7 @@ Provide one deterministic, JSON-safe status report that answers what contrib plu
 
 `status()` MUST return a dictionary with exactly these top-level Reserved Fields:
 
-- `schema_version`: integer; MUST be `1`.
+- `schema_version`: integer; MUST be `0`.
 - `summary`: dictionary.
 - `adapters`: list of Registration Records.
 - `executors`: list of Registration Records.
@@ -72,7 +72,7 @@ Provide one deterministic, JSON-safe status report that answers what contrib plu
 Top-level field handling:
 
 - `status()` has no user inputs.
-- Constraints: Consumers MUST treat the top-level Status Report shape for `schema_version == 1` as closed except where this document explicitly marks a nested mapping as open.
+- Constraints: Consumers MUST treat the top-level Status Report shape for `schema_version == 0` as closed except where this document explicitly marks a nested mapping as open.
 - Errors and failure modes: internal status assembly failure is raised.
 - Invocation surfaces: python API call.
 
@@ -158,7 +158,7 @@ Diagnostic rules:
   - `registration_invalid`,
   - `duplicate_key`,
   - `introspection_failed`.
-- Additional diagnostic codes MUST NOT be added in `schema_version == 1`.
+- Additional diagnostic codes MUST NOT be added in `schema_version == 0`.
 
 Best-effort behavior:
 
@@ -230,7 +230,7 @@ None identified in this spec.
 
 ## Compatibility
 
-- `schema_version` MUST be `1` for this contract.
+- `schema_version` MUST be `0` for this contract.
 - Any change to top-level Reserved Fields, `summary` Reserved Fields, Registration Record Reserved Fields, Diagnostic Record Reserved Fields, required `implements` keys, or allowed diagnostic `code` values MUST require a new `schema_version`.
 - Changes to adapter attributes, executor attributes, or codec attributes do not require a new `schema_version` unless they change Reserved Fields owned by this document.
 - The order of `codecs` is compatibility-relevant because it mirrors runtime codec selection order.
