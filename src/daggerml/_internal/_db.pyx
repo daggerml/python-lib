@@ -25,16 +25,8 @@ from cpython.exc cimport PyErr_Clear, PyErr_Occurred
 
 
 logger = logging.getLogger(__name__)
-def _config_int(name, default):
-    try:
-        value = int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
-    return value if value >= 0 else default
-
-
-MAX_STRING_BYTES = _config_int("DML_DB_MAX_STRING_BYTES", 1024 * 1024)
-MAX_COLLECTION_LEN = _config_int("DML_DB_MAX_COLLECTION_LEN", 100000)
+MAX_STRING_BYTES = 1024 * 1024
+MAX_COLLECTION_LEN = 100000
 
 cdef extern from "dml_value.h":
     ctypedef enum DmlValueType:

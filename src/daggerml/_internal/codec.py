@@ -15,16 +15,16 @@ if TYPE_CHECKING:
 LITERAL_CODEC_ENTRYPOINT_GROUP = "daggerml.codecs"
 
 
-class LiteralCodec(Protocol):
-    def can_encode(self, value: Any) -> bool: ...
-
-    def encode(self, value: Any, ctx: "CodecContext") -> Any: ...
-
-
 @dataclass(frozen=True)
 class CodecContext:
     index_id: str
     index_ops: "IndexOps"
+
+
+class LiteralCodec(Protocol):
+    def can_encode(self, value: Any) -> bool: ...
+
+    def encode(self, value: Any, ctx: CodecContext) -> Any: ...
 
 
 _literal_codecs: list[tuple[int, int, LiteralCodec]] = []

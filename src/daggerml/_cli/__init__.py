@@ -29,25 +29,27 @@ def cli() -> None:
         ),
         examples=[
             "dml --help",
-            "dml --repo /path/to/repo head list",
+            "dml --project-home /path/to/repo head list",
             "dml commit list HEAD --limit 10",
         ],
     )
     parser.add_argument(
-        "--repo",
+        "--project-home",
+        dest="project_home",
         type=str,
-        help="Repository path (defaults to $DML_PROJECT_HOME)",
+        help="Project home path (defaults to $DML_PROJECT_HOME)",
     )
     parser.add_argument(
-        "--remote-root",
+        "--remote-uri",
+        dest="runtime_remote_uri",
         type=str,
-        help="Remote project root URI (defaults to $DML_REMOTE_URI)",
+        help="Remote project URI (defaults to $DML_REMOTE_URI)",
     )
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity")
     subparsers = parser.add_subparsers(dest="op", metavar="<operation>", help="Operations")
 
     # Init subcommand
-    init_parser = subparsers.add_parser("init", help="Initialize .dml state in current or --repo directory")
+    init_parser = subparsers.add_parser("init", help="Initialize .dml state in current or --project-home directory")
     setup_init_parser(init_parser)
 
     # Status subcommand

@@ -9,8 +9,8 @@ from daggerml._internal.config import DmlConfig
 def execute_status(args) -> dict[str, object]:
     cfg = DmlConfig.resolve(
         explicit={
-            "project.home": args.repo,
-            "remote.uri": getattr(args, "remote_root", None),
+            "project.home": getattr(args, "project_home", None),
+            "remote.uri": getattr(args, "runtime_remote_uri", None),
         }
     )
     return cfg.to_dict()
@@ -22,7 +22,7 @@ def setup_status_parser(parser: ArgumentParser) -> None:
         description="Show effective current runtime settings (excluding contrib status).",
         examples=[
             "dml status",
-            "dml --repo /path/to/repo status",
+            "dml --project-home /path/to/repo status",
         ],
     )
     parser.set_defaults(func=execute_status)

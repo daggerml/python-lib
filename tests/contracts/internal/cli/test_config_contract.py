@@ -21,13 +21,13 @@ class TestSetupConfigParser:
 
 class TestExecuteConfig:
     def test_set_and_get_local_value(self, tmp_path):
-        args_set = Namespace(repo=str(tmp_path), global_scope=False, key="project.uri", value=["dml://alice/demo"])
+        args_set = Namespace(project_home=str(tmp_path), global_scope=False, key="project.uri", value=["dml://alice/demo"])
         assert execute_config(args_set) == ""
-        args_get = Namespace(repo=str(tmp_path), global_scope=False, key="project.uri", value=[])
+        args_get = Namespace(project_home=str(tmp_path), global_scope=False, key="project.uri", value=[])
         assert execute_config(args_get) == "dml://alice/demo"
 
     def test_rejects_invalid_global_key(self, tmp_path):
-        args = Namespace(repo=str(tmp_path), global_scope=True, key="project.uri", value=["dml://alice/demo"])
+        args = Namespace(project_home=str(tmp_path), global_scope=True, key="project.uri", value=["dml://alice/demo"])
         with pytest.raises(DmlRepoError, match="not valid in global scope"):
             execute_config(args)
 

@@ -16,8 +16,8 @@ def setup_init_parser(parser: ArgumentParser) -> None:
         examples=[
             "dml init my-project",
             "dml init --project-uri dml://alice/my-project",
-            "dml init --repo /path/to/project my-project",
-            "dml --repo /path/to/project init",
+            "dml init --project-home /path/to/project my-project",
+            "dml --project-home /path/to/project init",
         ],
     )
     parser.add_argument("name", nargs="?", help="Project name")
@@ -45,7 +45,7 @@ def setup_init_parser(parser: ArgumentParser) -> None:
 def execute_init(args) -> dict[str, str | None]:
     """Execute init command."""
     return DmlOps.init(
-        path=args.repo,
+        path=getattr(args, "project_home", None),
         name=args.name.strip() if args.name else None,
         owner=getattr(args, "owner", None),
         branch=getattr(args, "branch", None),

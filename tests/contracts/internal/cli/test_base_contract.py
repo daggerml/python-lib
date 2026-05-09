@@ -8,6 +8,7 @@ from io import StringIO
 from unittest.mock import Mock, patch
 
 from hypothesis import given, settings
+import pytest
 
 from daggerml._cli.base import (
     apply_help_config,
@@ -29,13 +30,13 @@ from tests.contracts.internal.test_types_contract import _refs
 class TestGetRepoPath:
     """Test repository path resolution."""
 
-    def test_repo_arg_provided(self):
-        """Test --repo flag takes priority."""
+    def test_project_home_arg_provided(self):
+        """Test --project-home flag takes priority."""
         assert get_repo_path("/path/from/arg") == "/path/from/arg"
 
     @patch.dict(os.environ, {"DML_PROJECT_HOME": "/env/path"})
     def test_env_var_fallback(self):
-        """Test DML_PROJECT_HOME env var when no --repo."""
+        """Test DML_PROJECT_HOME env var when no --project-home."""
         assert get_repo_path(None) == "/env/path"
 
     @patch.dict(os.environ, {"DML_PROJECT_HOME": "/env/repo"})
@@ -211,6 +212,63 @@ class TestHelpHelpers:
         assert "Examples:" in (parser.epilog or "")
 
 
+class TestTopLevelCliParsing:
+    def test_cli_accepts_project_home_and_remote_uri(self):
+        from daggerml._cli import cli
+
+        old_argv = sys.argv
+        sys.argv = ["dml", "--project-home", "/repo", "--remote-uri", "s3://bucket/project", "status"]
+        try:
+            with patch("daggerml._cli.base.execute_command") as mock_execute:
+                cli()
+        finally:
+            sys.argv = old_argv
+
+        args = mock_execute.call_args.args[0]
+        assert args.project_home == "/repo"
+        assert args.runtime_remote_uri == "s3://bucket/project"
+
+    def test_cli_keeps_top_level_and_init_remote_uri_distinct(self):
+        from daggerml._cli import cli
+
+        old_argv = sys.argv
+        sys.argv = [
+            "dml",
+            "--remote-uri",
+            "s3://bucket/runtime",
+            "init",
+            "--remote-uri",
+            "s3://bucket/project",
+            "demo",
+        ]
+        try:
+            with patch("daggerml._cli.base.execute_command") as mock_execute:
+                cli()
+        finally:
+            sys.argv = old_argv
+
+        args = mock_execute.call_args.args[0]
+        assert args.runtime_remote_uri == "s3://bucket/runtime"
+        assert args.remote_uri == "s3://bucket/project"
+
+    def test_cli_rejects_legacy_repo_flag(self):
+        from daggerml._cli import cli
+
+        old_argv = sys.argv
+        old_stderr = sys.stderr
+        sys.argv = ["dml", "--repo", "/repo", "status"]
+        sys.stderr = StringIO()
+        try:
+            with pytest.raises(SystemExit):
+                cli()
+            err = sys.stderr.getvalue()
+            assert "--project-home" in err
+            assert "--repo" not in err
+        finally:
+            sys.argv = old_argv
+            sys.stderr = old_stderr
+
+
 class TestErrorNormalization:
     def test_normalize_error_message_includes_command_context(self):
         msg = normalize_error_message(RuntimeError("boom"), command="cache put")
@@ -222,7 +280,7 @@ class TestErrorNormalization:
 
     def test_normalize_error_message_repo_path_has_recovery_hint(self):
         msg = normalize_error_message(FileNotFoundError("/nope"), command="head list")
-        assert "--repo" in msg or "DML_PROJECT_HOME" in msg
+        assert "--project-home" in msg or "DML_PROJECT_HOME" in msg
 
     def test_build_error_payload_preserves_schema_fields(self):
         payload = build_error_payload(ValueError("Invalid Ref format"), command="node get")
@@ -244,7 +302,7 @@ class TestExecuteCommand:
         mock_open.return_value.__enter__.return_value = mock_ops
         mock_open.return_value.__exit__.return_value = None
 
-        args = Namespace(repo=None, op="commit", func=Mock(return_value={"result": "ok"}))
+        args = Namespace(project_home=None, runtime_remote_uri=None, op="commit", func=Mock(return_value={"result": "ok"}))
 
         with patch("daggerml._cli.base.output_json") as mock_output:
             execute_command(args)
@@ -275,7 +333,7 @@ class TestExecuteCommand:
         mock_open.return_value.__enter__.return_value = mock_ops
         mock_open.return_value.__exit__.return_value = None
 
-        args = Namespace(repo=None, op="commit", func=Mock(return_value={"result": "ok"}))
+        args = Namespace(project_home=None, runtime_remote_uri=None, op="commit", func=Mock(return_value={"result": "ok"}))
 
         with patch("daggerml._cli.base.output_json"):
             execute_command(args)
@@ -295,7 +353,7 @@ class TestExecuteCommand:
         mock_open.return_value.__enter__.return_value = mock_ops
         mock_open.return_value.__exit__.return_value = None
 
-        args = Namespace(repo=None, op="commit", func=Mock(return_value={"result": "ok"}))
+        args = Namespace(project_home=None, runtime_remote_uri=None, op="commit", func=Mock(return_value={"result": "ok"}))
 
         with patch("daggerml._cli.base.output_json"):
             execute_command(args)
@@ -311,7 +369,7 @@ class TestExecuteCommand:
         mock_open.return_value.__enter__.return_value = mock_ops
         mock_open.return_value.__exit__.return_value = None
 
-        args = Namespace(repo=None, op="dag", method="checkout", func=Mock(return_value="commit:1"))
+        args = Namespace(project_home=None, runtime_remote_uri=None, op="dag", method="checkout", func=Mock(return_value="commit:1"))
 
         with patch("daggerml._cli.base.output_json") as mock_output:
             execute_command(args)
@@ -340,7 +398,7 @@ class TestExecuteCommand:
         mock_get_path.return_value = "/repo/path"
         mock_open.side_effect = FileNotFoundError("repo not found")
 
-        args = Namespace(repo=None, op="commit", func=Mock())
+        args = Namespace(project_home=None, runtime_remote_uri=None, op="commit", func=Mock())
 
         execute_command(args)
 

@@ -15,8 +15,8 @@ def setup_remote_parser(parser: ArgumentParser) -> None:
         parser,
         description="Remote operations backed by S3 (requires boto3 at runtime for remote commands).",
         examples=[
-            "dml --remote-root s3://bucket/project remote push main",
-            "dml --remote-root s3://bucket/project remote pull tags/main/v1.json",
+            "dml --remote-uri s3://bucket/project remote push main",
+            "dml --remote-uri s3://bucket/project remote pull tags/main/v1.json",
         ],
     )
     subparsers = parser.add_subparsers(dest="method", metavar="<method>", help="Methods", required=True)
@@ -47,7 +47,7 @@ def setup_remote_push_parser(parser: ArgumentParser) -> None:
         parser,
         description="Publish a local branch as a tag ref in remote storage.",
         examples=[
-            "dml --remote-root s3://bucket/project remote push main",
+            "dml --remote-uri s3://bucket/project remote push main",
         ],
     )
     parser.add_argument("branch", help="Branch name to push")
@@ -59,7 +59,7 @@ def setup_remote_pull_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         parser,
         description="Pull a ref path from remote storage into the local repo.",
-        examples=["dml --remote-root s3://bucket/project remote pull tags/main/v1.json"],
+        examples=["dml --remote-uri s3://bucket/project remote pull tags/main/v1.json"],
     )
     parser.add_argument("ref_path", help="Remote ref path (e.g. tags/<name>/<version>.json)")
     parser.set_defaults(method="pull", func=execute_remote_pull)
@@ -93,7 +93,7 @@ def setup_remote_list_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         parser,
         description="List remote refs under a prefix.",
-        examples=["dml --remote-root s3://bucket/project remote list tags"],
+        examples=["dml --remote-uri s3://bucket/project remote list tags"],
     )
     parser.add_argument("prefix", help="Remote prefix to list (e.g. tags, cache)")
     parser.set_defaults(method="list", func=execute_remote_list)
@@ -118,7 +118,7 @@ def setup_remote_prune_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         parser,
         description="Prune aged remote io/invoke transport blobs.",
-        examples=["dml --remote-root s3://bucket/project remote prune"],
+        examples=["dml --remote-uri s3://bucket/project remote prune"],
     )
     parser.set_defaults(method="prune", func=execute_remote_prune)
 
@@ -128,7 +128,7 @@ def setup_remote_gc_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         parser,
         description="Run remote garbage collection.",
-        examples=["dml --remote-root s3://bucket/project remote gc --min-age 0"],
+        examples=["dml --remote-uri s3://bucket/project remote gc --min-age 0"],
     )
     parser.add_argument(
         "--min-age",
@@ -155,7 +155,7 @@ def create_s3_client(boto3_module: Any) -> Any:
 def get_remote_ops(ops: DmlOps, s3_client: Any) -> Any:
     """Get remote operations from DmlOps instance."""
     if not ops.remote_root:
-        raise DmlRepoError("Remote URI required; pass --remote-root or set DML_REMOTE_URI")
+        raise DmlRepoError("Remote URI required; pass --remote-uri or set DML_REMOTE_URI")
     return ops.remote(client=s3_client)
 
 

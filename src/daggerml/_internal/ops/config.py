@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import tomllib
 
 from daggerml._internal.config import _validate_ref_name, validate_dml_project_uri, validate_remote_uri
 from daggerml._internal.types import DmlRepoError
@@ -67,7 +66,7 @@ class ConfigOps:
             return Path(self.config_home) / "config.toml"
         if scope == SCOPE_LOCAL:
             if not self.project_home:
-                raise DmlRepoError("Local config requires project.home (--repo or DML_PROJECT_HOME)")
+                raise DmlRepoError("Local config requires project.home (--project-home or DML_PROJECT_HOME)")
             return Path(self.project_home) / ".dml" / "config.toml"
         raise DmlRepoError(f"Unknown config scope: {scope}")
 

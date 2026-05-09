@@ -76,7 +76,7 @@ def test_non_remote_commands_do_not_import_boto3(monkeypatch, tmp_path):
     old_argv = sys.argv
     old_stdout = sys.stdout
     old_stderr = sys.stderr
-    sys.argv = ["dml", "--repo", str(tmp_path), "cache", "list"]
+    sys.argv = ["dml", "--project-home", str(tmp_path), "cache", "list"]
     sys.stdout = StringIO()
     sys.stderr = StringIO()
     try:

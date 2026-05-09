@@ -37,11 +37,11 @@ class DmlJsonEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def get_repo_path(repo_arg: str | None) -> str:
-    """Resolve repository path from args and environment."""
-    cfg = DmlConfig.resolve(explicit={"project.home": repo_arg})
+def get_repo_path(project_home_arg: str | None) -> str:
+    """Resolve project home path from args and environment."""
+    cfg = DmlConfig.resolve(explicit={"project.home": project_home_arg})
     if not cfg.project.home:
-        raise DmlRepoError("Local config requires project.home (--repo or DML_PROJECT_HOME)")
+        raise DmlRepoError("Local config requires project.home (--project-home or DML_PROJECT_HOME)")
     return cfg.project.home
 
 
@@ -144,7 +144,7 @@ def normalize_error_message(error: Exception, *, command: str | None) -> str:
 
     # Repository path errors should include recovery hints.
     if isinstance(error, (DmlDbInvalidPathError, FileNotFoundError, NotADirectoryError, PermissionError)):
-        message = _with_hint(message, "pass --repo PATH or set DML_PROJECT_HOME")
+        message = _with_hint(message, "pass --project-home PATH or set DML_PROJECT_HOME")
 
     # Config errors are generally surfaced via DmlRepoError.
     if isinstance(error, DmlRepoError):
@@ -200,11 +200,11 @@ def execute_command(args) -> None:
             else:
                 output_json(result)
             return
-        repo_path = get_repo_path(args.repo)
+        repo_path = get_repo_path(getattr(args, "project_home", None))
         cfg = DmlConfig.resolve(
             explicit={
                 "project.home": repo_path,
-                "remote.uri": getattr(args, "remote_root", None),
+                "remote.uri": getattr(args, "runtime_remote_uri", None),
             }
         )
         with DmlOps.open(repo_path, remote_root=cfg.remote.uri) as ops:

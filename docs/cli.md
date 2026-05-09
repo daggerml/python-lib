@@ -40,6 +40,7 @@ CLI is an operational interface over `_internal` ops. It owns argument parsing a
 - `contrib status` emits the structured contrib status report as compact JSON,
 - `cache` supports `list|get|delete|clear`,
 - runtime config naming follows [configuration.md](configuration.md): `project.home`, `project.uri`, `db.path`, `remote.uri`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
+- explicit CLI override flags mirror the canonical config naming, including `--project-home`, `--remote-uri`, `--project-uri`, and `--config-home`.
 
 ## Serialization-Limited Gaps
 

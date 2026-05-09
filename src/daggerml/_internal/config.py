@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tomllib
 from dataclasses import dataclass, field
 from getpass import getuser
 from pathlib import Path
 from socket import gethostname
 from typing import Any, Mapping
 from urllib.parse import urlsplit
-
-import tomllib
 
 from daggerml._internal.revision_uri import (
     canonicalize_revision_uri,
@@ -21,16 +20,15 @@ from daggerml._internal.revision_uri import (
 
 _PROJECT_SCOPE = "project/runtime"
 _GLOBAL_SCOPE = "global"
-_PATH_KEYS = {"project.home", "db.path", "config_home"}
-_ENV_KEYS: dict[str, tuple[str, ...]] = {
-    "project.home": ("DML_PROJECT_HOME",),
-    "project.uri": ("DML_PROJECT_URI",),
-    "db.path": ("DML_DB_PATH",),
-    "remote.uri": ("DML_REMOTE_URI",),
-    "remote.fetch_workers": ("DML_REMOTE_FETCH_WORKERS",),
-    "user": ("DML_USER",),
-    "default_branch": ("DML_DEFAULT_BRANCH",),
-    "config_home": ("DML_CONFIG_HOME",),
+_ENV_KEYS: dict[str, str] = {
+    "project.home": "DML_PROJECT_HOME",
+    "project.uri": "DML_PROJECT_URI",
+    "db.path": "DML_DB_PATH",
+    "remote.uri": "DML_REMOTE_URI",
+    "remote.fetch_workers": "DML_REMOTE_FETCH_WORKERS",
+    "user": "DML_USER",
+    "default_branch": "DML_DEFAULT_BRANCH",
+    "config_home": "DML_CONFIG_HOME",
 }
 
 
@@ -48,10 +46,6 @@ class ParsedProjectUri:
         if self.tag is not None:
             return f"{uri}@{self.tag}"
         return uri
-
-
-def _validate_segment(label: str, value: str) -> str:
-    return validate_segment(label, value)
 
 
 def _validate_ref_name(label: str, value: str) -> str:
@@ -241,15 +235,13 @@ def _overlay(base: dict[str, object], layer: Mapping[str, object]) -> dict[str, 
 
 def _env_layer(env: Mapping[str, str]) -> dict[str, object]:
     out: dict[str, object] = {}
-    for key, names in _ENV_KEYS.items():
-        for name in names:
-            if name not in env:
-                continue
-            value = env[name]
-            if value == "":
-                continue
-            out[key] = value
-            break
+    for key, name in _ENV_KEYS.items():
+        if name not in env:
+            continue
+        value = env[name]
+        if value == "":
+            continue
+        out[key] = value
     return out
 
 
@@ -419,19 +411,6 @@ class DmlConfig:
 
 def _validate_name(label: str, value: str) -> str:
     return validate_segment(label, value)
-
-
-def _validate_branch(value: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"Invalid branch: {value!r}")
-    if value in {".", ".."} or "\\" in value:
-        raise ValueError(f"Invalid branch: {value!r}")
-    parts = value.split("/")
-    if any(part in {"", ".", ".."} for part in parts):
-        raise ValueError(f"Invalid branch: {value!r}")
-    for part in parts:
-        _validate_name("branch segment", part)
-    return value
 
 
 def validate_dml_project_uri(uri: str) -> str:

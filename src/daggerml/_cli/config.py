@@ -28,7 +28,7 @@ def setup_config_parser(parser: ArgumentParser) -> None:
 def execute_config(args) -> str:
     cfg = DmlConfig.resolve(
         scope="global" if args.global_scope else "project/runtime",
-        explicit={"project.home": args.repo},
+        explicit={"project.home": getattr(args, "project_home", None)},
     )
     ops = ConfigOps(project_home=cfg.project.home, config_home=cfg.config_home)
     scope = SCOPE_GLOBAL if args.global_scope else SCOPE_LOCAL

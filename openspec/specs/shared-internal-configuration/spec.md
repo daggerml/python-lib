@@ -86,3 +86,20 @@ The system SHALL document operations that remain unavailable in the CLI because 
 #### Scenario: Missing CLI feature does not imply different config rules
 - **WHEN** a capability is supported by both API and CLI
 - **THEN** both frontends use the same shared internal configuration rules for that capability
+
+### Requirement: CLI explicit override names mirror canonical config parameters
+The CLI SHALL name explicit configuration override flags after the canonical parameters they populate in the shared internal resolver whenever those parameters are exposed directly to users.
+
+#### Scenario: Project-home flag maps to canonical parameter
+- **WHEN** the CLI resolves an explicit local project path override
+- **THEN** it reads that value from a flag named after `project.home`
+- **AND** it forwards the value into shared resolution as `project.home`
+
+#### Scenario: Remote-uri flag maps to canonical parameter
+- **WHEN** the CLI resolves an explicit remote project override
+- **THEN** it reads that value from a flag named after `remote.uri`
+- **AND** it forwards the value into shared resolution as `remote.uri`
+
+#### Scenario: Existing canonical names remain unchanged
+- **WHEN** the CLI exposes other explicit config-shaped overrides such as `--project-uri` or `--config-home`
+- **THEN** those flags continue using the established canonical names rather than introducing alternate aliases

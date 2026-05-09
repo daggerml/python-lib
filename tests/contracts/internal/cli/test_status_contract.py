@@ -18,7 +18,7 @@ class TestSetupStatusParser:
 
 class TestExecuteStatus:
     def test_execute_status_returns_config_dict(self, tmp_path):
-        args = Namespace(repo=str(tmp_path), remote_root="s3://bucket/project")
+        args = Namespace(project_home=str(tmp_path), runtime_remote_uri="s3://bucket/project")
         result = execute_status(args)
         assert set(result.keys()) == {"project", "db", "remote", "user", "default_branch", "hooks", "config_home"}
         assert result["project"]["home"] == str(tmp_path)

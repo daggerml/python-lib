@@ -18,7 +18,7 @@ def test_execute_init_forwards_branch_argument_without_local_derivation(mock_dml
     args = Namespace(
         name="demo",
         config_home=None,
-        repo=None,
+        project_home=None,
         owner=None,
         branch=None,
         project_uri=None,
@@ -52,7 +52,7 @@ class TestExecuteInit:
             args = Namespace(
                 name="my-repo",
                 config_home=temp_dir,
-                repo=None,
+                project_home=None,
                 owner=None,
                 branch=None,
                 project_uri=None,
@@ -70,7 +70,7 @@ class TestExecuteInit:
             assert (expected_repo / ".dml" / "db").exists()
 
     def test_execute_init_rejects_path_separators(self):
-        args = Namespace(name="bad/name", config_home="~/.config/dml/", repo=None)
+        args = Namespace(name="bad/name", config_home="~/.config/dml/", project_home=None)
         with pytest.raises(ValueError, match="must not contain path separators"):
             execute_init(args)
 
@@ -80,7 +80,7 @@ class TestExecuteInit:
             args = Namespace(
                 name=None,
                 config_home=None,
-                repo=None,
+                project_home=None,
                 owner=None,
                 branch=None,
                 project_uri="dml://alice/demo",
@@ -95,7 +95,7 @@ class TestExecuteInit:
         args = Namespace(
             name="demo",
             config_home=None,
-            repo=None,
+            project_home=None,
             owner=None,
             branch=None,
             project_uri="dml://alice/demo",
@@ -120,7 +120,7 @@ class TestExecuteInit:
             args = Namespace(
                 name="demo",
                 config_home=None,
-                repo=None,
+                project_home=None,
                 owner=None,
                 branch=None,
                 project_uri=None,
@@ -130,14 +130,14 @@ class TestExecuteInit:
             with pytest.raises(DmlRepoError, match="user is required to derive project URI from NAME"):
                 execute_init(args)
 
-    def test_execute_init_uses_repo_flag_path(self):
+    def test_execute_init_uses_project_home_flag_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             explicit = Path(temp_dir) / "repo-from-flag"
             explicit.mkdir()
             args = Namespace(
                 name=None,
                 config_home="~/.config/dml/",
-                repo=str(explicit),
+                project_home=str(explicit),
                 owner=None,
                 branch=None,
                 project_uri=None,
@@ -156,7 +156,7 @@ class TestExecuteInit:
             args = Namespace(
                 name="from-env",
                 config_home=None,
-                repo=None,
+                project_home=None,
                 owner=None,
                 branch=None,
                 project_uri=None,
@@ -176,7 +176,7 @@ class TestExecuteInit:
             args = Namespace(
                 name=None,
                 config_home=None,
-                repo=None,
+                project_home=None,
                 owner=None,
                 branch=None,
                 project_uri="dml://alice/demo",
@@ -196,7 +196,7 @@ class TestExecuteInit:
             args = Namespace(
                 name="demo",
                 config_home=None,
-                repo=None,
+                project_home=None,
                 owner=None,
                 branch=None,
                 project_uri=None,

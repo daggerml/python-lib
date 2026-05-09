@@ -49,12 +49,12 @@ class TestInitCLIIntegration:
             assert payload["branch"] == "main"
             assert (expected_repo / ".dml" / "db").exists()
 
-    def test_init_cli_respects_repo_flag_for_db_path_only_mode(self):
+    def test_init_cli_respects_project_home_flag_for_db_path_only_mode(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             explicit = Path(temp_dir) / "db-only"
             explicit.mkdir()
             stdout, stderr = self.run_cli_command(
-                ["--repo", str(explicit), "init", "--remote-uri", "s3://test-bucket/test-prefix"]
+                ["--project-home", str(explicit), "init", "--remote-uri", "s3://test-bucket/test-prefix"]
             )
             assert not stderr
             payload = json.loads(stdout.strip())
