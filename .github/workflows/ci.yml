@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: ${{ matrix.py }}
       - name: Install uv
-        run: pip install uv
+        run: pip install uv==0.11.7
       - name: Sync dependencies
         run: uv sync --group dev
       - name: pytest
@@ -50,7 +50,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install uv
-        run: pip install uv
+        run: pip install uv==0.11.7
       - name: Build with ASAN + UBSAN
         env:
           CMAKE_ARGS: "-DDML_ENABLE_ASAN=ON -DDML_ENABLE_UBSAN=ON"
@@ -61,7 +61,7 @@ jobs:
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
           LIBASAN=$(gcc -print-file-name=libasan.so)
-          LD_PRELOAD="$LIBASAN" uv run pytest .
+          LD_PRELOAD="$LIBASAN" uv run pytest tests/contracts tests/contrib src/daggerml
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -71,13 +71,13 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install uv
-        run: pip install uv
+        run: pip install uv==0.11.7
       - name: Sync dependencies
         run: uv sync --group dev
       - name: Run Ruff
         run: uv run ruff check --output-format=github .
   publish:
-    needs: ["test", "lint"]
+    needs: ["test", "lint", "sanitize"]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     name: Upload release to PyPI
     runs-on: ubuntu-latest
