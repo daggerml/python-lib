@@ -485,7 +485,7 @@ def init_project_layout(project_dir: Path | str, cfg: DmlProjectConfig) -> Path:
     dml_dir = root / ".dml"
     db_dir = dml_dir / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
-    (dml_dir / ".gitignore").write_text("*\n")
+    (dml_dir / ".gitignore").write_text("db\nHEAD\nrefs\n")
     cfg.save(root)
     return db_dir
 
