@@ -1,23 +1,19 @@
 import logging
-import os
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from tempfile import TemporaryDirectory
 from typing import Any, Iterator, Optional, Union, cast, overload
 
 from daggerml._internal import (
-    DEFAULT_HEAD,
-    DmlOps,
+    CodecContext,
+    Dml,
     DmlRepoError,
     Error,
     Ref,
     Runnable,
     Uri,
 )
-from daggerml._internal.codec import CodecContext, register_codec
-from daggerml._internal.config import DmlConfig
 from daggerml.util import BackoffWithJitter, current_time_millis
 
 log = logging.getLogger(__name__)
@@ -25,7 +21,6 @@ log = logging.getLogger(__name__)
 
 Scalar = Union[str, int, float, bool, type(None), Uri, Runnable]
 Collection = Union[list, tuple, dict]
-_DEFAULT_LITERAL_CODECS_REGISTERED = False
 _NO_DEFAULT_DML = object()
 _SCOPED_DEFAULT_DML: ContextVar[object] = ContextVar("daggerml_scoped_default_dml", default=_NO_DEFAULT_DML)
 _PROCESS_DEFAULT_DML: Optional["Dml"] = None
@@ -75,9 +70,11 @@ def use_default_dml(dml: "Dml"):
         _SCOPED_DEFAULT_DML.reset(token)
 
 
-def new(name="", message="", argv_ptr=None) -> "Dag":
-    """Create a new DAG using the active default Dml runtime."""
-    return get_default_dml().new(name=name, message=message, argv_ptr=argv_ptr)
+def new(name="", *, message="", argv_ptr=None, dml: Dml | None = None) -> "Dag":
+    """Create a new DAG using the active or provided Dml runtime."""
+    runtime = dml or get_default_dml()
+    index_id = runtime.runtime.create(argv_ptr=argv_ptr)
+    return Dag(dml=runtime, token=index_id, name=name, message=message)
 
 
 def load(name: Union[str, "Node"]) -> "Dag":
@@ -88,211 +85,14 @@ def load(name: Union[str, "Node"]) -> "Dag":
 def status() -> dict[str, object]:
     """Return status for the active default Dml runtime."""
     dml, source = _resolve_default_dml(create=True)
-    cfg = (
-        dml._config
-        or DmlConfig.resolve(
-            explicit={
-                "project.home": dml.repo,
-                "user": dml.user,
-            }
-        )
-    )
     return {
         "default": {
             "source": source,
             "has_scoped_override": _SCOPED_DEFAULT_DML.get() is not _NO_DEFAULT_DML,
             "has_process_default": _PROCESS_DEFAULT_DML is not None,
         },
-        "config": cfg.to_dict(),
-        "runtime": {
-            "ops_initialized": dml._ops is not None,
-            "branch_override": dml.branch,
-        },
+        "status": dml.status(),
     }
-
-
-@dataclass
-class Dml:
-    """DaggerML repository client using direct DmlOps API."""
-
-    # Configuration
-    repo: Optional[str] = None  # Repository path
-    user: Optional[str] = None
-    branch: Optional[str] = None
-    remote_root: Optional[str] = None
-
-    # Internal state
-    _ops: Optional[DmlOps] = field(default=None, init=False, repr=False)
-    _config: Optional[DmlConfig] = field(default=None, init=False, repr=False)
-    tmpdirs: dict[str, TemporaryDirectory] = field(default_factory=dict)
-
-    def __post_init__(self):
-        resolved = DmlConfig.resolve(
-            explicit={
-                "project.home": self.repo,
-                "user": self.user,
-                "remote.uri": self.remote_root,
-            }
-        )
-        self._config = resolved
-        self.repo = resolved.project.home
-        self.user = resolved.user
-        self.remote_root = resolved.remote.uri
-
-    @property
-    def ops(self) -> DmlOps:
-        """Get or create DmlOps instance."""
-        if self._ops is None:
-            if not self.repo:
-                raise DmlRepoError("Repository path is required")
-            remote_root = self._config.remote.uri if self._config is not None else ""
-            self._ops = DmlOps.open(self.repo, remote_root=remote_root)
-            self._ops.__enter__()
-        _ensure_default_literal_codecs(self)
-        return self._ops
-
-    @property
-    def commit(self):
-        return self.ops.commit()
-
-    @property
-    def head(self):
-        return self.ops.head()
-
-    @property
-    def index(self):
-        return self.ops.index()
-
-    @property
-    def dag(self):
-        return self.ops.dag()
-
-    @property
-    def node(self):
-        return self.ops.node()
-
-    @property
-    def cache(self):
-        return self.ops.cache()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        try:
-            if self._ops is not None:
-                self._ops.__exit__(exc_type, exc_value, traceback)
-                self._ops = None
-        finally:
-            self.cleanup()
-
-    def cleanup(self):
-        """Clean up temporary directories."""
-        for tmpdir in self.tmpdirs.values():
-            tmpdir.cleanup()
-        self.tmpdirs.clear()
-
-    def _runtime_branch(self) -> str | None:
-        if self.branch is not None:
-            return self.branch
-        if self._ops is None:
-            if not self.repo:
-                return None
-            remote_root = self._config.remote.uri if self._config is not None else ""
-            with DmlOps.open(self.repo, remote_root=remote_root) as ops:
-                return ops.head().get_attached_head_branch()
-        return self.ops.head().get_attached_head_branch()
-
-    @classmethod
-    def temporary(cls, repo="test", user="user", branch="main", remote_root: str | None = None) -> "Dml":
-        """Create a temporary Dml instance with a temporary repository.
-
-        Parameters
-        ----------
-        repo : str, default="test"
-            Repository name
-        user : str, default="user"
-            User name for commits
-        branch : str, default="main"
-            Branch name
-        Returns
-        -------
-        Dml
-            Temporary Dml instance
-        """
-        # Create temporary directory
-        tmpdir = TemporaryDirectory(prefix="dml-")
-        repo_path = os.path.join(tmpdir.name, repo)
-
-        # Create repository and initialize
-        with DmlOps.create(repo_path, user=user, remote_root=remote_root or "") as ops:
-            # DmlOps.create initializes the default head; only add a new branch when requested.
-            if branch != DEFAULT_HEAD:
-                head_ops = ops.head()
-                head_ops.create_branch(branch, head_ops.get_branch_commit(DEFAULT_HEAD))
-                head_ops.write_attached_head(branch)
-
-        return cls(repo=repo_path, user=user, branch=None, remote_root=remote_root, tmpdirs={"repo": tmpdir})
-
-    def new(self, name="", message="", argv_ptr=None) -> "Dag":
-        """Create a new DAG.
-
-        Parameters
-        ----------
-        name : str, optional
-            DAG name
-        message : str, optional
-            Commit message
-        argv_ptr : str, optional
-            Remote manifest pointer for argv state (used by adapter executions)
-        Returns
-        -------
-        Dag
-            New DAG instance
-        """
-        if argv_ptr is not None:
-            index_id = self.ops.index().create(argv_ptr=argv_ptr)
-        else:
-            runtime_branch = self._runtime_branch()
-            if runtime_branch is not None:
-                index_id = self.ops.index().create(head=runtime_branch)
-            else:
-                index_id = self.ops.index().create(commit=self.ops.head().resolve_head_commit())
-
-        return Dag(dml=self, token=index_id, ref=None, name=name, message=message)
-
-    def load(self, name: Union[str, "Node"]) -> "Dag":
-        """Load an existing DAG by name.
-
-        Parameters
-        ----------
-        name : str or Node
-            DAG name or node containing DAG name. If a Node from an import, loads
-            the source DAG of that import node.
-        Returns
-        -------
-        Dag
-            Loaded DAG instance
-        """
-        if isinstance(name, Node):
-            node_info = self.ops.node().describe(name.ref)
-            if "dag" in node_info and node_info["dag"] is not None:
-                return Dag(dml=self, ref=node_info["dag"])
-            dag_name = self.ops.node().unroll(name.ref)
-        else:
-            dag_name = name
-
-        runtime_branch = self._runtime_branch()
-        if runtime_branch is not None:
-            commit_ref = self.ops.head().get_branch_commit(cast(str, runtime_branch))
-        else:
-            commit_ref = self.ops.head().resolve_head_commit()
-        dag_ref = self.ops.commit().get_dag(commit_ref, str(dag_name))
-
-        if dag_ref is None:
-            raise DmlRepoError(f"DAG '{dag_name}' not found")
-
-        return Dag(dml=self, ref=dag_ref)
 
 
 def make_node(dag: "Dag", ref: Ref) -> "Node":
@@ -310,10 +110,8 @@ def make_node(dag: "Dag", ref: Ref) -> "Node":
     Node
         A Node instance representing the reference in the DAG.
     """
-    # Get node info from DmlOps
-    node_value = dag.dml.ops.node().get(ref)
+    node_value = dag.dml.dag.get_node(ref)["node"]
     info: dict[str, Any] = {"data_type": type(node_value).__name__.lower()}
-
     # Determine node type based on value and populate info
     if isinstance(node_value, list):
         info["length"] = len(node_value)
@@ -364,12 +162,12 @@ class Dag:
 
     def _put_literal(self, value: Any, *, name: Optional[str] = None) -> Ref:
         index_id = self._require_index_ref()
-        return self.dml.index.put_literal(index_id, value, name=name)
+        return self.dml.runtime.put_literal(index_id, value, name=name)
 
     def _start_fn(
         self, argv: list[Ref], *, kwargv: Optional[dict[str, Ref]] = None, name: Optional[str] = None
     ) -> Optional[Ref]:
-        return self.dml.index.start_fn(self._require_index_ref(), argv, kwargv=kwargv, name=name)
+        return self.dml.runtime.start_fn(self._require_index_ref(), argv, kwargv=kwargv, name=name)
 
     def _call_builtin(self, uri: str, *args: Any, name: Optional[str] = None, default: Any = None) -> Ref:
         fn_ref = self._put_literal(Runnable(target=Uri(uri), kwargs={}, adapter=""))
@@ -385,9 +183,9 @@ class Dag:
 
     def __len__(self) -> int:
         if self.ref is None:
-            info = self.dml.ops.index().describe(self._require_index_ref())
+            info = self.dml.runtime.describe(self._require_index_ref())
             return len(info["names"])
-        names_dict = self.dml.dag.describe(self.ref)["names"]
+        names_dict = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["names"]
         return len(names_dict)
 
     def __iter__(self):
@@ -395,15 +193,16 @@ class Dag:
 
     def _get_named_node(self, name: str) -> "Node":
         if self.ref is None:
-            node_ref = self.dml.ops.index().get_node(self._require_index_ref(), name)
+            node_ref = self.dml.runtime.get_node(self._require_index_ref(), name)
             return make_node(self, node_ref)
-        return make_node(self, self.dml.dag.get_node(self.ref, name))
+        node_ref = self.dml.dag.describe_node(name, dag_selector=cast(Ref, self.ref))["node"]["ref"]
+        return make_node(self, node_ref)
 
     def _set_named_node(self, name: str, value: Any) -> None:
         if self.ref is not None:
             raise DmlRepoError("Cannot set node names on a committed DAG.")
         if isinstance(value, Ref):
-            self.dml.index.set_node_name(self._require_index_ref(), name, value)
+            self.dml.runtime.set_node_name(self._require_index_ref(), name, value)
             return
         self.put(value, name=name)
 
@@ -432,32 +231,32 @@ class Dag:
     def keys(self) -> list[str]:
         """Get the list of all node names in the dag"""
         if self.ref is None:
-            info = self.dml.ops.index().describe(self._require_index_ref())
+            info = self.dml.runtime.describe(self._require_index_ref())
             return list(info["names"].keys())
-        names_dict = self.dml.dag.describe(self.ref)["names"]
+        names_dict = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["names"]
         return list(names_dict.keys())
 
     def values(self) -> list["Node"]:
         """Get the list of all nodes in the dag"""
         if self.ref is None:
-            info = self.dml.ops.index().describe(self._require_index_ref())
+            info = self.dml.runtime.describe(self._require_index_ref())
             return [make_node(self, ref) for ref in info["names"].values()]
-        names_dict = self.dml.dag.describe(self.ref)["names"]
+        names_dict = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["names"]
         return [make_node(self, ref) for ref in names_dict.values()]
 
     @property
     def argv(self) -> "ListNode":
         "Access the dag's argv node"
         if self.ref is None:
-            # Inside context manager, get argv from index
-            argv_ref = self.dml.ops.index().get_argv(self._require_index_ref())
+            argv_ref = self.dml.runtime.get_argv(self._require_index_ref())
             return cast(ListNode, make_node(self, argv_ref))
-        return cast(ListNode, make_node(self, self.dml.dag.get_argv(self.ref)))
+        argv_ref = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["argv"]
+        return cast(ListNode, make_node(self, argv_ref))
 
     @property
     def result(self) -> "Node":
         """Get the result node of the dag"""
-        ref = self.dml.dag.describe(cast(Ref, self.ref)).get("result")
+        ref = self.dml.dag.describe(cast(Ref, self.ref))["dag"].get("result")
         assert isinstance(ref, Ref), f"'{self.__class__.__name__}' dag has not been committed yet"
         return make_node(self, ref)
 
@@ -485,8 +284,8 @@ class Dag:
         Examples
         --------
         >>> dml = Dml.temporary()
-        >>> dml.new("my-dag-0", "going to import this").commit(42)
-        >>> dag = dml.new("my-dag-1", "importing my-dag-0")
+        >>> new(dml=dml, name="my-dag-0", message="going to import this").commit(42)
+        >>> dag = new(dml=dml, name="my-dag-1", message="importing my-dag-0")
         >>> node = dag.load("my-dag-0")
         >>> node.value()
         42
@@ -498,7 +297,7 @@ class Dag:
             loaded = self.dml.load(source)
             source = loaded.result if key == "result" else loaded[key]
         source_dag = cast(Ref, source.dag.ref)
-        node_ref = self.dml.index.put_import(self._require_index_ref(), source_dag, node=source.ref, name=name)
+        node_ref = self.dml.runtime.put_import(self._require_index_ref(), source_dag, node=source.ref, name=name)
         return make_node(self, node_ref)
 
     @overload
@@ -529,7 +328,7 @@ class Dag:
         Examples
         --------
         >>> dml = Dml.temporary()
-        >>> dag = dml.new("test", "test")
+        >>> dag = new(dml=dml, name="test", message="test")
         >>> n1 = dag.put(42, name="answer")
         >>> n1.value()
         42
@@ -610,7 +409,7 @@ class Dag:
         """
         # For Errors, pass directly to _commit (don't try to store as literal)
         if isinstance(value, Error):
-            commit_ref = self.dml.index.commit(
+            commit_ref = self.dml.runtime.commit(
                 self._require_index_ref(),
                 value,
                 head=self.dml._runtime_branch(),
@@ -621,7 +420,7 @@ class Dag:
             # For other values, ensure it's a Node and get its ref
             value = value if isinstance(value, Node) else self.put(value)
             value_ref = value.ref
-            commit_ref = self.dml.index.commit(
+            commit_ref = self.dml.runtime.commit(
                 self._require_index_ref(),
                 value_ref,
                 head=self.dml._runtime_branch(),
@@ -630,7 +429,8 @@ class Dag:
             )
 
         # Extract the dag ref from the commit
-        self.ref = self.dml.ops.commit().describe(commit_ref)["dag"]
+        self.ref = self.dml.dag.list(revision=commit_ref.to)["dags"][self.name]
+
 
 @dataclass(frozen=True)
 class Node:  # noqa: F811
@@ -664,7 +464,7 @@ class Node:  # noqa: F811
     @property
     def argv(self) -> "Node":
         "Access the node's argv list"
-        node_info = self.dag.dml.node.describe(self.ref)
+        node_info = self.dag.dml.dag.describe_node(self.ref)["node"]
         argv = node_info.get("argv")
         if argv is None:
             raise Error("Node has no argv", origin="dml", type="TypeError")
@@ -688,7 +488,7 @@ class Node:  # noqa: F811
         Examples
         --------
         >>> dml = Dml.temporary()
-        >>> dag = dml.new("test", "test")
+        >>> dag = new(dml=dml, name="test", message="test")
         >>> l0 = dag.put(42)
         >>> c0 = dag.put({"a": 1, "b": [l0, "23"]})
         >>> assert c0.backtrack("b", 0) == l0
@@ -733,7 +533,7 @@ class Node:  # noqa: F811
         Any
             The actual value represented by this node
         """
-        return self.dag.dml.node.unroll(self.ref)
+        return self.dag.dml.dag.unroll_node(self.ref)["node"]
 
     def __call__(self, *args, name=None, sleep=None, timeout=-1, **kw) -> "Node":
         raise TypeError(f"Node of type '{self.type}' is not callable")
@@ -1026,9 +826,5 @@ class NodeCodec:
             raise DmlRepoError(f"Failed to encode cross-dag node import: {e}") from e
 
 
-def _ensure_default_literal_codecs(dml: Dml) -> None:
-    global _DEFAULT_LITERAL_CODECS_REGISTERED
-    if _DEFAULT_LITERAL_CODECS_REGISTERED:
-        return
-    register_codec(NodeCodec(), priority=0)
-    _DEFAULT_LITERAL_CODECS_REGISTERED = True
+def codecs() -> list[Any]:
+    return [NodeCodec()]

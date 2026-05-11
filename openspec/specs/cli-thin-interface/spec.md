@@ -12,12 +12,16 @@ Any behavior that determines domain outcomes (state transitions, merge/reconcile
 - **WHEN** a command path requires branching based on repository or execution state
 - **THEN** the branching logic executes in a non-CLI module and CLI code only forwards parsed inputs and surfaces returned outcomes
 
-### Requirement: CLI output contract remains stable through refactor
-Refactoring to enforce a thin CLI boundary MUST preserve existing user-visible command semantics, including success output structure and failure signaling, unless a change is explicitly documented as a compatibility update.
+### Requirement: CLI output contract remains stable through documented compatibility changes
+Refactoring to enforce a thin CLI boundary MUST preserve documented user-visible command semantics, including success output structure and failure signaling, except where a change explicitly defines a breaking CLI compatibility update.
 
-#### Scenario: Refactor preserves command behavior
-- **WHEN** CLI logic is moved into domain modules
+#### Scenario: Refactor preserves behavior outside documented breaks
+- **WHEN** CLI logic is moved into domain modules for commands whose public contract is unchanged by an approved change
 - **THEN** command outputs and exit outcomes remain equivalent for existing supported invocations
+
+#### Scenario: Approved CLI redesign may replace old command contracts
+- **WHEN** an approved change explicitly redefines the public CLI grammar and JSON payloads
+- **THEN** the implementation MAY remove prior command names and prior output payload shapes for the affected commands
 
 ### Requirement: CLI tests focus on interface behavior
 CLI-focused tests SHALL validate input parsing, delegation wiring, output serialization, and exit signaling, while domain behavior assertions SHALL be covered in non-CLI test suites.

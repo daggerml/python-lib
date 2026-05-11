@@ -13,8 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from daggerml._internal import DmlOps
-from daggerml._internal.types import DmlRepoError
+from daggerml._internal import Dml, DmlRepoError
 
 logger = logging.getLogger(__name__)
 
@@ -239,8 +238,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     cache_key, execution_id, cmd, env, remote = _parse_cmd_payload(payload)
     workdir = tempfile.mkdtemp(prefix=f"dml-supervisor-{execution_id[:8]}-")
     repo_dir = Path(workdir) / "repo"
-    with DmlOps.create(str(repo_dir), user="worker", remote_root=remote["root"]):
-        pass
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    Dml.init(str(repo_dir), name="worker", remote_uri=remote["root"], user="worker", no_hooks=True)
     env = dict(env)
     env["DML_PROJECT_HOME"] = str(repo_dir)
     result_path = Path(workdir) / "result.json"

@@ -144,7 +144,7 @@ def ssh_server(dag):
             ssh_env_file = _write_ssh_env_file(tmpdir)
             dag.put(ssh_host, name="ssh-host")
             dag.put(ssh_flags, name="ssh-flags")
-            dag.put(ssh_env_file, name="ssh-env-file")
+            dag.put([ssh_env_file], name="ssh-env-files")
             yield SshServer(ssh_host, ssh_flags, ssh_env_file)
             return
     finally:
@@ -184,9 +184,11 @@ def predict_target(dag, dataset, params):
 
 def main() -> None:
     _require_local_tools()
-    with dml.new("examples/02-ssh-docker-dataset") as dag:
+    with dml.new(name="examples/02-ssh-docker-dataset") as dag:
         loaded_dag = dml.load("examples/01-docker-dataset")
+        dag.image = loaded_dag.image
         dag.dataset = loaded_dag.dataset
+        dag.put(loaded_dag["dkr-flags"], name="dkr-flags")
         with ssh_server(dag):
             print("Training model and generating predictions within Docker over SSH...")
             predictions = dag.call(predict_target, dag.dataset, {}, name="predictions")

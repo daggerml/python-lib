@@ -5,8 +5,7 @@ import os
 from typing import Any
 
 from daggerml import Uri
-from daggerml._internal.exec_state import ExecutionState
-from daggerml._internal.types import DmlRepoError, Runnable
+from daggerml._internal import DmlRepoError, ExecutionState, Runnable
 from daggerml.contrib.adapters import AdapterBase
 from daggerml.contrib.executors._lambda import LambdaExecutorBase
 from daggerml.util import get_client

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from daggerml._internal.types import Runnable
+from daggerml._internal import Runnable
 
 
 class ExecutorBase:

@@ -7,7 +7,7 @@ import subprocess
 from typing import Any, TypedDict, cast
 
 from daggerml import Uri
-from daggerml._internal.types import DmlRepoError, Runnable
+from daggerml._internal import DmlRepoError, Runnable
 from daggerml.contrib.adapters import AdapterBase
 from daggerml.contrib.api import is_node_like
 from daggerml.contrib.executors._base import ExecutorBase

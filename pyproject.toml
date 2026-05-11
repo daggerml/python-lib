@@ -53,6 +53,7 @@ cfn = "daggerml.contrib.executors:CfnExecutor"
 
 [project.entry-points."daggerml.codecs"]
 dataframe = "daggerml.contrib.codecs:literal_codecs"
+node = "daggerml.api:codecs"
 
 [project.urls]
 Homepage = "https://daggerml.com"

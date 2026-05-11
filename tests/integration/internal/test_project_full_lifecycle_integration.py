@@ -6,7 +6,7 @@ from io import StringIO
 import pytest
 
 from daggerml._cli import cli
-from daggerml.api import Dml
+from daggerml.api import Dml, new
 
 pytestmark = pytest.mark.slow
 
@@ -53,11 +53,11 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
     assert json.loads(stdout)["branch"] == "main"
 
     expected_result = {"score": 7, "ok": True}
-    with Dml(repo=str(source_repo), user=owner, branch="main") as dml:
-        with dml.new("baseline", "baseline") as dag:
+    with Dml(project_home=str(source_repo), user=owner) as dml:
+        with new(dml=dml, name="baseline", message="baseline") as dag:
             result = dag.put(expected_result, name="result")
             dag.commit(result)
-        with dml.new("candidate", "candidate") as dag:
+        with new(dml=dml, name="candidate", message="candidate") as dag:
             candidate = dag.put(11, name="candidate")
             dag.commit(candidate)
 
@@ -106,5 +106,5 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
     assert not stderr
     assert "commit:" in json.loads(stdout)
 
-    with Dml(repo=str(target_repo), user=owner, branch="main") as dml:
+    with Dml(project_home=str(target_repo), user=owner) as dml:
         assert dml.load("baseline").result.value() == expected_result

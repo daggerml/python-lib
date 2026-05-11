@@ -13,7 +13,7 @@ import daggerml as dml
 
 
 def main() -> None:
-    with dml.new("examples/03-load-docker-dataset") as dag:
+    with dml.new(name="examples/03-load-docker-dataset") as dag:
         print("Training model and generating predictions within Docker...")
         loaded_dag = dml.load("examples/01-docker-dataset")
         dag.predict_fn = loaded_dag.predict_fn

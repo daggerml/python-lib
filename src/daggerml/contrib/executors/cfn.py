@@ -4,8 +4,8 @@ import json
 from contextlib import contextmanager
 from typing import Any
 
-from daggerml import Dml
-from daggerml._internal.types import Runnable
+from daggerml import Dml, new
+from daggerml._internal import Runnable
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.util import get_client
 
@@ -32,7 +32,7 @@ class CfnExecutor(ExecutorBase):
     @contextmanager
     def _tmpdag(cls, argv_ptr, *, remote_root: str):
         with Dml.temporary(remote_root=remote_root) as dml:
-            with dml.new(argv_ptr=argv_ptr) as dag:
+            with new(dml=dml, argv_ptr=argv_ptr) as dag:
                 yield dag
 
     @classmethod
@@ -58,7 +58,7 @@ class CfnExecutor(ExecutorBase):
     ) -> dict[str, Any]:
         del runnable
         with Dml.temporary(remote_root=remote["root"]) as dml_inst:
-            with dml_inst.new(argv_ptr=argv_ptr) as dag:
+            with new(dml=dml_inst, argv_ptr=argv_ptr) as dag:
                 name, template, params = dag.argv[1:4].value()
 
         client = self._client()

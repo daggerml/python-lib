@@ -72,7 +72,7 @@ trap cleanup EXIT
 mkdir -p "${moto_dir}"
 mkdir -p "${DML_CONFIG_HOME}"
 dml_user="cool-guy"
-dml config --global user $dml_user
+dml config set --global user $dml_user
 
 log "Starting moto server and preparing env..."
 python - "${moto_env_file}" >"${moto_log_file}" 2>&1 <<'PY' &
@@ -179,14 +179,11 @@ dml status | jq .
 log "Running example: 00-hello_world.py"
 python "${examples_dir}/00-hello_world.py"
 
-log "Listing DML cache after running examples:"
-dml cache list
-
 log "Running example: 01-docker_dataset.py"
 python "${examples_dir}/01-docker_dataset.py"
-#
-# log "Running example: 02-ssh_docker_dataset.py"
-# python "${examples_dir}/02-ssh_docker_dataset.py"
+
+log "Running example: 02-ssh_docker_dataset.py"
+python "${examples_dir}/02-ssh_docker_dataset.py"
 
 log "Listing DML refs after running all examples:"
 s3_ls_recursive "${DML_REMOTE_URI}/dml/refs/projects/"

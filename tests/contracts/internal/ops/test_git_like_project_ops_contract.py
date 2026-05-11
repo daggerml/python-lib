@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from daggerml._internal.config import DmlProjectConfig, init_project_layout, normalize_project_uri
+from daggerml._internal.dml_resolution import resolve_revision_ref
 from daggerml._internal.ops.commit import CommitOps
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps
@@ -36,7 +37,7 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     db_path = init_project_layout(tmp_path, cfg)
 
     assert db_path == tmp_path / ".dml" / "db"
-    assert (tmp_path / ".dml" / ".gitignore").read_text() == "*\n"
+    assert (tmp_path / ".dml" / ".gitignore").read_text() == "db\nHEAD\nrefs\n"
     loaded = DmlProjectConfig.load(tmp_path)
     assert loaded.name == "demo"
     assert loaded.owner == "alice"
@@ -52,9 +53,10 @@ def test_head_advance_and_revision_resolution(temp_bo_fn):
     new_head = head_ops.create_branch("copy", commit)
 
     head_ops.update_branch_commit(new_head, head_ops.get_branch_commit(new_head), commit)
-    assert commit_ops.resolve_revision_ref("copy") == commit
-    with pytest.raises(DmlRepoError, match="walks past root"):
-        commit_ops.resolve_revision_ref("copy~1")
+    assert resolve_revision_ref(value="copy", commit_ops=commit_ops, head_ops=head_ops, project_dir=".") == commit
+    head_ops.write_attached_head("copy")
+    with pytest.raises(DmlRepoError, match="walks past the root commit"):
+        resolve_revision_ref(value="HEAD~1", commit_ops=commit_ops, head_ops=head_ops, project_dir=".")
 
 
 def test_checkout_absent_dag_does_not_advance_head(temp_bo_fn):

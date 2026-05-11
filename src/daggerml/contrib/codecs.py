@@ -44,7 +44,9 @@ class PolarsDataFrameCodec:
 
 
 def literal_codecs() -> list[Any]:
-    codecs: list[Any] = []
+    from daggerml.contrib.api import DelayedActionCodec
+
+    codecs: list[Any] = [DelayedActionCodec()]
 
     pandas = _import_optional("pandas")
     if pandas is not None:

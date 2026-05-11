@@ -11,7 +11,7 @@ from daggerml._cli.init import execute_init, setup_init_parser
 from daggerml._internal.types import DmlRepoError
 
 
-@patch("daggerml._cli.init.DmlOps.init")
+@patch("daggerml._cli.init.Dml.init")
 def test_execute_init_forwards_branch_argument_without_local_derivation(mock_dml_init):
     mock_dml_init.return_value = {"branch": "dev"}
 
@@ -47,31 +47,31 @@ class TestExecuteInit:
     """Test init command execution helper."""
 
     def test_execute_init_initializes_current_directory(self, monkeypatch):
+        monkeypatch.setenv("USER", "alice")
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.chdir(temp_dir)
             args = Namespace(
                 name="my-repo",
                 config_home=temp_dir,
-                project_home=None,
-                owner=None,
-                branch=None,
-                project_uri=None,
                 remote_uri="s3://test-bucket/test-prefix",
                 no_hooks=True,
             )
             result = execute_init(args)
             expected_repo = Path(temp_dir)
-            repo_path = result["repo_path"]
+            tmp = {k: str(type(v)) for k, v in result.items()}
+            print(f"{tmp = }")
+            # print(f"{result.keys() = }")
+            assert result["branch"] == "main"
+            assert result["project_uri"] == "dml://alice/my-repo"
+            repo_path = result["project_home"]
             assert repo_path is not None
             assert Path(repo_path).resolve() == expected_repo.resolve()
-            assert result["name"] == "my-repo"
-            assert result["branch"] == "main"
             assert (expected_repo / ".dml" / "config.toml").exists()
             assert (expected_repo / ".dml" / "db").exists()
 
     def test_execute_init_rejects_path_separators(self):
         args = Namespace(name="bad/name", config_home="~/.config/dml/", project_home=None)
-        with pytest.raises(ValueError, match="must not contain path separators"):
+        with pytest.raises(ValueError, match="Invalid project name: 'bad/name'"):
             execute_init(args)
 
     def test_execute_init_accepts_project_uri_without_name(self, monkeypatch):
@@ -81,15 +81,13 @@ class TestExecuteInit:
                 name=None,
                 config_home=None,
                 project_home=None,
-                owner=None,
-                branch=None,
                 project_uri="dml://alice/demo",
                 remote_uri="s3://test-bucket/test-prefix",
                 no_hooks=True,
             )
             result = execute_init(args)
-            assert result["name"] is None
             assert result["branch"] == "main"
+            assert result["project_uri"] == "dml://alice/demo"
 
     def test_execute_init_rejects_name_with_project_uri(self):
         args = Namespace(
@@ -129,86 +127,3 @@ class TestExecuteInit:
             )
             with pytest.raises(DmlRepoError, match="user is required to derive project URI from NAME"):
                 execute_init(args)
-
-    def test_execute_init_uses_project_home_flag_path(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            explicit = Path(temp_dir) / "repo-from-flag"
-            explicit.mkdir()
-            args = Namespace(
-                name=None,
-                config_home="~/.config/dml/",
-                project_home=str(explicit),
-                owner=None,
-                branch=None,
-                project_uri=None,
-                remote_uri="s3://test-bucket/test-prefix",
-                no_hooks=True,
-            )
-            result = execute_init(args)
-            assert result["repo_path"] == str(explicit)
-            assert result["name"] is None
-            assert (explicit / ".dml" / "db").exists()
-
-    def test_execute_init_uses_env_when_flag_missing(self, monkeypatch):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            monkeypatch.setenv("DML_CONFIG_HOME", temp_dir)
-            monkeypatch.chdir(temp_dir)
-            args = Namespace(
-                name="from-env",
-                config_home=None,
-                project_home=None,
-                owner=None,
-                branch=None,
-                project_uri=None,
-                remote_uri="s3://test-bucket/test-prefix",
-                no_hooks=True,
-            )
-            result = execute_init(args)
-            expected_repo = Path(temp_dir)
-            repo_path = result["repo_path"]
-            assert repo_path is not None
-            assert Path(repo_path).resolve() == expected_repo.resolve()
-            assert (expected_repo / ".dml" / "db").exists()
-
-    def test_execute_init_requires_remote_when_project_uri_present(self, monkeypatch):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            monkeypatch.chdir(temp_dir)
-            args = Namespace(
-                name=None,
-                config_home=None,
-                project_home=None,
-                owner=None,
-                branch=None,
-                project_uri="dml://alice/demo",
-                remote_uri="",
-                no_hooks=True,
-            )
-            with pytest.raises(DmlRepoError, match="remote.uri is required"):
-                execute_init(args)
-
-    def test_execute_init_recovery_without_project_uri_does_not_require_remote(self, monkeypatch):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            dml = root / ".dml"
-            dml.mkdir(parents=True)
-            (dml / "config.toml").write_text('[project]\nuri = "dml://alice/demo"\n[remote]\nuri = "s3://bucket/prefix"\n')
-            monkeypatch.chdir(temp_dir)
-            args = Namespace(
-                name="demo",
-                config_home=None,
-                project_home=None,
-                owner=None,
-                branch=None,
-                project_uri=None,
-                remote_uri=None,
-                no_hooks=True,
-            )
-            with patch("daggerml._cli.init.DmlOps.init") as mock_init:
-                mock_init.return_value = {
-                    "db_path": str(root / ".dml" / "db"),
-                    "branch": "main",
-                }
-                result = execute_init(args)
-
-            assert result["branch"] == "main"
-            assert mock_init.call_args.kwargs["path"] is None

@@ -25,6 +25,7 @@ from daggerml._internal.config import (
     run_project_hooks,
     validate_dml_project_uri,
 )
+from daggerml._internal.dml_resolution import resolve_revision, resolve_revision_ref
 from daggerml._internal.revision_uri import RevisionUri, parse_revision_uri, stringify_revision_uri
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
 
@@ -265,8 +266,10 @@ class DmlOps:
             raise DmlRepoError("user is required for dag checkout; pass --user or set DML_USER/config user.name")
         target_branch = self._mutable_branch(branch)
         commit_ops = self.commit()
-        source_commit = commit_ops.resolve_revision_ref(
-            revision,
+        source_commit = resolve_revision_ref(
+            value=revision,
+            commit_ops=commit_ops,
+            head_ops=self.head(),
             project_dir=self.path,
         )
         return commit_ops.checkout_dag(
@@ -279,8 +282,10 @@ class DmlOps:
         )
 
     def checkout_project(self, revision: str) -> dict[str, str | None]:
-        resolution = self.commit().resolve_revision(
-            revision,
+        resolution = resolve_revision(
+            value=revision,
+            commit_ops=self.commit(),
+            head_ops=self.head(),
             project_dir=self.path,
         )
         if resolution.kind == "branch" and resolution.branch is not None:
@@ -303,12 +308,22 @@ class DmlOps:
 
     def merge_project(self, revision: str, branch: str | None, user: str) -> Ref:
         commit_ops = self.commit()
-        other = commit_ops.resolve_revision_ref(revision, project_dir=self.path)
+        other = resolve_revision_ref(
+            value=revision,
+            commit_ops=commit_ops,
+            head_ops=self.head(),
+            project_dir=self.path,
+        )
         return commit_ops.merge_into_head(self._mutable_branch(branch), other, user)
 
     def revert_project(self, revision: str, branch: str | None, user: str) -> Ref:
         commit_ops = self.commit()
-        commit_ref = commit_ops.resolve_revision_ref(revision, project_dir=self.path)
+        commit_ref = resolve_revision_ref(
+            value=revision,
+            commit_ops=commit_ops,
+            head_ops=self.head(),
+            project_dir=self.path,
+        )
         return commit_ops.revert(self._mutable_branch(branch), commit_ref, user)
 
     @staticmethod

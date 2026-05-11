@@ -11,13 +11,15 @@ import daggerml as dml
 
 
 def main() -> None:
-    with dml.new("examples/01b-load-fn") as dag:
+    with dml.new(name="examples/01b-load-fn") as dag:
         print("Training model and generating predictions within Docker...")
         loaded_dag = dml.load("examples/00-hello-world")
         dag.old_result = loaded_dag.greeting
-        dag.hello_fn = loaded_dag.greeting.load().argv.value()[0]
+        dag.hello_fn = loaded_dag.hello_fn
+        # dag.hello_fn = loaded_dag.greeting.load().argv.value()[1]
         print(dag.hello_fn(42).value())
         print(dag.hello_fn(-1).value())
+        dag.commit(dag.hello_fn(42))
 
 
 if __name__ == "__main__":

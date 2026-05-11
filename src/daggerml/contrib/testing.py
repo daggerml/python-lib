@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from typing import Any, Generic, TypeVar
 
 from daggerml import Node
-from daggerml._internal.types import DmlRepoError
+from daggerml._internal import DmlRepoError
 from daggerml.contrib.api import DelayedRunnable
 
 T = TypeVar("T")

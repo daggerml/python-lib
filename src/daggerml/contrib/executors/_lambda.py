@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import traceback
 
-from daggerml._internal.execution_context import execution_context
-from daggerml._internal.types import Runnable
+from daggerml._internal import Runnable, execution_context
 from daggerml.contrib.adapters import AdapterBase
 from daggerml.contrib.executors._base import ExecutorBase
 

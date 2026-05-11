@@ -50,17 +50,19 @@ def _remote() -> dict[str, str]:
 
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
-    from daggerml import Dml
+    from daggerml import Dml, new
 
     with Dml.temporary() as dml:
-        dag = dml.new("argv-src", "argv-src")
+        dag = new(dml=dml, name="argv-src", message="argv-src")
         index_ref = dag._require_index_ref()
         head = argv0 if argv0 is not None else Runnable(target=Uri("daggerml:list"), kwargs={}, adapter="")
-        fn_ref = dml.index.put_literal(index_ref, head)
-        arg_refs = [dml.index.put_literal(index_ref, value) for value in args]
-        with dml.index._tx(readonly=False) as txn:
-            argv_ref = dml.index._prepare_fn(index_ref, [fn_ref, *arg_refs], {}, txn)
-        return dml.index._remote_ops().put_ref_manifest(argv_ref)
+        with dml._with_ops() as ops:
+            index_ops = ops.index()
+            fn_ref = index_ops.put_literal(index_ref, head)
+            arg_refs = [index_ops.put_literal(index_ref, value) for value in args]
+            with index_ops._tx(readonly=False) as txn:
+                argv_ref = index_ops._prepare_fn(index_ref, [fn_ref, *arg_refs], {}, txn)
+            return index_ops._remote_ops().put_ref_manifest(argv_ref)
 
 
 def _poll_until_terminal(

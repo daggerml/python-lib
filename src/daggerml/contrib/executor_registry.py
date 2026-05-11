@@ -4,7 +4,7 @@ from importlib import metadata
 from threading import Lock
 from typing import Any
 
-from daggerml._internal.types import DmlRepoError
+from daggerml._internal import DmlRepoError
 
 EXECUTOR_ENTRYPOINT_GROUP = "daggerml.contrib.executors"
 

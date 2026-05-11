@@ -223,6 +223,7 @@ class IndexOps(BaseOps):
         head: Optional[str] = None,
         commit: Optional[Ref] = None,
         argv_ptr: Optional[str] = None,
+        index_id: Optional[str] = None,
     ) -> str:
         """Create a new index object.
 
@@ -234,6 +235,8 @@ class IndexOps(BaseOps):
             Commit reference to base the index on.
         argv_ptr : str, optional
             Optional remote manifest OID to initialize argv from.
+        index_id : str, optional
+            Optional index id to use (defaults to a new UUID).
 
         Returns
         -------
@@ -252,7 +255,7 @@ class IndexOps(BaseOps):
             kw["argv"] = self._remote_ops().load_ptr(argv_ptr, expected_root_ns="node-argv")
         with self._tx(readonly=False) as txn:
             commit_ref = self._create(**kw, txn=txn)
-        return HeadOps(_db=self._db).create_index(commit_ref)
+        return HeadOps(_db=self._db).create_index(commit_ref, index_id=index_id)
 
     @with_retry
     def get_kwargv(self, index_id: str) -> Ref:

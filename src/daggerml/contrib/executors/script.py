@@ -14,13 +14,15 @@ from contextlib import chdir
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import daggerml as dml
-from daggerml._internal.execution_context import execution_context
-from daggerml._internal.types import DmlRepoError, Runnable, Uri
+from daggerml._internal import DmlRepoError, Runnable, Uri, execution_context
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store
+
+if TYPE_CHECKING:
+    from daggerml import Dag
 
 logger = logging.getLogger(__name__)
 
@@ -256,19 +258,15 @@ def run_payload(argv_ptr: str, *, execution_id: str, cache_key: str, remote_root
         if dag.ref is None:
             dag.commit(output)
 
-    def succeeded_result(dag) -> dict[str, Any]:
+    def succeeded_result(dag: "Dag") -> dict[str, Any]:
         if dag.ref is None:
             raise DmlRepoError("Script worker succeeded without committed DAG")
-        dag_info = dag.dml.dag.describe(dag.ref)
-        if dag_info.get("error") is not None:
-            err = dag.dml.node.unroll(cast(Any, dag_info["error"]))
-            return {"status": "failed", "error": str(err)}
         return {"status": "succeeded", "error": None, "dag_id": dag.ref.id()}
 
     with execution_context(execution_id, cache_key):
         with dml.Dml.temporary(remote_root=remote_root) as dml_instance:
             try:
-                dag = dml_instance.new(argv_ptr=argv_ptr)
+                dag = dml.new(dml=dml_instance, argv_ptr=argv_ptr)
             except Exception as e:
                 return {"status": "failed", "error": str(e)}
             with TemporaryDirectory(prefix="dml-script-worker-") as tmpd, chdir(tmpd):

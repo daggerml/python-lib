@@ -11,8 +11,7 @@ from threading import Lock
 from typing import Any, Callable, TypeAlias, TypeVar, cast, overload
 
 from daggerml import api as core_api
-from daggerml._internal import CodecContext, register_codec
-from daggerml._internal.types import DmlRepoError, Runnable
+from daggerml._internal import CodecContext, DmlRepoError, Runnable
 from daggerml.contrib.adapter_registry import get_adapter
 
 try:
@@ -437,7 +436,6 @@ def _ensure_contrib_codecs() -> None:
     with _LOCK:
         if _CONTRIB_CODECS_REGISTERED:
             return
-        register_codec(DelayedActionCodec(), priority=10)
         _CONTRIB_CODECS_REGISTERED = True
 
 
@@ -608,7 +606,7 @@ def run(instance, *args, name: str | None = None, entrypoint: str | None = None,
 
     run_name = name or _default_run_name(instance)
     dml = core_api.get_default_dml()
-    dag = dml.new(run_name, run_name)
+    dag = core_api.new(dml=dml, name=run_name, message=run_name)
     for member_name, member_value in _iter_dagclass_members(instance):
         dag.put(cast(Any, member_value), name=member_name)
     result = dag.call(cast(Any, fn), *args, name=_DAGCLASS_CALL_NODE_NAME, **kwargs)

@@ -5,8 +5,11 @@ import pytest
 from daggerml._cli.base import parse_ref
 from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlProjectConfig, init_project_layout
+from daggerml._internal.dml_resolution import resolve_dag_ref, resolve_node_ref, resolve_revision
 from daggerml._internal.ops.commit import CommitOps
+from daggerml._internal.ops.dag import DagOps
 from daggerml._internal.ops.head import HeadOps
+from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.ops.remote import RemoteOps
 from daggerml._internal.types import Commit, DmlRepoError, Tree
 
@@ -77,6 +80,29 @@ def _seed_project_commit_history(temp_bo_fn, tmp_path: Path) -> tuple[CommitOps,
     return commit_ops, initial, next_commit
 
 
+def _seed_named_dags(temp_bo_fn, tmp_path: Path, dag_nodes: dict[str, str]):
+    project = DmlProjectConfig(name="demo", owner="alice", remote_uri="s3://bucket/prefix")
+    init_project_layout(tmp_path, project)
+    head_ops = HeadOps(_db=temp_bo_fn._db)
+    commit_ops = CommitOps(_db=temp_bo_fn._db)
+    dag_ops = DagOps(_db=temp_bo_fn._db)
+    index_ops = IndexOps(_db=temp_bo_fn._db, remote_root="")
+
+    main_head = head_ops.create_branch("main")
+    head_ops.write_attached_head("main")
+
+    node_refs: dict[str, Ref] = {}
+    for dag_name, node_name in dag_nodes.items():
+        index_id = index_ops.create(head=main_head)
+        node_ref = index_ops.put_literal(index_id, dag_name, name=node_name)
+        index_ops.commit(index_id, node_ref, head=main_head, message=f"add {dag_name}", dag_name=dag_name)
+        node_refs[dag_name] = node_ref
+
+    latest_commit = head_ops.get_branch_commit(main_head)
+    dag_refs = {dag_name: commit_ops.get_dag(latest_commit, dag_name) for dag_name in dag_nodes}
+    return commit_ops, head_ops, dag_ops, latest_commit, dag_refs, node_refs
+
+
 @pytest.mark.parametrize(
     "contract_id,label,revision_builder,expected_kind,expected_commit",
     [
@@ -136,7 +162,12 @@ def test_revision_form_classification_matrix(
     del contract_id, label
     commit_ops, initial, next_commit = _seed_project_commit_history(temp_bo_fn, tmp_path)
     revision = revision_builder(initial, next_commit)
-    resolved = commit_ops.resolve_revision(revision, project_dir=str(tmp_path))
+    resolved = resolve_revision(
+        value=revision,
+        commit_ops=commit_ops,
+        head_ops=HeadOps(_db=temp_bo_fn._db),
+        project_dir=str(tmp_path),
+    )
     assert resolved.kind == expected_kind
     assert resolved.commit == expected_commit(initial, next_commit)
 
@@ -144,14 +175,137 @@ def test_revision_form_classification_matrix(
 def test_revision_rejects_unfetched_remote_uri_boundary(temp_bo_fn, tmp_path: Path):
     commit_ops, _initial, _next_commit = _seed_project_commit_history(temp_bo_fn, tmp_path)
     with pytest.raises(DmlRepoError, match="cannot be resolved locally"):
-        commit_ops.resolve_revision("dml://alice/demo#main", project_dir=str(tmp_path))
+        resolve_revision(
+            value="dml://alice/demo#main",
+            commit_ops=commit_ops,
+            head_ops=HeadOps(_db=temp_bo_fn._db),
+            project_dir=str(tmp_path),
+        )
 
 
 def test_detached_head_ancestry_resolves_from_head_file(temp_bo_fn, tmp_path: Path):
     commit_ops, initial, next_commit = _seed_project_commit_history(temp_bo_fn, tmp_path)
     HeadOps(_db=temp_bo_fn._db).write_detached_head(next_commit)
 
-    resolved = commit_ops.resolve_revision("HEAD~1", project_dir=str(tmp_path))
+    resolved = resolve_revision(
+        value="HEAD~1",
+        commit_ops=commit_ops,
+        head_ops=HeadOps(_db=temp_bo_fn._db),
+        project_dir=str(tmp_path),
+    )
 
     assert resolved.kind == "commit"
     assert resolved.commit == initial
+
+
+def test_dag_resolution_returns_named_dag_ref(temp_bo_fn, tmp_path: Path):
+    commit_ops, head_ops, _dag_ops, latest_commit, dag_refs, _node_refs = _seed_named_dags(
+        temp_bo_fn, tmp_path, {"train": "result"}
+    )
+
+    resolved = resolve_dag_ref(
+        value="train",
+        revision="HEAD",
+        commit_ops=commit_ops,
+        head_ops=head_ops,
+        project_dir=str(tmp_path),
+        operation="get",
+    )
+
+    assert resolved.ref == dag_refs["train"]
+    assert resolved.selector == "train"
+    assert resolved.revision is not None
+    assert resolved.revision.commit == latest_commit
+
+
+def test_dag_resolution_rejects_revision_with_explicit_dag_ref(temp_bo_fn, tmp_path: Path):
+    commit_ops, head_ops, _dag_ops, _latest_commit, dag_refs, _node_refs = _seed_named_dags(
+        temp_bo_fn, tmp_path, {"train": "result"}
+    )
+
+    with pytest.raises(DmlRepoError, match="rejects --revision with explicit dag refs"):
+        resolve_dag_ref(
+            value=dag_refs["train"],
+            revision="HEAD",
+            commit_ops=commit_ops,
+            head_ops=head_ops,
+            project_dir=str(tmp_path),
+            operation="get",
+        )
+
+
+def test_node_resolution_resolves_named_node_with_explicit_dag_selector(temp_bo_fn, tmp_path: Path):
+    commit_ops, head_ops, dag_ops, _latest_commit, _dag_refs, node_refs = _seed_named_dags(
+        temp_bo_fn, tmp_path, {"train": "result"}
+    )
+
+    resolved = resolve_node_ref(
+        value="result",
+        dag_selector="train",
+        revision="HEAD",
+        commit_ops=commit_ops,
+        dag_ops=dag_ops,
+        head_ops=head_ops,
+        project_dir=str(tmp_path),
+        operation="describe-node",
+    )
+
+    assert resolved.ref == node_refs["train"]
+    assert resolved.dag_selector == "train"
+    assert resolved.revision is not None
+
+
+def test_node_resolution_resolves_named_node_without_dag_selector_when_unique(temp_bo_fn, tmp_path: Path):
+    commit_ops, head_ops, dag_ops, _latest_commit, _dag_refs, node_refs = _seed_named_dags(
+        temp_bo_fn, tmp_path, {"train": "result", "score": "score_result"}
+    )
+
+    resolved = resolve_node_ref(
+        value="score_result",
+        commit_ops=commit_ops,
+        dag_ops=dag_ops,
+        head_ops=head_ops,
+        project_dir=str(tmp_path),
+        operation="get-node",
+    )
+
+    assert resolved.ref == node_refs["score"]
+    assert resolved.dag_selector == "score"
+    assert resolved.revision is not None
+
+
+def test_node_resolution_rejects_ambiguous_named_lookup_without_dag_selector(temp_bo_fn, tmp_path: Path):
+    commit_ops, head_ops, dag_ops, _latest_commit, _dag_refs, _node_refs = _seed_named_dags(
+        temp_bo_fn, tmp_path, {"train": "result", "score": "result"}
+    )
+
+    with pytest.raises(DmlRepoError, match="requires dag_selector for ambiguous node lookup"):
+        resolve_node_ref(
+            value="result",
+            commit_ops=commit_ops,
+            dag_ops=dag_ops,
+            head_ops=head_ops,
+            project_dir=str(tmp_path),
+            operation="describe-node",
+        )
+
+
+def test_node_resolution_accepts_explicit_node_ref(temp_bo_fn, tmp_path: Path):
+    commit_ops, head_ops, dag_ops, _latest_commit, _dag_refs, _node_refs = _seed_named_dags(
+        temp_bo_fn, tmp_path, {"train": "result"}
+    )
+
+    resolved = resolve_node_ref(
+        value="node-literal:abc123",
+        dag_selector="train",
+        revision="HEAD",
+        commit_ops=commit_ops,
+        dag_ops=dag_ops,
+        head_ops=head_ops,
+        project_dir=str(tmp_path),
+        operation="get-node",
+    )
+
+    assert resolved.ref == Ref("node-literal:abc123")
+    assert resolved.dag_selector is None
+    assert resolved.revision is None

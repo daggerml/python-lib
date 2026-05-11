@@ -1,148 +1,75 @@
-"""DAG operation CLI setup."""
+"""DAG CLI setup."""
 
 from __future__ import annotations
 
 from argparse import ArgumentParser
-from typing import Any
 
-from daggerml._cli.base import apply_help_config, parse_ref
+from daggerml._cli.base import apply_help_config
 
 
 def setup_dag_parser(parser: ArgumentParser) -> None:
-    """Setup DAG operation parsers and subcommands."""
     apply_help_config(
         parser,
-        description="DAG operations: list DAGs and inspect their nodes/arguments.",
+        description="Inspect and mutate named DAGs.",
         examples=[
-            "dml dag list",
-            "dml dag describe dag:<id>",
-            "dml dag get-node dag:<id> result",
+            "dml dag list --revision HEAD~1",
+            "dml dag get train --revision main",
+            "dml dag get dag:abc123",
+            "dml dag checkout HEAD~1 train --as baseline_train",
+            "dml dag delete train --user alice",
         ],
     )
-    subparsers = parser.add_subparsers(dest="method", metavar="<method>", help="Methods", required=True)
+    subparsers = parser.add_subparsers(dest="method", metavar="<method>", help="DAG methods", required=True)
 
-    setup_dag_list_parser(subparsers.add_parser("list", help="List DAGs"))
-    setup_dag_describe_parser(subparsers.add_parser("describe", help="Describe a DAG"))
-    setup_dag_get_node_parser(subparsers.add_parser("get-node", help="Get a DAG node ref"))
-    setup_dag_get_argv_parser(subparsers.add_parser("get-argv", help="Get DAG argv node"))
-    setup_dag_get_kwargv_parser(subparsers.add_parser("get-kwargv", help="Get DAG kwargv node"))
-    setup_dag_checkout_parser(subparsers.add_parser("checkout", help="Checkout a DAG from a revision"))
+    list_parser = subparsers.add_parser("list", help="List DAGs in a revision")
+    apply_help_config(list_parser, description="Return the DAG map for a revision.")
+    list_parser.add_argument("--revision", default="HEAD")
+    list_parser.set_defaults(op="dag", method="list", func=execute_dag_list)
+
+    get_parser = subparsers.add_parser("get", help="Get one DAG by name or ref")
+    apply_help_config(get_parser, description="Load one DAG from a revision tree or by exact dag ref.")
+    get_parser.add_argument("selector")
+    get_parser.add_argument("--revision", default=None)
+    get_parser.set_defaults(op="dag", method="get", func=execute_dag_get)
+
+    checkout_parser = subparsers.add_parser("checkout", help="Copy a DAG from history")
+    apply_help_config(checkout_parser, description="Copy one DAG from a revision into the current branch.")
+    checkout_parser.add_argument("revision")
+    checkout_parser.add_argument("source_name")
+    checkout_parser.add_argument("--as", dest="target_name")
+    checkout_parser.add_argument("--replace", action="store_true")
+    checkout_parser.add_argument("--branch", default=None)
+    checkout_parser.add_argument("--user", default=None)
+    checkout_parser.set_defaults(op="dag", method="checkout", func=execute_dag_checkout)
+
+    delete_parser = subparsers.add_parser("delete", help="Delete a DAG from a branch")
+    apply_help_config(delete_parser, description="Delete one named DAG from a branch and commit the change.")
+    delete_parser.add_argument("name")
+    delete_parser.add_argument("--branch", default=None)
+    delete_parser.add_argument("--user", default=None)
+    delete_parser.set_defaults(op="dag", method="delete", func=execute_dag_delete)
 
 
-def setup_dag_list_parser(parser: ArgumentParser) -> None:
-    """Setup dag list command parser."""
-    apply_help_config(parser, description="List DAGs.", examples=["dml dag list"])
-    parser.set_defaults(op="dag", method="list", func=execute_dag_list)
+def execute_dag_list(dml, args) -> dict[str, object]:
+    return dml.dag.list(args.revision)
 
 
-def setup_dag_describe_parser(parser: ArgumentParser) -> None:
-    """Setup dag describe command parser."""
-    apply_help_config(parser, description="Describe a DAG by ref.", examples=["dml dag describe dag:abc123"])
-    parser.add_argument("dag_ref", help="DAG ref (dag:<id>)")
-    parser.set_defaults(op="dag", method="describe", func=execute_dag_describe)
+def execute_dag_get(dml, args) -> dict[str, object]:
+    return dml.dag.get(args.selector, revision=args.revision)
 
 
-def setup_dag_get_node_parser(parser: ArgumentParser) -> None:
-    """Setup dag get-node command parser."""
-    apply_help_config(
-        parser,
-        description="Get a node ref by name from a DAG.",
-        examples=["dml dag get-node dag:abc123 result"],
+def execute_dag_checkout(dml, args) -> str:
+    return str(
+        dml.dag.checkout(
+            args.revision,
+            args.source_name,
+            branch=args.branch,
+            target_name=args.target_name,
+            replace=args.replace,
+            user=args.user,
+        )
     )
-    parser.add_argument("dag_ref", help="DAG ref (dag:<id>)")
-    parser.add_argument("name", help="Node name (string)")
-    parser.set_defaults(op="dag", method="get-node", func=execute_dag_get_node)
 
 
-def setup_dag_get_argv_parser(parser: ArgumentParser) -> None:
-    """Setup dag get-argv command parser."""
-    apply_help_config(parser, description="Get argv node ref for a DAG.", examples=["dml dag get-argv dag:abc123"])
-    parser.add_argument("dag_ref", help="DAG ref (dag:<id>)")
-    parser.set_defaults(op="dag", method="get-argv", func=execute_dag_get_argv)
-
-
-def execute_dag_list(ops_obj: Any, args) -> list[dict[str, Any]]:
-    """Execute dag list command."""
-    return ops_obj.list()
-
-
-def execute_dag_describe(ops_obj: Any, args) -> dict[str, Any]:
-    """Execute dag describe command."""
-    dag_ref = parse_ref(args.dag_ref)
-    return ops_obj.describe(dag_ref)
-
-
-def execute_dag_get_node(ops_obj: Any, args) -> str:
-    """Execute dag get-node command."""
-    dag_ref = parse_ref(args.dag_ref)
-    result = ops_obj.get_node(dag_ref, args.name)
-    return result.to
-
-
-def execute_dag_get_argv(ops_obj: Any, args) -> str:
-    """Execute dag get-argv command."""
-    dag_ref = parse_ref(args.dag_ref)
-    result = ops_obj.get_argv(dag_ref)
-    return result.to
-
-
-def execute_dag_get_kwargv(ops_obj: Any, args) -> str:
-    """Execute dag get-kwargv command."""
-    dag_ref = parse_ref(args.dag_ref)
-    result = ops_obj.get_kwargv(dag_ref)
-    return result.to
-
-
-def setup_dag_checkout_parser(parser: ArgumentParser) -> None:
-    apply_help_config(
-        parser,
-        description="Copy one DAG from a revision into the current branch and commit the change.",
-        examples=["dml dag checkout HEAD~1 train --as baseline_train"],
-    )
-    parser.add_argument("revision")
-    parser.add_argument("source_name")
-    parser.add_argument("--as", dest="target_name")
-    parser.add_argument("--replace", action="store_true")
-    parser.add_argument("--branch", default=None)
-    parser.add_argument("--user", default=None)
-    parser.set_defaults(op="dag", method="checkout", func=execute_dag_checkout)
-
-
-def execute_dag_checkout(_ops_obj: Any, args) -> str:
-    # Parse optional head ref if provided. Some ops implementations (mocks) accept
-    # a `head` kwarg for testing, while the real DmlOps.checkout_dag_from_revision
-    # does not. Detect the callable signature and pass head only when supported.
-    head = parse_ref(args.head) if getattr(args, "head", None) is not None else None
-    import inspect
-    from unittest import mock as _unittest_mock
-
-    func = getattr(_ops_obj, "checkout_dag_from_revision", None)
-    kwargs: dict[str, object | None] = {
-        "target_name": args.target_name,
-        "replace": args.replace,
-        "branch": args.branch,
-        "user": args.user,
-    }
-    # If the target callable is a test Mock, the tests expect a `head` kwarg
-    # to be passed (even if None). For real implementations we only add `head`
-    # when the callable signature explicitly accepts it.
-    try:
-        if isinstance(func, _unittest_mock.Mock):
-            kwargs["head"] = head
-        elif callable(func):
-            sig = inspect.signature(func)
-            if "head" in sig.parameters:
-                kwargs["head"] = head
-    except Exception:
-        # Fallback: do not include `head` to avoid unexpected keyword arg
-        pass
-
-    result = _ops_obj.checkout_dag_from_revision(args.revision, args.source_name, **kwargs)
-    return str(result)
-
-
-def setup_dag_get_kwargv_parser(parser: ArgumentParser) -> None:
-    """Setup dag get-kwargv command parser."""
-    apply_help_config(parser, description="Get kwargv node ref for a DAG.", examples=["dml dag get-kwargv dag:abc123"])
-    parser.add_argument("dag_ref", help="DAG ref (dag:<id>)")
-    parser.set_defaults(op="dag", method="get-kwargv", func=execute_dag_get_kwargv)
+def execute_dag_delete(dml, args) -> str:
+    return str(dml.dag.delete(args.name, branch=args.branch, user=args.user))

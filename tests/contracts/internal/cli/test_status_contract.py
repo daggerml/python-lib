@@ -6,6 +6,7 @@ from argparse import ArgumentParser, Namespace
 from io import StringIO
 
 from daggerml._cli.status import execute_status, setup_status_parser
+from daggerml._internal import Dml
 
 
 class TestSetupStatusParser:
@@ -17,34 +18,32 @@ class TestSetupStatusParser:
 
 
 class TestExecuteStatus:
-    def test_execute_status_returns_config_dict(self, tmp_path):
-        args = Namespace(project_home=str(tmp_path), runtime_remote_uri="s3://bucket/project")
-        result = execute_status(args)
-        assert set(result.keys()) == {"project", "db", "remote", "user", "default_branch", "hooks", "config_home"}
-        assert result["project"]["home"] == str(tmp_path)
-        assert set(result["project"].keys()) == {"home", "uri"}
-        assert result["remote"]["uri"] == "s3://bucket/project"
-        assert result["remote"]["fetch_workers"] == 16
+    def test_execute_status_returns_repository_summary(self):
+        with Dml.temporary() as dml:
+            result = execute_status(dml, Namespace())
+        assert set(result.keys()) == {"head", "branches", "dags", "indexes"}
+        assert result["head"]["mode"] == "attached"
+        assert "main" in result["branches"]
 
 
 class TestTopLevelStatusCli:
-    def test_dml_status_outputs_json(self):
+    def test_dml_status_outputs_json(self, tmp_path):
         from daggerml._cli import cli
 
-        old_argv = sys.argv
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        sys.argv = ["dml", "status"]
-        sys.stdout = StringIO()
-        sys.stderr = StringIO()
-        try:
-            cli()
-            out = sys.stdout.getvalue()
-        finally:
-            sys.argv = old_argv
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+        with Dml.temporary(repo="repo") as dml:
+            old_argv = sys.argv
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.argv = ["dml", "--project-home", dml._context.project_home, "status"]
+            sys.stdout = StringIO()
+            sys.stderr = StringIO()
+            try:
+                cli()
+                out = sys.stdout.getvalue()
+            finally:
+                sys.argv = old_argv
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
 
         payload = json.loads(out)
-        assert "project" in payload
-        assert "remote" in payload
+        assert set(payload.keys()) == {"head", "branches", "dags", "indexes"}

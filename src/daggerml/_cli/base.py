@@ -9,10 +9,15 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from daggerml._internal import DmlOps
-from daggerml._internal._db import DmlDbInvalidPathError, DmlDbInvalidRefError, Ref
-from daggerml._internal.config import DmlConfig
-from daggerml._internal.types import DmlRepoError, Runnable, Uri
+from daggerml._internal import (
+    Dml,
+    DmlDbInvalidPathError,
+    DmlDbInvalidRefError,
+    DmlRepoError,
+    Ref,
+    Runnable,
+    Uri,
+)
 
 
 class DmlJsonEncoder(json.JSONEncoder):
@@ -20,47 +25,25 @@ class DmlJsonEncoder(json.JSONEncoder):
 
     def default(self, obj):
         if isinstance(obj, Ref):
-            return str(obj)
+            return str(obj.to)
         if isinstance(obj, Uri):
-            return {
-                "__type__": "uri",
-                "uri": obj.uri,
-            }
+            return obj.uri
         if isinstance(obj, Runnable):
-            return {
-                "__type__": "runnable",
-                "target": obj.target,
-                "sub": obj.sub,
-                "kwargs": obj.kwargs,
-                "adapter": obj.adapter,
-            }
+            raise NotImplementedError("Runnable objects cannot be serialized to JSON directly")
         return super().default(obj)
 
 
 def get_repo_path(project_home_arg: str | None) -> str:
     """Resolve project home path from args and environment."""
-    cfg = DmlConfig.resolve(explicit={"project.home": project_home_arg})
-    if not cfg.project.home:
+    project_home = Dml(project_home=project_home_arg).config.show()["project"]["home"]
+    if not project_home:
         raise DmlRepoError("Local config requires project.home (--project-home or DML_PROJECT_HOME)")
-    return cfg.project.home
+    return project_home
 
 
-def get_ops_object(ops: DmlOps, op_name: str) -> Any:
-    """Get ops object by operation name.
-
-    For subsystem constructors (commit, head, index, dag, node, cache, gc),
-    calls the method and returns the ops instance. For non-callable
-    attributes, returns the attribute unchanged.
-
-    Special case: remote returns the DmlOps instance so the command handler can
-    provide runtime remote context/client and then call `ops.remote(...)`.
-    """
-    if op_name in {"remote", "fetch", "pull", "push", "merge", "revert", "checkout"}:
-        return ops
-    subsystem = getattr(ops, op_name)
-    if callable(subsystem):
-        return subsystem()
-    return subsystem
+def get_ops_object(dml: Dml, op_name: str) -> Any:
+    """Return the shared Dml boundary for a CLI command."""
+    return dml
 
 
 def parse_ref(ref_string: str) -> Ref:
@@ -191,7 +174,7 @@ def execute_command(args) -> None:
     try:
         if not getattr(args, "func", None):
             raise ValueError("Missing command method; run with --help for available methods")
-        if args.op in {"init", "contrib", "status", "config"}:
+        if args.op == "init":
             result = args.func(args)
             if isinstance(result, str):
                 sys.stdout.write(result)
@@ -201,17 +184,18 @@ def execute_command(args) -> None:
                 output_json(result)
             return
         repo_path = get_repo_path(getattr(args, "project_home", None))
-        cfg = DmlConfig.resolve(
-            explicit={
-                "project.home": repo_path,
-                "remote.uri": getattr(args, "runtime_remote_uri", None),
-            }
-        )
-        with DmlOps.open(repo_path, remote_root=cfg.remote.uri) as ops:
-            ops_obj = get_ops_object(ops, args.op)
-            if args.op == "dag" and getattr(args, "method", None) == "checkout":
-                ops_obj = ops
+        resolved_remote_uri = Dml(
+            project_home=repo_path,
+            remote_uri=getattr(args, "runtime_remote_uri", None),
+        ).config.show()["remote"]["uri"]
+        with Dml(project_home=repo_path, remote_uri=resolved_remote_uri) as dml:
+            ops_obj = get_ops_object(dml, args.op)
             result = args.func(ops_obj, args)
+            if isinstance(result, str) and getattr(args, "raw_output", False):
+                sys.stdout.write(result)
+                if not result.endswith("\n"):
+                    sys.stdout.write("\n")
+                return
             output_json(result)
     except Exception as e:
         output_error(e, _command_context_from_args(args))

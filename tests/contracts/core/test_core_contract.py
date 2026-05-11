@@ -6,7 +6,7 @@ from unittest import TestCase
 import pytest
 
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
-from daggerml.api import Dag, DictNode, Dml, Error, ListNode, Node
+from daggerml.api import Dag, DictNode, Dml, Error, ListNode, Node, new
 
 SUM_URI = "./tests/assets/fns/sum.py"
 ASYNC_URI = "./tests/assets/fns/async.py"
@@ -21,7 +21,7 @@ class TestSetAttrs:
 
     @pytest.mark.parametrize("x", [[0], (0,), [], ["asdf", None]])  # none contain 1
     def test_list_attrs(self, x, dml):
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         n0 = dag.put(x)
         assert n0.contains(1).value() is False
         assert 1 not in n0
@@ -37,7 +37,8 @@ class TestSetAttrs:
 
     @pytest.mark.parametrize("x", [{}, {"a": 1}, {"x": 42, "y": {"k0": None}}])  # none contain 'z'
     def test_dict_attrs(self, x, dml):
-        dag = dml.new("d0", "d0")
+        print(f"Testing dict attrs with x={x} and dml={dml}")
+        dag = new(dml=dml, name="d0", message="d0")
         n0 = dag.put(x)
         assert n0.contains("z").value() is False
         assert "z" not in n0
@@ -56,10 +57,10 @@ class TestSetAttrs:
         assert n0.update({"z": 1, "a": 2}).value() == {**x, "z": 1, "a": 2}
 
     def test_load_reboot(self, dml):
-        with dml.new("d0", "d0") as dag:
+        with new(dml=dml, name="d0", message="d0") as dag:
             dag.put(42, name="n0")
             dag.commit("foo")
-        with dml.new("d1", "d1") as dag:
+        with new(dml=dml, name="d1", message="d1") as dag:
             node = dag.load("d0", name="n1")
             assert node.dag == dag
             assert node.value() == "foo"
@@ -67,19 +68,19 @@ class TestSetAttrs:
             assert dag.load("d0", key="n0").value() == 42
 
     def test_put_node_from_other_dag_auto_imports(self, dml):
-        with dml.new("src", "src") as src:
+        with new(dml=dml, name="src", message="src") as src:
             src.put(99, name="n0")
             src.commit(src.n0)
 
         foreign_node = dml.load("src")["n0"]
-        with dml.new("dst", "dst") as dst:
+        with new(dml=dml, name="dst", message="dst") as dst:
             imported = dst.put(foreign_node, name="imported")
             assert imported.value() == 99
             dst.commit(imported)
 
     def test_node_call_w_literal_deps(self, dml):
         nums = [1, 2, 3]
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         fn = self._mk_runnable(dml, SUM_URI, FN_ADAPTER, defaults={"x": 10})
         result = dag.call(fn, *nums)
         assert result.value() == sum(nums)
@@ -88,7 +89,7 @@ class TestSetAttrs:
 
     def test_node_call_w_node_deps(self, dml):
         nums = [1, 2, 3]
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         fn = self._mk_runnable(dml, SUM_URI, FN_ADAPTER, defaults={"x": dag.put(10)})
         result = dag.call(fn, *nums)
         assert result.value() == sum(nums)
@@ -97,7 +98,7 @@ class TestSetAttrs:
 
     def test_node_call_w_kwarg(self, dml):
         nums = [1, 2, 3]
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         fn = self._mk_runnable(dml, SUM_URI, FN_ADAPTER, defaults={"x": 10})
         result = dag.call(fn, *nums, x=100)
         assert result.value() == sum(nums)
@@ -106,30 +107,30 @@ class TestSetAttrs:
 
     def test_bad_kwarg(self, dml):
         nums = [1, 2, 3]
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         fn = self._mk_runnable(dml, SUM_URI, FN_ADAPTER, defaults={"x": 10})
         with pytest.raises(DmlRepoError, match=r"Unknown kwarg: y"):
             dag.call(fn, *nums, y=100)
 
     def test_node_call(self, dml):
         nums = [1, 2, 3]
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         fn = dag.put(self._mk_runnable(dml, SUM_URI, FN_ADAPTER))
         result = fn(*nums)
         assert result.value() == sum(nums)
 
     def test_node_call_runnable(self, dml):
         nums = [1, 2, 3]
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         fn = self._mk_runnable(dml, SUM_URI, FN_ADAPTER)
         result = dag.call(fn, *nums)
         assert result.value() == sum(nums)
 
     def test_load_recursing(self, dml):
         nums = [1, 2, 3]
-        with dml.new("d0", "d0") as dag:
+        with new(dml=dml, name="d0", message="d0") as dag:
             dag.commit(dag.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums, name="n1"))
-        d1 = dml.new("d1", "d1")
+        d1 = new(dml=dml, name="d1", message="d1")
         n1 = d1.load(dml.load("d0")["n1"], name="n1_1")
         assert n1.dag == d1
         n2 = n1.load()["n1"].load()["num_args"]
@@ -139,17 +140,17 @@ class TestSetAttrs:
     def test_no_caching(self):
         nums = [1, 2, 3]
         with Dml.temporary() as dml:
-            with dml.new("d0", "d0") as d1:
+            with new(dml=dml, name="d0", message="d0") as d1:
                 n1 = d1.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums)
                 uid = n1.load()["uuid"].value()
         with Dml.temporary() as dml:
-            with dml.new("d1", "d0") as d1:
+            with new(dml=dml, name="d1", message="d0") as d1:
                 n1 = d1.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums)
                 uid1 = n1.load()["uuid"].value()
         assert uid == uid1, "Cached dag should have the same UUID"
 
     def test_nodemap(self, dml):
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         dag.a = 23
         node = dag.put(42, name="b")
         other = dag.put(420)
@@ -158,12 +159,12 @@ class TestSetAttrs:
         dag.commit([node, other])
 
     def test_set_attrs(self, dml):
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         with pytest.raises(DmlRepoError, match="Set literals are not supported"):
             dag.put({0})
 
     def test_load_constructors(self, dml):
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         l0 = dag.put(42)
         c0 = dag.put({"a": 1, "b": [l0, "23"]})
         assert c0["b"][0] != l0
@@ -171,7 +172,7 @@ class TestSetAttrs:
             c0.backtrack("b", 0)
 
     def test_fn_ok_cache(self, dml):
-        with dml.new("d0", "d0") as dag:
+        with new(dml=dml, name="d0", message="d0") as dag:
             nodes = [dag.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), i, 1, 2) for i in range(2)]
             # Add a repeat outside so `nodes` remains unique.
             dag.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), 0, 1, 2)
@@ -179,8 +180,8 @@ class TestSetAttrs:
         assert dag.result.value() == 3
 
     def test_async_fn_ok(self, dml):
-        debug_file = os.path.join(dml.repo, "debug")
-        with dml.new("d0", "d0") as dag:
+        debug_file = os.path.join(dml._context.project_home, "debug")
+        with new(dml=dml, name="d0", message="d0") as dag:
             n1 = dag.call(self._mk_runnable(dml, ASYNC_URI, FN_ADAPTER), 1, 2, 3)
             dag.commit(n1)
         assert n1.value() == 6
@@ -189,18 +190,18 @@ class TestSetAttrs:
 
     def test_async_fn_error(self, dml):
         with pytest.raises(Error, match=r".*unsupported operand type.*"):
-            with dml.new("d0", "d0") as dag:
+            with new(dml=dml, name="d0", message="d0") as dag:
                 dag.call(self._mk_runnable(dml, ASYNC_URI, FN_ADAPTER), 1, 2, "asdf")
-        commit_ref = dml.head.get_branch_commit(cast(str, dml.branch))
-        assert dml.commit.get_dag(commit_ref, "d0") is not None
+        commit_ref = dml.ops.head().get_branch_commit(cast(str, dml.ops.head().get_attached_head_branch()))
+        assert dml.ops.commit().get_dag(commit_ref, "d0") is not None
 
     def test_async_fn_timeout(self, dml):
         with pytest.raises(TimeoutError):
-            with dml.new("d0", "d0") as dag:
+            with new(dml=dml, name="d0", message="d0") as dag:
                 dag.call(self._mk_runnable(dml, TIMEOUT_URI, FN_ADAPTER), 1, 2, 3, timeout=1000)
 
     def test_load(self, dml):
-        with dml.new("d0", "d0") as dag:
+        with new(dml=dml, name="d0", message="d0") as dag:
             dag.put(42, name="n0")
             dag.commit("foo")
         dl = dml.load("d0")
@@ -209,7 +210,7 @@ class TestSetAttrs:
         assert dl.result.value() == "foo"
 
     def test_put_node_uses_node_codec(self, dml):
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         original = dag.put(42, name="n0")
         alias = dag.put(original, name="n1")
         assert alias.ref == original.ref
@@ -219,7 +220,7 @@ class TestSetAttrs:
 class TestBasic(TestCase):
     def test_dag_named_node_access_roundtrip(self):
         with Dml.temporary() as dml:
-            d0 = dml.new("d0", "d0")
+            d0 = new(dml=dml, name="d0", message="d0")
             self.assertIsInstance(d0, Dag)
             n0 = d0.put([42], name="n0")
             self.assertIsInstance(n0, Node)
@@ -236,7 +237,7 @@ class TestBasic(TestCase):
 
     def test_dag_collection_materialization_roundtrip(self):
         with Dml.temporary() as dml:
-            d0 = dml.new("d0", "d0")
+            d0 = new(dml=dml, name="d0", message="d0")
             n0 = d0.put([42], name="n0")
             d0.x2 = 99
             self.assertEqual(d0.x2.value(), 99)
@@ -262,12 +263,16 @@ class TestBasic(TestCase):
 
     def test_dag_commit_result_and_delete_then_gc(self):
         with Dml.temporary() as dml:
-            d0 = dml.new("d0", "d0")
+            d0 = new(dml=dml, name="d0", message="d0")
             n0 = d0.put([42], name="n0")
             d0.commit(n0)
-            commit_ref = dml.head.get_branch_commit(cast(str, dml.branch))
-            dag_ref = dml.commit.get_dag(commit_ref, "d0")
+            commit_ref = dml.ops.head().get_branch_commit(cast(str, dml.ops.head().get_attached_head_branch()))
+            dag_ref = dml.ops.commit().get_dag(commit_ref, "d0")
             assert dag_ref is not None
-            self.assertEqual(dml.dag.describe(dag_ref)["result"], n0.ref)
-            dml.commit.delete_dag("d0", cast(str, dml.branch), dml.user or "dml")
+            self.assertEqual(dml.ops.dag().describe(dag_ref)["result"], n0.ref)
+            dml.ops.commit().delete_dag(
+                "d0",
+                cast(str, dml.ops.head().get_attached_head_branch()),
+                dml._context.user or "dml",
+            )
             dml.ops.gc().gc()

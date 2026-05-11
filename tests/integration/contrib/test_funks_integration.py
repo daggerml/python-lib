@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from daggerml import Dml, Uri
+from daggerml import Dml, Uri, new
 from daggerml.contrib import api
 from daggerml.contrib.funks import docker_build
 from daggerml.contrib.s3 import S3Store
@@ -65,8 +65,8 @@ def test_docker_build_builds_and_uploads_image_tar(monkeypatch):
     class FakeUuid:
         hex = "abc123"
 
+    monkeypatch.setattr("uuid.uuid4", lambda: FakeUuid())
     monkeypatch.setattr("daggerml.contrib.s3.S3Store", FakeStore)
-    monkeypatch.setattr("daggerml._internal.util.uuid7", lambda: FakeUuid())
     monkeypatch.setattr("daggerml.contrib.funks._run", lambda *cmd: calls.append(cmd))
 
     result = call(FakeDag(), Uri("s3://bucket/context.tar"), ["--platform=linux/amd64", "--no-cache"])
@@ -92,8 +92,8 @@ def test_docker_build_pushes_when_repo_is_provided(monkeypatch):
     class FakeUuid:
         hex = "abc123"
 
+    monkeypatch.setattr("uuid.uuid4", lambda: FakeUuid())
     monkeypatch.setattr("daggerml.contrib.s3.S3Store", FakeStore)
-    monkeypatch.setattr("daggerml._internal.util.uuid7", lambda: FakeUuid())
     monkeypatch.setattr("daggerml.contrib.funks._run", lambda *cmd: calls.append(cmd))
 
     result = call(FakeDag(), Uri("s3://bucket/context.tar"), [], Uri("repo/name"))
@@ -112,7 +112,7 @@ def test_docker_build_in_dag_builds_runnable_image(tmp_path):
     call = defunkify(docker_build)
 
     with Dml.temporary() as dml:
-        with dml.new("docker-build-int", "docker-build-int") as dag:
+        with new(dml=dml, name="docker-build-int", message="docker-build-int") as dag:
             image_tar_uri = call(dag, context_tarball)
 
     assert isinstance(image_tar_uri, Uri)

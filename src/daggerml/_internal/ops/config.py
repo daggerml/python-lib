@@ -4,7 +4,7 @@ import json
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from daggerml._internal.config import _validate_ref_name, validate_dml_project_uri, validate_remote_uri
 from daggerml._internal.types import DmlRepoError
@@ -61,7 +61,7 @@ class ConfigOps:
     project_home: str | None
     config_home: str
 
-    def _path_for_scope(self, scope: str) -> Path:
+    def _path_for_scope(self, scope: Literal["global", "local"]) -> Path:
         if scope == SCOPE_GLOBAL:
             return Path(self.config_home) / "config.toml"
         if scope == SCOPE_LOCAL:
@@ -70,7 +70,7 @@ class ConfigOps:
             return Path(self.project_home) / ".dml" / "config.toml"
         raise DmlRepoError(f"Unknown config scope: {scope}")
 
-    def _validate_scope_key(self, scope: str, key: str) -> None:
+    def _validate_scope_key(self, scope: Literal["global", "local"], key: str) -> None:
         if key not in ALL_KEYS:
             raise DmlRepoError(f"Unsupported config key: {key}")
         if scope == SCOPE_GLOBAL and key not in GLOBAL_KEYS:
@@ -78,7 +78,7 @@ class ConfigOps:
         if scope == SCOPE_LOCAL and key not in LOCAL_KEYS:
             raise DmlRepoError(f"Config key {key!r} is not valid in local scope")
 
-    def get(self, key: str, *, scope: str) -> str | list[str] | None:
+    def get(self, key: str, *, scope: Literal["global", "local"]) -> str | list[str] | None:
         self._validate_scope_key(scope, key)
         data = _read_toml(self._path_for_scope(scope))
         if key == "project.uri":
@@ -105,7 +105,7 @@ class ConfigOps:
             return [str(item) for item in value]
         raise DmlRepoError(f"Unsupported config key: {key}")
 
-    def set(self, key: str, values: list[str], *, scope: str) -> str | list[str]:
+    def set(self, key: str, values: list[str], *, scope: Literal["global", "local"]) -> str | list[str]:
         self._validate_scope_key(scope, key)
         if key == "hooks.post-init":
             if not values:
@@ -151,11 +151,3 @@ class ConfigOps:
             raise DmlRepoError(f"Unsupported config key: {key}")
         _write_toml(path, data)
         return value
-
-
-def render_config_output(value: str | list[str] | None) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        return "\n".join(value)
-    return value

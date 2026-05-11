@@ -10,35 +10,47 @@ This document is authoritative for CLI subsystem contracts.
 
 ## Purpose
 
-Define the minimal command wrapper around `DmlOps` with automatic configuration resolution and JSON output and error handling.
+Define the thin command wrapper around `daggerml._internal.Dml` with automatic configuration resolution plus JSON and plain-text output handling.
 
 ## Scope
 
-CLI is an operational interface over `_internal` ops. It owns argument parsing and output normalization; shared configuration precedence, validation, and derivation are delegated to `daggerml._internal.config.DmlConfig`.
+CLI is the public operational interface over the shared internal `Dml` boundary. It owns argument parsing and output normalization; repository orchestration, revision resolution, DAG lookup, and admin workflows are delegated to `daggerml._internal.Dml`.
 
 ## Routing Model
 
-- top-level `dml` dispatches by operation group,
-- subcommands call corresponding `DmlOps` methods via thin handlers,
-- the CLI does not reimplement commit, DAG, index, cache, or remote business logic,
-- `dml contrib status` is a pass-through status surface over `daggerml.contrib.status.status()`,
+- top-level `dml` dispatches by public porcelain verb or namespace,
+- handlers call public `Dml` methods and namespaces only,
+- CLI handlers do not reach into `Dml.ops` or private `_...ops()` helpers,
+- repository inspection verbs are `status`, `show`, `log`, `diff`, `checkout`, `branch`, `fetch`, `pull`, `push`, `merge`, and `revert`,
+- DAG workflows live under `dml dag`,
+- maintenance workflows live under `dml admin`,
+- `dml config show [--contrib]` is the JSON config-status entrypoint,
 - errors are normalized into structured JSON payloads.
 
 ## Behavior Contracts
 
 - default output is compact JSON,
+- `config get` and `config set` are the plain-text exceptions to default JSON output,
 - repo-path resolution is delegated to the shared internal resolver,
 - remote project-root resolution is delegated to the shared internal resolver,
 - verbosity controls logging level only,
 - expected domain errors MUST NOT emit unstructured tracebacks,
-- `remote` commands use remote operation methods,
-- `remote` and `cache` are separate command domains,
-- top-level git-like project commands include `checkout`, `fetch`, `pull`, `push`, `merge`, and `revert`, with remote subcommand equivalents for lower-level S3 sync operations,
+- top-level git-like project commands include `status`, `show`, `log`, `diff`, `checkout`, `branch`, `fetch`, `pull`, `push`, `merge`, and `revert`,
 - `checkout <revision>` resolves revisions locally (branch, tag, commit ref, or ancestry expression), reports attached vs detached mode explicitly, and does not perform implicit network fetches,
-- project bootstrap runs through `init`; remote synchronization then uses explicit `fetch`, `checkout`, or `pull` flows,
+- `status` reports repository state as JSON with `head`, `branches`, `dags`, and `indexes`,
+- `show <revision>` returns JSON with top-level `revision`, `commit`, `dags`, and `change`,
+- `log [<revision>] [--limit N]` returns JSON with `revision` and `commits`,
+- `diff [<left>] [<right>]` returns JSON with `left`, `right`, `added`, `removed`, and `updated`,
+- `branch` lists local branches and `branch --remote` lists remote-tracking branch selectors,
+- `dag list [--revision REV]` returns a revision-scoped DAG map,
+- `dag get <name-or-id> [--revision REV]` resolves by DAG name within a revision or exact `dag:<id>` selector and returns node data in the `dag` payload,
 - `dag checkout <revision> <dag-name> [--as <name>] [--replace]` copies one DAG from history into the current branch as a new commit,
-- `contrib status` emits the structured contrib status report as compact JSON,
-- `cache` supports `list|get|delete|clear`,
+- `dag delete <name>` removes one named DAG from a branch and commits the change,
+- `admin index list|get|delete` exposes live-index inspection and deletion,
+- `admin cache invalidate <cache-key>...` accepts exact cache keys only,
+- `admin remote list [--owner OWNER]` lists canonical project URIs and `admin remote list dml://<owner>/<project>` lists that project's tracked branches and tags,
+- `admin remote gc` runs remote maintenance,
+- `admin gc [--dry-run]` runs or previews local garbage collection,
 - runtime config naming follows [configuration.md](configuration.md): `project.home`, `project.uri`, `db.path`, `remote.uri`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
 - explicit CLI override flags mirror the canonical config naming, including `--project-home`, `--remote-uri`, `--project-uri`, and `--config-home`.
 
@@ -55,7 +67,7 @@ CLI is an operational interface over `_internal` ops. It owns argument parsing a
 
 ## Stability Notes
 
-The CLI surface is operational and can evolve faster than the public Python API.
+The CLI surface is intentionally breaking in this redesign and no legacy aliases or legacy public command groups are preserved.
 
 ## References
 

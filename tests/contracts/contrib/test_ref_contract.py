@@ -1,6 +1,6 @@
 import pytest
 
-from daggerml import Dml
+from daggerml import Dml, new
 from daggerml._internal.types import DmlRepoError
 from daggerml.contrib import api
 
@@ -20,7 +20,7 @@ def test_delayed_action_codec_matches_delayed_ref():
 
 def test_ref_resolves_when_staged():
     with Dml.temporary() as dml:
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         dag.a = 42
         out = dag.put(api.ref("a"))
         assert out.value() == 42
@@ -28,7 +28,7 @@ def test_ref_resolves_when_staged():
 
 def test_ref_resolves_in_nested_values():
     with Dml.temporary() as dml:
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         dag.a = 7
         out = dag.put({"v": [api.ref("a")]})
         assert out.value() == {"v": [7]}
@@ -36,7 +36,7 @@ def test_ref_resolves_in_nested_values():
 
 def test_ref_missing_name_fails():
     with Dml.temporary() as dml:
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         with pytest.raises(DmlRepoError, match="Node 'missing' not found in DAG"):
             dag.put(api.ref("missing"))
 
@@ -50,38 +50,38 @@ def test_load_returns_delayed_load():
 
 def test_load_resolves_result_node_when_nodename_none():
     with Dml.temporary() as dml:
-        src = dml.new("src", "src")
+        src = new(dml=dml, name="src", message="src")
         src.result_named = 123
         src.commit(999)
 
-        dst = dml.new("dst", "dst")
+        dst = new(dml=dml, name="dst", message="dst")
         out = dst.put(api.load("src"))
         assert out.value() == 999
 
 
 def test_load_resolves_named_node_when_nodename_set():
     with Dml.temporary() as dml:
-        src = dml.new("src", "src")
+        src = new(dml=dml, name="src", message="src")
         src.result_named = 123
         src.commit(999)
 
-        dst = dml.new("dst", "dst")
+        dst = new(dml=dml, name="dst", message="dst")
         out = dst.put(api.load("src", "result_named"))
         assert out.value() == 123
 
 
 def test_load_missing_dag_fails():
     with Dml.temporary() as dml:
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         with pytest.raises(DmlRepoError, match="DAG 'missing' not found"):
             dag.put(api.load("missing"))
 
 
 def test_load_missing_node_fails():
     with Dml.temporary() as dml:
-        src = dml.new("src", "src")
+        src = new(dml=dml, name="src", message="src")
         src.commit(1)
 
-        dst = dml.new("dst", "dst")
+        dst = new(dml=dml, name="dst", message="dst")
         with pytest.raises(DmlRepoError, match="Node 'missing' not found in DAG 'src'"):
             dst.put(api.load("src", "missing"))

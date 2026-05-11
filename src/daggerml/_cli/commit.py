@@ -1,9 +1,14 @@
 """Commit operation CLI setup."""
 
 from argparse import ArgumentParser
-from typing import List, Optional
+from typing import Any, Optional
 
 from daggerml._cli.base import apply_help_config, parse_ref
+from daggerml._internal import Dml
+
+
+def _commit_ops(ops_obj):
+    return ops_obj._commit_ops() if isinstance(ops_obj, Dml) else ops_obj
 
 
 def setup_commit_parser(parser: ArgumentParser) -> None:
@@ -108,27 +113,31 @@ def setup_commit_parser(parser: ArgumentParser) -> None:
     delete_dag_parser.set_defaults(func=execute_commit_delete_dag)
 
 
-def execute_commit_list(ops_obj, args) -> List[str]:
+def execute_commit_list(ops_obj, args) -> list[Any] | dict[str, Any]:
     """Execute commit list command, return JSON-serializable result."""
-    result = ops_obj.list(args.head, args.limit)
-    return [str(ref) for ref in result]
+    if isinstance(ops_obj, Dml):
+        return ops_obj.log(args.head, limit=args.limit)
+    return [str(ref) for ref in ops_obj.list(args.head, args.limit)]
 
 
 def execute_commit_merge(ops_obj, args) -> str:
     """Execute commit merge command, return JSON-serializable result."""
     commit1 = parse_ref(args.commit1)
     commit2 = parse_ref(args.commit2)
-    result = ops_obj.merge(commit1, commit2, args.user)
+    commit_ops = _commit_ops(ops_obj)
+    result = commit_ops.merge(commit1, commit2, args.user)
     return str(result)
 
 
 def execute_commit_merge_head(ops_obj, args) -> str:
-    result = ops_obj.merge_into_head(args.head, parse_ref(args.other), args.user)
+    commit_ops = _commit_ops(ops_obj)
+    result = commit_ops.merge_into_head(args.head, parse_ref(args.other), args.user)
     return str(result)
 
 
 def execute_commit_revert(ops_obj, args) -> str:
-    result = ops_obj.revert(args.head, parse_ref(args.commit), args.user)
+    commit_ops = _commit_ops(ops_obj)
+    result = commit_ops.revert(args.head, parse_ref(args.commit), args.user)
     return str(result)
 
 
@@ -136,26 +145,30 @@ def execute_commit_rebase(ops_obj, args) -> str:
     """Execute commit rebase command, return JSON-serializable result."""
     source = parse_ref(args.source)
     target = parse_ref(args.target)
-    result = ops_obj.rebase(source, target, args.user)
+    commit_ops = _commit_ops(ops_obj)
+    result = commit_ops.rebase(source, target, args.user)
     return str(result)
 
 
 def execute_commit_get_dag(ops_obj, args) -> Optional[str]:
     """Execute commit get-dag command, return JSON-serializable result."""
     commit = parse_ref(args.commit)
-    result = ops_obj.get_dag(commit, args.name)
+    commit_ops = _commit_ops(ops_obj)
+    result = commit_ops.get_dag(commit, args.name)
     return str(result) if result is not None else None
 
 
 def execute_commit_describe(ops_obj, args) -> dict:
     """Execute commit describe command, return JSON-serializable result."""
     commit = parse_ref(args.commit)
-    return ops_obj.describe(commit)
+    commit_ops = _commit_ops(ops_obj)
+    return commit_ops.describe(commit)
 
 
 def execute_commit_delete_dag(ops_obj, args) -> str:
     """Execute commit delete-dag command, return JSON-serializable result."""
-    # head may be a branch name or a ref string; parse into a Ref when present
-    head = parse_ref(args.head) if getattr(args, "head", None) is not None else None
-    result = ops_obj.delete_dag(args.name, head, args.user)
+    if isinstance(ops_obj, Dml):
+        result = ops_obj.dag.delete(args.name, branch=args.head, user=args.user)
+        return str(result)
+    result = ops_obj.delete_dag(args.name, parse_ref(args.head), args.user)
     return str(result)

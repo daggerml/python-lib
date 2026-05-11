@@ -5,8 +5,7 @@ from argparse import ArgumentParser
 from typing import Any
 
 from daggerml._cli.base import apply_help_config
-from daggerml._internal import DmlOps
-from daggerml._internal.types import DmlRepoError
+from daggerml._internal import Dml, DmlRepoError
 
 
 def setup_remote_parser(parser: ArgumentParser) -> None:
@@ -23,13 +22,9 @@ def setup_remote_parser(parser: ArgumentParser) -> None:
 
     setup_remote_push_parser(subparsers.add_parser("push", help="Push a branch to remote"))
     setup_remote_fetch_parser(subparsers.add_parser("fetch", help="Fetch a project URI into local tracking refs"))
-    setup_remote_pull_branch_parser(
-        subparsers.add_parser("pull-branch", help="Fetch and merge a project branch")
-    )
+    setup_remote_pull_branch_parser(subparsers.add_parser("pull-branch", help="Fetch and merge a project branch"))
     setup_remote_push_branch_parser(
-        subparsers.add_parser(
-            "push-branch", help="Push a local branch to a project branch"
-        )
+        subparsers.add_parser("push-branch", help="Push a local branch to a project branch")
     )
     setup_remote_pull_parser(subparsers.add_parser("pull", help="Pull a ref path from remote"))
     setup_remote_list_parser(subparsers.add_parser("list", help="List remote refs under a prefix"))
@@ -152,11 +147,9 @@ def create_s3_client(boto3_module: Any) -> Any:
     return boto3_module.client("s3")
 
 
-def get_remote_ops(ops: DmlOps, s3_client: Any) -> Any:
-    """Get remote operations from DmlOps instance."""
-    if not ops.remote_root:
-        raise DmlRepoError("Remote URI required; pass --remote-uri or set DML_REMOTE_URI")
-    return ops.remote(client=s3_client)
+def get_remote_ops(dml: Dml, s3_client: Any) -> Any:
+    """Get remote operations from Dml instance."""
+    return dml._remote_ops(client=s3_client)
 
 
 def execute_remote_push(ops, args) -> str:

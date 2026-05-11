@@ -60,13 +60,15 @@ class HeadOps(BaseOps):
     def update_branch_commit(self, branch_name: str, old_commit: Ref, new_commit: Ref) -> Ref:
         return self._update_pointer_commit(self._branch_path(branch_name), old_commit, new_commit)
 
-    def create_index(self, commit_ref: Ref) -> str:
-        while True:
-            index_id = str(uuid7())
-            index_path = self._index_path(index_id)
-            if not index_path.exists():
-                self._create_pointer(index_path, commit_ref)
-                return index_id
+    def create_index(self, commit_ref: Ref, index_id: str | None = None) -> str:
+        _id = index_id or str(uuid7())
+        index_path = self._index_path(_id)
+        if index_path.exists():
+            if index_id is None:
+                raise DmlRepoError(f"Index already exists with id: {index_id}")
+            index_path.unlink()
+        self._create_pointer(index_path, commit_ref)
+        return _id
 
     def delete_index(self, index_id: str) -> None:
         self._delete_pointer(self._index_path(index_id))

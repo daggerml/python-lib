@@ -1,6 +1,9 @@
+from typing import cast
+
 import pytest
 
 import daggerml as dml
+from daggerml.api import Dml
 
 
 @pytest.fixture(autouse=True)
@@ -14,12 +17,8 @@ def _default_info(status: dict) -> dict:
     return status["default"]
 
 
-def _runtime_info(status: dict) -> dict:
-    return status["runtime"]
-
-
-def _config_info(status: dict) -> dict:
-    return status["config"]
+def _repo_status(status: dict) -> dict:
+    return status["status"]
 
 
 def test_default_runtime_status_DRT_STS_001_reports_implicit_default_creation_source():
@@ -30,15 +29,12 @@ def test_default_runtime_status_DRT_STS_001_reports_implicit_default_creation_so
     assert info["has_scoped_override"] is False
     assert info["has_process_default"] is True
 
-    cfg = _config_info(status)
-    assert set(cfg.keys()) == {"project", "db", "remote", "user", "default_branch", "hooks", "config_home"}
-    assert set(cfg["project"].keys()) == {"home", "uri"}
-    assert set(cfg["db"].keys()) == {"path"}
-    assert set(cfg["remote"].keys()) == {"uri", "fetch_workers"}
-
-    runtime = _runtime_info(status)
-    assert runtime["ops_initialized"] is False
-    assert runtime["branch_override"] is None
+    repo = _repo_status(status)
+    assert set(repo.keys()) == {"head", "branches", "dags", "indexes"}
+    assert repo["head"] is None
+    assert repo["branches"] == []
+    assert repo["dags"] == {}
+    assert repo["indexes"] == []
 
 
 def test_default_runtime_status_DRT_STS_002_get_default_dml_is_cached_process_default():
@@ -52,7 +48,9 @@ def test_default_runtime_status_DRT_STS_002_get_default_dml_is_cached_process_de
 
 
 def test_default_runtime_status_DRT_STS_003_set_and_scoped_default_runtime_resolution():
-    with dml.Dml.temporary(repo="a") as dml_a, dml.Dml.temporary(repo="b") as dml_b:
+    with Dml.temporary(repo="a") as raw_a, Dml.temporary(repo="b") as raw_b:
+        dml_a = cast(Dml, raw_a)
+        dml_b = cast(Dml, raw_b)
         dml.set_default_dml(dml_a)
         assert dml.get_default_dml() is dml_a
         assert _default_info(dml.status())["source"] == "process"
@@ -68,9 +66,10 @@ def test_default_runtime_status_DRT_STS_003_set_and_scoped_default_runtime_resol
 
 
 def test_default_runtime_status_DRT_STS_004_top_level_new_and_load_delegate_to_default_runtime():
-    with dml.Dml.temporary(repo="default-runtime") as default_dml:
+    with Dml.temporary(repo="default-runtime") as raw_dml:
+        default_dml = cast(Dml, raw_dml)
         dml.set_default_dml(default_dml)
-        with dml.new("d0", "msg") as dag:
+        with dml.new(dml=default_dml, name="d0", message="msg") as dag:
             dag.put(42, name="n0")
             dag.commit("ok")
 
@@ -79,7 +78,8 @@ def test_default_runtime_status_DRT_STS_004_top_level_new_and_load_delegate_to_d
         assert loaded["n0"].value() == 42
 
 
-def test_temporary_runtime_uses_head_state_instead_of_branch_override():
-    with dml.Dml.temporary(repo="temp-head", branch="feature") as runtime:
-        assert runtime.branch is None
-        assert runtime.head.get_attached_head_branch() == "feature"
+def test_temporary_runtime_uses_head_state_for_active_branch():
+    with Dml.temporary(repo="temp-head", branch="feature") as raw_runtime:
+        runtime = cast(Dml, raw_runtime)
+        assert runtime._context.project_home is not None
+        assert runtime.ops.head().get_attached_head_branch() == "feature"

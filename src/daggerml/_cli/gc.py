@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser
+from typing import Any
 
 from daggerml._cli.base import apply_help_config, parse_ref
-from daggerml._internal._db import Ref
-from daggerml._internal.types import DmlRepoError
+from daggerml._internal import Dml, DmlRepoError, Ref
 
 
 def setup_gc_parser(parser: ArgumentParser) -> None:
@@ -48,12 +48,16 @@ def setup_gc_list_orphans_parser(parser: ArgumentParser) -> None:
 
 def execute_gc_run(ops, args) -> dict[str, int]:
     """Execute gc run command."""
+    if isinstance(ops, Dml):
+        return ops.admin.gc()
     return ops.gc()
 
 
 def execute_gc_list_orphans(ops, args) -> list[Ref]:
     """Execute gc list-orphans command."""
     heads = parse_heads(ops, args.heads)
+    if isinstance(ops, Dml):
+        return ops._gc_ops().list_orphans(heads)
     return ops.list_orphans(heads)
 
 
@@ -61,18 +65,19 @@ def parse_heads(ops, heads: list[str] | None) -> list[Ref] | None:
     """Parse optional root selectors into commit refs."""
     if heads is None:
         return None
+    head_ops: Any = ops._head_ops() if isinstance(ops, Dml) else ops.head()
     parsed: list[Ref] = []
     for head in heads:
         if head.startswith("commit:"):
             parsed.append(parse_ref(head))
             continue
         try:
-            parsed.append(ops.head().get_branch_commit(head))
+            parsed.append(head_ops.get_branch_commit(head))
             continue
         except DmlRepoError:
             pass
         try:
-            parsed.append(ops.head().get_index_commit(head))
+            parsed.append(head_ops.get_index_commit(head))
             continue
         except DmlRepoError:
             pass

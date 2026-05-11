@@ -13,9 +13,8 @@ from urllib.parse import urlparse
 
 import boto3
 
-from daggerml import Node, Uri
-from daggerml._internal.config import DmlConfig
-from daggerml._internal.types import DmlRepoError
+from daggerml import Dml, Node, Uri
+from daggerml._internal import DmlRepoError
 
 
 def is_s3_uri(value: str) -> bool:
@@ -56,8 +55,7 @@ class S3Store:
         bucket = self.bucket
         prefix = self.prefix
         if bucket is None and prefix is None:
-            cfg = DmlConfig.resolve()
-            remote_root = cfg.remote.uri
+            remote_root = Dml().config.show()["remote"]["uri"]
             if not remote_root:
                 raise DmlRepoError(
                     "S3Store requires configured remote.uri (set DML_REMOTE_URI or pass bucket/prefix)"

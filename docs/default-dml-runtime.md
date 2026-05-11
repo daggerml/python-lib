@@ -35,7 +35,7 @@ Rules:
 - implicit default creation occurs only when no scoped or process default is set,
 - the implicit default is cached as the process default after first creation,
 - constructing `DmlOps` from the default runtime requires `remote.uri` to be configured.
-- when no explicit `Dml(branch=...)` override is present, runtime checkout behavior derives from `.dml/HEAD`.
+- runtime checkout behavior derives from `.dml/HEAD`; constructor arguments do not override the active branch.
 
 ## Runtime API
 
@@ -63,6 +63,9 @@ These delegate to `get_default_dml()`.
   - `source`: `scoped|process|implicit`
   - `has_scoped_override`: `bool`
   - `has_process_default`: `bool`
+  - `scope_diagnostics`:
+    - `scoped_override_active`: `bool`
+    - `process_default_configured`: `bool`
 - `config`:
   - `project` with `home` and branchless `uri`
   - `db` with `path`
@@ -74,13 +77,16 @@ These delegate to `get_default_dml()`.
 - `runtime`:
   - `ops_initialized`: `bool`
   - `branch_override`: `str | null`
+  - `head`: `str | null`
 
 Rules:
 
 - `status()` uses `get_default_dml()` resolution semantics,
+- `status()` MUST source config/runtime status data from the public active `Dml.status()` method,
 - `status()` MUST NOT return custom object instances,
 - `status()` MUST be safe to serialize as JSON,
 - `config` key naming and shape MUST follow [configuration.md](configuration.md).
+- `runtime.branch_override` is currently `null`.
 
 ## Boundary to Contrib
 

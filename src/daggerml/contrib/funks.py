@@ -7,7 +7,7 @@ from daggerml.contrib import api
 def _run(*cmd: str) -> None:
     import subprocess
 
-    from daggerml._internal.types import DmlRepoError
+    from daggerml._internal import DmlRepoError
 
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
     if proc.returncode == 0:
@@ -19,14 +19,15 @@ def _run(*cmd: str) -> None:
 
 @api.funkify(uri="script", adapter="local", extra_objs=(_run,))
 def docker_build(dag, context_tarball, build_flags=(), repo=None):
+    from uuid import uuid4
+
     from daggerml import Uri
-    from daggerml._internal.util import uuid7
     from daggerml.contrib.s3 import S3Store
 
     build_flags = tuple(build_flags.value())
 
     store = S3Store()
-    tag = uuid7().hex
+    tag = uuid4().hex
     local_image = f"dml:{tag}"
     store.untar(context_tarball.value(), ".")
     _run("docker", "build", *build_flags, "-t", local_image, ".")
@@ -43,7 +44,7 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
 
 def cfn(template: dict, params: dict, name: str, dag: Dag | None = None) -> Node:
     if dag is None:
-        with new(f"cfn:{name}") as dag:
+        with new(name=f"cfn:{name}") as dag:
             return cfn(template=template, params=params, name=name, dag=dag)
     dag.cfn_fn = Runnable(target=Uri("cfn"), adapter="dml-local-adapter", kwargs={}, sub=None)
     stack = dag.cfn_fn(name, template, params, name=f"cfn:{name}")

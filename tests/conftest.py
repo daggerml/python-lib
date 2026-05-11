@@ -74,7 +74,7 @@ def debug(clear_envvars):
 def dml():
     with Dml.temporary() as _dml:
         # Set function cache dir to repo so tests can find debug files
-        with patch.dict(os.environ, DML_TEST_FN_STATE_DIR=_dml.repo):
+        with patch.dict(os.environ, DML_TEST_FN_STATE_DIR=_dml._context.project_home):
             yield _dml
 
 

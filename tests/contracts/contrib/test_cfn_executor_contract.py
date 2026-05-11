@@ -24,11 +24,19 @@ class _FakeDml:
     def __init__(self, dag, calls):
         self._dag = dag
         self._calls = calls
+        self.runtime = type("_Runtime", (), {"create": self._create})()
 
-    @contextmanager
-    def new(self, *, argv_ptr):
-        self._calls.append(("new", argv_ptr))
-        yield self._dag
+    def _create(self, *, argv_ptr):
+        self._calls.append(("runtime.create", argv_ptr))
+        return "index-1"
+
+
+@contextmanager
+def _fake_new(*, dml=None, name="", message="", argv_ptr=None, fake_dag=None):
+    del name, message
+    assert dml is not None
+    dml.runtime.create(argv_ptr=argv_ptr)
+    yield fake_dag
 
 
 _REMOTE = {"root": "s3://bucket/root"}
@@ -47,11 +55,12 @@ def test_cfn_tmpdag_is_context_manager(monkeypatch):
         temporary = staticmethod(_temporary)
 
     monkeypatch.setattr("daggerml.contrib.executors.cfn.Dml", _FakeDmlApi)
+    monkeypatch.setattr("daggerml.contrib.executors.cfn.new", lambda **kwargs: _fake_new(**kwargs, fake_dag=dag))
 
     with CfnExecutor._tmpdag("argv://ptr", remote_root=_REMOTE["root"]) as result:
         assert result is dag
 
-    assert calls == [("temporary", _REMOTE["root"]), ("new", "argv://ptr")]
+    assert calls == [("temporary", _REMOTE["root"]), ("runtime.create", "argv://ptr")]
 
 
 def test_cfn_tmpdag_propagates_setup_errors(monkeypatch):
@@ -90,10 +99,11 @@ class _ArgvDag:
 class _StartDml:
     def __init__(self, dag):
         self._dag = dag
+        self.runtime = type("_Runtime", (), {"create": self._create})()
 
-    @contextmanager
-    def new(self, *, argv_ptr):
-        yield self._dag
+    def _create(self, *, argv_ptr):
+        assert argv_ptr == "argv://ptr"
+        return "index-1"
 
 
 def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
@@ -123,6 +133,7 @@ def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
         return {"status": "running", "error": None, "state": state}
 
     monkeypatch.setattr("daggerml.contrib.executors.cfn.Dml", _FakeDmlApi)
+    monkeypatch.setattr("daggerml.contrib.executors.cfn.new", lambda **kwargs: _fake_new(**kwargs, fake_dag=dag))
     monkeypatch.setattr(CfnExecutor, "_client", staticmethod(lambda: _FakeClient()))
     monkeypatch.setattr(CfnExecutor, "poll", _poll)
 

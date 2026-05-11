@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from daggerml import Dml, clear_default_dml, set_default_dml
+from daggerml import Dml, clear_default_dml, new, set_default_dml
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
@@ -87,14 +87,16 @@ def _remote() -> dict[str, str]:
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
     with Dml.temporary() as dml:
-        dag = dml.new("argv-src", "argv-src")
+        dag = new(dml=dml, name="argv-src", message="argv-src")
         index_ref = dag._require_index_ref()
         head = argv0 if argv0 is not None else Runnable(target=Uri("daggerml:list"), kwargs={}, adapter="")
-        fn_ref = dml.index.put_literal(index_ref, head)
-        arg_refs = [dml.index.put_literal(index_ref, value) for value in args]
-        with dml.index._tx(readonly=False) as txn:
-            argv_ref = dml.index._prepare_fn(index_ref, [fn_ref, *arg_refs], {}, txn)
-        return dml.index._remote_ops().put_ref_manifest(argv_ref)
+        with dml._with_ops() as ops:
+            index_ops = ops.index()
+            fn_ref = index_ops.put_literal(index_ref, head)
+            arg_refs = [index_ops.put_literal(index_ref, value) for value in args]
+            with index_ops._tx(readonly=False) as txn:
+                argv_ref = index_ops._prepare_fn(index_ref, [fn_ref, *arg_refs], {}, txn)
+            return index_ops._remote_ops().put_ref_manifest(argv_ref)
 
 
 def _poll_until_terminal(
@@ -161,10 +163,10 @@ def test_funkify_invalid_input_fails():
 
 def test_funkify_with_ref_and_load_normalizes_via_codec():
     with Dml.temporary() as dml:
-        src = dml.new("src", "src")
+        src = new(dml=dml, name="src", message="src")
         src.commit(9)
 
-        dag = dml.new("dst", "dst")
+        dag = new(dml=dml, name="dst", message="dst")
         dag.a = 7
         inner = api.DelayedRunnable(uri="inner", adapter="local", sub=None, kwargs={})
         delayed = api.funkify(inner, uri="custom", adapter="local", x=api.ref("a"), y=api.load("src"))
@@ -185,7 +187,7 @@ def test_funkify_script_runnable_contains_executable_fn_script():
         return helper(x) + y
 
     with Dml.temporary() as dml:
-        dag = dml.new("dst", "dst")
+        dag = new(dml=dml, name="dst", message="dst")
         delayed = api.funkify(fn, uri="script", adapter="local", extra_objs=[helper])
         node = dag.put(cast(Any, delayed))
         rv = node.value()
@@ -239,7 +241,7 @@ def test_funkify_script_lifecycle_stage_matrix_FKY_LFC_001_to_FKY_LFC_004(contra
 
     with Dml.temporary() as dml:
         dag_name = "dst-prepop" if use_prepop else "dst-int"
-        dag = dml.new(dag_name, dag_name)
+        dag = new(dml=dml, name=dag_name, message=dag_name)
         runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
 
         if use_prepop:
@@ -329,9 +331,9 @@ def test_funkify_script_runtime_executes_generated_source_with_args_and_kwargs(t
 
     delayed = api.funkify(fn, uri="script", adapter="local")
     with Dml.temporary() as dml:
-        dag = dml.new("dst-worker", "dst-worker")
+        dag = new(dml=dml, name="dst-worker", message="dst-worker")
         runnable = cast(Runnable, dag.put(cast(Any, delayed)).value())
-        os.environ["DML_PROJECT_HOME"] = cast(str, dml.repo)
+        os.environ["DML_PROJECT_HOME"] = cast(str, dml._context.project_home)
         try:
             result = run_payload(
                 _mk_argv_ptr(4, argv0=runnable),
@@ -371,7 +373,7 @@ def test_funkify_resolve_runnable_requires_runnable_return():
     areg.register_adapter(BadAdapter())
 
     with Dml.temporary() as dml:
-        dag = dml.new("d0", "d0")
+        dag = new(dml=dml, name="d0", message="d0")
         delayed = api.funkify(lambda dag: None, uri="script", adapter="bad")
         with pytest.raises(DmlRepoError, match="resolve_runnable must return Runnable"):
             dag.put(cast(Any, delayed))

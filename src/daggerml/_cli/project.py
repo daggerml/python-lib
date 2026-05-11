@@ -3,7 +3,6 @@ from __future__ import annotations
 from argparse import ArgumentParser
 
 from daggerml._cli.base import apply_help_config
-from daggerml._internal import DmlOps
 
 
 def setup_project_alias_parser(parser: ArgumentParser, name: str) -> None:
@@ -38,13 +37,13 @@ def setup_project_alias_parser(parser: ArgumentParser, name: str) -> None:
 
 class ProjectAliasHandlers:
     @staticmethod
-    def fetch(ops: DmlOps, args) -> str:
-        return str(ops.fetch_project(args.remote_or_uri, args.branch))
+    def fetch(dml, args) -> str:
+        return str(dml.fetch(args.remote_or_uri, args.branch))
 
     @staticmethod
-    def pull(ops: DmlOps, args) -> str:
+    def pull(dml, args) -> str:
         return str(
-            ops.pull_project(
+            dml.pull(
                 args.remote_or_uri,
                 args.branch,
                 branch=args.branch_name,
@@ -53,8 +52,8 @@ class ProjectAliasHandlers:
         )
 
     @staticmethod
-    def push(ops: DmlOps, args) -> str:
-        return ops.push_project(
+    def push(dml, args) -> str:
+        return dml.push(
             args.tag,
             branch=args.branch_name,
             create=args.create,
@@ -62,13 +61,13 @@ class ProjectAliasHandlers:
         )
 
     @staticmethod
-    def checkout(ops: DmlOps, args) -> dict[str, str | None]:
-        return ops.checkout_project(args.revision)
+    def checkout(dml, args) -> dict[str, str | None]:
+        return dml.checkout(args.revision)
 
     @staticmethod
-    def merge(ops: DmlOps, args) -> str:
-        return str(ops.merge_project(args.revision, args.branch_name, args.user))
+    def merge(dml, args) -> str:
+        return str(dml.merge(args.revision, args.branch_name, args.user))
 
     @staticmethod
-    def revert(ops: DmlOps, args) -> str:
-        return str(ops.revert_project(args.revision, args.branch_name, args.user))
+    def revert(dml, args) -> str:
+        return str(dml.revert(args.revision, args.branch_name, args.user))

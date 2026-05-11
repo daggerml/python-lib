@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import pytest
 
-from daggerml import Dml, Uri
+from daggerml import Dml, Uri, new
 from daggerml._internal.types import Runnable
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
@@ -185,14 +185,16 @@ def _remote() -> dict[str, str]:
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
     with Dml.temporary() as dml:
-        dag = dml.new("argv-src", "argv-src")
+        dag = new(dml=dml, name="argv-src", message="argv-src")
         index_ref = dag._require_index_ref()
         head = argv0 if argv0 is not None else Runnable(target=Uri("daggerml:list"), kwargs={}, adapter="")
-        fn_ref = dml.index.put_literal(index_ref, head)
-        arg_refs = [dml.index.put_literal(index_ref, value) for value in args]
-        with dml.index._tx(readonly=False) as txn:
-            argv_ref = dml.index._prepare_fn(index_ref, [fn_ref, *arg_refs], {}, txn)
-        return dml.index._remote_ops().put_ref_manifest(argv_ref)
+        with dml._with_ops() as ops:
+            index_ops = ops.index()
+            fn_ref = index_ops.put_literal(index_ref, head)
+            arg_refs = [index_ops.put_literal(index_ref, value) for value in args]
+            with index_ops._tx(readonly=False) as txn:
+                argv_ref = index_ops._prepare_fn(index_ref, [fn_ref, *arg_refs], {}, txn)
+            return index_ops._remote_ops().put_ref_manifest(argv_ref)
 
 
 def _poll_until_terminal(*, runnable: Runnable, argv_ptr: str, cache_key: str) -> dict[str, Any]:
@@ -234,7 +236,7 @@ def test_ssh_executor_integration_runs_script_over_local_sshd(ssh_resource_data)
         return os.environ["DML_TEST_SSH_VALUE"]
 
     with Dml.temporary() as dml:
-        dag = dml.new("ssh-int", "ssh-int")
+        dag = new(dml=dml, name="ssh-int", message="ssh-int")
         runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
 
         argv_ptr = _mk_argv_ptr(argv0=runnable)

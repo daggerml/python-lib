@@ -94,7 +94,7 @@ def main() -> None:
         raise RuntimeError("pandas should not be installed in the local environment for this example to work")
     except ModuleNotFoundError:
         pass
-    with dml.new("examples/01-docker-dataset") as dag:
+    with dml.new(name="examples/01-docker-dataset") as dag:
         dag.dkr_build = docker_build
         s3 = S3Store()
         print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)

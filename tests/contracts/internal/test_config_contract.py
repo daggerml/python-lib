@@ -1,4 +1,5 @@
 import os
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -42,8 +43,14 @@ def test_dml_uses_config_resolution_from_env(monkeypatch):
     monkeypatch.setenv("DML_PROJECT_HOME", "/tmp/from-env")
     monkeypatch.setenv("DML_PROJECT_URI", "dml://alice/demo")
     dml = Dml()
-    assert dml.repo == "/tmp/from-env"
-    assert dml.branch is None
+    assert dml._context.project_home == "/tmp/from-env"
+    assert dml._context.remote_uri == dml._context.config.remote.uri
+
+
+def test_dml_constructor_rejects_legacy_aliases():
+    ctor = cast(Any, Dml)
+    with pytest.raises(TypeError):
+        ctor(repo="/tmp/test-repo")
 
 
 def test_remote_config_from_canonical_env():
@@ -160,12 +167,12 @@ def test_project_home_defaults_to_cwd_when_unset(tmp_path, monkeypatch):
         os.chdir(old)
 
 
-@patch("daggerml.api.DmlOps.open")
+@patch("daggerml._internal.dml.DmlOps.open")
 def test_dml_ops_receives_remote_context(mock_open, monkeypatch):
     monkeypatch.setenv("DML_REMOTE_URI", "s3://bucket/project")
     mock_open.return_value = Mock(__enter__=Mock(), __exit__=Mock())
 
-    dml = Dml(repo="/tmp/test-repo")
+    dml = Dml(project_home="/tmp/test-repo")
     _ = dml.ops
 
     mock_open.assert_called_once_with(
@@ -174,11 +181,11 @@ def test_dml_ops_receives_remote_context(mock_open, monkeypatch):
     )
 
 
-@patch("daggerml.api.DmlOps.open")
+@patch("daggerml._internal.dml.DmlOps.open")
 def test_dml_ops_allows_local_access_without_remote(mock_open, monkeypatch):
     monkeypatch.delenv("DML_REMOTE_URI", raising=False)
     mock_open.return_value = Mock(__enter__=Mock(), __exit__=Mock())
-    dml = Dml(repo="/tmp/test-repo")
+    dml = Dml(project_home="/tmp/test-repo")
     _ = dml.ops
     mock_open.assert_called_once_with("/tmp/test-repo", remote_root="")
 

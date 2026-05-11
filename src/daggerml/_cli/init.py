@@ -5,7 +5,7 @@ from __future__ import annotations
 from argparse import ArgumentParser
 
 from daggerml._cli.base import apply_help_config
-from daggerml._internal import DmlOps
+from daggerml._internal import Dml
 
 
 def setup_init_parser(parser: ArgumentParser) -> None:
@@ -42,10 +42,10 @@ def setup_init_parser(parser: ArgumentParser) -> None:
     parser.set_defaults(func=execute_init)
 
 
-def execute_init(args) -> dict[str, str | None]:
+def execute_init(args) -> dict[str, object]:
     """Execute init command."""
-    return DmlOps.init(
-        path=getattr(args, "project_home", None),
+    return Dml.init(
+        project_home=getattr(args, "project_home", None),
         name=args.name.strip() if args.name else None,
         owner=getattr(args, "owner", None),
         branch=getattr(args, "branch", None),

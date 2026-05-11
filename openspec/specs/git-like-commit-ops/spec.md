@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define the git-like repository workflow contracts for revision resolution, checkout, merge, revert, DAG checkout, and shared `Dml` orchestration over commit/head/remote subsystems.
+
+## Requirements
 
 ### Requirement: Merge advances current head
 The system SHALL merge another commit or branch into the current branch by creating a merge commit when needed and advancing the current head.
@@ -152,26 +155,76 @@ The system SHALL perform branch advancement in git-like commit workflows through
 #### Scenario: DAG checkout updates branch through HeadOps
 - **WHEN** DAG checkout creates a new commit on a branch
 - **THEN** the workflow advances the branch through `HeadOps` rather than writing the head object directly
-## Requirements
-### Requirement: Git-like project workflows are owned by DmlOps orchestration
-Git-like project command workflows SHALL execute through `DmlOps` orchestration methods that coordinate commit and remote operations without requiring CLI-owned business logic.
 
-#### Scenario: Pull executes through DmlOps workflow
-- **WHEN** a caller invokes project pull with remote target, head ref, and user context
-- **THEN** `DmlOps` resolves project context, performs remote synchronization, and applies merge behavior through internal ops
+### Requirement: Repository inspection workflows resolve revisions locally
+The system SHALL provide repository inspection workflows for `show`, `log`, and `diff` that resolve revisions locally without performing implicit network fetches.
 
-#### Scenario: Push executes through DmlOps workflow
+#### Scenario: Show resolves revision locally
+- **WHEN** a user runs `dml show origin/main`
+- **THEN** the system resolves `origin/main` through existing local tracking state
+- **AND** it does not contact the remote automatically
+
+#### Scenario: Diff resolves both revisions locally
+- **WHEN** a user runs `dml diff dml://alice/demo#main HEAD`
+- **THEN** the system resolves both revisions from local state only
+
+### Requirement: Branch listing exposes remote-tracking branches
+The system SHALL support listing locally tracked remote branches for git-like branch inspection.
+
+#### Scenario: Branch remote lists tracked refs
+- **WHEN** a user runs `dml branch --remote`
+- **THEN** the system returns the set of locally tracked remote branch selectors
+
+### Requirement: Repository status reports current DAG map and live indexes
+The system SHALL provide a repository status workflow that reports the current HEAD state, local branches, the DAG map for the current revision, and live indexes.
+
+#### Scenario: Status reports attached head
+- **WHEN** HEAD is attached to branch `main` and a user runs `dml status`
+- **THEN** the response reports attached head state for `main`
+- **AND** includes the DAG map for the commit selected by that head
+
+#### Scenario: Status reports detached head
+- **WHEN** HEAD is detached and a user runs `dml status`
+- **THEN** the response reports detached head state and the current commit
+
+### Requirement: Show returns commit delta over DAG namespace
+The system SHALL compute commit-introduced change for `dml show` as DAG-map additions, removals, and updates between the selected commit tree and its base tree.
+
+#### Scenario: Show detects DAG addition
+- **WHEN** a commit introduces `train -> dag:a` where the base tree had no `train`
+- **THEN** `dml show` reports `train` under `change.added`
+
+#### Scenario: Show detects DAG update
+- **WHEN** a commit changes `train` from `dag:a` to `dag:b`
+- **THEN** `dml show` reports `train` under `change.updated` with `before` and `after`
+
+#### Scenario: Show detects DAG removal
+- **WHEN** a commit removes `train -> dag:a`
+- **THEN** `dml show` reports `train` under `change.removed`
+
+### Requirement: Git-like project workflows are owned by `Dml` orchestration
+Git-like project command workflows SHALL be available through the shared internal `Dml` orchestration boundary, which coordinates commit, head, and remote operations while delegating concrete repository actions to lower-level ops classes.
+
+#### Scenario: Pull executes through Dml workflow
+- **WHEN** a caller invokes project pull with remote target, branch target, and user context
+- **THEN** `Dml` obtains project and remote context through `dml_context`, resolves any fuzzy selectors through its fuzzy-resolution submodule, performs remote synchronization, and applies merge behavior through internal ops
+
+#### Scenario: Push executes through Dml workflow
 - **WHEN** a caller invokes project push with remote target and push options
-- **THEN** `DmlOps` performs project-aware remote push behavior and returns the push result without CLI-managed remote orchestration
+- **THEN** `Dml` obtains project and remote context through `dml_context`, performs project-aware remote push behavior through the relevant ops classes, and returns the push result through the shared boundary
 
-#### Scenario: Revert executes through DmlOps workflow
-- **WHEN** a caller invokes project revert with revision, head ref, and user context
-- **THEN** `DmlOps` resolves the revision and performs revert behavior through internal commit operations
+#### Scenario: Revert executes through Dml workflow
+- **WHEN** a caller invokes project revert with revision, branch target, and user context
+- **THEN** `Dml` resolves the revision through its fuzzy-resolution submodule and performs revert behavior through `CommitOps`
 
-#### Scenario: Init runs as in-place project setup
-- **WHEN** a caller invokes `DmlOps.init`
-- **THEN** it initializes project state under `.dml/` in the current location instead of creating a separate project directory
+#### Scenario: Checkout executes through Dml workflow
+- **WHEN** a caller invokes repository checkout with a revision value
+- **THEN** `Dml` resolves the revision through its fuzzy-resolution submodule and performs attached-vs-detached checkout behavior through the relevant ops classes
+
+#### Scenario: Init runs through Dml-owned project setup
+- **WHEN** a caller invokes repository init/bootstrap behavior
+- **THEN** `Dml` initializes project state under `.dml/` in the current location through the shared internal boundary instead of requiring a separate bootstrap entrypoint
 
 #### Scenario: Init recovers config-first partial state
 - **WHEN** `.dml/config.toml` exists but `.dml/db/` is missing at init time
-- **THEN** `DmlOps.init` creates the missing DB state and continues bootstrap behavior based on resolved configuration
+- **THEN** the Dml-owned init workflow uses `dml_context` to resolve bootstrap context, creates the missing DB state, and continues bootstrap behavior through the relevant ops classes

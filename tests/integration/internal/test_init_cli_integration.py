@@ -43,21 +43,21 @@ class TestInitCLIIntegration:
             assert not stderr
             payload = json.loads(stdout.strip())
             expected_repo = Path(temp_dir)
-            repo_path = payload["repo_path"]
-            assert repo_path is not None
-            assert Path(repo_path).resolve() == expected_repo.resolve()
+            project_home = payload["project_home"]
+            assert project_home is not None
+            assert Path(project_home).resolve() == expected_repo.resolve()
             assert payload["branch"] == "main"
             assert (expected_repo / ".dml" / "db").exists()
 
-    def test_init_cli_respects_project_home_flag_for_db_path_only_mode(self):
+    def test_init_cli_requires_name_or_project_uri(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             explicit = Path(temp_dir) / "db-only"
             explicit.mkdir()
             stdout, stderr = self.run_cli_command(
                 ["--project-home", str(explicit), "init", "--remote-uri", "s3://test-bucket/test-prefix"]
             )
-            assert not stderr
-            payload = json.loads(stdout.strip())
-            assert payload["repo_path"] == str(explicit)
-            assert payload["name"] is None
-            assert (explicit / ".dml" / "db").exists()
+            assert not stdout
+            payload = json.loads(stderr.strip())
+            assert payload["type"] == "DmlRepoError"
+            assert payload["command"] == "init"
+            assert payload["error"] == "init: Either NAME or project_uri is required"

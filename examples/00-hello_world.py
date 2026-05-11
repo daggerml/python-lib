@@ -19,12 +19,13 @@ def hello(dag, arg):
 
 
 def main() -> None:
-    with dml.new("examples/00-hello-world") as dag:
+    with dml.new(name="examples/00-hello-world") as dag:
+        dag.hello_fn = hello
         result = dag.call(hello, 23, name="greeting")
         dag.commit(result)
     loaded = dml.load("examples/00-hello-world")
     print(loaded.result.value())
-    with dml.new("examples/00-hello-world-redux") as dag:
+    with dml.new(name="examples/00-hello-world-redux") as dag:
         print(dag.call(hello, 23).value())
         print(dag.call(hello, 42).value())
 
