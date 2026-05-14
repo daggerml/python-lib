@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict, cast, overload
 
 from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlProjectConfig, init_project_layout, run_project_hooks
@@ -29,6 +29,258 @@ from daggerml._internal.ops.config import ConfigOps
 from daggerml._internal.types import DEFAULT_HEAD, DmlRepoError
 
 
+class ProjectConfigPayload(TypedDict):
+    home: str | None
+    uri: str | None
+
+
+class DbConfigPayload(TypedDict):
+    path: str | None
+
+
+class RemoteConfigPayload(TypedDict):
+    uri: str
+    fetch_workers: int
+
+
+HooksConfigPayload = TypedDict("HooksConfigPayload", {"post-init": list[str]})
+
+
+class ConfigShowPayload(TypedDict):
+    project: ProjectConfigPayload
+    db: DbConfigPayload
+    remote: RemoteConfigPayload
+    user: str | None
+    default_branch: str
+    hooks: HooksConfigPayload
+    config_home: str
+
+
+class ConfigShowContribPayload(ConfigShowPayload):
+    contrib: dict[str, Any]
+
+
+class CommitPayload(TypedDict):
+    id: str
+    parents: list[Ref]
+    tree: Ref
+    author: str | None
+    message: str | None
+    dag: Ref | None
+    created: int
+    modified: int
+
+
+class RevisionPayload(TypedDict):
+    input: str
+    kind: str
+    commit: Ref
+    branch: str | None
+    tag: str | None
+
+
+class DagSummaryPayload(TypedDict):
+    id: str
+    nodes: list[Ref]
+    names: dict[str, Ref]
+    result: Ref | None
+    argv: Ref | None
+    kwargv: Ref | None
+    ref: Ref
+
+
+class NodeDescriptionPayload(TypedDict, total=False):
+    id: str
+    ref: Ref
+    type: str
+    value_ref: Ref
+    dag: Ref
+    argv: list[Ref]
+    node: Ref
+
+
+class DagPayload(TypedDict):
+    id: str
+    nodes: list[NodeDescriptionPayload]
+    names: dict[str, Ref]
+    result: Ref | None
+    argv: Ref | None
+    kwargv: Ref | None
+    ref: Ref
+
+
+class NodeSelectorPayload(TypedDict):
+    selector: str
+    dag_selector: str | None
+    node: Any
+
+
+class NodeSelectorWithRevisionPayload(NodeSelectorPayload):
+    revision: RevisionPayload
+
+
+class DagListPayload(TypedDict):
+    revision: RevisionPayload
+    dags: dict[str, Ref]
+
+
+class DagDescribePayload(TypedDict):
+    selector: str
+    dag: DagSummaryPayload
+
+
+class DagDescribeWithRevisionPayload(DagDescribePayload):
+    revision: RevisionPayload
+
+
+class DagGetPayload(TypedDict):
+    selector: str
+    dag: DagPayload
+
+
+class DagGetWithRevisionPayload(DagGetPayload):
+    revision: RevisionPayload
+
+
+class DagMapDiffPayload(TypedDict):
+    added: dict[str, Ref]
+    removed: dict[str, Ref]
+    updated: dict[str, dict[str, Ref]]
+
+
+class ShowChangePayload(DagMapDiffPayload):
+    base: Ref | None
+
+
+class LogPayload(TypedDict):
+    revision: RevisionPayload
+    commits: list[CommitPayload]
+
+
+class ShowPayload(TypedDict):
+    revision: RevisionPayload
+    commit: CommitPayload
+    dags: dict[str, Ref]
+    change: ShowChangePayload
+
+
+class DiffPayload(DagMapDiffPayload):
+    left: RevisionPayload
+    right: RevisionPayload
+
+
+class HeadStatePayload(TypedDict):
+    mode: str
+    branch: str | None
+    commit: Ref
+
+
+class StatusPayload(TypedDict):
+    head: HeadStatePayload | None
+    branches: list[str]
+    dags: dict[str, Ref]
+    indexes: list[str]
+
+
+class BranchLocalPayload(TypedDict):
+    branches: list[str]
+    head: str | None
+    remote: Literal[False]
+
+
+class BranchRemotePayload(TypedDict):
+    branches: list[str]
+    remote: Literal[True]
+
+
+class CheckoutAttachedPayload(TypedDict):
+    mode: Literal["attached"]
+    branch: str
+
+
+class CheckoutDetachedPayload(TypedDict):
+    mode: Literal["detached"]
+    branch: None
+
+
+class IndexDescribePayload(TypedDict):
+    id: str
+    commit: Ref
+    dag: Ref | None
+    nodes: list[Ref]
+    names: dict[str, Ref]
+    result: Ref | None
+    argv: Ref | None
+    kwargv: Ref | None
+
+
+class IndexCommitPayload(TypedDict):
+    ref: Ref
+    summary: CommitPayload
+
+
+class AdminIndexItemPayload(TypedDict):
+    id: str
+    commit: IndexCommitPayload
+    dag: Ref | None
+    nodes: list[Ref]
+    names: dict[str, Ref]
+    result: Ref | None
+    argv: Ref | None
+    kwargv: Ref | None
+
+
+class AdminIndexListPayload(TypedDict):
+    indexes: list[AdminIndexItemPayload]
+
+
+class AdminIndexGetPayload(TypedDict):
+    index: AdminIndexItemPayload
+
+
+class AdminIndexDeletePayload(TypedDict):
+    index: str
+    deleted: Literal[True]
+
+
+class AdminCacheInvalidatePayload(TypedDict):
+    cache_keys: list[str]
+    invalidated: dict[str, Any]
+
+
+class AdminRemoteProjectsPayload(TypedDict):
+    projects: list[str]
+
+
+class AdminRemoteProjectRefsPayload(TypedDict):
+    project: str
+    branches: list[str]
+    tags: list[str]
+
+
+class AdminGcDryRunPayload(TypedDict):
+    dry_run: Literal[True]
+    would_delete: int
+    orphans: list[Ref]
+
+
+class AdminGcRunPayload(TypedDict):
+    dry_run: Literal[False]
+    deleted: int
+
+
+class InitRecoveredPayload(TypedDict):
+    branch: str
+    project_home: str
+    recovered: Literal[True]
+
+
+class InitCreatedPayload(TypedDict):
+    branch: str
+    project_home: str
+    project_uri: str | None
+
+
 @dataclass(frozen=True)
 class _OpsProxy:
     _dml: "Dml"
@@ -51,12 +303,18 @@ class _ConfigNamespace:
     def set(self, key: str, values: list[str], *, scope: Literal["global", "local"] = "local"):
         return self._dml._config_ops().set(key, values, scope=scope)
 
-    def show(self, *, contrib: bool = False) -> dict[str, Any]:
-        payload = config_dict(self._dml._context.config)
+    @overload
+    def show(self, *, contrib: Literal[False] = False) -> ConfigShowPayload: ...
+
+    @overload
+    def show(self, *, contrib: Literal[True]) -> ConfigShowContribPayload: ...
+
+    def show(self, *, contrib: bool = False) -> ConfigShowPayload:
+        payload = cast(ConfigShowPayload, config_dict(self._dml._context.config))
         if contrib:
             from daggerml.contrib import status as contrib_status
 
-            payload["contrib"] = contrib_status.status()
+            return cast(ConfigShowContribPayload, {**payload, "contrib": contrib_status.status()})
         return payload
 
 
@@ -78,7 +336,7 @@ class _RuntimeNamespace:
             commit = head_state.commit if head is None else None
         return self._dml._index_ops().create(head=head, commit=commit, argv_ptr=argv_ptr, index_id=index_id)
 
-    def describe(self, index_id: str) -> dict[str, Any]:
+    def describe(self, index_id: str) -> IndexDescribePayload:
         return self._dml._index_ops().describe(index_id)
 
     def get_node(self, index_id: str, name: str) -> Ref:
@@ -126,14 +384,20 @@ class _DagNamespace:
     def _stringify_node_selector(node_selector: str | Ref) -> str:
         return node_selector.to if isinstance(node_selector, Ref) else node_selector
 
-    def list(self, revision: str = "HEAD") -> dict[str, Any]:
+    def list(self, revision: str = "HEAD") -> DagListPayload:
         resolved = self._dml._resolve_revision(revision)
         return {
             "revision": self._dml._revision_payload(revision, resolved),
             "dags": self._dml._dag_map_for_commit(resolved.commit),
         }
 
-    def describe(self, value: str | Ref, *, revision: str | None = None) -> dict[str, Any]:
+    @overload
+    def describe(self, value: str | Ref, *, revision: None = None) -> DagDescribePayload: ...
+
+    @overload
+    def describe(self, value: str | Ref, *, revision: str) -> DagDescribeWithRevisionPayload: ...
+
+    def describe(self, value: str | Ref, *, revision: str | None = None) -> DagDescribePayload:
         resolved = resolve_dag_ref(
             value=value,
             revision=revision,
@@ -142,12 +406,24 @@ class _DagNamespace:
             project_dir=require_project_home(self._dml._context.project_home),
             operation="describe",
         )
-        payload = {"selector": resolved.selector, "dag": self._dml._dag_summary_payload(resolved.ref)}
+        payload: DagDescribePayload = {
+            "selector": resolved.selector,
+            "dag": self._dml._dag_summary_payload(resolved.ref),
+        }
         if resolved.revision is not None:
-            payload["revision"] = self._dml._revision_payload(revision or "HEAD", resolved.revision)
+            return cast(
+                DagDescribeWithRevisionPayload,
+                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+            )
         return payload
 
-    def get(self, value: str | Ref, *, revision: str | None = None) -> dict[str, Any]:
+    @overload
+    def get(self, value: str | Ref, *, revision: None = None) -> DagGetPayload: ...
+
+    @overload
+    def get(self, value: str | Ref, *, revision: str) -> DagGetWithRevisionPayload: ...
+
+    def get(self, value: str | Ref, *, revision: str | None = None) -> DagGetPayload:
         resolved = resolve_dag_ref(
             value=value,
             revision=revision,
@@ -156,10 +432,31 @@ class _DagNamespace:
             project_dir=require_project_home(self._dml._context.project_home),
             operation="get",
         )
-        payload = {"selector": resolved.selector, "dag": self._dml._dag_payload(resolved.ref)}
+        payload: DagGetPayload = {"selector": resolved.selector, "dag": self._dml._dag_payload(resolved.ref)}
         if resolved.revision is not None:
-            payload["revision"] = self._dml._revision_payload(revision or "HEAD", resolved.revision)
+            return cast(
+                DagGetWithRevisionPayload,
+                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+            )
         return payload
+
+    @overload
+    def describe_node(
+        self,
+        node_selector: str | Ref,
+        *,
+        dag_selector: str | Ref | None = None,
+        revision: None = None,
+    ) -> NodeSelectorPayload: ...
+
+    @overload
+    def describe_node(
+        self,
+        node_selector: str | Ref,
+        *,
+        dag_selector: str | Ref | None = None,
+        revision: str,
+    ) -> NodeSelectorWithRevisionPayload: ...
 
     def describe_node(
         self,
@@ -167,7 +464,7 @@ class _DagNamespace:
         *,
         dag_selector: str | Ref | None = None,
         revision: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> NodeSelectorPayload:
         resolved = resolve_node_ref(
             value=node_selector,
             dag_selector=dag_selector,
@@ -178,14 +475,35 @@ class _DagNamespace:
             project_dir=require_project_home(self._dml._context.project_home),
             operation="describe-node",
         )
-        payload: dict[str, Any] = {
+        payload: NodeSelectorPayload = {
             "selector": self._stringify_node_selector(node_selector),
             "dag_selector": resolved.dag_selector,
             "node": self._dml._node_ops().describe(resolved.ref),
         }
         if resolved.revision is not None:
-            payload["revision"] = self._dml._revision_payload(revision or "HEAD", resolved.revision)
+            return cast(
+                NodeSelectorWithRevisionPayload,
+                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+            )
         return payload
+
+    @overload
+    def get_node(
+        self,
+        node_selector: str | Ref,
+        *,
+        dag_selector: str | Ref | None = None,
+        revision: None = None,
+    ) -> NodeSelectorPayload: ...
+
+    @overload
+    def get_node(
+        self,
+        node_selector: str | Ref,
+        *,
+        dag_selector: str | Ref | None = None,
+        revision: str,
+    ) -> NodeSelectorWithRevisionPayload: ...
 
     def get_node(
         self,
@@ -193,7 +511,7 @@ class _DagNamespace:
         *,
         dag_selector: str | Ref | None = None,
         revision: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> NodeSelectorPayload:
         resolved = resolve_node_ref(
             value=node_selector,
             dag_selector=dag_selector,
@@ -204,14 +522,35 @@ class _DagNamespace:
             project_dir=require_project_home(self._dml._context.project_home),
             operation="get-node",
         )
-        payload: dict[str, Any] = {
+        payload: NodeSelectorPayload = {
             "selector": self._stringify_node_selector(node_selector),
             "dag_selector": resolved.dag_selector,
             "node": self._dml._node_ops().get(resolved.ref),
         }
         if resolved.revision is not None:
-            payload["revision"] = self._dml._revision_payload(revision or "HEAD", resolved.revision)
+            return cast(
+                NodeSelectorWithRevisionPayload,
+                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+            )
         return payload
+
+    @overload
+    def unroll_node(
+        self,
+        node_selector: str | Ref,
+        *,
+        dag_selector: str | Ref | None = None,
+        revision: None = None,
+    ) -> NodeSelectorPayload: ...
+
+    @overload
+    def unroll_node(
+        self,
+        node_selector: str | Ref,
+        *,
+        dag_selector: str | Ref | None = None,
+        revision: str,
+    ) -> NodeSelectorWithRevisionPayload: ...
 
     def unroll_node(
         self,
@@ -219,7 +558,7 @@ class _DagNamespace:
         *,
         dag_selector: str | Ref | None = None,
         revision: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> NodeSelectorPayload:
         resolved = resolve_node_ref(
             value=node_selector,
             dag_selector=dag_selector,
@@ -230,13 +569,16 @@ class _DagNamespace:
             project_dir=require_project_home(self._dml._context.project_home),
             operation="unroll-node",
         )
-        payload: dict[str, Any] = {
+        payload: NodeSelectorPayload = {
             "selector": self._stringify_node_selector(node_selector),
             "dag_selector": resolved.dag_selector,
             "node": self._dml._node_ops().unroll(resolved.ref),
         }
         if resolved.revision is not None:
-            payload["revision"] = self._dml._revision_payload(revision or "HEAD", resolved.revision)
+            return cast(
+                NodeSelectorWithRevisionPayload,
+                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+            )
         return payload
 
     def checkout(
@@ -269,20 +611,20 @@ class _DagNamespace:
 class _AdminIndexNamespace:
     _dml: "Dml"
 
-    def list(self) -> dict[str, Any]:
+    def list(self) -> AdminIndexListPayload:
         indexes = [self.get(index_id)["index"] for index_id in self._dml._head_ops().list_indexes()]
         return {"indexes": indexes}
 
-    def get(self, index_id: str) -> dict[str, Any]:
+    def get(self, index_id: str) -> AdminIndexGetPayload:
         index = dict(self._dml._index_ops().describe(index_id))
         commit_ref = index["commit"]
         index["commit"] = {
             "ref": commit_ref,
             "summary": self._dml._commit_ops().describe(commit_ref),
         }
-        return {"index": index}
+        return {"index": cast(AdminIndexItemPayload, index)}
 
-    def delete(self, index_id: str) -> dict[str, Any]:
+    def delete(self, index_id: str) -> AdminIndexDeletePayload:
         self._dml._index_ops().delete(index_id)
         return {"index": index_id, "deleted": True}
 
@@ -291,7 +633,7 @@ class _AdminIndexNamespace:
 class _AdminCacheNamespace:
     _dml: "Dml"
 
-    def invalidate(self, cache_keys: list[str]) -> dict[str, Any]:
+    def invalidate(self, cache_keys: list[str]) -> AdminCacheInvalidatePayload:
         if not cache_keys:
             raise DmlRepoError("At least one cache key is required")
         for cache_key in cache_keys:
@@ -306,7 +648,15 @@ class _AdminCacheNamespace:
 class _AdminRemoteNamespace:
     _dml: "Dml"
 
-    def list(self, project: str | None = None, *, owner: str | None = None) -> dict[str, Any]:
+    @overload
+    def list(self, project: None = None, *, owner: str | None = None) -> AdminRemoteProjectsPayload: ...
+
+    @overload
+    def list(self, project: str, *, owner: None = None) -> AdminRemoteProjectRefsPayload: ...
+
+    def list(
+        self, project: str | None = None, *, owner: str | None = None
+    ) -> AdminRemoteProjectsPayload | AdminRemoteProjectRefsPayload:
         refs = self._dml._remote_ops().list("projects")
         if project is None:
             projects: set[str] = set()
@@ -366,7 +716,13 @@ class _AdminNamespace:
     def remote(self) -> _AdminRemoteNamespace:
         return _AdminRemoteNamespace(self._dml)
 
-    def gc(self, *, dry_run: bool = False) -> dict[str, Any]:
+    @overload
+    def gc(self, *, dry_run: Literal[False] = False) -> AdminGcRunPayload: ...
+
+    @overload
+    def gc(self, *, dry_run: Literal[True]) -> AdminGcDryRunPayload: ...
+
+    def gc(self, *, dry_run: bool = False) -> AdminGcDryRunPayload | AdminGcRunPayload:
         if dry_run:
             orphans = self._dml._gc_ops().list_orphans()
             return {"dry_run": True, "would_delete": len(orphans), "orphans": orphans}
@@ -457,13 +813,13 @@ class Dml:
     def _dag_map_for_commit(self, commit_ref: Ref) -> dict[str, Ref]:
         return self._tree_dags(self._commit_ops().describe(commit_ref)["tree"])
 
-    def _dag_summary_payload(self, dag_ref: Ref) -> dict[str, Any]:
-        dag = dict(self._dag_ops().describe(dag_ref))
+    def _dag_summary_payload(self, dag_ref: Ref) -> DagSummaryPayload:
+        dag = cast(DagSummaryPayload, dict(self._dag_ops().describe(dag_ref)))
         dag["ref"] = dag_ref
         return dag
 
     @staticmethod
-    def _dag_map_diff(left: dict[str, Ref], right: dict[str, Ref]) -> dict[str, Any]:
+    def _dag_map_diff(left: dict[str, Ref], right: dict[str, Ref]) -> DagMapDiffPayload:
         added: dict[str, Ref] = {}
         removed: dict[str, Ref] = {}
         updated: dict[str, dict[str, Ref]] = {}
@@ -479,7 +835,7 @@ class Dml:
         return {"added": added, "removed": removed, "updated": updated}
 
     @staticmethod
-    def _revision_payload(value: str, resolved) -> dict[str, Any]:
+    def _revision_payload(value: str, resolved) -> RevisionPayload:
         return {
             "input": value,
             "kind": resolved.kind,
@@ -507,11 +863,18 @@ class Dml:
             branches.append(f"dml://{owner}/{project}#{branch_name}")
         return branches
 
-    def _dag_payload(self, dag_ref: Ref) -> dict[str, Any]:
-        dag = self._dag_summary_payload(dag_ref)
-        node_refs = list(dag["nodes"])
-        dag["nodes"] = [self._node_ops().describe(node_ref) for node_ref in node_refs]
-        return dag
+    def _dag_payload(self, dag_ref: Ref) -> DagPayload:
+        summary = self._dag_summary_payload(dag_ref)
+        node_refs = list(summary["nodes"])
+        return {
+            "id": summary["id"],
+            "nodes": [cast(NodeDescriptionPayload, self._node_ops().describe(node_ref)) for node_ref in node_refs],
+            "names": summary["names"],
+            "result": summary["result"],
+            "argv": summary["argv"],
+            "kwargv": summary["kwargv"],
+            "ref": summary["ref"],
+        }
 
     def _resolve_revision(self, value: str):
         return resolve_revision(
@@ -551,7 +914,7 @@ class Dml:
     def admin(self) -> _AdminNamespace:
         return _AdminNamespace(self)
 
-    def status(self) -> dict[str, object]:
+    def status(self) -> StatusPayload:
         if not self._context.project_home or not project_config_exists(
             require_project_home(self._context.project_home)
         ):
@@ -573,7 +936,13 @@ class Dml:
             "indexes": self._head_ops().list_indexes(),
         }
 
-    def branch(self, *, remote: bool = False) -> dict[str, object]:
+    @overload
+    def branch(self, *, remote: Literal[False] = False) -> BranchLocalPayload: ...
+
+    @overload
+    def branch(self, *, remote: Literal[True]) -> BranchRemotePayload: ...
+
+    def branch(self, *, remote: bool = False) -> BranchLocalPayload | BranchRemotePayload:
         if remote:
             return {"branches": self._remote_tracking_branches(), "remote": True}
         head_ops = self._head_ops()
@@ -583,7 +952,7 @@ class Dml:
             "remote": False,
         }
 
-    def log(self, revision: str = "HEAD", *, limit: int | None = None) -> dict[str, Any]:
+    def log(self, revision: str = "HEAD", *, limit: int | None = None) -> LogPayload:
         resolved = self._resolve_revision(revision)
         with self._with_ops() as ops:
             refs = list(ops.commit().list(resolved.commit, limit=limit))
@@ -592,7 +961,7 @@ class Dml:
             "commits": [self._commit_ops().describe(ref) for ref in refs],
         }
 
-    def show(self, revision: str = "HEAD") -> dict[str, Any]:
+    def show(self, revision: str = "HEAD") -> ShowPayload:
         resolved = self._resolve_revision(revision)
         commit = self._commit_ops().describe(resolved.commit)
         dags = self._dag_map_for_commit(resolved.commit)
@@ -605,7 +974,7 @@ class Dml:
             "change": {"base": base_commit, **self._dag_map_diff(base_dags, dags)},
         }
 
-    def diff(self, left: str = "HEAD~1", right: str = "HEAD") -> dict[str, Any]:
+    def diff(self, left: str = "HEAD~1", right: str = "HEAD") -> DiffPayload:
         left_resolved = self._resolve_revision(left)
         right_resolved = self._resolve_revision(right)
         left_dags = self._dag_map_for_commit(left_resolved.commit)
@@ -616,7 +985,7 @@ class Dml:
             **self._dag_map_diff(left_dags, right_dags),
         }
 
-    def checkout(self, revision: str) -> dict[str, str | None]:
+    def checkout(self, revision: str) -> CheckoutAttachedPayload | CheckoutDetachedPayload:
         resolved = self._resolve_revision(revision)
         head_ops = self._head_ops()
         if resolved.kind == "branch" and resolved.branch is not None:
@@ -726,7 +1095,7 @@ class Dml:
         config_home: str | None = None,
         project_uri: str | None = None,
         no_hooks: bool = False,
-    ) -> dict[str, object]:
+    ) -> InitRecoveredPayload | InitCreatedPayload:
         root = Path(project_home or ".").resolve()
         if not root.exists():
             raise FileNotFoundError(f"{root} does not exist")

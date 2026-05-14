@@ -257,6 +257,7 @@ class Dag:
             argv_ref = self.dml.runtime.get_argv(self._require_index_ref())
             return cast(ListNode, make_node(self, argv_ref))
         argv_ref = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["argv"]
+        assert isinstance(argv_ref, Ref), f"'{self.__class__.__name__}' dag has no argv"
         return cast(ListNode, make_node(self, argv_ref))
 
     @property

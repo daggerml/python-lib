@@ -6,6 +6,7 @@ from argparse import ArgumentParser
 
 from daggerml._cli.base import apply_help_config
 from daggerml._internal import Dml
+from daggerml._internal.dml import InitCreatedPayload, InitRecoveredPayload
 
 
 def setup_init_parser(parser: ArgumentParser) -> None:
@@ -42,7 +43,7 @@ def setup_init_parser(parser: ArgumentParser) -> None:
     parser.set_defaults(func=execute_init)
 
 
-def execute_init(args) -> dict[str, object]:
+def execute_init(args) -> InitRecoveredPayload | InitCreatedPayload:
     """Execute init command."""
     return Dml.init(
         project_home=getattr(args, "project_home", None),
