@@ -13,7 +13,7 @@ This document is authoritative for contrib tools that create `Runnable` values:
 - `api.run` dagclass execution behavior,
 - `api.ref` delayed reference behavior,
 - `api.load` delayed DAG-load behavior,
-- `DelayedActionCodec` behavior for contrib delayed actions,
+- delayed-action codec behavior for contrib delayed actions,
 - `api.dagclass` compilation behavior,
 - lowering from `api.dagclass` instance methods to `api.funkify` materialization.
 
@@ -27,7 +27,7 @@ This doc defines:
 - `ref(...)` delayed-reference behavior,
 - `load(...)` delayed DAG-load behavior,
 - `DelayedRunnable` construction/materialization/error contracts,
-- `DelayedActionCodec` type matching and encode contracts,
+- delayed-action type matching and encode contracts,
 - class-based DAG dependency analysis and ordering,
 - inferred `prepop` construction and merge rules,
 - lowering constraints for helper DSL surfaces.
@@ -81,13 +81,13 @@ Define contrib API contracts for authoring `Runnable` values directly (`api.funk
 
 #### `DelayedActionCodec`
 
-- **Location**: contrib codec catalog.
+- **Location**: `daggerml.codecs` built-in codec catalog.
 - **Interfaces**:
   - `can_encode(obj) -> bool`
   - `encode(obj, ctx) -> Any`
 - **Accepted inputs and output shape**:
   - `can_encode(obj)` MUST return `isinstance(obj, (DelayedRef, DelayedLoad, DelayedRunnable))`.
-  - `encode(...)` MUST lower delayed actions using index context.
+  - `encode(...)` MUST lower delayed actions using the active `Dag` context.
 - **Behavior/semantics**:
   - `DelayedActionCodec` MUST be the contrib codec responsible for delayed-action lowering,
   - `encode(...)` MUST apply delayed-action behavior at DAG staging/normalization time, not at delayed-action construction time,

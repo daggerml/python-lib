@@ -251,7 +251,7 @@ class ExecutionState:
             "execution_id": current["execution_id"],
             "cache_key": current["cache_key"],
             "created_at": created_at,
-            "status": cast(Any, status),
+            "status": status,
             "state": state,
             "dependencies": dependencies,
             "updated_at": max(current["updated_at"], incoming["updated_at"]),

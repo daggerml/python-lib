@@ -17,7 +17,6 @@ from urllib.parse import urlparse
 
 from daggerml._internal._db import Ref
 from daggerml._internal.builtins import BUILTIN_FNS
-from daggerml._internal.codec import CodecContext, apply_codec
 from daggerml._internal.exec_state import ExecutionRecord, ExecutionState
 from daggerml._internal.execution_context import get_current_execution_context
 from daggerml._internal.ops.base_ops import BaseOps, with_retry
@@ -94,10 +93,7 @@ class IndexOps(BaseOps):
         kwargv: Optional[dict[str, Ref]] = None,
         name: Optional[str] = None,
     ) -> Optional[Ref]:
-        codec_ctx = self._make_codec_ctx(index_id)
-        argv = [self._normalize_codec_value(arg, ctx=codec_ctx) for arg in argv]
         kwargv = kwargv or {}
-        kwargv = {k: self._normalize_codec_value(v, ctx=codec_ctx) for k, v in kwargv.items()}
         # Important: if the called function produced a DaggerML Error, we still
         # want any DB + pointer updates performed while finishing the call to be
         # committed. We therefore capture the error inside the transaction and
@@ -174,7 +170,7 @@ class IndexOps(BaseOps):
             "execution_id": execution_id,
             "cache_key": prepared.cache_key,
             "created_at": int(execution_record["created_at"]) if execution_record is not None else int(time.time()),
-            "status": cast(Any, status),
+            "status": status,
             "state": result.get("state") if (status == "running" and state is None) else None,
             "dependencies": [],
             "updated_at": int(time.time()),
@@ -341,8 +337,6 @@ class IndexOps(BaseOps):
 
     @with_retry
     def put_literal(self, index_id: str, value: Any, name: Optional[str] = None) -> Ref:
-        codec_ctx = self._make_codec_ctx(index_id)
-        value = self._normalize_codec_value(value, ctx=codec_ctx)
         return self._retry_index_publication(
             index_id,
             lambda old_commit, txn: self._put_literal_retry(
@@ -446,27 +440,6 @@ class IndexOps(BaseOps):
         node_ref = NodeOps(_db=self._db)._require_node_ref(node_ref)
         node = txn.get(node_ref)
         return node.datum_ref(txn)
-
-    def _make_codec_ctx(self, index_id: str) -> CodecContext:
-        return CodecContext(
-            index_id=index_id,
-            index_ops=self,
-        )
-
-    def _normalize_codec_value(self, value: Any, *, ctx: CodecContext) -> Any:
-        value = apply_codec(value, ctx=ctx)
-        if isinstance(value, list):
-            return [self._normalize_codec_value(v, ctx=ctx) for v in value]
-        if isinstance(value, tuple):
-            return tuple(self._normalize_codec_value(v, ctx=ctx) for v in value)
-        if isinstance(value, dict):
-            return {k: self._normalize_codec_value(v, ctx=ctx) for k, v in value.items()}
-        if isinstance(value, Runnable):
-            target = self._normalize_codec_value(value.target, ctx=ctx)
-            sub = self._normalize_codec_value(value.sub, ctx=ctx) if value.sub is not None else None
-            kwargs = {k: self._normalize_codec_value(v, ctx=ctx) for k, v in value.kwargs.items()}
-            return Runnable(target=target, adapter=value.adapter, kwargs=kwargs, sub=sub)
-        return value
 
     def _put_node(self, node: Node, txn, index_id: str, name: Optional[str] = None) -> Ref:
         if txn is not None:

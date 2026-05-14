@@ -7,20 +7,17 @@ from dataclasses import dataclass, fields, is_dataclass
 from functools import wraps
 from pathlib import Path
 from textwrap import dedent
-from threading import Lock
-from typing import Any, Callable, TypeAlias, TypeVar, cast, overload
+from typing import Any, Callable, Protocol, TypeAlias, TypeVar, cast, overload
 
 from daggerml import api as core_api
-from daggerml._internal import CodecContext, DmlRepoError, Runnable
-from daggerml.contrib.adapter_registry import get_adapter
+from daggerml._internal import DmlRepoError, Runnable
+from daggerml.codecs import DelayedLoad, DelayedRef, DelayedRunnable
 
 try:
     from typing import dataclass_transform
 except ImportError:
     from typing_extensions import dataclass_transform
 
-_CONTRIB_CODECS_REGISTERED = False
-_LOCK = Lock()
 _DAGCLASS_CALL_NODE_NAME = "<dagclass-call>"
 _DAGCLASS_RESERVED_NAMES = {"dag", "dml", "argv", "call", "put", "commit"}
 
@@ -33,7 +30,6 @@ def _iter_dagclass_members(instance):
             if name in members:
                 yield name, members[name]
         return
-
     seen: set[str] = set()
     for f in fields(instance):
         name = f.name
@@ -41,7 +37,6 @@ def _iter_dagclass_members(instance):
             continue
         seen.add(name)
         yield name, getattr(instance, name)
-
     for name, class_value in instance.__class__.__dict__.items():
         if name.startswith("_") or name in seen:
             continue
@@ -383,47 +378,16 @@ def _bind_dagclass_value(value):
     return value
 
 
-@dataclass(frozen=True)
-class DelayedRef:
-    name: str
-
-
-@dataclass(frozen=True)
-class DelayedLoad:
-    dagname: str
-    nodename: str | None = None
-
-
-@dataclass(frozen=True)
-class DelayedRunnable:
-    uri: str
-    adapter: str
-    sub: Runnable | DelayedRunnable | None
-    kwargs: dict[str, Any]
-
-
 FunkifyInput: TypeAlias = Callable[..., Any] | Runnable | DelayedRunnable
 DagclassType = TypeVar("DagclassType", bound=type[Any])
 
 
-class DelayedActionCodec:
-    def can_encode(self, value: Any) -> bool:
-        return isinstance(value, (DelayedRef, DelayedLoad, DelayedRunnable))
+class _DagclassProtocol(Protocol):
+    __dagclass__: bool
+    __dagclass_entrypoint__: str
+    __dagclass_wrapped_init__: bool
 
-    def encode(self, value: DelayedRef | DelayedLoad | DelayedRunnable, ctx: CodecContext):
-        if isinstance(value, DelayedRef):
-            return ctx.index_ops.get_node(ctx.index_id, value.name)
-        if isinstance(value, DelayedRunnable):
-            adapter_spec = get_adapter(value.adapter)
-            sub = value.sub
-            if isinstance(sub, DelayedRunnable):
-                sub = ctx.index_ops._normalize_codec_value(sub, ctx=ctx)
-            resolved = adapter_spec.resolve_runnable(value.uri, value.kwargs, sub)
-            if not isinstance(resolved, Runnable):
-                raise DmlRepoError("Adapter resolve_runnable must return Runnable")
-            return resolved
-        dag_ref, node_ref = ctx.index_ops.resolve_dag_node(ctx.index_id, value.dagname, value.nodename)
-        return ctx.index_ops.put_import(ctx.index_id, dag_ref, node=node_ref, name=None)
+    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
 
 
 def is_node_like(x: object) -> bool:
@@ -432,11 +396,7 @@ def is_node_like(x: object) -> bool:
 
 
 def _ensure_contrib_codecs() -> None:
-    global _CONTRIB_CODECS_REGISTERED
-    with _LOCK:
-        if _CONTRIB_CODECS_REGISTERED:
-            return
-        _CONTRIB_CODECS_REGISTERED = True
+    return None
 
 
 def ref(name: str) -> DelayedRef:
@@ -530,38 +490,33 @@ def _compile_dagclass_instance(instance) -> None:
 def dagclass(
     _cls: None = None, *, entrypoint: str = "main", **dataclass_kwargs: Any
 ) -> Callable[[DagclassType], DagclassType]: ...
-
-
 @overload
 def dagclass(_cls: DagclassType, *, entrypoint: str = "main", **dataclass_kwargs: Any) -> DagclassType: ...
-
-
 def dagclass(
     _cls: DagclassType | None = None, *, entrypoint: str = "main", **dataclass_kwargs: Any
 ) -> Callable[[DagclassType], DagclassType] | DagclassType:
     def wrap(cls: DagclassType) -> DagclassType:
         if not is_dataclass(cls):
-            cls = cast(DagclassType, dataclass(cls, **dataclass_kwargs))
+            cls = dataclass(cls, **dataclass_kwargs)
         elif dataclass_kwargs:
             bad = ", ".join(sorted(dataclass_kwargs.keys()))
             raise DmlRepoError(f"api.dagclass dataclass kwargs not allowed on pre-dataclass class: {bad}")
+        cls = cast(DagclassType, cls)
+        dagclass_cls = cast(_DagclassProtocol, cls)
+        dagclass_cls.__dagclass__ = True
+        dagclass_cls.__dagclass_entrypoint__ = entrypoint
+        if getattr(dagclass_cls, "__dagclass_wrapped_init__", False):
+            return cls
+        original_init = dagclass_cls.__init__
 
-        cast(Any, cls).__dagclass__ = True
-        cast(Any, cls).__dagclass_entrypoint__ = entrypoint
-
-        if getattr(cls, "__dagclass_wrapped_init__", False):
-            return cast(DagclassType, cls)
-
-        original_init = cast(Any, cls).__init__
-
-        @wraps(cast(Any, original_init))
+        @wraps(original_init)
         def _dagclass_init(self, *args, **kwargs):
             original_init(self, *args, **kwargs)
             _compile_dagclass_instance(self)
 
-        cast(Any, cls).__init__ = _dagclass_init
-        cast(Any, cls).__dagclass_wrapped_init__ = True
-        return cast(DagclassType, cls)
+        dagclass_cls.__init__ = _dagclass_init
+        dagclass_cls.__dagclass_wrapped_init__ = True
+        return cls
 
     if _cls is None:
         return wrap
@@ -573,13 +528,11 @@ def _default_run_name(instance) -> str:
     if not getattr(module, "__file__", None):
         return f"{instance.__class__.__module__}::{instance.__class__.__name__}"
     module_file = Path(module.__file__).resolve()
-
     repo_root = None
     for parent in (module_file.parent, *module_file.parents):
         if (parent / ".git").exists():
             repo_root = parent
             break
-
     base = repo_root if repo_root is not None else Path.cwd().resolve()
     try:
         rel = module_file.relative_to(base)
@@ -603,13 +556,12 @@ def run(instance, *args, name: str | None = None, entrypoint: str | None = None,
     fn = getattr(instance, entry)
     if not isinstance(fn, DelayedRunnable):
         raise DmlRepoError("api.run entrypoint must be DelayedRunnable")
-
     run_name = name or _default_run_name(instance)
     dml = core_api.get_default_dml()
     dag = core_api.new(dml=dml, name=run_name, message=run_name)
     for member_name, member_value in _iter_dagclass_members(instance):
-        dag.put(cast(Any, member_value), name=member_name)
-    result = dag.call(cast(Any, fn), *args, name=_DAGCLASS_CALL_NODE_NAME, **kwargs)
+        dag.put(member_value, name=member_name)
+    result = dag.call(fn, *args, name=_DAGCLASS_CALL_NODE_NAME, **kwargs)
     dag.commit(result)
 
 
@@ -617,20 +569,14 @@ def run(instance, *args, name: str | None = None, entrypoint: str | None = None,
 def funkify(
     sub_or_fn: None = None, *, adapter: str = "local", uri: str = "script", **kwargs: Any
 ) -> Callable[[FunkifyInput], DelayedRunnable]: ...
-
-
 @overload
 def funkify(
     sub_or_fn: Callable[..., Any], *, adapter: str = "local", uri: str = "script", **kwargs: Any
 ) -> DelayedRunnable: ...
-
-
 @overload
 def funkify(
     sub_or_fn: Runnable | DelayedRunnable, *, adapter: str = "local", uri: str = "script", **kwargs: Any
 ) -> DelayedRunnable: ...
-
-
 def funkify(
     sub_or_fn: FunkifyInput | None = None, *, adapter: str = "local", uri: str = "script", **kwargs: Any
 ) -> Callable[[FunkifyInput], DelayedRunnable] | DelayedRunnable:

@@ -4,7 +4,7 @@ from typing import Any, cast
 
 import pytest
 
-import daggerml._internal.codec as codec_mod
+import daggerml.codecs as codec_mod
 from daggerml import Runnable, Uri
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import executor_registry as ereg

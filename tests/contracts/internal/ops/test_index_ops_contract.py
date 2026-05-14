@@ -9,7 +9,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-import daggerml._internal.codec as literal_codec
+import daggerml.codecs as literal_codec
+from daggerml import Dml, new
 from daggerml._internal._db import Ref
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps, _PreparedAdapterCall
@@ -787,9 +788,7 @@ class TestIndexOps:
         try:
             alt_adapter = tmp_path / "python-fork-adapter-alt.sh"
             alt_adapter.write_text(
-                "#!/usr/bin/env bash\n"
-                "set -eu\n"
-                f'exec "{_sys.executable}" "{FN_ADAPTER}"\n',
+                f'#!/usr/bin/env bash\nset -eu\nexec "{_sys.executable}" "{FN_ADAPTER}"\n',
                 encoding="utf-8",
             )
             os.chmod(alt_adapter, 0o755)
@@ -831,7 +830,6 @@ class TestIndexOps:
             ops.delete(index_ref)
 
     def test_literal_codecs_apply_highest_priority_match(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         calls: list[str] = []
 
         class LowCodec:
@@ -861,17 +859,16 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(LowCodec(), priority=1)
             literal_codec.register_codec(HighCodec(), priority=10)
-            node_ref = ops.put_literal(index_ref, "input")
-            assert NodeOps(_db=temp_bo._db).unroll(node_ref) == "high"
+            with Dml.temporary() as dml:
+                dag = new(dml=dml, name="codec-priority", message="codec-priority")
+                assert dag.put("input").value() == "high"
             assert calls == ["high:can", "high:encode", "high:can", "high:encode"]
         finally:
             literal_codec._literal_codecs = old_codecs
             literal_codec._literal_codec_seq = old_seq
             literal_codec._plugins_loaded = old_plugins_loaded
-            ops.delete(index_ref)
 
     def test_literal_codecs_short_circuit_first_match(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         calls: list[str] = []
 
         class FirstCodec:
@@ -901,17 +898,16 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(FirstCodec(), priority=0)
             literal_codec.register_codec(SecondCodec(), priority=0)
-            node_ref = ops.put_literal(index_ref, "input")
-            assert NodeOps(_db=temp_bo._db).unroll(node_ref) == "first"
+            with Dml.temporary() as dml:
+                dag = new(dml=dml, name="codec-short-circuit", message="codec-short-circuit")
+                assert dag.put("input").value() == "first"
             assert calls == ["first:can", "first:encode", "first:can", "first:encode"]
         finally:
             literal_codec._literal_codecs = old_codecs
             literal_codec._literal_codec_seq = old_seq
             literal_codec._plugins_loaded = old_plugins_loaded
-            ops.delete(index_ref)
 
     def test_literal_codecs_reencode_with_new_match(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         calls: list[str] = []
 
         class IntCodec:
@@ -941,19 +937,17 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(IntCodec(), priority=10)
             literal_codec.register_codec(DictCodec(), priority=0)
-            node_ref = ops.put_literal(index_ref, 7)
-            assert NodeOps(_db=temp_bo._db).unroll(node_ref) == "wrapped=v7"
+            with Dml.temporary() as dml:
+                dag = new(dml=dml, name="codec-reencode", message="codec-reencode")
+                assert dag.put(7).value() == "wrapped=v7"
             assert calls.count("int:encode") == 1
             assert calls.count("dict:encode") == 1
         finally:
             literal_codec._literal_codecs = old_codecs
             literal_codec._literal_codec_seq = old_seq
             literal_codec._plugins_loaded = old_plugins_loaded
-            ops.delete(index_ref)
 
     def test_literal_codecs_non_convergent_recursion_fails(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-
         class FlappingCodec:
             def can_encode(self, value):
                 return isinstance(value, str) and value in {"left", "right"}
@@ -971,18 +965,17 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec._literal_codec_max_reencodes = 4
             literal_codec.register_codec(FlappingCodec(), priority=0)
-            with pytest.raises(DmlRepoError, match=r"Literal codec recursion failed to converge"):
-                ops.put_literal(index_ref, "left")
+            with Dml.temporary() as dml:
+                dag = new(dml=dml, name="codec-recursion", message="codec-recursion")
+                with pytest.raises(DmlRepoError, match=r"Literal codec recursion failed to converge"):
+                    dag.put("left")
         finally:
             literal_codec._literal_codecs = old_codecs
             literal_codec._literal_codec_seq = old_seq
             literal_codec._plugins_loaded = old_plugins_loaded
             literal_codec._literal_codec_max_reencodes = old_max_reencodes
-            ops.delete(index_ref)
 
     def test_literal_codec_failure_is_wrapped(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-
         class FailingCodec:
             def can_encode(self, value):
                 return isinstance(value, str)
@@ -998,17 +991,16 @@ class TestIndexOps:
             literal_codec._literal_codec_seq = 0
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(FailingCodec(), priority=0)
-            with pytest.raises(DmlRepoError, match=r"Literal codec FailingCodec failed: boom"):
-                ops.put_literal(index_ref, "input")
+            with Dml.temporary() as dml:
+                dag = new(dml=dml, name="codec-failure", message="codec-failure")
+                with pytest.raises(DmlRepoError, match=r"Literal codec FailingCodec failed: boom"):
+                    dag.put("input")
         finally:
             literal_codec._literal_codecs = old_codecs
             literal_codec._literal_codec_seq = old_seq
             literal_codec._plugins_loaded = old_plugins_loaded
-            ops.delete(index_ref)
 
     def test_literal_codecs_traverse_codec_returned_collection(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-
         class SeedCodec:
             def can_encode(self, value):
                 return value == "seed"
@@ -1032,17 +1024,15 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(SeedCodec(), priority=10)
             literal_codec.register_codec(IntCodec(), priority=0)
-            node_ref = ops.put_literal(index_ref, "seed")
-            assert NodeOps(_db=temp_bo._db).unroll(node_ref) == [11, 12]
+            with Dml.temporary() as dml:
+                dag = new(dml=dml, name="codec-collection", message="codec-collection")
+                assert dag.put("seed").value() == [11, 12]
         finally:
             literal_codec._literal_codecs = old_codecs
             literal_codec._literal_codec_seq = old_seq
             literal_codec._plugins_loaded = old_plugins_loaded
-            ops.delete(index_ref)
 
     def test_literal_codecs_traverse_codec_returned_runnable(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-
         class SeedCodec:
             def can_encode(self, value):
                 return value == "seed"
@@ -1066,54 +1056,40 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(SeedCodec(), priority=10)
             literal_codec.register_codec(IntCodec(), priority=0)
-            node_ref = ops.put_literal(index_ref, "seed")
-            with ops._tx(readonly=True) as txn:
-                lit: LiteralNode = txn.get(node_ref)
-                encoded: RunnableDatum = txn.get(lit.value)
-                target: Uri = txn.get(encoded.target)
-                kwargs: DictDatum = txn.get(encoded.kwargs)
-                x = txn.get(kwargs.data["x"])
-                assert isinstance(target, Uri)
-                assert target.uri == "daggerml:list"
-                assert isinstance(x, ScalarDatum)
-                assert x.data == 2
+            with Dml.temporary() as dml:
+                dag = new(dml=dml, name="codec-runnable", message="codec-runnable")
+                encoded = dag.put("seed").value()
+                assert isinstance(encoded, Runnable)
+                assert encoded.target.uri == "daggerml:list"
+                assert encoded.kwargs["x"] == 2
         finally:
             literal_codec._literal_codecs = old_codecs
             literal_codec._literal_codec_seq = old_seq
             literal_codec._plugins_loaded = old_plugins_loaded
-            ops.delete(index_ref)
 
     def test_start_fn_applies_codec_to_argv_and_kwargv(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-        fn_node = _put_runnable_literal(ops, index_ref, uri="daggerml:list", adapter="")
-        arg_node = ops.put_literal(index_ref, 1)
-        kw_node = ops.put_literal(index_ref, 2)
+        with Dml.temporary() as dml:
+            dag0 = new(dml=dml, name="codec-call", message="codec-call")
+            fn = Runnable(target=Uri("daggerml:list"), adapter="", kwargs={"x": 0}, sub=None)
+            result_ref = dag0.put(42).ref
+            seen: list[Any] = []
 
-        with ops._tx(readonly=False) as txn:
-            fn_lit = txn.get(fn_node)
-            fn_runnable_ref = fn_lit.datum_ref(txn)
-            runnable: RunnableDatum = txn.get(fn_runnable_ref)
-            kwargs = txn.get(runnable.kwargs)
-            kwargs.data["x"] = txn.put(ScalarDatum(0))
-            runnable.kwargs = txn.put(kwargs)
-            fn_lit.value = txn.put(runnable)
-            txn.put(fn_lit, to=fn_node)
+            def _spy_apply(value, *, dag):
+                assert dag is dag0
+                seen.append(value)
+                return value
 
-        seen: list[Ref] = []
-
-        def _spy_apply(value, *, ctx):
-            assert ctx.index_id == index_ref
-            assert ctx.index_ops is ops
-            seen.append(value)
-            return value
-
-        with patch("daggerml._internal.ops.index.apply_codec", side_effect=_spy_apply):
-            with pytest.raises(DmlRepoError, match="Keyword arguments are not supported"):
-                ops.start_fn(index_ref, [fn_node, arg_node], kwargv={"x": kw_node})
-
-        assert fn_node in seen
-        assert arg_node in seen
-        assert kw_node in seen
+            original_start_fn = dag0._start_fn
+            dag0._start_fn = lambda argv, *, kwargv=None, name=None: result_ref
+            try:
+                with patch("daggerml.codecs.apply_codec", side_effect=_spy_apply):
+                    out = dag0.call(fn, 1, x=2)
+            finally:
+                dag0._start_fn = original_start_fn
+            assert out.value() == 42
+            assert fn in seen
+            assert 1 in seen
+            assert 2 in seen
 
     def test_get_argv_raises_when_missing(self, temp_bo):
         ops, _head_ref, index_ref = _mk_repo_state(temp_bo, with_argv=False)

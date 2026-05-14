@@ -42,6 +42,15 @@ Map code paths to the docs that must be read before editing.
   - `docs/codec-system.md`
   - `docs/default-dml-runtime.md`
 
+### Codec module
+
+- Match: `src/daggerml/codecs.py`
+- Read:
+  - `docs/codec-system.md`
+  - `docs/api.md`
+  - `docs/contrib/api.md`
+  - `docs/errors.md`
+
 ### CLI surface
 
 - Match: `src/daggerml/_cli/**`

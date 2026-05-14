@@ -4,7 +4,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from daggerml._internal import codec as codec_mod
+import daggerml.codecs as codec_mod
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import executor_registry as ereg
 

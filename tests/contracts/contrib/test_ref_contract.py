@@ -1,6 +1,6 @@
 import pytest
 
-from daggerml import Dml, new
+from daggerml import Dml, codecs, new
 from daggerml._internal.types import DmlRepoError
 from daggerml.contrib import api
 
@@ -12,7 +12,7 @@ def test_ref_returns_delayed_ref():
 
 
 def test_delayed_action_codec_matches_delayed_ref():
-    codec = api.DelayedActionCodec()
+    codec = codecs.DelayedActionCodec()
     assert codec.can_encode(api.DelayedRef("x"))
     assert codec.can_encode(api.DelayedLoad("d0"))
     assert not codec.can_encode("x")

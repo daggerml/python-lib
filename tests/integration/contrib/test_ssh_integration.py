@@ -237,7 +237,7 @@ def test_ssh_executor_integration_runs_script_over_local_sshd(ssh_resource_data)
 
     with Dml.temporary() as dml:
         dag = new(dml=dml, name="ssh-int", message="ssh-int")
-        runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
+        runnable = cast(Runnable, dag.put(fn).value())
 
         argv_ptr = _mk_argv_ptr(argv0=runnable)
         result = _poll_until_terminal(runnable=runnable, argv_ptr=argv_ptr, cache_key="ck-ssh-int-success")

@@ -158,7 +158,7 @@ def test_funkify_wrapper_preserves_innermost_script_for_defunkify():
 
 def test_funkify_invalid_input_fails():
     with pytest.raises(DmlRepoError, match="Invalid funkify input"):
-        api.funkify(cast(Any, 123), uri="script", adapter="local")
+        api.funkify(123, uri="script", adapter="local")
 
 
 def test_funkify_with_ref_and_load_normalizes_via_codec():
@@ -170,7 +170,7 @@ def test_funkify_with_ref_and_load_normalizes_via_codec():
         dag.a = 7
         inner = api.DelayedRunnable(uri="inner", adapter="local", sub=None, kwargs={})
         delayed = api.funkify(inner, uri="custom", adapter="local", x=api.ref("a"), y=api.load("src"))
-        node = dag.put(cast(Any, delayed))
+        node = dag.put(delayed)
         rv = node.value()
         assert isinstance(rv, Runnable)
         assert rv.target.uri == "custom"
@@ -189,7 +189,7 @@ def test_funkify_script_runnable_contains_executable_fn_script():
     with Dml.temporary() as dml:
         dag = new(dml=dml, name="dst", message="dst")
         delayed = api.funkify(fn, uri="script", adapter="local", extra_objs=[helper])
-        node = dag.put(cast(Any, delayed))
+        node = dag.put(delayed)
         rv = node.value()
         assert isinstance(rv, Runnable)
         assert "script" not in rv.kwargs
@@ -242,7 +242,7 @@ def test_funkify_script_lifecycle_stage_matrix_FKY_LFC_001_to_FKY_LFC_004(contra
     with Dml.temporary() as dml:
         dag_name = "dst-prepop" if use_prepop else "dst-int"
         dag = new(dml=dml, name=dag_name, message=dag_name)
-        runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
+        runnable = cast(Runnable, dag.put(fn).value())
 
         if use_prepop:
             meta = cast(dict[str, Any], runnable.kwargs["__dml_script_exec__"])
@@ -332,7 +332,7 @@ def test_funkify_script_runtime_executes_generated_source_with_args_and_kwargs(t
     delayed = api.funkify(fn, uri="script", adapter="local")
     with Dml.temporary() as dml:
         dag = new(dml=dml, name="dst-worker", message="dst-worker")
-        runnable = cast(Runnable, dag.put(cast(Any, delayed)).value())
+        runnable = cast(Runnable, dag.put(delayed).value())
         os.environ["DML_PROJECT_HOME"] = cast(str, dml._context.project_home)
         try:
             result = run_payload(
@@ -376,4 +376,4 @@ def test_funkify_resolve_runnable_requires_runnable_return():
         dag = new(dml=dml, name="d0", message="d0")
         delayed = api.funkify(lambda dag: None, uri="script", adapter="bad")
         with pytest.raises(DmlRepoError, match="resolve_runnable must return Runnable"):
-            dag.put(cast(Any, delayed))
+            dag.put(delayed)

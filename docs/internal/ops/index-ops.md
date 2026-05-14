@@ -36,10 +36,10 @@ Define `IndexOps` behavior boundaries and invariants for staging-time execution 
   - Resolves remote argv payload and stages `ArgvNode` + derived `KwargvNode`.
 - `put_literal(...)`
   - Owns literal normalization and storage staging.
-  - Must call `daggerml._internal.codec.apply_codec(...)` on its values.
+  - Accepts already-normalized values from higher-level callers.
 - `start_fn(...)`
   - Orchestrates function execution.
-  - Must call `daggerml._internal.codec.apply_codec(...)` on `argv` and `kwargv` values.
+  - Accepts already-staged node refs for `argv` and `kwargv` values.
   - First call arg resolves to runnable.
   - Kwargs resolve inner-most to outer-most by key.
   - Unknown key raises `DmlRepoError("Unknown kwarg: <key>")`.
@@ -77,7 +77,7 @@ Unspecified interface fields are rejected.
 
 ### Authority Handoffs
 
-- `daggerml._internal.codec.apply_codec(...)` behavior is out of scope; hands off to the Codec System spec.
+- Public codec normalization behavior is out of scope; hands off to the Codec System spec and public API spec.
 - Adapter execution details and `succeeded` status cache-backed result resolution are out of scope; hands off to the Adapter Execution Contract spec.
 - DAG node structures (`ArgvNode`, `KwargvNode`, `ImportNode`) are out of scope; hands off to the Remote Data Model spec.
 

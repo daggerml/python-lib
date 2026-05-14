@@ -76,7 +76,9 @@ Define the stable user-facing contract for DAG authoring, execution entry, and n
   - Invocation surfaces are `Dag.call(*args, **kwargs)` and `RunnableNode.__call__(*args, **kwargs)`.
   - Accepted argument forms are positional call arguments, keyword call arguments, existing public node wrappers, and plain Python values accepted by the public staging surface.
   - Success return shape is a public `Node` wrapper representing the staged function-result node or staged result node produced by the call-entry operation.
+  - `Dag.put(...)` and `Dag.call(...)` MUST normalize caller-supplied values through the codec system in `daggerml.codecs` before runtime staging.
   - Public DAG function invocation through `Dag.call(...)` and `RunnableNode.__call__(...)` MUST stage call arguments through DAG nodes before adapter or runtime execution begins.
+  - Public DAG function invocation MUST stage the callable itself through the same codec-driven insertion path used for arguments.
   - When a supplied argument is already a node, the API MUST preserve that node identity instead of copying it through a new literal node.
   - Unknown callable keyword arguments surfaced during keyword-argument validation MUST be reported deterministically to callers.
   - Side effects: this interface mutates active DAG staging state by creating or reusing staged nodes needed for the call-entry operation.

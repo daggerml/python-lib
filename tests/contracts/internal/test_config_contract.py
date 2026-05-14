@@ -1,5 +1,4 @@
 import os
-from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -48,9 +47,8 @@ def test_dml_uses_config_resolution_from_env(monkeypatch):
 
 
 def test_dml_constructor_rejects_legacy_aliases():
-    ctor = cast(Any, Dml)
     with pytest.raises(TypeError):
-        ctor(repo="/tmp/test-repo")
+        Dml(repo="/tmp/test-repo")
 
 
 def test_remote_config_from_canonical_env():

@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional, Union, cast, overload
 
 from daggerml._internal import (
-    CodecContext,
     Dml,
     DmlRepoError,
     Error,
@@ -14,6 +13,7 @@ from daggerml._internal import (
     Runnable,
     Uri,
 )
+from daggerml.codecs import CodecError, stage_value
 from daggerml.util import BackoffWithJitter, current_time_millis
 
 log = logging.getLogger(__name__)
@@ -164,6 +164,12 @@ class Dag:
         index_id = self._require_index_ref()
         return self.dml.runtime.put_literal(index_id, value, name=name)
 
+    def _stage_value(self, value: Any, *, name: Optional[str] = None) -> Ref:
+        try:
+            return stage_value(self, value, name=name)
+        except CodecError as e:
+            raise DmlRepoError(str(e)) from e
+
     def _start_fn(
         self, argv: list[Ref], *, kwargv: Optional[dict[str, Ref]] = None, name: Optional[str] = None
     ) -> Optional[Ref]:
@@ -173,9 +179,9 @@ class Dag:
         fn_ref = self._put_literal(Runnable(target=Uri(uri), kwargs={}, adapter=""))
         argv: list[Ref] = [fn_ref]
         for arg in args:
-            argv.append(arg if isinstance(arg, Ref) else self._put_literal(arg))
+            argv.append(arg if isinstance(arg, Ref) else self._stage_value(arg))
         if default is not None:
-            argv.append(default if isinstance(default, Ref) else self._put_literal(default))
+            argv.append(default if isinstance(default, Ref) else self._stage_value(default))
         result = self._start_fn(argv, name=name)
         if result is None:
             raise DmlRepoError("Function execution failed")
@@ -339,7 +345,7 @@ class Dag:
         >>> n3.value()
         {'a': 1, 'b': [42, '23']}
         """
-        return make_node(self, self._put_literal(value, name=name))
+        return make_node(self, self._stage_value(value, name=name))
 
     def call(
         self,
@@ -380,23 +386,20 @@ class Dag:
         Error
             If the function returns an error
         """
-        fn_value = fn.value() if isinstance(fn, Node) else fn
-
         kwargv_refs: dict[str, Ref] = {}
         for key, value in kw.items():
-            kwargv_refs[key] = value.ref if isinstance(value, Node) else self.put(value).ref
+            kwargv_refs[key] = self._stage_value(value)
 
         sleep = sleep or BackoffWithJitter()
-        expr = [self.put(x) for x in [fn_value, *args]]
+        argv_seed = [fn, *args]
         end = current_time_millis() + timeout
         while timeout <= 0 or current_time_millis() < end:
-            # Extract refs from nodes
-            argv_refs = [node.ref for node in expr]
+            argv_refs = [self._stage_value(value) for value in argv_seed]
             resp = self._start_fn(argv_refs, kwargv=kwargv_refs, name=name)
             if resp:
                 return make_node(self, resp)
             time.sleep(sleep() / 1000)
-        raise TimeoutError(f"invoking function: {expr[0].value()}")
+        raise TimeoutError(f"invoking function: {fn}")
 
     def commit(self, value) -> None:
         """
@@ -808,23 +811,7 @@ class DictNode(CollectionNode):  # noqa: F811
         return self
 
 
-@dataclass(frozen=True)
-class NodeCodec:
-    def can_encode(self, value: Any) -> bool:
-        return isinstance(value, Node)
-
-    def encode(self, value: Node, ctx: CodecContext) -> Ref:
-        if value.dag.token is not None and value.dag.token == ctx.index_id:
-            return value.ref
-        if value.dag.ref is None:
-            raise DmlRepoError("Cannot encode node from uncommitted DAG in a different index")
-        if value.dag.ref == ctx.index_ops.current_dag_ref(ctx.index_id):
-            return value.ref
-        try:
-            return cast(Ref, ctx.index_ops.put_import(ctx.index_id, value.dag.ref, node=value.ref, name=None))
-        except Exception as e:
-            raise DmlRepoError(f"Failed to encode cross-dag node import: {e}") from e
-
-
 def codecs() -> list[Any]:
-    return [NodeCodec()]
+    from daggerml.codecs import codecs as builtins
+
+    return builtins()
