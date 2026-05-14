@@ -7,7 +7,7 @@ from importlib import metadata
 from threading import RLock
 from typing import TYPE_CHECKING, Any, Iterator, Protocol
 
-from daggerml._internal import Error, Runnable
+from daggerml._internal import DmlRepoError, Error, Runnable
 from daggerml._internal._db import Ref
 
 if TYPE_CHECKING:
@@ -218,9 +218,16 @@ class DelayedActionCodec:
             if not isinstance(resolved, Runnable):
                 raise CodecError("Adapter resolve_runnable must return Runnable")
             return resolved
-        dag_ref, node_ref = dag.dml._index_ops().resolve_dag_node(
-            dag._require_index_ref(), value.dagname, value.nodename
-        )
+        index = dag.dml.admin.index.get(dag._require_index_ref())["index"]
+        commit_ref = index["commit"]["ref"]
+        resolved = dag.dml.dag.get(value.dagname, revision=commit_ref.to)["dag"]
+        dag_ref = resolved["ref"]
+        if value.nodename is None:
+            node_ref = resolved["result"]
+        else:
+            node_ref = resolved["names"].get(value.nodename)
+        if node_ref is None:
+            raise DmlRepoError(f"Node '{value.nodename}' not found in DAG '{value.dagname}'")
         return dag.dml.runtime.put_import(dag._require_index_ref(), dag_ref, node=node_ref, name=None)
 
 

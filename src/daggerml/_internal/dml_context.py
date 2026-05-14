@@ -77,10 +77,6 @@ def mutable_branch(*, branch: str | None, head_ops) -> str:
     return branch or head_ops.require_attached_head_branch()
 
 
-def effective_project_branch(*, branch: str | None, head_ops, default_branch: str) -> str:
-    return branch or current_head_branch(head_ops) or default_branch
-
-
 def project_remote_uri(*, project_home: str, remote_or_uri: str, branch: str | None, default_branch: str) -> str:
     project = DmlProjectConfig.load(project_home)
     if remote_or_uri.startswith("dml://"):

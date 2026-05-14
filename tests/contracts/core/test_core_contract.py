@@ -192,8 +192,7 @@ class TestSetAttrs:
         with pytest.raises(Error, match=r".*unsupported operand type.*"):
             with new(dml=dml, name="d0", message="d0") as dag:
                 dag.call(self._mk_runnable(dml, ASYNC_URI, FN_ADAPTER), 1, 2, "asdf")
-        commit_ref = dml.ops.head().get_branch_commit(cast(str, dml.ops.head().get_attached_head_branch()))
-        assert dml.ops.commit().get_dag(commit_ref, "d0") is not None
+        assert dml.dag.list()["dags"]["d0"] is not None
 
     def test_async_fn_timeout(self, dml):
         with pytest.raises(TimeoutError):
@@ -266,13 +265,6 @@ class TestBasic(TestCase):
             d0 = new(dml=dml, name="d0", message="d0")
             n0 = d0.put([42], name="n0")
             d0.commit(n0)
-            commit_ref = dml.ops.head().get_branch_commit(cast(str, dml.ops.head().get_attached_head_branch()))
-            dag_ref = dml.ops.commit().get_dag(commit_ref, "d0")
-            assert dag_ref is not None
-            self.assertEqual(dml.ops.dag().describe(dag_ref)["result"], n0.ref)
-            dml.ops.commit().delete_dag(
-                "d0",
-                cast(str, dml.ops.head().get_attached_head_branch()),
-                dml._context.user or "dml",
-            )
-            dml.ops.gc().gc()
+            self.assertEqual(dml.dag.get("d0")["dag"]["result"], n0.ref)
+            dml.dag.delete("d0", user=dml._context.user or "dml")
+            dml.admin.gc()

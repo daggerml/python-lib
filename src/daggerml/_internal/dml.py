@@ -13,7 +13,6 @@ from daggerml._internal.dml_context import (
     current_head_branch,
     current_head_state,
     db_path_for_project,
-    effective_project_branch,
     gitignore_exists,
     load_project_config,
     mutable_branch,
@@ -40,38 +39,6 @@ class _OpsProxy:
         return lambda *args, **kwargs: self._dml._call_ops_method(
             self._factory, name, *args, factory_kwargs=self._factory_kwargs, **kwargs
         )
-
-
-@dataclass(frozen=True)
-class _OpsNamespace:
-    _dml: "Dml"
-
-    def commit(self):
-        return self._dml._ops_proxy("commit")
-
-    def head(self):
-        return self._dml._ops_proxy("head")
-
-    def dag(self):
-        return self._dml._ops_proxy("dag")
-
-    def node(self):
-        return self._dml._ops_proxy("node")
-
-    def index(self):
-        return self._dml._ops_proxy("index")
-
-    def cache(self):
-        return self._dml._ops_proxy("cache")
-
-    def remote(self):
-        return self._dml._ops_proxy("remote")
-
-    def gc(self):
-        return self._dml._ops_proxy("gc")
-
-    def config(self):
-        return self._dml._ops_proxy("config")
 
 
 @dataclass(frozen=True)
@@ -562,24 +529,11 @@ class Dml:
             project_dir=require_project_home(self._context.project_home),
         )
 
-    def _runtime_branch(self) -> str:
-        return effective_project_branch(
-            branch=None,
-            head_ops=self._head_ops(),
-            default_branch=self._context.default_branch,
-        )
-
     def _create_s3_client(self):
         import boto3
         from botocore.config import Config
 
         return boto3.client("s3", config=Config(max_pool_connections=20))
-
-    @property
-    def ops(self) -> _OpsNamespace:
-        with self._with_ops():
-            pass
-        return _OpsNamespace(self)
 
     @property
     def config(self) -> _ConfigNamespace:

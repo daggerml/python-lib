@@ -82,4 +82,4 @@ def test_temporary_runtime_uses_head_state_for_active_branch():
     with Dml.temporary(repo="temp-head", branch="feature") as raw_runtime:
         runtime = cast(Dml, raw_runtime)
         assert runtime._context.project_home is not None
-        assert runtime.ops.head().get_attached_head_branch() == "feature"
+        assert runtime.branch()["head"] == "feature"

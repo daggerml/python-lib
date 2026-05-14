@@ -410,12 +410,16 @@ class Dag:
         value : Union[Node, Error, Any]
             Value to commit
         """
+        branch = self.dml.branch()["head"]
+        if branch is None:
+            raise DmlRepoError("Current checkout is detached; attach HEAD to commit")
+
         # For Errors, pass directly to _commit (don't try to store as literal)
         if isinstance(value, Error):
             commit_ref = self.dml.runtime.commit(
                 self._require_index_ref(),
                 value,
-                head=self.dml._runtime_branch(),
+                head=branch,
                 message=self.message,
                 dag_name=self.name,
             )
@@ -426,7 +430,7 @@ class Dag:
             commit_ref = self.dml.runtime.commit(
                 self._require_index_ref(),
                 value_ref,
-                head=self.dml._runtime_branch(),
+                head=branch,
                 message=self.message,
                 dag_name=self.name,
             )

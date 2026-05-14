@@ -165,29 +165,6 @@ def test_project_home_defaults_to_cwd_when_unset(tmp_path, monkeypatch):
         os.chdir(old)
 
 
-@patch("daggerml._internal.dml.DmlOps.open")
-def test_dml_ops_receives_remote_context(mock_open, monkeypatch):
-    monkeypatch.setenv("DML_REMOTE_URI", "s3://bucket/project")
-    mock_open.return_value = Mock(__enter__=Mock(), __exit__=Mock())
-
-    dml = Dml(project_home="/tmp/test-repo")
-    _ = dml.ops
-
-    mock_open.assert_called_once_with(
-        "/tmp/test-repo",
-        remote_root="s3://bucket/project",
-    )
-
-
-@patch("daggerml._internal.dml.DmlOps.open")
-def test_dml_ops_allows_local_access_without_remote(mock_open, monkeypatch):
-    monkeypatch.delenv("DML_REMOTE_URI", raising=False)
-    mock_open.return_value = Mock(__enter__=Mock(), __exit__=Mock())
-    dml = Dml(project_home="/tmp/test-repo")
-    _ = dml.ops
-    mock_open.assert_called_once_with("/tmp/test-repo", remote_root="")
-
-
 @patch("daggerml._internal.ops.remote.RemoteOps")
 def test_dml_ops_remote_uses_configured_fetch_workers(mock_remote_ops):
     from daggerml._internal.ops import DmlOps
