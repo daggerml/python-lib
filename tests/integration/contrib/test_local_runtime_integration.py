@@ -51,12 +51,13 @@ def _remote() -> dict[str, str]:
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
     from daggerml import Dml, new
+    from daggerml._internal.dml import with_ops
 
     with Dml.temporary() as dml:
         dag = new(dml=dml, name="argv-src", message="argv-src")
         index_ref = dag._require_index_ref()
         head = argv0 if argv0 is not None else Runnable(target=Uri("daggerml:list"), kwargs={}, adapter="")
-        with dml._with_ops() as ops:
+        with with_ops(dml) as ops:
             index_ops = ops.index()
             fn_ref = index_ops.put_literal(index_ref, head)
             arg_refs = [index_ops.put_literal(index_ref, value) for value in args]

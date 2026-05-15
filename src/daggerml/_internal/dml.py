@@ -23,7 +23,16 @@ from daggerml._internal.dml_context import (
     resolve_global_context,
     resolve_runtime_context,
 )
-from daggerml._internal.dml_resolution import resolve_dag_ref, resolve_node_ref, resolve_revision, resolve_revision_ref
+from daggerml._internal.dml_resolution import (
+    resolve_dag_ref,
+    resolve_node_ref,
+)
+from daggerml._internal.dml_resolution import (
+    resolve_revision as resolve_revision_value,
+)
+from daggerml._internal.dml_resolution import (
+    resolve_revision_ref as resolve_revision_ref_value,
+)
 from daggerml._internal.ops import DmlOps
 from daggerml._internal.ops.config import ConfigOps
 from daggerml._internal.types import DEFAULT_HEAD, DmlRepoError
@@ -288,9 +297,176 @@ class _OpsProxy:
     _factory_kwargs: dict[str, Any] | None = None
 
     def __getattr__(self, name: str):
-        return lambda *args, **kwargs: self._dml._call_ops_method(
-            self._factory, name, *args, factory_kwargs=self._factory_kwargs, **kwargs
+        return lambda *args, **kwargs: call_ops_method(
+            self._dml, self._factory, name, *args, factory_kwargs=self._factory_kwargs, **kwargs
         )
+
+
+def stringify_node_selector(node_selector: str | Ref) -> str:
+    return node_selector.to if isinstance(node_selector, Ref) else node_selector
+
+
+@contextmanager
+def with_ops(dml: "Dml"):
+    ops = open_ops(dml)
+    try:
+        yield ops
+    finally:
+        ops.close()
+
+
+def ops_proxy(dml: "Dml", factory: str, **factory_kwargs) -> _OpsProxy:
+    return _OpsProxy(dml, factory, factory_kwargs or None)
+
+
+def call_ops_method(
+    dml: "Dml", factory: str, method: str, *args, factory_kwargs: dict[str, Any] | None = None, **kwargs
+):
+    with with_ops(dml) as ops:
+        return getattr(getattr(ops, factory)(**(factory_kwargs or {})), method)(*args, **kwargs)
+
+
+def open_ops(dml: "Dml"):
+    project_home = require_project_home(dml._context.project_home)
+    return DmlOps.open(project_home, remote_root=dml._context.remote_uri)
+
+
+def head_ops(dml: "Dml"):
+    return ops_proxy(dml, "head")
+
+
+def commit_ops(dml: "Dml"):
+    return ops_proxy(dml, "commit")
+
+
+def dag_ops(dml: "Dml"):
+    return ops_proxy(dml, "dag")
+
+
+def node_ops(dml: "Dml"):
+    return ops_proxy(dml, "node")
+
+
+def index_ops(dml: "Dml"):
+    return ops_proxy(dml, "index")
+
+
+def cache_ops(dml: "Dml"):
+    return ops_proxy(dml, "cache")
+
+
+def remote_ops(dml: "Dml", *, s3_client=None, client=None):
+    return ops_proxy(dml, "remote", client=s3_client or client)
+
+
+def gc_ops(dml: "Dml"):
+    return ops_proxy(dml, "gc")
+
+
+def config_ops(dml: "Dml"):
+    return ConfigOps(project_home=dml._context.project_home, config_home=dml._context.config.config_home)
+
+
+def tree_dags(dml: "Dml", tree_ref: Ref) -> dict[str, Ref]:
+    with with_ops(dml) as ops:
+        with ops.commit()._tx(readonly=True) as txn:
+            tree = txn.get(tree_ref)
+            return dict(tree.dags)
+
+
+def dag_map_for_commit(dml: "Dml", commit_ref: Ref) -> dict[str, Ref]:
+    return tree_dags(dml, commit_ops(dml).describe(commit_ref)["tree"])
+
+
+def dag_summary_payload(dml: "Dml", dag_ref: Ref) -> DagSummaryPayload:
+    dag = cast(DagSummaryPayload, dict(dag_ops(dml).describe(dag_ref)))
+    dag["ref"] = dag_ref
+    return dag
+
+
+def dag_map_diff(left: dict[str, Ref], right: dict[str, Ref]) -> DagMapDiffPayload:
+    added: dict[str, Ref] = {}
+    removed: dict[str, Ref] = {}
+    updated: dict[str, dict[str, Ref]] = {}
+    for name in sorted(set(left) | set(right)):
+        before = left.get(name)
+        after = right.get(name)
+        if before is None and after is not None:
+            added[name] = after
+        elif before is not None and after is None:
+            removed[name] = before
+        elif before is not None and after is not None and before != after:
+            updated[name] = {"before": before, "after": after}
+    return {"added": added, "removed": removed, "updated": updated}
+
+
+def revision_payload(value: str, resolved) -> RevisionPayload:
+    return {
+        "input": value,
+        "kind": resolved.kind,
+        "commit": resolved.commit,
+        "branch": resolved.branch,
+        "tag": resolved.tag,
+    }
+
+
+def remote_tracking_branches(dml: "Dml") -> list[str]:
+    project_home = require_project_home(dml._context.project_home)
+    remote_root = Path(project_home) / ".dml" / "refs" / "remote"
+    if not remote_root.exists():
+        return []
+    branches: list[str] = []
+    for ref_path in sorted(remote_root.glob("*/*/heads/**/*")):
+        if not ref_path.is_file() or ref_path.name.endswith(".lock"):
+            continue
+        relative = ref_path.relative_to(remote_root)
+        parts = relative.parts
+        if len(parts) < 4:
+            continue
+        owner = parts[0]
+        project = parts[1]
+        branch_name = "/".join(parts[3:])
+        branches.append(f"dml://{owner}/{project}#{branch_name}")
+    return branches
+
+
+def dag_payload(dml: "Dml", dag_ref: Ref) -> DagPayload:
+    summary = dag_summary_payload(dml, dag_ref)
+    node_refs = list(summary["nodes"])
+    return {
+        "id": summary["id"],
+        "nodes": [cast(NodeDescriptionPayload, node_ops(dml).describe(node_ref)) for node_ref in node_refs],
+        "names": summary["names"],
+        "result": summary["result"],
+        "argv": summary["argv"],
+        "kwargv": summary["kwargv"],
+        "ref": summary["ref"],
+    }
+
+
+def resolve_dml_revision(dml: "Dml", value: str):
+    return resolve_revision_value(
+        value=value,
+        commit_ops=commit_ops(dml),
+        head_ops=head_ops(dml),
+        project_dir=require_project_home(dml._context.project_home),
+    )
+
+
+def resolve_dml_revision_ref(dml: "Dml", value: str) -> Ref:
+    return resolve_revision_ref_value(
+        value=value,
+        commit_ops=commit_ops(dml),
+        head_ops=head_ops(dml),
+        project_dir=require_project_home(dml._context.project_home),
+    )
+
+
+def create_s3_client():
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client("s3", config=Config(max_pool_connections=20))
 
 
 @dataclass(frozen=True)
@@ -298,10 +474,10 @@ class _ConfigNamespace:
     _dml: "Dml"
 
     def get(self, key: str, *, scope: Literal["global", "local"] = "local"):
-        return self._dml._config_ops().get(key, scope=scope)
+        return config_ops(self._dml).get(key, scope=scope)
 
     def set(self, key: str, values: list[str], *, scope: Literal["global", "local"] = "local"):
-        return self._dml._config_ops().set(key, values, scope=scope)
+        return config_ops(self._dml).set(key, values, scope=scope)
 
     @overload
     def show(self, *, contrib: Literal[False] = False) -> ConfigShowPayload: ...
@@ -331,28 +507,28 @@ class _RuntimeNamespace:
         index_id: str | None = None,
     ) -> str:
         if head is None and commit is None and argv_ptr is None:
-            head_state = self._dml._head_ops().get_head_state()
+            head_state = head_ops(self._dml).get_head_state()
             head = head_state.branch
             commit = head_state.commit if head is None else None
-        return self._dml._index_ops().create(head=head, commit=commit, argv_ptr=argv_ptr, index_id=index_id)
+        return index_ops(self._dml).create(head=head, commit=commit, argv_ptr=argv_ptr, index_id=index_id)
 
     def describe(self, index_id: str) -> IndexDescribePayload:
-        return self._dml._index_ops().describe(index_id)
+        return index_ops(self._dml).describe(index_id)
 
     def get_node(self, index_id: str, name: str) -> Ref:
-        return self._dml._index_ops().get_node(index_id, name)
+        return index_ops(self._dml).get_node(index_id, name)
 
     def get_argv(self, index_id: str) -> Ref:
-        return self._dml._index_ops().get_argv(index_id)
+        return index_ops(self._dml).get_argv(index_id)
 
     def put_literal(self, index_id: str, value: Any, *, name: str | None = None) -> Ref:
-        return self._dml._index_ops().put_literal(index_id, value, name=name)
+        return index_ops(self._dml).put_literal(index_id, value, name=name)
 
     def put_import(self, index_id: str, dag: Ref, *, node: Ref | None = None, name: str | None = None) -> Ref:
-        return self._dml._index_ops().put_import(index_id, dag, node=node, name=name)
+        return index_ops(self._dml).put_import(index_id, dag, node=node, name=name)
 
     def set_node_name(self, index_id: str, name: str, node: Ref) -> Ref:
-        return self._dml._index_ops().set_node_name(index_id, name, node)
+        return index_ops(self._dml).set_node_name(index_id, name, node)
 
     def start_fn(
         self,
@@ -362,7 +538,7 @@ class _RuntimeNamespace:
         kwargv: dict[str, Ref] | None = None,
         name: str | None = None,
     ) -> Ref | None:
-        return self._dml._index_ops().start_fn(index_id, argv, kwargv=kwargv, name=name)
+        return index_ops(self._dml).start_fn(index_id, argv, kwargv=kwargv, name=name)
 
     def commit(
         self,
@@ -373,22 +549,18 @@ class _RuntimeNamespace:
         message: str | None = None,
         dag_name: str | None = None,
     ) -> Ref:
-        return self._dml._index_ops().commit(index_id, value, head=head, message=message, dag_name=dag_name)
+        return index_ops(self._dml).commit(index_id, value, head=head, message=message, dag_name=dag_name)
 
 
 @dataclass(frozen=True)
 class _DagNamespace:
     _dml: "Dml"
 
-    @staticmethod
-    def _stringify_node_selector(node_selector: str | Ref) -> str:
-        return node_selector.to if isinstance(node_selector, Ref) else node_selector
-
     def list(self, revision: str = "HEAD") -> DagListPayload:
-        resolved = self._dml._resolve_revision(revision)
+        resolved = resolve_dml_revision(self._dml, revision)
         return {
-            "revision": self._dml._revision_payload(revision, resolved),
-            "dags": self._dml._dag_map_for_commit(resolved.commit),
+            "revision": revision_payload(revision, resolved),
+            "dags": dag_map_for_commit(self._dml, resolved.commit),
         }
 
     @overload
@@ -401,19 +573,19 @@ class _DagNamespace:
         resolved = resolve_dag_ref(
             value=value,
             revision=revision,
-            commit_ops=self._dml._commit_ops(),
-            head_ops=self._dml._head_ops(),
+            commit_ops=commit_ops(self._dml),
+            head_ops=head_ops(self._dml),
             project_dir=require_project_home(self._dml._context.project_home),
             operation="describe",
         )
         payload: DagDescribePayload = {
             "selector": resolved.selector,
-            "dag": self._dml._dag_summary_payload(resolved.ref),
+            "dag": dag_summary_payload(self._dml, resolved.ref),
         }
         if resolved.revision is not None:
             return cast(
                 DagDescribeWithRevisionPayload,
-                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
             )
         return payload
 
@@ -427,16 +599,16 @@ class _DagNamespace:
         resolved = resolve_dag_ref(
             value=value,
             revision=revision,
-            commit_ops=self._dml._commit_ops(),
-            head_ops=self._dml._head_ops(),
+            commit_ops=commit_ops(self._dml),
+            head_ops=head_ops(self._dml),
             project_dir=require_project_home(self._dml._context.project_home),
             operation="get",
         )
-        payload: DagGetPayload = {"selector": resolved.selector, "dag": self._dml._dag_payload(resolved.ref)}
+        payload: DagGetPayload = {"selector": resolved.selector, "dag": dag_payload(self._dml, resolved.ref)}
         if resolved.revision is not None:
             return cast(
                 DagGetWithRevisionPayload,
-                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
             )
         return payload
 
@@ -469,21 +641,21 @@ class _DagNamespace:
             value=node_selector,
             dag_selector=dag_selector,
             revision=revision,
-            commit_ops=self._dml._commit_ops(),
-            dag_ops=self._dml._dag_ops(),
-            head_ops=self._dml._head_ops(),
+            commit_ops=commit_ops(self._dml),
+            dag_ops=dag_ops(self._dml),
+            head_ops=head_ops(self._dml),
             project_dir=require_project_home(self._dml._context.project_home),
             operation="describe-node",
         )
         payload: NodeSelectorPayload = {
-            "selector": self._stringify_node_selector(node_selector),
+            "selector": stringify_node_selector(node_selector),
             "dag_selector": resolved.dag_selector,
-            "node": self._dml._node_ops().describe(resolved.ref),
+            "node": node_ops(self._dml).describe(resolved.ref),
         }
         if resolved.revision is not None:
             return cast(
                 NodeSelectorWithRevisionPayload,
-                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
             )
         return payload
 
@@ -516,21 +688,21 @@ class _DagNamespace:
             value=node_selector,
             dag_selector=dag_selector,
             revision=revision,
-            commit_ops=self._dml._commit_ops(),
-            dag_ops=self._dml._dag_ops(),
-            head_ops=self._dml._head_ops(),
+            commit_ops=commit_ops(self._dml),
+            dag_ops=dag_ops(self._dml),
+            head_ops=head_ops(self._dml),
             project_dir=require_project_home(self._dml._context.project_home),
             operation="get-node",
         )
         payload: NodeSelectorPayload = {
-            "selector": self._stringify_node_selector(node_selector),
+            "selector": stringify_node_selector(node_selector),
             "dag_selector": resolved.dag_selector,
-            "node": self._dml._node_ops().get(resolved.ref),
+            "node": node_ops(self._dml).get(resolved.ref),
         }
         if resolved.revision is not None:
             return cast(
                 NodeSelectorWithRevisionPayload,
-                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
             )
         return payload
 
@@ -563,21 +735,21 @@ class _DagNamespace:
             value=node_selector,
             dag_selector=dag_selector,
             revision=revision,
-            commit_ops=self._dml._commit_ops(),
-            dag_ops=self._dml._dag_ops(),
-            head_ops=self._dml._head_ops(),
+            commit_ops=commit_ops(self._dml),
+            dag_ops=dag_ops(self._dml),
+            head_ops=head_ops(self._dml),
             project_dir=require_project_home(self._dml._context.project_home),
             operation="unroll-node",
         )
         payload: NodeSelectorPayload = {
-            "selector": self._stringify_node_selector(node_selector),
+            "selector": stringify_node_selector(node_selector),
             "dag_selector": resolved.dag_selector,
-            "node": self._dml._node_ops().unroll(resolved.ref),
+            "node": node_ops(self._dml).unroll(resolved.ref),
         }
         if resolved.revision is not None:
             return cast(
                 NodeSelectorWithRevisionPayload,
-                {**payload, "revision": self._dml._revision_payload(revision or "HEAD", resolved.revision)},
+                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
             )
         return payload
 
@@ -591,11 +763,11 @@ class _DagNamespace:
         replace: bool = False,
         user: str | None = None,
     ) -> Ref:
-        target_branch = mutable_branch(branch=branch, head_ops=self._dml._head_ops())
+        target_branch = mutable_branch(branch=branch, head_ops=head_ops(self._dml))
         author = require_user(user or self._dml._context.user, message="user is required for dag checkout")
-        return self._dml._commit_ops().checkout_dag(
+        return commit_ops(self._dml).checkout_dag(
             target_branch,
-            self._dml._resolve_revision_ref(revision),
+            resolve_dml_revision_ref(self._dml, revision),
             dag_name,
             target_name=target_name,
             replace=replace,
@@ -604,7 +776,7 @@ class _DagNamespace:
 
     def delete(self, name: str, *, branch: str | None = None, user: str | None = None):
         author = require_user(user or self._dml._context.user, message="user is required for dag delete")
-        return self._dml._commit_ops().delete_dag(name, branch, author)
+        return commit_ops(self._dml).delete_dag(name, branch, author)
 
 
 @dataclass(frozen=True)
@@ -612,20 +784,20 @@ class _AdminIndexNamespace:
     _dml: "Dml"
 
     def list(self) -> AdminIndexListPayload:
-        indexes = [self.get(index_id)["index"] for index_id in self._dml._head_ops().list_indexes()]
+        indexes = [self.get(index_id)["index"] for index_id in head_ops(self._dml).list_indexes()]
         return {"indexes": indexes}
 
     def get(self, index_id: str) -> AdminIndexGetPayload:
-        index = dict(self._dml._index_ops().describe(index_id))
+        index = dict(index_ops(self._dml).describe(index_id))
         commit_ref = index["commit"]
         index["commit"] = {
             "ref": commit_ref,
-            "summary": self._dml._commit_ops().describe(commit_ref),
+            "summary": commit_ops(self._dml).describe(commit_ref),
         }
         return {"index": cast(AdminIndexItemPayload, index)}
 
     def delete(self, index_id: str) -> AdminIndexDeletePayload:
-        self._dml._index_ops().delete(index_id)
+        index_ops(self._dml).delete(index_id)
         return {"index": index_id, "deleted": True}
 
 
@@ -640,7 +812,7 @@ class _AdminCacheNamespace:
             if ":" in cache_key:
                 raise DmlRepoError("Admin cache invalidation accepts exact cache keys only")
         requested_by = self._dml._context.user or "cli"
-        invalidated = self._dml._remote_ops().invalidate_cache(cache_keys, requested_by=requested_by)
+        invalidated = remote_ops(self._dml).invalidate_cache(cache_keys, requested_by=requested_by)
         return {"cache_keys": cache_keys, "invalidated": invalidated}
 
 
@@ -657,7 +829,7 @@ class _AdminRemoteNamespace:
     def list(
         self, project: str | None = None, *, owner: str | None = None
     ) -> AdminRemoteProjectsPayload | AdminRemoteProjectRefsPayload:
-        refs = self._dml._remote_ops().list("projects")
+        refs = remote_ops(self._dml).list("projects")
         if project is None:
             projects: set[str] = set()
             for ref in refs:
@@ -676,7 +848,7 @@ class _AdminRemoteNamespace:
 
         if not project.startswith("dml://") or "#" in project or "@" in project:
             raise DmlRepoError("Admin remote list expects a bare dml://<owner>/<project> project URI")
-        parsed = self._dml._remote_ops().parse_dml_uri(project, require_identifier=False)
+        parsed = remote_ops(self._dml).parse_dml_uri(project, require_identifier=False)
         branches: list[str] = []
         tags: list[str] = []
         for ref in refs:
@@ -697,7 +869,7 @@ class _AdminRemoteNamespace:
         return {"project": project, "branches": sorted(branches), "tags": sorted(tags)}
 
     def gc(self, *, min_age_seconds: int = 24 * 3600, malformed: str = "warn") -> dict[str, int]:
-        return self._dml._remote_ops().gc(min_age_seconds=min_age_seconds, malformed=malformed)
+        return remote_ops(self._dml).gc(min_age_seconds=min_age_seconds, malformed=malformed)
 
 
 @dataclass(frozen=True)
@@ -724,9 +896,9 @@ class _AdminNamespace:
 
     def gc(self, *, dry_run: bool = False) -> AdminGcDryRunPayload | AdminGcRunPayload:
         if dry_run:
-            orphans = self._dml._gc_ops().list_orphans()
+            orphans = gc_ops(self._dml).list_orphans()
             return {"dry_run": True, "would_delete": len(orphans), "orphans": orphans}
-        return {"dry_run": False, "deleted": self._dml._gc_ops().gc()}
+        return {"dry_run": False, "deleted": gc_ops(self._dml).gc()}
 
 
 class Dml:
@@ -756,148 +928,6 @@ class Dml:
         while self._tempdirs:
             self._tempdirs.pop().cleanup()
 
-    @contextmanager
-    def _with_ops(self):
-        ops = self._ops()
-        try:
-            yield ops
-        finally:
-            ops.close()
-
-    def _ops_proxy(self, factory: str, **factory_kwargs) -> _OpsProxy:
-        return _OpsProxy(self, factory, factory_kwargs or None)
-
-    def _call_ops_method(
-        self, factory: str, method: str, *args, factory_kwargs: dict[str, Any] | None = None, **kwargs
-    ):
-        with self._with_ops() as ops:
-            return getattr(getattr(ops, factory)(**(factory_kwargs or {})), method)(*args, **kwargs)
-
-    def _ops(self):
-        project_home = require_project_home(self._context.project_home)
-        return DmlOps.open(project_home, remote_root=self._context.remote_uri)
-
-    def _head_ops(self):
-        return self._ops_proxy("head")
-
-    def _commit_ops(self):
-        return self._ops_proxy("commit")
-
-    def _dag_ops(self):
-        return self._ops_proxy("dag")
-
-    def _node_ops(self):
-        return self._ops_proxy("node")
-
-    def _index_ops(self):
-        return self._ops_proxy("index")
-
-    def _cache_ops(self):
-        return self._ops_proxy("cache")
-
-    def _remote_ops(self, *, s3_client=None, client=None):
-        return self._ops_proxy("remote", client=s3_client or client)
-
-    def _gc_ops(self):
-        return self._ops_proxy("gc")
-
-    def _config_ops(self):
-        return ConfigOps(project_home=self._context.project_home, config_home=self._context.config.config_home)
-
-    def _tree_dags(self, tree_ref: Ref) -> dict[str, Ref]:
-        with self._with_ops() as ops:
-            with ops.commit()._tx(readonly=True) as txn:
-                tree = txn.get(tree_ref)
-                return dict(tree.dags)
-
-    def _dag_map_for_commit(self, commit_ref: Ref) -> dict[str, Ref]:
-        return self._tree_dags(self._commit_ops().describe(commit_ref)["tree"])
-
-    def _dag_summary_payload(self, dag_ref: Ref) -> DagSummaryPayload:
-        dag = cast(DagSummaryPayload, dict(self._dag_ops().describe(dag_ref)))
-        dag["ref"] = dag_ref
-        return dag
-
-    @staticmethod
-    def _dag_map_diff(left: dict[str, Ref], right: dict[str, Ref]) -> DagMapDiffPayload:
-        added: dict[str, Ref] = {}
-        removed: dict[str, Ref] = {}
-        updated: dict[str, dict[str, Ref]] = {}
-        for name in sorted(set(left) | set(right)):
-            before = left.get(name)
-            after = right.get(name)
-            if before is None and after is not None:
-                added[name] = after
-            elif before is not None and after is None:
-                removed[name] = before
-            elif before is not None and after is not None and before != after:
-                updated[name] = {"before": before, "after": after}
-        return {"added": added, "removed": removed, "updated": updated}
-
-    @staticmethod
-    def _revision_payload(value: str, resolved) -> RevisionPayload:
-        return {
-            "input": value,
-            "kind": resolved.kind,
-            "commit": resolved.commit,
-            "branch": resolved.branch,
-            "tag": resolved.tag,
-        }
-
-    def _remote_tracking_branches(self) -> list[str]:
-        project_home = require_project_home(self._context.project_home)
-        remote_root = Path(project_home) / ".dml" / "refs" / "remote"
-        if not remote_root.exists():
-            return []
-        branches: list[str] = []
-        for ref_path in sorted(remote_root.glob("*/*/heads/**/*")):
-            if not ref_path.is_file() or ref_path.name.endswith(".lock"):
-                continue
-            relative = ref_path.relative_to(remote_root)
-            parts = relative.parts
-            if len(parts) < 4:
-                continue
-            owner = parts[0]
-            project = parts[1]
-            branch_name = "/".join(parts[3:])
-            branches.append(f"dml://{owner}/{project}#{branch_name}")
-        return branches
-
-    def _dag_payload(self, dag_ref: Ref) -> DagPayload:
-        summary = self._dag_summary_payload(dag_ref)
-        node_refs = list(summary["nodes"])
-        return {
-            "id": summary["id"],
-            "nodes": [cast(NodeDescriptionPayload, self._node_ops().describe(node_ref)) for node_ref in node_refs],
-            "names": summary["names"],
-            "result": summary["result"],
-            "argv": summary["argv"],
-            "kwargv": summary["kwargv"],
-            "ref": summary["ref"],
-        }
-
-    def _resolve_revision(self, value: str):
-        return resolve_revision(
-            value=value,
-            commit_ops=self._commit_ops(),
-            head_ops=self._head_ops(),
-            project_dir=require_project_home(self._context.project_home),
-        )
-
-    def _resolve_revision_ref(self, value: str) -> Ref:
-        return resolve_revision_ref(
-            value=value,
-            commit_ops=self._commit_ops(),
-            head_ops=self._head_ops(),
-            project_dir=require_project_home(self._context.project_home),
-        )
-
-    def _create_s3_client(self):
-        import boto3
-        from botocore.config import Config
-
-        return boto3.client("s3", config=Config(max_pool_connections=20))
-
     @property
     def config(self) -> _ConfigNamespace:
         return _ConfigNamespace(self)
@@ -924,16 +954,17 @@ class Dml:
                 "dags": {},
                 "indexes": [],
             }
-        head_state = current_head_state(self._head_ops())
+        current_head_ops = head_ops(self)
+        head_state = current_head_state(current_head_ops)
         return {
             "head": {
                 "mode": head_state.mode,
                 "branch": head_state.branch,
                 "commit": head_state.commit,
             },
-            "branches": self._head_ops().list_branches(),
-            "dags": self._dag_map_for_commit(head_state.commit),
-            "indexes": self._head_ops().list_indexes(),
+            "branches": current_head_ops.list_branches(),
+            "dags": dag_map_for_commit(self, head_state.commit),
+            "indexes": current_head_ops.list_indexes(),
         }
 
     @overload
@@ -944,54 +975,54 @@ class Dml:
 
     def branch(self, *, remote: bool = False) -> BranchLocalPayload | BranchRemotePayload:
         if remote:
-            return {"branches": self._remote_tracking_branches(), "remote": True}
-        head_ops = self._head_ops()
+            return {"branches": remote_tracking_branches(self), "remote": True}
+        current_head_ops = head_ops(self)
         return {
-            "branches": head_ops.list_branches(),
-            "head": current_head_branch(head_ops),
+            "branches": current_head_ops.list_branches(),
+            "head": current_head_branch(current_head_ops),
             "remote": False,
         }
 
     def log(self, revision: str = "HEAD", *, limit: int | None = None) -> LogPayload:
-        resolved = self._resolve_revision(revision)
-        with self._with_ops() as ops:
+        resolved = resolve_dml_revision(self, revision)
+        with with_ops(self) as ops:
             refs = list(ops.commit().list(resolved.commit, limit=limit))
         return {
-            "revision": self._revision_payload(revision, resolved),
-            "commits": [self._commit_ops().describe(ref) for ref in refs],
+            "revision": revision_payload(revision, resolved),
+            "commits": [commit_ops(self).describe(ref) for ref in refs],
         }
 
     def show(self, revision: str = "HEAD") -> ShowPayload:
-        resolved = self._resolve_revision(revision)
-        commit = self._commit_ops().describe(resolved.commit)
-        dags = self._dag_map_for_commit(resolved.commit)
+        resolved = resolve_dml_revision(self, revision)
+        commit = commit_ops(self).describe(resolved.commit)
+        dags = dag_map_for_commit(self, resolved.commit)
         base_commit = commit["parents"][0] if commit["parents"] else None
-        base_dags = self._dag_map_for_commit(base_commit) if base_commit is not None else {}
+        base_dags = dag_map_for_commit(self, base_commit) if base_commit is not None else {}
         return {
-            "revision": self._revision_payload(revision, resolved),
+            "revision": revision_payload(revision, resolved),
             "commit": commit,
             "dags": dags,
-            "change": {"base": base_commit, **self._dag_map_diff(base_dags, dags)},
+            "change": {"base": base_commit, **dag_map_diff(base_dags, dags)},
         }
 
     def diff(self, left: str = "HEAD~1", right: str = "HEAD") -> DiffPayload:
-        left_resolved = self._resolve_revision(left)
-        right_resolved = self._resolve_revision(right)
-        left_dags = self._dag_map_for_commit(left_resolved.commit)
-        right_dags = self._dag_map_for_commit(right_resolved.commit)
+        left_resolved = resolve_dml_revision(self, left)
+        right_resolved = resolve_dml_revision(self, right)
+        left_dags = dag_map_for_commit(self, left_resolved.commit)
+        right_dags = dag_map_for_commit(self, right_resolved.commit)
         return {
-            "left": self._revision_payload(left, left_resolved),
-            "right": self._revision_payload(right, right_resolved),
-            **self._dag_map_diff(left_dags, right_dags),
+            "left": revision_payload(left, left_resolved),
+            "right": revision_payload(right, right_resolved),
+            **dag_map_diff(left_dags, right_dags),
         }
 
     def checkout(self, revision: str) -> CheckoutAttachedPayload | CheckoutDetachedPayload:
-        resolved = self._resolve_revision(revision)
-        head_ops = self._head_ops()
+        resolved = resolve_dml_revision(self, revision)
+        current_head_ops = head_ops(self)
         if resolved.kind == "branch" and resolved.branch is not None:
-            head_ops.write_attached_head(resolved.branch)
+            current_head_ops.write_attached_head(resolved.branch)
             return {"mode": "attached", "branch": resolved.branch}
-        head_ops.write_detached_head(resolved.commit)
+        current_head_ops.write_detached_head(resolved.commit)
         return {"mode": "detached", "branch": None}
 
     def fetch(self, remote_or_uri: str, branch: str | None, *, s3_client=None) -> Ref:
@@ -1002,30 +1033,30 @@ class Dml:
             branch=branch,
             default_branch=self._context.default_branch,
         )
-        client = s3_client or self._create_s3_client()
-        with self._with_ops() as ops:
+        client = s3_client or create_s3_client()
+        with with_ops(self) as ops:
             return ops.remote(client=client).fetch_uri(uri)
 
     def pull(
         self, remote_or_uri: str, remote_branch: str | None, *, branch: str | None, user: str, s3_client=None
     ) -> Ref:
         project_home = require_project_home(self._context.project_home)
-        target_branch = mutable_branch(branch=branch, head_ops=self._head_ops())
+        target_branch = mutable_branch(branch=branch, head_ops=head_ops(self))
         uri = project_remote_uri(
             project_home=project_home,
             remote_or_uri=remote_or_uri,
             branch=remote_branch or target_branch,
             default_branch=self._context.default_branch,
         )
-        client = s3_client or self._create_s3_client()
-        with self._with_ops() as ops:
+        client = s3_client or create_s3_client()
+        with with_ops(self) as ops:
             return ops.remote(client=client).pull_uri_into_branch(uri, target_branch, user=user)
 
     def push(self, tag: str | None, *, branch: str | None, create: bool, force: bool, s3_client=None) -> str:
         project = load_project_config(require_project_home(self._context.project_home))
-        source_branch = branch or self._head_ops().require_attached_head_branch()
-        client = s3_client or self._create_s3_client()
-        with self._with_ops() as ops:
+        source_branch = branch or head_ops(self).require_attached_head_branch()
+        client = s3_client or create_s3_client()
+        with with_ops(self) as ops:
             remote = ops.remote(client=client)
             if tag:
                 return remote.push_project_tag(f"{project.uri}@{tag}", source_branch)
@@ -1034,24 +1065,24 @@ class Dml:
             )
 
     def merge(self, revision: str, branch: str | None, user: str):
-        target_branch = mutable_branch(branch=branch, head_ops=self._head_ops())
-        return self._commit_ops().merge_into_head(target_branch, self._resolve_revision_ref(revision), user)
+        target_branch = mutable_branch(branch=branch, head_ops=head_ops(self))
+        return commit_ops(self).merge_into_head(target_branch, resolve_dml_revision_ref(self, revision), user)
 
     def revert(self, revision: str, branch: str | None, user: str):
-        target_branch = mutable_branch(branch=branch, head_ops=self._head_ops())
-        return self._commit_ops().revert(target_branch, self._resolve_revision_ref(revision), user)
+        target_branch = mutable_branch(branch=branch, head_ops=head_ops(self))
+        return commit_ops(self).revert(target_branch, resolve_dml_revision_ref(self, revision), user)
 
     def load(self, name_or_node):
         from daggerml.api import Dag, Node
 
         if isinstance(name_or_node, Node):
-            desc = self._node_ops().describe(name_or_node.ref)
+            desc = node_ops(self).describe(name_or_node.ref)
             dag_ref = desc.get("dag")
             if dag_ref is None:
                 raise DmlRepoError("Node is not linked to a DAG")
             return Dag(dml=self, ref=dag_ref)
-        commit = self._head_ops().resolve_head_commit()
-        dag_ref = self._commit_ops().get_dag(commit, name_or_node)
+        commit = head_ops(self).resolve_head_commit()
+        dag_ref = commit_ops(self).get_dag(commit, name_or_node)
         if dag_ref is None:
             raise DmlRepoError(f"DAG '{name_or_node}' not found")
         return Dag(dml=self, ref=dag_ref, name=name_or_node)

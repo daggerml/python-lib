@@ -131,6 +131,7 @@ exclude_lines = [
 
 [tool.pyright]
 include = ["src"]
+exclude = ["tests"]
 defineConstant = { DEBUG = true }
 typeCheckingMode = "basic"
 reportGeneralTypeIssues = false

@@ -17,6 +17,7 @@ from typing import Any, cast
 import pytest
 
 from daggerml import Dml, Uri, new
+from daggerml._internal.dml import with_ops
 from daggerml._internal.types import Runnable
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
@@ -188,7 +189,7 @@ def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
         dag = new(dml=dml, name="argv-src", message="argv-src")
         index_ref = dag._require_index_ref()
         head = argv0 if argv0 is not None else Runnable(target=Uri("daggerml:list"), kwargs={}, adapter="")
-        with dml._with_ops() as ops:
+        with with_ops(dml) as ops:
             index_ops = ops.index()
             fn_ref = index_ops.put_literal(index_ref, head)
             arg_refs = [index_ops.put_literal(index_ref, value) for value in args]
@@ -237,7 +238,7 @@ def test_ssh_executor_integration_runs_script_over_local_sshd(ssh_resource_data)
 
     with Dml.temporary() as dml:
         dag = new(dml=dml, name="ssh-int", message="ssh-int")
-        runnable = cast(Runnable, dag.put(fn).value())
+        runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
 
         argv_ptr = _mk_argv_ptr(argv0=runnable)
         result = _poll_until_terminal(runnable=runnable, argv_ptr=argv_ptr, cache_key="ck-ssh-int-success")
