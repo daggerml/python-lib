@@ -158,8 +158,8 @@ class AdapterBase:
         if not isinstance(result, dict):
             raise DmlRepoError("Adapter output must be a dict")
         status = result.get("status")
-        if status not in {"running", "succeeded", "failed"}:
-            raise DmlRepoError("Adapter output status must be one of running|succeeded|failed")
+        if status not in {"running", "succeeded", "failed", "cancelled"}:
+            raise DmlRepoError("Adapter output status must be one of running|succeeded|failed|cancelled")
         allowed_keys = {"status", "error"}
         if status == "succeeded":
             allowed_keys.add("dag_id")
@@ -172,6 +172,9 @@ class AdapterBase:
         if status == "failed":
             if error is None:
                 raise DmlRepoError("Adapter output failed requires error")
+        elif status == "cancelled":
+            if error is not None:
+                raise DmlRepoError("Adapter output cancelled requires error=None")
         elif status == "running":
             if error is not None:
                 raise DmlRepoError("Adapter output running requires error=None")
@@ -259,7 +262,7 @@ class AdapterBase:
             persisted_state = state
             current_status = execution_status
             current_cancel_requested_by = cancel_requested_by
-            while args.poll and result.get("status") not in {"succeeded", "failed"}:
+            while args.poll and result.get("status") not in {"succeeded", "failed", "cancelled"}:
                 persisted_state, current_status, current_cancel_requested_by = cls._refresh_execution_payload(
                     cache_key=cache_key,
                     execution_id=execution_id,

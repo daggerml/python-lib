@@ -148,6 +148,9 @@ class ExecutionState:
     def _key_for_edge(self, callee_execution_id: str, caller_execution_id: str) -> str:
         return f"{self._exec_prefix}/exec/edges/{callee_execution_id}/{caller_execution_id}.json"
 
+    def _key_for_edge_prefix(self, callee_execution_id: str) -> str:
+        return f"{self._exec_prefix}/exec/edges/{callee_execution_id}/"
+
     def _key_for_invalidation(self, execution_id: str) -> str:
         return f"{self._exec_prefix}/exec/invalidate/{execution_id}.json"
 
@@ -393,3 +396,21 @@ class ExecutionState:
                 "requested_at": requested_at,
             },
         )
+
+    def list_execution_callers(self, callee_execution_id: str) -> list[str]:
+        prefix = self._key_for_edge_prefix(callee_execution_id)
+        paginator = self._s3().get_paginator("list_objects_v2")
+        callers: list[str] = []
+        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                key = obj["Key"]
+                if not key.endswith(".json"):
+                    continue
+                payload = self._get_object_bytes(key)
+                if payload is None:
+                    continue
+                edge = json.loads(payload[0])
+                caller = edge.get("caller_execution_id")
+                if isinstance(caller, str) and caller:
+                    callers.append(caller)
+        return callers

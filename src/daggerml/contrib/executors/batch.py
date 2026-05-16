@@ -175,3 +175,25 @@ class BatchExecutor(LambdaExecutorBase):
         if reason not in {None, ""}:
             error = f"{error}: {reason}"
         return {"status": "failed", "error": error}
+
+    def cancel(
+        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+    ) -> dict[str, Any]:
+        del cache_key, execution_id, remote
+        client = self._client()
+        job_id = state.get("job_id")
+        job_definition = state.get("job_definition")
+        if isinstance(job_id, str) and job_id:
+            try:
+                client.cancel_job(jobId=job_id, reason="daggerml cancellation requested")
+            except Exception:
+                try:
+                    client.terminate_job(jobId=job_id, reason="daggerml cancellation requested")
+                except Exception:
+                    pass
+        if isinstance(job_definition, str) and job_definition:
+            try:
+                client.deregister_job_definition(jobDefinition=job_definition)
+            except Exception:
+                pass
+        return {"status": "cancelled", "error": None}

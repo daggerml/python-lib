@@ -34,6 +34,12 @@ class TerminalStartExecutor(MockExecutor):
         return {"status": "succeeded", "error": None, "dag_id": "a" * 64}
 
 
+class CancelExecutor(MockExecutor):
+    def cancel(self, *, cache_key, execution_id, state, remote):
+        MockExecutor.calls.append("cancel")
+        return {"status": "cancelled", "error": None}
+
+
 @pytest.fixture(autouse=True)
 def reset_calls():
     MockExecutor.calls = []
@@ -119,3 +125,18 @@ def test_executor_base_handle_EXB_HDL_004_routes_mixed_state_invocations_correct
     assert MockExecutor.calls.count("poll") == 1
     assert kickoff["status"] == "running"
     assert resumed["status"] == "running"
+
+
+def test_executor_base_handle_routes_cancel_requested_updates_to_cancel():
+    result = CancelExecutor.handle(
+        cache_key="ck-cancel",
+        execution_id="exec-cancel",
+        state={"pid": 1},
+        execution_status="cancel-requested",
+        cancel_requested_by="alice@example.com",
+        runnable=_runnable(),
+        argv_ptr="ptr",
+        remote=_remote(),
+    )
+    assert MockExecutor.calls == ["cancel"]
+    assert result == {"status": "cancelled", "error": None}

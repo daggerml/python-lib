@@ -183,6 +183,17 @@ def test_dag_checkout_requires_user_if_not_resolved():
             ops.dag.checkout("origin/main", "train")
 
 
+def test_runtime_cancel_delegates_to_index_ops_with_required_user():
+    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix", user="alice")
+    index_ops = Mock(cancel=Mock(return_value={"index_id": "idx-1"}))
+
+    with patch.object(dml_module, "index_ops", return_value=index_ops):
+        result = ops.runtime.cancel("idx-1")
+
+    index_ops.cancel.assert_called_once_with("idx-1", requested_by="alice")
+    assert result == {"index_id": "idx-1"}
+
+
 def test_dag_describe_node_resolves_named_node_with_revision_context():
     ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
     revision = SimpleNamespace(commit=Ref("commit:2"), kind="branch", branch="main", tag=None)

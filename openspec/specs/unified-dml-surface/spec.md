@@ -41,7 +41,7 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 - `admin.cache`: `invalidate`
 - `admin.remote`: `list`, `gc`
 - `admin`: `gc`
-- `runtime`: `create`, `describe`, `put_literal`, `put_import`, `start_fn`, `commit`
+- `runtime`: `create`, `describe`, `put_literal`, `put_import`, `start_fn`, `cancel`, `commit`
 - `config`: `get`, `set`, `show`
 - `ops`: `commit`, `head`, `dag`, `node`, `index`, `cache`, `remote`, `gc`, `config`
 
@@ -52,6 +52,10 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 #### Scenario: DAG, admin, runtime, and config methods remain namespaced
 - **WHEN** a caller needs DAG inspection, admin maintenance, runtime staging behavior, or config access
 - **THEN** the shared `Dml` exposes those methods under `dag`, `admin`, `runtime`, and `config` namespaces respectively
+
+#### Scenario: Runtime namespace exposes cancel
+- **WHEN** a caller needs to cancel work rooted at an index
+- **THEN** the shared `Dml` exposes that workflow as `dml.runtime.cancel(index_id)`
 
 #### Scenario: Exact subsystem objects are grouped under ops
 - **WHEN** a caller needs direct exact-input subsystem behavior such as `CommitOps`, `HeadOps`, or `IndexOps`

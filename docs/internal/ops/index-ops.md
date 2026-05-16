@@ -50,6 +50,7 @@ Define `IndexOps` behavior boundaries and invariants for staging-time execution 
   - Adapter invocation payload MUST publish `argv_ptr` through the remote manifest path before subprocess execution.
   - Adapter `pending` and `running` status MUST return `None` without materializing a `FnNode`.
   - Adapter `succeeded` status requires cache-backed result resolution.
+  - `runtime.cancel(...)` reuses the same locally materialized adapter input shape for cancel updates; callers MUST NOT run local GC concurrently with cancellation because GC can remove local materialization needed to build the cancel-time adapter envelope.
 - `put_import(...)`
   - Stages `ImportNode` refs from committed DAG nodes.
 - `commit(head=...)`

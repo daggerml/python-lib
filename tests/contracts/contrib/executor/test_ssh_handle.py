@@ -173,3 +173,33 @@ def test_ssh_executor_handle_SSH_HDL_005_forwards_runtime_state_to_transport(mon
         remote=_remote(),
     )
     assert result["status"] == "succeeded"
+
+
+def test_ssh_executor_handle_forwards_cancel_update_fields(monkeypatch):
+    runnable = _ssh_runnable()
+
+    def _fake_run(cmd, input=None, capture_output=None, check=None):
+        del cmd, capture_output, check
+        payload = json.loads(cast(bytes, input).decode("utf-8"))
+        assert payload["execution_status"] == "cancel-requested"
+        assert payload["cancel_requested_by"] == "alice@example.com"
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({"status": "cancelled", "error": None}).encode(),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    result = SshExecutor.handle(
+        cache_key="ck-ssh-cancel",
+        execution_id="exec-ssh-cancel",
+        state={"job_id": "123"},
+        execution_status="cancel-requested",
+        cancel_requested_by="alice@example.com",
+        runnable=runnable,
+        argv_ptr="s3://bucket/argv",
+        remote=_remote(),
+    )
+    assert result == {"status": "cancelled", "error": None}

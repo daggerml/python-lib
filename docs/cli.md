@@ -51,6 +51,9 @@ CLI is the public operational interface over the shared internal `Dml` boundary.
 - `admin remote list [--owner OWNER]` lists canonical project URIs and `admin remote list dml://<owner>/<project>` lists that project's tracked branches and tags,
 - `admin remote gc` runs remote maintenance,
 - `admin gc [--dry-run]` runs or previews local garbage collection,
+
+Operational note:
+- Do not run local `admin gc` concurrently with `runtime.cancel(...)`. Cancellation reuses locally materialized adapter input state while it walks the rooted execution set.
 - runtime config naming follows [configuration.md](configuration.md): `project.home`, `project.uri`, `db.path`, `remote.uri`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
 - explicit CLI override flags mirror the canonical config naming, including `--project-home`, `--remote-uri`, `--project-uri`, and `--config-home`.
 

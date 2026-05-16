@@ -198,10 +198,16 @@ class HeadOps(BaseOps):
 
     @staticmethod
     def _validate_index_id(index_id: str) -> str:
-        if not isinstance(index_id, str) or not index_id or "/" in index_id or "\\" in index_id:
+        if not isinstance(index_id, str) or not index_id or "\\" in index_id:
             raise DmlRepoError(f"Invalid index id: {index_id!r}")
         if index_id in {".", ".."}:
             raise DmlRepoError(f"Invalid index id: {index_id!r}")
+        if "/" not in index_id:
+            return index_id
+        segments = index_id.split("/")
+        if len(segments) == 2 and segments[0] == ".cancelled" and segments[1] not in {"", ".", ".."}:
+            return index_id
+        raise DmlRepoError(f"Invalid index id: {index_id!r}")
         return index_id
 
     @staticmethod

@@ -251,3 +251,19 @@ def test_batch_executor_poll_returns_failed_for_missing_job_id():
 
     assert result["status"] == "failed"
     assert "job_id" in result["error"]
+
+
+def test_batch_executor_cancel_cleans_up_backend_resources(monkeypatch):
+    fake_client = _FakeBatchClient()
+    monkeypatch.setattr(BatchExecutor, "_client", staticmethod(lambda: fake_client))
+
+    result = BatchExecutor().cancel(
+        cache_key="batch-cancel",
+        execution_id="exec-batch-cancel",
+        state={"job_id": "job-123", "job_definition": "arn:batch:def/123"},
+        remote=_REMOTE,
+    )
+
+    assert result == {"status": "cancelled", "error": None}
+    assert fake_client.canceled == [{"jobId": "job-123", "reason": "daggerml cancellation requested"}]
+    assert fake_client.deregistered == [{"jobDefinition": "arn:batch:def/123"}]

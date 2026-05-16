@@ -223,6 +223,14 @@ class IndexDescribePayload(TypedDict):
     kwargv: Ref | None
 
 
+class RuntimeCancelPayload(TypedDict):
+    index_id: str
+    requested_by: str
+    cancelled_index: Literal[True]
+    cancel_requested_execution_ids: list[str]
+    cancelled_execution_ids: list[str]
+
+
 class IndexCommitPayload(TypedDict):
     ref: Ref
     summary: CommitPayload
@@ -539,6 +547,10 @@ class _RuntimeNamespace:
         name: str | None = None,
     ) -> Ref | None:
         return index_ops(self._dml).start_fn(index_id, argv, kwargv=kwargv, name=name)
+
+    def cancel(self, index_id: str) -> RuntimeCancelPayload:
+        requested_by = require_user(self._dml._context.user, message="user is required for runtime cancel")
+        return index_ops(self._dml).cancel(index_id, requested_by=requested_by)
 
     def commit(
         self,

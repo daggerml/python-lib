@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -223,6 +224,21 @@ class ScriptExecutor(ExecutorBase):
 
         _cleanup_workdir(state)
         return {"status": "failed", "error": "Script supervisor exited without result"}
+
+    def cancel(
+        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+    ) -> dict[str, Any]:
+        del cache_key, execution_id, remote
+        pid = state.get("pid")
+        if isinstance(pid, int):
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
+        _cleanup_workdir(state)
+        return {"status": "cancelled", "error": None}
 
 
 def _cleanup_workdir(launch_state: dict[str, Any]) -> None:

@@ -209,6 +209,18 @@ class DockerExecutor(ExecutorBase):
 
         return {"status": "failed", "error": f"docker container {container_id} exited without output"}
 
+    def cancel(
+        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+    ) -> dict[str, Any]:
+        del cache_key, execution_id, remote
+        docker_bin = shutil.which("docker")
+        if docker_bin is None:
+            return {"status": "cancelled", "error": None}
+        container_id = state.get("container_id")
+        if isinstance(container_id, str) and container_id:
+            _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
+        return {"status": "cancelled", "error": None}
+
 
 def _cleanup_docker(container_id: str, cleanup_image: str | None, docker_bin: str) -> None:
     subprocess.run([docker_bin, "rm", "-f", container_id], check=False, capture_output=True, text=True)

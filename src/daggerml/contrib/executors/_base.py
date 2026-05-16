@@ -68,6 +68,12 @@ class ExecutorBase:
         is known to be done.
         """
 
+    def cancel(
+        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+    ) -> dict[str, Any]:
+        self.cleanup(cache_key=cache_key, execution_id=execution_id, remote=remote, state=state)
+        return {"status": "cancelled", "error": None}
+
     # ------------------------------------------------------------------
     # Main dispatch
     # ------------------------------------------------------------------
@@ -89,6 +95,13 @@ class ExecutorBase:
         executor = cls()
         executor.execution_status = execution_status
         executor.cancel_requested_by = cancel_requested_by
+        if execution_status == "cancel-requested" and state is not None:
+            return executor.cancel(
+                cache_key=cache_key,
+                execution_id=execution_id,
+                state=state,
+                remote=remote,
+            )
         if state is None:
             return executor.start(
                 cache_key=cache_key,

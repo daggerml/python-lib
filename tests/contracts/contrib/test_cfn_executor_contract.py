@@ -240,6 +240,26 @@ def test_cfn_poll_marks_success_with_committed_dag_id(monkeypatch):
     ]
 
 
+def test_cfn_cancel_starts_rollback_or_delete_and_reports_cancelled(monkeypatch):
+    calls = []
+
+    class _FakeClient:
+        def cancel_update_stack(self, *, StackName):
+            calls.append(("cancel_update_stack", StackName))
+
+    monkeypatch.setattr(CfnExecutor, "_client", staticmethod(lambda: _FakeClient()))
+
+    result = CfnExecutor().cancel(
+        cache_key="cache-key",
+        execution_id="exec-cfn-cancel",
+        state={"stack_name": "stack-name", "argv_ptr": "argv://ptr"},
+        remote=_REMOTE,
+    )
+
+    assert result == {"status": "cancelled", "error": None}
+    assert calls == [("cancel_update_stack", "stack-name")]
+
+
 def test_cfn_poll_marks_failed_when_stack_is_missing(monkeypatch):
     class _FakeClient:
         def describe_stacks(self, *, StackName):

@@ -212,6 +212,25 @@ def test_docker_executor_poll_returns_failed_when_no_s3_output(monkeypatch):
     assert "without output" in result["error"]
 
 
+def test_docker_executor_cancel_removes_container_and_reports_cancelled(monkeypatch):
+    cleanup_calls = []
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.docker._cleanup_docker",
+        lambda container_id, cleanup_image, docker_bin: cleanup_calls.append((container_id, cleanup_image, docker_bin)),
+    )
+
+    result = DockerExecutor().cancel(
+        cache_key="ck-docker-cancel",
+        execution_id="exec-docker-cancel",
+        state={"container_id": "cid-cancel", "cleanup_image": "img:tmp"},
+        remote=_remote(),
+    )
+
+    assert result == {"status": "cancelled", "error": None}
+    assert cleanup_calls == [("cid-cancel", "img:tmp", "/usr/bin/docker")]
+
+
 # ---------------------------------------------------------------------------
 # AdapterBase._write_output S3 support
 # ---------------------------------------------------------------------------

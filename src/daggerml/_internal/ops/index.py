@@ -7,10 +7,13 @@ Public API:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 from subprocess import run
 from typing import Any, Mapping, Optional, cast
 from urllib.parse import urlparse
@@ -47,6 +50,8 @@ from daggerml._internal.types import (
     require_ref,
 )
 from daggerml._internal.util import now, unnest, uuid7
+
+_CANCEL_LOCK_SLEEP_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -200,6 +205,10 @@ class IndexOps(BaseOps):
             if "terminal_dag_ref" in locals():
                 return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
             raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
+        elif status == "cancelled":
+            es.delete_active_execution()
+            es.unlock()
+            return None
         else:
             if state is None:
                 if not es.create_active_execution(execution_id):
@@ -212,6 +221,54 @@ class IndexOps(BaseOps):
     def delete(self, index_id: str) -> None:
         """Delete an index object from db."""
         HeadOps(_db=self._db).delete_index(index_id)
+
+    def cancel(self, index_id: str, *, requested_by: str) -> dict[str, Any]:
+        cancelled_path = self._resolve_index_for_cancellation(index_id)
+        cancel_requested_execution_ids: list[str] = []
+        cancelled_execution_ids: list[str] = []
+        cancel_succeeded = False
+        try:
+            self._ensure_index_execution_root(index_id)
+            unseen = {index_id}
+            seen: set[str] = set()
+            terminal = {"succeeded", "failed", "cancelled"}
+            inactive = terminal | {"cancel-requested"}
+            with ThreadPoolExecutor() as executor:
+                while unseen:
+                    batch = [candidate_id for candidate_id in unseen if candidate_id not in seen]
+                    unseen.clear()
+                    futures = {
+                        executor.submit(
+                            self._cancel_execution_candidate,
+                            candidate_id,
+                            requested_by=requested_by,
+                            terminal=terminal,
+                            inactive=inactive,
+                        ): candidate_id
+                        for candidate_id in batch
+                    }
+                    for future in as_completed(futures):
+                        result = future.result()
+                        seen.add(result["execution_id"])
+                        unseen.update(candidate_id for candidate_id in result["dependencies"] if candidate_id not in seen)
+                        if result["cancel_requested"]:
+                            cancel_requested_execution_ids.append(result["execution_id"])
+                        if result["cancelled"]:
+                            cancelled_execution_ids.append(result["execution_id"])
+            cancel_succeeded = True
+        finally:
+            if cancel_succeeded:
+                try:
+                    cancelled_path.unlink()
+                except FileNotFoundError:
+                    pass
+        return {
+            "index_id": index_id,
+            "requested_by": requested_by,
+            "cancelled_index": True,
+            "cancel_requested_execution_ids": cancel_requested_execution_ids,
+            "cancelled_execution_ids": cancelled_execution_ids,
+        }
 
     @with_retry
     def create(
@@ -251,7 +308,10 @@ class IndexOps(BaseOps):
             kw["argv"] = self._remote_ops().load_ptr(argv_ptr, expected_root_ns="node-argv")
         with self._tx(readonly=False) as txn:
             commit_ref = self._create(**kw, txn=txn)
-        return HeadOps(_db=self._db).create_index(commit_ref, index_id=index_id)
+        created_index_id = HeadOps(_db=self._db).create_index(commit_ref, index_id=index_id)
+        if self.remote_root:
+            self._ensure_index_execution_root(created_index_id)
+        return created_index_id
 
     @with_retry
     def get_kwargv(self, index_id: str) -> Ref:
@@ -635,7 +695,7 @@ class IndexOps(BaseOps):
         if not isinstance(payload, dict):
             raise DmlRepoError("Adapter output schema invalid")
         status = payload.get("status")
-        if status not in {"running", "succeeded", "failed"}:
+        if status not in {"running", "succeeded", "failed", "cancelled"}:
             raise DmlRepoError("Adapter output schema invalid")
         if status == "succeeded":
             allowed = {"status", "error", "dag_id"}
@@ -650,6 +710,11 @@ class IndexOps(BaseOps):
             if set(payload.keys()) != {"status", "error"}:
                 raise DmlRepoError("Adapter output schema invalid")
             if payload.get("error") is None:
+                raise DmlRepoError("Adapter output schema invalid")
+        elif status == "cancelled":
+            if set(payload.keys()) != {"status", "error"}:
+                raise DmlRepoError("Adapter output schema invalid")
+            if payload.get("error") is not None:
                 raise DmlRepoError("Adapter output schema invalid")
         else:
             if set(payload.keys()) != {"status", "error", "state"}:
@@ -667,9 +732,17 @@ class IndexOps(BaseOps):
         ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id))
         if ctx.dag is None:
             raise DmlRepoError("Index commit has no DAG.")
-        return None, None
+        return index_id, index_id
 
-    def _prepare_adapter_call(self, index_id: str, argv_ref: Ref, txn) -> _PreparedAdapterCall:
+    def _prepare_adapter_call(
+        self,
+        index_id: str,
+        argv_ref: Ref,
+        txn,
+        *,
+        caller_execution_id: str | None = None,
+        caller_cache_key: str | None = None,
+    ) -> _PreparedAdapterCall:
         argv_node: ArgvNode = txn.get(argv_ref)
         argv_datum: ListDatum = txn.get(argv_node.datum_ref(txn))
         if len(argv_datum.data) == 0:
@@ -709,7 +782,8 @@ class IndexOps(BaseOps):
                 ),
             )
         node_ops = NodeOps(_db=self._db)
-        caller_execution_id, caller_cache_key = self._caller_identity(index_id=index_id, txn=txn)
+        if caller_execution_id is None and caller_cache_key is None:
+            caller_execution_id, caller_cache_key = self._caller_identity(index_id=index_id, txn=txn)
         return _PreparedAdapterCall(
             argv_ref=argv_ref,
             adapter_path=adapter_path,
@@ -761,6 +835,147 @@ class IndexOps(BaseOps):
                     "updated_at": int(time.time()),
                     "cancel_requested_by": None,
                 }
+            )
+
+    def _ensure_index_execution_root(self, index_id: str) -> ExecutionRecord:
+        timestamp = int(time.time())
+        return ExecutionState(index_id, remote_root=self.remote_root).update_execution_record(
+            {
+                "execution_id": index_id,
+                "cache_key": index_id,
+                "created_at": timestamp,
+                "status": "running",
+                "state": None,
+                "dependencies": [],
+                "updated_at": timestamp,
+                "cancel_requested_by": None,
+            }
+        )
+
+    def _resolve_index_for_cancellation(self, index_id: str) -> Path:
+        head_ops = HeadOps(_db=self._db)
+        live_path = head_ops._index_path(index_id)
+        cancelled_path = self._cancelled_index_path(head_ops, index_id)
+        with head_ops._pointer_lock(live_path):
+            if cancelled_path.exists():
+                return cancelled_path
+            if not live_path.exists():
+                raise DmlRepoError(f"Pointer does not exist: {live_path}")
+            cancelled_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(live_path, cancelled_path)
+            return cancelled_path
+
+    def _freeze_index_for_cancellation(self, index_id: str):
+        return self._resolve_index_for_cancellation(index_id)
+
+    @staticmethod
+    def _cancelled_index_path(head_ops: HeadOps, index_id: str):
+        return head_ops._local_indexes_dir() / ".cancelled" / head_ops._validate_index_id(index_id)
+
+    def _cancel_execution_candidate(
+        self,
+        candidate_id: str,
+        *,
+        requested_by: str,
+        terminal: set[str],
+        inactive: set[str],
+    ) -> dict[str, Any]:
+        lock_state = self._wait_for_execution_lock(candidate_id)
+        try:
+            record = lock_state.read_execution_record(candidate_id)
+            if record is None:
+                return {
+                    "execution_id": candidate_id,
+                    "dependencies": [],
+                    "cancel_requested": False,
+                    "cancelled": False,
+                }
+            dependencies = list(cast(list[str], record.get("dependencies", [])))
+            if record["status"] in terminal:
+                return {
+                    "execution_id": candidate_id,
+                    "dependencies": dependencies if self._is_synthetic_index_root(record) else [],
+                    "cancel_requested": False,
+                    "cancelled": False,
+                }
+            if self._count_active_callers(candidate_id, inactive) != 0:
+                return {
+                    "execution_id": candidate_id,
+                    "dependencies": dependencies,
+                    "cancel_requested": False,
+                    "cancelled": False,
+                }
+            updated = lock_state.update_execution_record(
+                {
+                    "execution_id": candidate_id,
+                    "cache_key": cast(str, record["cache_key"]),
+                    "created_at": int(record["created_at"]),
+                    "status": "cancel-requested",
+                    "state": cast(dict[str, Any] | None, record["state"]),
+                    "dependencies": dependencies,
+                    "updated_at": int(time.time()),
+                    "cancel_requested_by": requested_by,
+                }
+            )
+            if self._is_synthetic_index_root(updated):
+                lock_state.update_execution_record({**updated, "status": "cancelled", "updated_at": int(time.time())})
+                return {
+                    "execution_id": candidate_id,
+                    "dependencies": dependencies,
+                    "cancel_requested": True,
+                    "cancelled": True,
+                }
+            cancelled = False
+            result = self._invoke_cancel_update(candidate_id, updated)
+            if result["status"] == "cancelled":
+                lock_state.update_execution_record({**updated, "status": "cancelled", "updated_at": int(time.time())})
+                cancelled = True
+            return {
+                "execution_id": candidate_id,
+                "dependencies": dependencies,
+                "cancel_requested": True,
+                "cancelled": cancelled,
+            }
+        finally:
+            lock_state.unlock()
+
+    def _wait_for_execution_lock(self, candidate_id: str) -> ExecutionState:
+        lock_state = ExecutionState(candidate_id, remote_root=self.remote_root)
+        while not lock_state.lock():
+            time.sleep(_CANCEL_LOCK_SLEEP_SECONDS)
+        return lock_state
+
+    def _count_active_callers(self, execution_id: str, inactive: set[str]) -> int:
+        count = 0
+        state = ExecutionState(execution_id, remote_root=self.remote_root)
+        for caller_id in state.list_execution_callers(execution_id):
+            caller_record = ExecutionState(caller_id, remote_root=self.remote_root).read_execution_record(caller_id)
+            if caller_record is not None and caller_record["status"] not in inactive:
+                count += 1
+        return count
+
+    @staticmethod
+    def _is_synthetic_index_root(record: ExecutionRecord) -> bool:
+        return record["execution_id"] == record["cache_key"] and record["state"] is None
+
+    def _invoke_cancel_update(self, execution_id: str, record: ExecutionRecord) -> dict[str, Any]:
+        argv_ref = Ref(f"node-argv:{cast(str, record['cache_key'])}")
+        with self._tx(readonly=True) as txn:
+            prepared = self._prepare_adapter_call(
+                execution_id,
+                argv_ref,
+                txn,
+                caller_execution_id=execution_id,
+                caller_cache_key=cast(str, record["cache_key"]),
+            )
+            argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
+            return self._call_adapter(
+                prepared,
+                argv_ptr,
+                execution_id=execution_id,
+                state=cast(dict[str, Any] | None, record["state"]),
+                execution_status="cancel-requested",
+                cancel_requested_by=cast(str | None, record.get("cancel_requested_by")),
             )
 
     def _call_adapter(

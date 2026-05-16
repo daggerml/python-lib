@@ -134,3 +134,19 @@ class CfnExecutor(ExecutorBase):
                 pass
             return {"status": "failed", "error": error}
         return {"status": "running", "error": None, "state": state}
+
+    def cancel(
+        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+    ) -> dict[str, Any]:
+        del cache_key, execution_id, remote
+        stack_name = state.get("stack_name")
+        if isinstance(stack_name, str) and stack_name:
+            client = self._client()
+            try:
+                client.cancel_update_stack(StackName=stack_name)
+            except Exception:
+                try:
+                    client.delete_stack(StackName=stack_name)
+                except Exception:
+                    pass
+        return {"status": "cancelled", "error": None}

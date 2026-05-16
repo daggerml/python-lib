@@ -38,7 +38,6 @@ class SshExecutor(ExecutorBase):
         argv_ptr: str,
         remote: dict[str, str],
     ) -> dict[str, Any]:
-        del execution_status, cancel_requested_by
         if runnable is None or runnable.sub is None:
             raise DmlRepoError("ssh executor handle requires runnable with sub runnable")
         kw = cls._validate_kw(runnable.kwargs)
@@ -55,6 +54,8 @@ class SshExecutor(ExecutorBase):
             execution_id=execution_id,
             remote=remote,
             state=state,
+            execution_status=execution_status,
+            cancel_requested_by=cancel_requested_by,
         )
         logger.debug(
             "ssh executor launch host=%s flags=%s env_files=%s adapter=%s cache_key=%s execution_id=%s has_state=%s",
@@ -94,7 +95,7 @@ class SshExecutor(ExecutorBase):
                 stdout,
             )
             return {"status": "failed", "error": f"SSH nested adapter returned invalid JSON: {e}"}
-        if not isinstance(result, dict) or result.get("status") not in {"succeeded", "failed", "running"}:
+        if not isinstance(result, dict) or result.get("status") not in {"succeeded", "failed", "running", "cancelled"}:
             logger.debug("ssh executor unexpected result execution_id=%s result=%r", execution_id, result)
             return {"status": "failed", "error": f"SSH nested adapter returned unexpected result: {result}"}
         logger.debug(
