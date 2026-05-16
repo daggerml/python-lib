@@ -51,7 +51,7 @@ requests and appreciate your help in improving this project.
   ```
 - Run lint with:
   ```bash
-  uv run --dev --all-extras ruff check .
+  uv run --dev --all-extras ruff check --fix .
   ```
 - We mark tests with `@pytest.mark.slow` for those that take longer to run. You can run only the fast tests with:
   ```

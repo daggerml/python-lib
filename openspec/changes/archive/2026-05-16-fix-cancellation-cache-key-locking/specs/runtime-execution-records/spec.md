@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: Runtime SHALL separate cache identity from execution identity
 The runtime SHALL treat `cache_key` as the stable computation identity and `execution_id` as the stable identity of one execution attempt. The runtime SHALL acquire execution coordination locks by `cache_key` for launch, resume, and cancellation, SHALL propagate `execution_id` in the adapter envelope, and SHALL use execution id as the identity for dependency edges, execution state objects, and invalidation records.
 
@@ -16,18 +18,6 @@ The runtime SHALL treat `cache_key` as the stable computation identity and `exec
 - **AND** `exec/state/e1.json` records `cache_key = "ck1"`
 - **THEN** the runtime SHALL acquire the execution coordination lock for `ck1`
 - **AND** it SHALL continue to use `e1` as the execution-record and dependency-graph identity
-
-### Requirement: Runtime SHALL maintain an active execution pointer per cache key
-The runtime SHALL persist the currently active execution for a `cache_key` at `active/<cache_key>` as plain text containing only the `execution_id`.
-
-#### Scenario: Active pointer is created for a new running execution
-- **WHEN** the first adapter call for a new execution returns `running`
-- **THEN** the runtime SHALL create `active/<cache_key>` containing that execution's `execution_id`
-
-#### Scenario: Stale active pointer is discarded
-- **WHEN** `active/<cache_key>` exists but `exec/state/<execution_id>.json` does not exist
-- **THEN** the runtime SHALL delete `active/<cache_key>`
-- **AND** it SHALL treat the cache key as having no active execution
 
 ### Requirement: Runtime SHALL maintain one mutable execution object per execution id
 The runtime SHALL persist `exec/state/<execution_id>.json` as the single compare-and-swap updated execution object for that execution. That object SHALL include `execution_id`, `cache_key`, `created_at`, `status`, `state`, `dependencies`, `updated_at`, and `cancel_requested_by`, where `cancel_requested_by` is `str | null`. `status` SHALL be one of `running`, `cancel-requested`, `cancelled`, `succeeded`, or `failed`. `state` SHALL contain the durable adapter state returned by the first adapter call for that execution and SHALL be `null` when no durable adapter state exists. Once `state` is first written for an execution, the runtime SHALL NOT replace or merge it on later updates. `dependencies` SHALL be the deduped set of discovered callee execution ids for that execution. Execution-object updates SHALL be monotone: newly discovered dependencies MAY be added, terminal status MAY replace non-terminal status, `cancel-requested` MAY precede `cancelled`, and existing dependencies SHALL NOT be removed.
@@ -105,73 +95,3 @@ The execution-object schema SHALL be:
 #### Scenario: Index root accumulates launched execution dependencies
 - **WHEN** index `idx1` starts execution `e1`
 - **THEN** the runtime SHALL update `exec/state/idx1.json` so that `dependencies` contains `e1`
-
-### Requirement: Cache refs SHALL remain proper refs and record execution ids
-The runtime SHALL publish `refs/cache/<cache_key>.json` as a normal cache ref to the current manifest for that cache key, and that ref SHALL also record `execution_id` for the current execution. Readers that materialize cached results SHALL continue resolving the cached manifest through the ref target, and graph planners SHALL read `execution_id` from the same cache ref.
-
-#### Scenario: Successful execution updates cache pointer
-- **WHEN** execution `e7` becomes the terminal cached result for cache key `ck1`
-- **THEN** the runtime SHALL write `refs/cache/ck1.json` with `execution_id = "e7"`
-- **AND** that object SHALL remain a valid cache ref with its manifest `target`
-
-#### Scenario: Re-run requires prior invalidation
-- **WHEN** a later execution `e8` attempts to publish a terminal cached result for cache key `ck1`
-- **AND** `refs/cache/ck1.json` already exists for an earlier execution
-- **THEN** the runtime SHALL reject that cache publication
-- **AND** the earlier cache ref MUST be invalidated or deleted before `e8` can publish `refs/cache/ck1.json`
-
-### Requirement: Adapter envelope and result schema SHALL follow the runtime-owned execution contract
-The adapter envelope SHALL include `argv_ptr`, `cache_key`, `execution_id`, `remote`, `runnable`, `state`, `execution_status`, and `cancel_requested_by`. The adapter result SHALL use only `running`, `succeeded`, `failed`, or `cancelled` statuses. `running` MUST include durable `state`. `succeeded` MUST include `dag_id`. `failed` MUST include `error`. `cancelled` MUST identify a successful cancel update and MAY omit durable execution output.
-
-#### Scenario: First adapter call uses null state
-- **WHEN** the runtime invokes an adapter for a new execution
-- **THEN** the adapter envelope SHALL include `state = null`
-
-#### Scenario: Cancel update includes cancellation fields
-- **WHEN** the runtime invokes an adapter for a cancel update
-- **THEN** the adapter envelope SHALL include `execution_status = "cancel-requested"`
-- **AND** it SHALL include `cancel_requested_by`
-
-#### Scenario: Later adapter state is ignored after first write
-- **WHEN** the runtime invokes an adapter for an existing execution and the adapter returns `running` with a different `state`
-- **THEN** the runtime SHALL continue using the existing stored `state` from `exec/state/<execution_id>.json`
-
-#### Scenario: Cancel update may return cancelled
-- **WHEN** an executor completes a cancel update successfully
-- **THEN** the adapter result MAY use `status = "cancelled"`
-
-#### Scenario: Pending is rejected
-- **WHEN** an adapter returns `pending`
-- **THEN** the runtime SHALL reject that result as invalid adapter output
-
-### Requirement: Stale lock recovery SHALL preserve active execution ownership
-The runtime SHALL use the lock for `cache_key` only to coordinate mutation of the active execution. If a lock is stale and an active execution record exists, the runtime SHALL recover the lock and resume that execution instead of creating a new one.
-
-#### Scenario: Stale lock with active execution resumes existing execution
-- **WHEN** the lock for a `cache_key` is stale and `active/<cache_key>` points to an existing execution record
-- **THEN** the runtime SHALL recover the lock
-- **AND** it SHALL resume the existing `execution_id`
-- **AND** it SHALL NOT launch a duplicate execution
-
-### Requirement: Failed execution SHALL be cached as a terminal result
-If an adapter returns `failed`, the runtime SHALL complete the DAG with the error and SHALL publish that failed terminal outcome to cache for the `cache_key`.
-
-#### Scenario: Failed adapter result populates cache
-- **WHEN** an adapter returns `failed` for a cache key
-- **THEN** the runtime SHALL complete the DAG with the reported error
-- **AND** it SHALL publish the failed outcome into cache for that cache key
-
-#### Scenario: Failed execution clears active pointer
-- **WHEN** an active execution returns `failed`
-- **THEN** the runtime SHALL delete `active/<cache_key>` before surfacing the failure
-
-### Requirement: Execution record status typing SHALL remain concrete during runtime updates
-The runtime SHALL preserve the declared execution-status literal type from adapter results through execution-record creation and execution-record merge operations. The implementation SHALL NOT erase `ExecutionRecord["status"]` through `cast(..., Any)` when persisting or merging runtime execution state.
-
-#### Scenario: First execution record uses the adapter result status directly
-- **WHEN** `IndexOps.start_fn` constructs an execution record from a valid adapter result
-- **THEN** the record stores the concrete runtime status value without erasing it through `Any`
-
-#### Scenario: Merge preserves the higher-ranked status without type erasure
-- **WHEN** execution-record merge logic chooses between current and incoming statuses
-- **THEN** it keeps the higher-ranked concrete status value and returns an `ExecutionRecord` whose `status` remains within the declared runtime status set

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +38,8 @@ from daggerml._internal.dml_resolution import (
 from daggerml._internal.ops import DmlOps
 from daggerml._internal.ops.config import ConfigOps
 from daggerml._internal.types import DEFAULT_HEAD, DmlRepoError
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectConfigPayload(TypedDict):
@@ -225,10 +229,13 @@ class IndexDescribePayload(TypedDict):
 
 class RuntimeCancelPayload(TypedDict):
     index_id: str
-    requested_by: str
-    cancelled_index: Literal[True]
-    cancel_requested_execution_ids: list[str]
-    cancelled_execution_ids: list[str]
+    iterations: int
+    graph_edges: int
+    candidate_count: int
+    own_execution_count: int
+    cancelled_count: int
+    dropped_count: int
+    lock_retry_count: int
 
 
 class IndexCommitPayload(TypedDict):
@@ -550,7 +557,70 @@ class _RuntimeNamespace:
 
     def cancel(self, index_id: str) -> RuntimeCancelPayload:
         requested_by = require_user(self._dml._context.user, message="user is required for runtime cancel")
-        return index_ops(self._dml).cancel(index_id, requested_by=requested_by)
+        with with_ops(self._dml) as ops:
+            index = ops.index()
+            plan = index.cancel(index_id, requested_by=requested_by)
+            candidate_set = set(cast(set[str], plan["candidate_set"]))
+            own_executions = set(cast(set[str], plan["own_executions"]))
+            stats: RuntimeCancelPayload = {
+                "index_id": index_id,
+                "iterations": 0,
+                "graph_edges": len(cast(set[tuple[str, str]], plan["graph"])),
+                "candidate_count": len(candidate_set),
+                "own_execution_count": 0,
+                "cancelled_count": 0,
+                "dropped_count": 0,
+                "lock_retry_count": 0,
+            }
+            while candidate_set:
+                stats["iterations"] += 1
+                batch = sorted(candidate_set)
+                logger.info(
+                    "runtime.cancel iteration=%s index_id=%s candidates=%s owned=%s",
+                    stats["iterations"],
+                    index_id,
+                    len(batch),
+                    len(own_executions),
+                )
+                with ThreadPoolExecutor() as executor:
+                    futures = {
+                        executor.submit(
+                            index._cancel_execution_candidate,
+                            candidate_id,
+                            requested_by=requested_by,
+                            own_executions=set(own_executions),
+                        ): candidate_id
+                        for candidate_id in batch
+                    }
+                    for future in as_completed(futures):
+                        result = future.result()
+                        candidate_id = cast(str, result["execution_id"])
+                        if cast(bool, result["lock_retry"]):
+                            stats["lock_retry_count"] += 1
+                        outcome = cast(int | None, result["outcome"])
+                        if outcome == 1:
+                            candidate_set.discard(candidate_id)
+                            stats["cancelled_count"] += 1
+                        elif outcome == -1:
+                            candidate_set.discard(candidate_id)
+                            if candidate_id in own_executions:
+                                own_executions.discard(candidate_id)
+                                stats["dropped_count"] += 1
+            index._complete_index_cancellation(
+                index_id,
+                cancelled_path=cast(Path, plan["cancelled_path"]),
+                own_executions=own_executions,
+            )
+            stats["own_execution_count"] = len(own_executions)
+            logger.info(
+                "runtime.cancel complete index_id=%s iterations=%s cancelled=%s dropped=%s lock_retries=%s",
+                index_id,
+                stats["iterations"],
+                stats["cancelled_count"],
+                stats["dropped_count"],
+                stats["lock_retry_count"],
+            )
+            return stats
 
     def commit(
         self,

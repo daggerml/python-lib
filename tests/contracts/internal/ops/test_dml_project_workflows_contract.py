@@ -1,4 +1,6 @@
+import logging
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
 
@@ -15,6 +17,7 @@ from daggerml._internal.types import DmlRepoError
 def _opened_ops(remote_ops):
     runtime_ops = Mock()
     runtime_ops.remote.return_value = remote_ops
+    runtime_ops.index.return_value = remote_ops
     yield runtime_ops
 
 
@@ -183,15 +186,49 @@ def test_dag_checkout_requires_user_if_not_resolved():
             ops.dag.checkout("origin/main", "train")
 
 
-def test_runtime_cancel_delegates_to_index_ops_with_required_user():
+def test_runtime_cancel_runs_retry_loop_and_returns_stats(caplog):
+    caplog.set_level(logging.INFO)
     ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix", user="alice")
-    index_ops = Mock(cancel=Mock(return_value={"index_id": "idx-1"}))
+    index = Mock()
+    index.cancel.return_value = {
+        "index_id": "idx-1",
+        "requested_by": "alice",
+        "cancelled_path": Path("/tmp/cancelled/idx-1"),
+        "graph": {("idx-1", "exec-1"), ("idx-1", "exec-2")},
+        "candidate_set": {"exec-1", "exec-2"},
+        "own_executions": {"exec-1", "exec-2"},
+    }
+    outcomes = {
+        (2, "exec-1"): {"execution_id": "exec-1", "outcome": None, "lock_retry": True, "cancel_requested": False},
+        (2, "exec-2"): {"execution_id": "exec-2", "outcome": -1, "lock_retry": False, "cancel_requested": False},
+        (1, "exec-1"): {"execution_id": "exec-1", "outcome": 1, "lock_retry": False, "cancel_requested": True},
+    }
 
-    with patch.object(dml_module, "index_ops", return_value=index_ops):
+    def _cancel_candidate(execution_id, *, requested_by, own_executions):
+        assert requested_by == "alice"
+        return outcomes[(len(own_executions), execution_id)]
+
+    index._cancel_execution_candidate.side_effect = _cancel_candidate
+    with patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(index)):
         result = ops.runtime.cancel("idx-1")
 
-    index_ops.cancel.assert_called_once_with("idx-1", requested_by="alice")
-    assert result == {"index_id": "idx-1"}
+    index.cancel.assert_called_once_with("idx-1", requested_by="alice")
+    index._complete_index_cancellation.assert_called_once_with(
+        "idx-1",
+        cancelled_path=Path("/tmp/cancelled/idx-1"),
+        own_executions={"exec-1"},
+    )
+    assert result == {
+        "index_id": "idx-1",
+        "iterations": 2,
+        "graph_edges": 2,
+        "candidate_count": 2,
+        "own_execution_count": 1,
+        "cancelled_count": 1,
+        "dropped_count": 1,
+        "lock_retry_count": 1,
+    }
+    assert "runtime.cancel iteration=1 index_id=idx-1 candidates=2 owned=2" in caplog.text
 
 
 def test_dag_describe_node_resolves_named_node_with_revision_context():
