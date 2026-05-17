@@ -7,7 +7,7 @@
 ## 2. Configuration and project layout
 
 - [x] 2.1 Remove `DML_BRANCH` and any branch-selection config normalization from shared internal configuration resolution.
-- [x] 2.2 Change local `DmlProjectConfig` persistence and validation so `project.uri` is branchless and local config no longer stores branch state.
+- [x] 2.2 Change local `DmlProjectConfig` persistence and validation so `remote.project` is branchless and local config no longer stores branch state.
 - [x] 2.3 Update init, hook environment, and status/config surfaces to reflect branchless project config and the removal of `DML_BRANCH`.
 
 ## 3. Revision and checkout behavior

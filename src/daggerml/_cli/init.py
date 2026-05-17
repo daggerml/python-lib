@@ -16,7 +16,7 @@ def setup_init_parser(parser: ArgumentParser) -> None:
         description="Initialize .dml-managed state in the current project directory.",
         examples=[
             "dml init my-project",
-            "dml init --project-uri dml://alice/my-project",
+            "dml init --remote-project dml://alice/my-project",
             "dml init --project-home /path/to/project my-project",
             "dml --project-home /path/to/project init",
         ],
@@ -24,12 +24,14 @@ def setup_init_parser(parser: ArgumentParser) -> None:
     parser.add_argument("name", nargs="?", help="Project name")
     parser.add_argument("--owner", default=None, help="Project owner (default: global user)")
     parser.add_argument(
-        "--project-uri",
+        "--remote-project",
+        dest="remote_project",
         default=None,
-        help="Explicit project URI (dml://owner/project). Mutually exclusive with NAME.",
+        help="Explicit remote project URI (dml://owner/project). Mutually exclusive with NAME.",
     )
     parser.add_argument(
-        "--remote-uri",
+        "--remote-root",
+        dest="remote_root",
         default=None,
         help="Remote root URI (s3://bucket or s3://bucket/prefix).",
     )
@@ -48,8 +50,8 @@ def execute_init(args) -> InitPayload:
         project_home=getattr(args, "project_home", None) or ".",
         name=args.name.strip() if args.name else None,
         owner=getattr(args, "owner", None),
-        project_uri=getattr(args, "project_uri", None),
-        remote_uri=getattr(args, "remote_uri", None),
+        remote_project=getattr(args, "remote_project", None),
+        remote_uri=getattr(args, "remote_root", None),
         user=None,
         config_home=getattr(args, "config_home", None),
         no_hooks=getattr(args, "no_hooks", False),

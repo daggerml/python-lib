@@ -14,7 +14,7 @@ def _reset_registries(tmp_path, monkeypatch):
     areg._reset_for_tests()
     ereg._reset_for_tests()
     monkeypatch.setenv("DML_TEST_FN_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("DML_REMOTE_URI", "s3://test-bucket/test-prefix")
+    monkeypatch.setenv("DML_REMOTE_ROOT", "s3://test-bucket/test-prefix")
     areg.register_adapter(LocalAdapter)
     ereg.register_executor(ScriptExecutor)
     ereg.register_executor(SshExecutor)

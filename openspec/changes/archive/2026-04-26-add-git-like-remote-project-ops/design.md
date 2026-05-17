@@ -111,7 +111,7 @@ Configuration resolution uses waterfall precedence:
 explicit CLI/API argument > environment variable > config file value
 ```
 
-Environment variables use `DML_` names for config values, including `DML_USER`, `DML_DEFAULT_BRANCH`, `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, `DML_PROJECT_URI`, `DML_BRANCH`, `DML_REMOTE`, `DML_REMOTE_URI`, `DML_REMOTE_BUCKET`, and `DML_REMOTE_PREFIX`. Explicit command arguments always win over environment variables and config.
+Environment variables use `DML_` names for config values, including `DML_USER`, `DML_DEFAULT_BRANCH`, `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, `DML_REMOTE_PROJECT`, `DML_BRANCH`, `DML_REMOTE`, `DML_REMOTE_URI`, `DML_REMOTE_BUCKET`, and `DML_REMOTE_PREFIX`. Explicit command arguments always win over environment variables and config.
 
 The supported DML environment variable surface for this project model is:
 
@@ -123,7 +123,7 @@ The supported DML environment variable surface for this project model is:
 | `DML_DEFAULT_BRANCH` | Global default branch override for init/branch defaults. |
 | `DML_PROJECT_NAME` | Project name override and hook context. |
 | `DML_PROJECT_OWNER` | Project owner override and hook context. |
-| `DML_PROJECT_URI` | Canonical local project URI override. |
+| `DML_REMOTE_PROJECT` | Canonical local remote project override. |
 | `DML_PROJECT_HOME` | Hook context: absolute project root directory. |
 | `DML_HOOK` | Hook context: hook name such as `post-init` or `post-clone`. |
 | `DML_REMOTE` | Selected named remote override. |

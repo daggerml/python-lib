@@ -352,7 +352,7 @@ def test_dml_init_recovers_when_config_exists_and_db_missing(tmp_path):
     repo_dir = tmp_path / "repo"
     dml_dir = repo_dir / ".dml"
     dml_dir.mkdir(parents=True)
-    (dml_dir / "config.toml").write_text('[project]\nuri = "dml://alice/demo"\n[remote]\nuri = "s3://bucket/prefix"\n')
+    (dml_dir / "config.toml").write_text('[remote]\nproject = "dml://alice/demo"\nroot = "s3://bucket/prefix"\n')
 
     with (
         patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")) as mock_fetch,
@@ -397,7 +397,7 @@ def test_dml_init_uses_init_project_layout_for_bootstrap(tmp_path):
     init_cfg = DmlProjectConfig.load(repo_dir)
     assert init_cfg.name == "demo"
     assert init_cfg.owner == "alice"
-    assert init_cfg.project_uri == "dml://alice/demo"
+    assert init_cfg.remote_project == "dml://alice/demo"
     assert init_cfg.remote_uri == "s3://bucket/prefix"
     assert (repo_dir / ".dml").is_dir()
     assert (repo_dir / ".dml" / "config.toml").exists()
@@ -409,21 +409,21 @@ def test_dml_init_uses_init_project_layout_for_bootstrap(tmp_path):
     assert result["created"] == {"db": True, "config": True}
 
 
-def test_dml_init_rejects_name_and_project_uri_together(tmp_path):
+def test_dml_init_rejects_name_and_remote_project_together(tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
 
     with pytest.raises(
         ValueError,
         match=(
-            "NAME and --project-uri are mutually exclusive; provide NAME to derive project URI "
-            "or use --project-uri for an explicit URI"
+            "NAME and --remote-project are mutually exclusive; provide NAME to derive remote project "
+            "or use --remote-project for an explicit URI"
         ),
     ):
         Dml.init(
             str(repo_dir),
             name="demo",
-            project_uri="dml://alice/demo",
+            remote_project="dml://alice/demo",
             remote_uri="s3://bucket/prefix",
         )
 
@@ -436,7 +436,7 @@ def test_dml_init_name_mode_requires_resolved_user(tmp_path, monkeypatch):
     monkeypatch.setattr("daggerml._internal.config.getuser", lambda: (_ for _ in ()).throw(RuntimeError()))
     monkeypatch.setattr("daggerml._internal.config.gethostname", lambda: (_ for _ in ()).throw(RuntimeError()))
 
-    with pytest.raises(DmlRepoError, match="user is required to derive project URI from NAME"):
+    with pytest.raises(DmlRepoError, match="user is required to derive remote project from NAME"):
         Dml.init(
             str(repo_dir),
             name="demo",
@@ -448,13 +448,13 @@ def test_dml_init_requires_remote_uri_for_recovery_pull(tmp_path):
     repo_dir = tmp_path / "repo"
     dml_dir = repo_dir / ".dml"
     dml_dir.mkdir(parents=True)
-    (dml_dir / "config.toml").write_text('[project]\nuri = "dml://alice/demo"\n')
+    (dml_dir / "config.toml").write_text('[remote]\nproject = "dml://alice/demo"\n')
 
-    with pytest.raises(DmlRepoError, match="remote.uri is required"):
+    with pytest.raises(DmlRepoError, match="remote.root is required"):
         Dml.init(str(repo_dir), remote_uri="")
 
 
 def test_dml_init_requires_existing_project_directory(tmp_path):
     missing = tmp_path / "missing"
     with pytest.raises(FileNotFoundError, match="does not exist"):
-        Dml.init(str(missing), project_uri="dml://alice/demo", remote_uri="s3://bucket/prefix")
+        Dml.init(str(missing), remote_project="dml://alice/demo", remote_uri="s3://bucket/prefix")

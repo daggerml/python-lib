@@ -27,8 +27,8 @@ def test_execute_init_does_not_forward_branch_argument(mock_dml_init):
         config_home=None,
         project_home=None,
         owner=None,
-        project_uri=None,
-        remote_uri="s3://test-bucket/test-prefix",
+        remote_project=None,
+        remote_root="s3://test-bucket/test-prefix",
         no_hooks=True,
     )
 
@@ -59,7 +59,7 @@ class TestExecuteInit:
             args = Namespace(
                 name="my-repo",
                 config_home=temp_dir,
-                remote_uri="s3://test-bucket/test-prefix",
+                remote_root="s3://test-bucket/test-prefix",
                 no_hooks=True,
             )
             with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")):
@@ -78,15 +78,15 @@ class TestExecuteInit:
         with pytest.raises(ValueError, match="Invalid project name: 'bad/name'"):
             execute_init(args)
 
-    def test_execute_init_accepts_project_uri_without_name(self, monkeypatch):
+    def test_execute_init_accepts_remote_project_without_name(self, monkeypatch):
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.chdir(temp_dir)
             args = Namespace(
                 name=None,
                 config_home=None,
                 project_home=None,
-                project_uri="dml://alice/demo",
-                remote_uri="s3://test-bucket/test-prefix",
+                remote_project="dml://alice/demo",
+                remote_root="s3://test-bucket/test-prefix",
                 no_hooks=True,
             )
             with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")):
@@ -95,21 +95,21 @@ class TestExecuteInit:
             assert result["remote_uri"] == "s3://test-bucket/test-prefix"
             assert result["created"] == {"db": True, "config": True}
 
-    def test_execute_init_rejects_name_with_project_uri(self):
+    def test_execute_init_rejects_name_with_remote_project(self):
         args = Namespace(
             name="demo",
             config_home=None,
             project_home=None,
             owner=None,
-            project_uri="dml://alice/demo",
-            remote_uri="s3://test-bucket/test-prefix",
+            remote_project="dml://alice/demo",
+            remote_root="s3://test-bucket/test-prefix",
             no_hooks=True,
         )
         with pytest.raises(
             ValueError,
             match=(
-                "NAME and --project-uri are mutually exclusive; provide NAME to derive project URI "
-                "or use --project-uri for an explicit URI"
+                "NAME and --remote-project are mutually exclusive; provide NAME to derive remote project "
+                "or use --remote-project for an explicit URI"
             ),
         ):
             execute_init(args)
@@ -125,9 +125,9 @@ class TestExecuteInit:
                 config_home=None,
                 project_home=None,
                 owner=None,
-                project_uri=None,
-                remote_uri="s3://test-bucket/test-prefix",
+                remote_project=None,
+                remote_root="s3://test-bucket/test-prefix",
                 no_hooks=True,
             )
-            with pytest.raises(DmlRepoError, match="user is required to derive project URI from NAME"):
+            with pytest.raises(DmlRepoError, match="user is required to derive remote project from NAME"):
                 execute_init(args)

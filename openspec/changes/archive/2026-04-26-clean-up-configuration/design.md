@@ -41,8 +41,8 @@ Remote-aware components should receive already-resolved `remote.uri` values from
 Alternative considered: keep `remote.root`, `remote.uri`, and bucket/prefix config side by side.
 Why not: multiple canonical representations for the same remote location are a major source of current config complexity.
 
-### Normalize project identity into `project.uri`
-The resolved config model will use `project.uri` as the canonical project identity, and the resolver will normalize that URI to always include a branch, defaulting from `default_branch` when needed. `project.uri` will never normalize to a tag form because tags are immutable and are not valid active project context. Code that needs the branch will use a `project.branch` helper on the resolved config object instead of a standalone canonical `branch` parameter.
+### Normalize project identity into `remote.project`
+The resolved config model will use `remote.project` as the canonical project identity, and the resolver will normalize that URI to always include a branch, defaulting from `default_branch` when needed. `remote.project` will never normalize to a tag form because tags are immutable and are not valid active project context. Code that needs the branch will use a `project.branch` helper on the resolved config object instead of a standalone canonical `branch` parameter.
 
 Alternative considered: keep a separate canonical `branch` config parameter.
 Why not: it duplicates information already carried by the normalized project URI and creates another overlap point between API and CLI.

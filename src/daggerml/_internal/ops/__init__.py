@@ -357,17 +357,17 @@ class DmlOps:
         name: str | None = None,
         owner: str | None = None,
         branch: str | None = None,
-        project_uri: str | None = None,
+        remote_project: str | None = None,
         remote_uri: str | None = None,
         user: str | None = None,
         config_home: str | None = None,
         no_hooks: bool = False,
     ) -> dict[str, str | None]:
         root = Path(path) if path else Path.cwd()
-        if name is not None and project_uri is not None:
+        if name is not None and remote_project is not None:
             raise ValueError(
-                "NAME and --project-uri are mutually exclusive; provide NAME to derive project URI or use "
-                "--project-uri for an explicit URI"
+                "NAME and --remote-project are mutually exclusive; provide NAME to derive remote project or use "
+                "--remote-project for an explicit URI"
             )
 
         global_cfg = DmlConfig.resolve(
@@ -391,23 +391,23 @@ class DmlOps:
 
         config_path = root / ".dml" / "config.toml"
         config_exists = config_path.exists()
-        if name is not None and not project_uri:
+        if name is not None and not remote_project:
             if not global_cfg.user:
                 raise DmlRepoError(
-                    "user is required to derive project URI from NAME; set DML_USER or configure global user.name"
+                    "user is required to derive remote project from NAME; set DML_USER or configure global user.name"
                 )
             owner_name = cls._default_owner(global_cfg.user)
-            project_uri = validate_dml_project_uri(f"dml://{owner_name}/{project_name}")
-        elif not project_uri and not config_exists:
-            project_uri = validate_dml_project_uri(f"dml://{owner_name}/{project_name}")
+            remote_project = validate_dml_project_uri(f"dml://{owner_name}/{project_name}")
+        elif not remote_project and not config_exists:
+            remote_project = validate_dml_project_uri(f"dml://{owner_name}/{project_name}")
         if remote_uri is None:
-            remote_uri = global_cfg.remote.uri
+            remote_uri = global_cfg.remote.root
 
         cfg = DmlConfig.resolve(
             explicit={
                 "project.home": str(root),
-                "project.uri": project_uri,
-                "remote.uri": remote_uri,
+                "remote.project": remote_project,
+                "remote.root": remote_uri,
                 "user": user,
                 "default_branch": branch_name,
                 "config_home": config_home,
@@ -419,30 +419,30 @@ class DmlOps:
         db_path = Path(cls._db_path(str(root)))
         db_exists = db_path.exists()
         needs_recovery_pull = config_exists and not db_exists and bool(
-            DmlConfig.resolve(explicit={"project.home": str(root)}).project.uri
+            DmlConfig.resolve(explicit={"project.home": str(root)}).remote.project
         )
 
-        if (project_uri or config_exists) and not cfg.remote.uri:
-            raise DmlRepoError("remote.uri is required when project.uri is configured")
+        if (remote_project or config_exists) and not cfg.remote.root:
+            raise DmlRepoError("remote.root is required when remote.project is configured")
 
         gitignore_path = root / ".dml" / ".gitignore"
         if not config_exists or not db_exists or not gitignore_path.exists():
             if config_exists:
                 layout_cfg = DmlProjectConfig.load(root)
             else:
-                project_uri_value = cfg.project.uri
-                if not project_uri_value:
-                    raise DmlRepoError("project.uri is required for init")
-                project_ref = parse_dml_project_uri(project_uri_value, require_identifier=False)
+                remote_project_value = cfg.remote.project
+                if not remote_project_value:
+                    raise DmlRepoError("remote.project is required for init")
+                project_ref = parse_dml_project_uri(remote_project_value, require_identifier=False)
                 layout_cfg = DmlProjectConfig(
                     name=project_ref.project,
                     owner=project_ref.owner,
-                    remote_uri=cfg.remote.uri,
+                    remote_uri=cfg.remote.root,
                 )
             init_project_layout(root, layout_cfg)
 
         if not db_exists:
-            with cls.create(str(root), user=cfg.user, remote_root=cfg.remote.uri, branch=cfg.default_branch):
+            with cls.create(str(root), user=cfg.user, remote_root=cfg.remote.root, branch=cfg.default_branch):
                 pass
 
         recovered_ref: str | None = None
@@ -450,7 +450,7 @@ class DmlOps:
             if not cfg.user:
                 raise DmlRepoError("user is required for recovery pull")
             s3_client = cls._create_s3_client()
-            with cls.open(str(root), remote_root=cfg.remote.uri) as ops:
+            with cls.open(str(root), remote_root=cfg.remote.root) as ops:
                 recovered_ref = ops.pull_project(
                     "origin", None, branch=cfg.default_branch, user=cfg.user, s3_client=s3_client
                 ).to

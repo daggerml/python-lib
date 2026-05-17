@@ -18,7 +18,7 @@ pytestmark = pytest.mark.slow
 
 
 def _remote_root_from_env() -> str:
-    return os.environ["DML_REMOTE_URI"]
+    return os.environ["DML_REMOTE_ROOT"]
 
 
 def _put_datum_hashed(temp_bo, data) -> Ref:

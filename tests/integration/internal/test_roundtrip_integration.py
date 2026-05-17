@@ -23,7 +23,7 @@ TEST_FN_ADAPTER = str(Path(__file__).resolve().parents[2] / "assets" / "internal
 
 
 def _remote_root_from_env() -> str:
-    return os.environ["DML_REMOTE_URI"]
+    return os.environ["DML_REMOTE_ROOT"]
 
 
 @dataclass(frozen=True)

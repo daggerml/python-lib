@@ -42,7 +42,7 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     assert loaded.name == "demo"
     assert loaded.owner == "alice"
     assert loaded.remote_uri == "s3://bucket/team/dml"
-    assert loaded.project_uri == "dml://alice/demo"
+    assert loaded.remote_project == "dml://alice/demo"
 
 
 def test_head_advance_and_revision_resolution(temp_bo_fn):

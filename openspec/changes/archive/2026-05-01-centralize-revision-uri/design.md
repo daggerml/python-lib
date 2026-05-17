@@ -20,7 +20,7 @@ Those operation constraints should be applied at call boundaries, not baked into
 **Goals:**
 - Establish one shared revision URI model and parse/stringify surface.
 - Ensure canonical stringification always emits branch or tag form.
-- Allow `project.uri` to carry either a branch or a tag.
+- Allow `remote.project` to carry either a branch or a tag.
 - Keep mutation restrictions explicit in operation methods.
 
 **Non-Goals:**

@@ -110,7 +110,7 @@ def main() -> None:
         "AWS_DEFAULT_REGION": "us-east-1",
         "AWS_SHARED_CREDENTIALS_FILE": "/dev/null",
         "AWS_ENDPOINT_URL": endpoint,
-        "DML_REMOTE_URI": remote_uri,
+        "DML_REMOTE_ROOT": remote_uri,
     }
 
     for key, value in env_values.items():
@@ -160,7 +160,7 @@ fi
 # shellcheck disable=SC1090
 source "${moto_env_file}"
 log "Moto ready: ${AWS_ENDPOINT_URL}"
-log "Remote URI: ${DML_REMOTE_URI}"
+log "Remote root: ${DML_REMOTE_ROOT}"
 
 log "Setting up DML repo in ${ignore_dir}"
 mkdir -p "${scratch_dir}" || true
@@ -186,9 +186,9 @@ log "Running example: 02-ssh_docker_dataset.py"
 python "${examples_dir}/02-ssh_docker_dataset.py"
 
 log "Listing DML refs after running all examples:"
-s3_ls_recursive "${DML_REMOTE_URI}/dml/refs/projects/"
+s3_ls_recursive "${DML_REMOTE_ROOT}/dml/refs/projects/"
 dml push --create
-s3_ls_recursive "${DML_REMOTE_URI}/dml/refs/projects/"
+s3_ls_recursive "${DML_REMOTE_ROOT}/dml/refs/projects/"
 
 log "Cleaning up first project to test fresh init with existing remote"
 cd .. && rm -rf "${project0}"

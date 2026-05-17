@@ -9,11 +9,11 @@ from daggerml._internal.config import DmlConfig
 
 def test_config_waterfall_defaults_env_explicit():
     cfg = DmlConfig.resolve(
-        defaults={"project.uri": "dml://alice/defaults"},
-        env={"DML_PROJECT_URI": "dml://alice/env"},
-        explicit={"project.uri": "dml://alice/explicit"},
+        defaults={"remote.project": "dml://alice/defaults"},
+        env={"DML_REMOTE_PROJECT": "dml://alice/env"},
+        explicit={"remote.project": "dml://alice/explicit"},
     )
-    assert cfg.project.uri == "dml://alice/explicit"
+    assert cfg.remote.project == "dml://alice/explicit"
 
 
 def test_repo_env_resolution():
@@ -40,10 +40,10 @@ def test_path_values_expand_user():
 
 def test_dml_uses_config_resolution_from_env(monkeypatch):
     monkeypatch.setenv("DML_PROJECT_HOME", "/tmp/from-env")
-    monkeypatch.setenv("DML_PROJECT_URI", "dml://alice/demo")
+    monkeypatch.setenv("DML_REMOTE_PROJECT", "dml://alice/demo")
     dml = Dml()
     assert dml._context.project_home == "/tmp/from-env"
-    assert dml._context.remote_uri == dml._context.config.remote.uri
+    assert dml._context.remote_uri == dml._context.config.remote.root
 
 
 def test_dml_constructor_rejects_legacy_aliases():
@@ -54,10 +54,10 @@ def test_dml_constructor_rejects_legacy_aliases():
 def test_remote_config_from_canonical_env():
     cfg = DmlConfig.resolve(
         env={
-            "DML_REMOTE_URI": "s3://bucket/project",
+            "DML_REMOTE_ROOT": "s3://bucket/project",
         }
     )
-    assert cfg.remote.uri == "s3://bucket/project"
+    assert cfg.remote.root == "s3://bucket/project"
 
 
 def test_remote_fetch_workers_defaults_to_16():
@@ -75,15 +75,15 @@ def test_remote_fetch_workers_rejects_invalid_values():
         DmlConfig.resolve(env={"DML_REMOTE_FETCH_WORKERS": "0"})
 
 
-def test_project_uri_stays_branchless_and_sets_db_path():
+def test_remote_project_stays_branchless_and_sets_db_path():
     cfg = DmlConfig.resolve(
         explicit={
             "project.home": "/tmp/demo",
-            "project.uri": "dml://alice/demo",
+            "remote.project": "dml://alice/demo",
         },
         env={"DML_DEFAULT_BRANCH": "stable"},
     )
-    assert cfg.project.uri == "dml://alice/demo"
+    assert cfg.remote.project == "dml://alice/demo"
     assert cfg.db.path == "/tmp/demo/.dml/db"
 
 
@@ -92,13 +92,13 @@ def test_global_scope_omits_project_config(tmp_path):
     dml_dir.mkdir()
     (dml_dir / "config.toml").write_text(
         """
-[project]
-uri = "dml://alice/demo"
+[remote]
+project = "dml://alice/demo"
 """.strip()
         + "\n"
     )
     cfg = DmlConfig.resolve(scope="global", explicit={"project.home": str(tmp_path)})
-    assert cfg.project.uri is None
+    assert cfg.remote.project is None
 
 
 def test_resolution_precedence_global_project_env_explicit(tmp_path):
@@ -109,8 +109,8 @@ def test_resolution_precedence_global_project_env_explicit(tmp_path):
     (project_dir / ".dml").mkdir(parents=True)
     (project_dir / ".dml" / "config.toml").write_text(
         """
-[project]
-uri = "dml://alice/demo"
+[remote]
+project = "dml://alice/demo"
 """.strip()
         + "\n"
     )
@@ -119,29 +119,29 @@ uri = "dml://alice/demo"
         explicit={"project.home": str(project_dir)},
         env={"DML_CONFIG_HOME": str(config_home)},
     )
-    assert cfg_from_project.project.uri == "dml://alice/demo"
+    assert cfg_from_project.remote.project == "dml://alice/demo"
 
     cfg_from_env = DmlConfig.resolve(
         explicit={"project.home": str(project_dir)},
-        env={"DML_CONFIG_HOME": str(config_home), "DML_PROJECT_URI": "dml://alice/env"},
+        env={"DML_CONFIG_HOME": str(config_home), "DML_REMOTE_PROJECT": "dml://alice/env"},
     )
-    assert cfg_from_env.project.uri == "dml://alice/env"
+    assert cfg_from_env.remote.project == "dml://alice/env"
 
     cfg = DmlConfig.resolve(
-        explicit={"project.home": str(project_dir), "project.uri": "dml://alice/explicit"},
-        env={"DML_CONFIG_HOME": str(config_home), "DML_PROJECT_URI": "dml://alice/env"},
+        explicit={"project.home": str(project_dir), "remote.project": "dml://alice/explicit"},
+        env={"DML_CONFIG_HOME": str(config_home), "DML_REMOTE_PROJECT": "dml://alice/env"},
     )
-    assert cfg.project.uri == "dml://alice/explicit"
+    assert cfg.remote.project == "dml://alice/explicit"
 
 
-def test_project_uri_rejects_tag_form():
+def test_remote_project_rejects_tag_form():
     with pytest.raises(ValueError, match="must not include a branch or tag"):
-        DmlConfig.resolve(explicit={"project.uri": "dml://alice/demo@v1"})
+        DmlConfig.resolve(explicit={"remote.project": "dml://alice/demo@v1"})
 
 
-def test_project_uri_rejects_branch_selector():
+def test_remote_project_rejects_branch_selector():
     with pytest.raises(ValueError, match="must not include a branch or tag"):
-        DmlConfig.resolve(explicit={"project.uri": "dml://alice/demo#main"})
+        DmlConfig.resolve(explicit={"remote.project": "dml://alice/demo#main"})
 
 
 def test_remote_config_defaults_to_empty_string(tmp_path):
@@ -149,7 +149,7 @@ def test_remote_config_defaults_to_empty_string(tmp_path):
     os.chdir(tmp_path)
     try:
         cfg = DmlConfig.resolve(env={"DML_CONFIG_HOME": str(tmp_path / "cfg")})
-        assert cfg.remote.uri == ""
+        assert cfg.remote.root == ""
     finally:
         os.chdir(old)
 

@@ -22,9 +22,9 @@ _PROJECT_SCOPE = "project/runtime"
 _GLOBAL_SCOPE = "global"
 _ENV_KEYS: dict[str, str] = {
     "project.home": "DML_PROJECT_HOME",
-    "project.uri": "DML_PROJECT_URI",
+    "remote.project": "DML_REMOTE_PROJECT",
     "db.path": "DML_DB_PATH",
-    "remote.uri": "DML_REMOTE_URI",
+    "remote.root": "DML_REMOTE_ROOT",
     "remote.fetch_workers": "DML_REMOTE_FETCH_WORKERS",
     "user": "DML_USER",
     "default_branch": "DML_DEFAULT_BRANCH",
@@ -84,23 +84,22 @@ def normalize_project_uri(uri: str, *, default_branch: str | None = None, requir
     return canonicalize_revision_uri(stringify_revision_uri(parsed), require_identifier=True)
 
 
-def validate_remote_uri(value: str) -> str:
+def validate_remote_root(value: str) -> str:
     if not isinstance(value, str):
-        raise ValueError("remote.uri must be a string")
+        raise ValueError("remote.root must be a string")
     if not value:
         return ""
     if not value.startswith("s3://"):
-        raise ValueError("remote.uri must be s3://bucket or s3://bucket/prefix")
+        raise ValueError("remote.root must be s3://bucket or s3://bucket/prefix")
     rest = value[5:]
     if not rest:
-        raise ValueError("remote.uri must include a bucket name")
+        raise ValueError("remote.root must include a bucket name")
     bucket, sep, prefix = rest.partition("/")
     if not bucket:
-        raise ValueError("remote.uri must include a bucket name")
+        raise ValueError("remote.root must include a bucket name")
     if sep and not prefix.strip("/"):
-        raise ValueError("remote.uri prefix must be non-empty when '/' is provided")
+        raise ValueError("remote.root prefix must be non-empty when '/' is provided")
     return value.rstrip("/")
-
 
 def global_config_home(env: Mapping[str, str] | None = None) -> Path:
     env_map = os.environ if env is None else env
@@ -198,13 +197,12 @@ def _load_project_layer(project_home: str | None) -> dict[str, object]:
     if not path.exists():
         return {}
     data = _read_toml(path)
-    project = data.get("project", {}) or {}
     remote = data.get("remote", {}) or {}
     layer: dict[str, object] = {"project.home": project_home}
-    if project.get("uri"):
-        layer["project.uri"] = str(project["uri"])
-    if remote.get("uri"):
-        layer["remote.uri"] = remote.get("uri")
+    if remote.get("project"):
+        layer["remote.project"] = str(remote["project"])
+    if remote.get("root"):
+        layer["remote.root"] = remote.get("root")
     if remote.get("fetch_workers") is not None:
         layer["remote.fetch_workers"] = remote.get("fetch_workers")
     return layer
@@ -248,7 +246,6 @@ def _env_layer(env: Mapping[str, str]) -> dict[str, object]:
 @dataclass(frozen=True)
 class DmlProjectSettings:
     home: str | None = None
-    uri: str | None = None
 
 
 @dataclass(frozen=True)
@@ -258,12 +255,9 @@ class DmlDbSettings:
 
 @dataclass(frozen=True)
 class DmlRemoteSettings:
-    uri: str = ""
+    project: str | None = None
+    root: str = ""
     fetch_workers: int = 16
-
-    @property
-    def root(self) -> str:
-        return self.uri
 
 
 @dataclass(frozen=True)
@@ -335,24 +329,24 @@ class DmlConfig:
         default_branch = str(default_branch_value) if default_branch_value else "main"
         _validate_ref_name("branch", default_branch)
 
-        project_uri: str | None = None
-        raw_project_uri = merged.get("project.uri")
-        if raw_project_uri is not None:
-            if not isinstance(raw_project_uri, str):
-                raise ValueError("project.uri must be a string")
-            project_uri = validate_dml_project_uri(raw_project_uri)
+        remote_project: str | None = None
+        raw_remote_project = merged.get("remote.project")
+        if raw_remote_project is not None:
+            if not isinstance(raw_remote_project, str):
+                raise ValueError("remote.project must be a string")
+            remote_project = validate_dml_project_uri(raw_remote_project)
 
         db_path = _coerce_path(merged.get("db.path"))
         if db_path is None and project_home and scope == _PROJECT_SCOPE:
             db_path = str(Path(project_home) / ".dml" / "db")
 
-        remote_uri = merged.get("remote.uri")
-        if remote_uri is None:
-            remote_uri_s = ""
+        remote_root = merged.get("remote.root")
+        if remote_root is None:
+            remote_root_s = ""
         else:
-            if not isinstance(remote_uri, str):
-                raise ValueError("remote.uri must be a string")
-            remote_uri_s = validate_remote_uri(remote_uri)
+            if not isinstance(remote_root, str):
+                raise ValueError("remote.root must be a string")
+            remote_root_s = validate_remote_root(remote_root)
 
         remote_fetch_workers = _coerce_positive_int(merged.get("remote.fetch_workers"), key="remote.fetch_workers")
         if remote_fetch_workers is None:
@@ -365,9 +359,9 @@ class DmlConfig:
             post_init=_coerce_commands(merged.get("hooks.post-init")) or (),
         )
         return cls(
-            project=DmlProjectSettings(home=project_home, uri=project_uri),
+            project=DmlProjectSettings(home=project_home),
             db=DmlDbSettings(path=db_path),
-            remote=DmlRemoteSettings(uri=remote_uri_s, fetch_workers=remote_fetch_workers),
+            remote=DmlRemoteSettings(project=remote_project, root=remote_root_s, fetch_workers=remote_fetch_workers),
             user=user,
             default_branch=default_branch,
             hooks=hooks,
@@ -380,10 +374,10 @@ class DmlConfig:
             "DML_DEFAULT_BRANCH": self.default_branch,
             "DML_CONFIG_HOME": self.config_home,
             "DML_DB_PATH": self.db.path,
-            "DML_REMOTE_URI": self.remote.uri,
+            "DML_REMOTE_ROOT": self.remote.root,
             "DML_REMOTE_FETCH_WORKERS": str(self.remote.fetch_workers),
+            "DML_REMOTE_PROJECT": self.remote.project,
             "DML_PROJECT_HOME": self.project.home,
-            "DML_PROJECT_URI": self.project.uri,
         }
         return env
 
@@ -391,13 +385,13 @@ class DmlConfig:
         return {
             "project": {
                 "home": self.project.home,
-                "uri": self.project.uri,
             },
             "db": {
                 "path": self.db.path,
             },
             "remote": {
-                "uri": self.remote.uri,
+                "project": self.remote.project,
+                "root": self.remote.root,
                 "fetch_workers": self.remote.fetch_workers,
             },
             "user": self.user,
@@ -451,32 +445,32 @@ class DmlProjectConfig:
         return validate_dml_project_uri(f"dml://{self.owner}/{self.name}")
 
     @property
-    def project_uri(self) -> str:
+    def remote_project(self) -> str:
         return self.uri
 
     def __post_init__(self) -> None:
         _validate_name("project name", self.name)
         _validate_name("project owner", self.owner)
         if self.remote_uri:
-            validate_remote_uri(self.remote_uri)
+            validate_remote_root(self.remote_uri)
 
     @classmethod
     def load(cls, project_dir: Path | str = ".") -> "DmlProjectConfig":
         resolved = DmlConfig.resolve(explicit={"project.home": str(project_dir)}, env={})
-        if not resolved.project.uri:
-            raise ValueError("Project config must define project.uri")
-        parsed = parse_dml_project_uri(resolved.project.uri, require_identifier=False)
-        return cls(name=parsed.project, owner=parsed.owner, remote_uri=resolved.remote.uri)
+        if not resolved.remote.project:
+            raise ValueError("Project config must define remote.project")
+        parsed = parse_dml_project_uri(resolved.remote.project, require_identifier=False)
+        return cls(name=parsed.project, owner=parsed.owner, remote_uri=resolved.remote.root)
 
     def save(self, project_dir: Path | str = ".") -> None:
         dml_dir = Path(project_dir) / ".dml"
         dml_dir.mkdir(parents=True, exist_ok=True)
         lines = [
-            "[project]",
-            f'uri = "{self.project_uri}"',
+            "[remote]",
+            f'project = "{self.remote_project}"',
         ]
         if self.remote_uri:
-            lines.extend(["", "[remote]", f'uri = "{validate_remote_uri(self.remote_uri)}"'])
+            lines.append(f'root = "{validate_remote_root(self.remote_uri)}"')
         (dml_dir / "config.toml").write_text("\n".join(lines) + "\n")
 
 
@@ -510,8 +504,8 @@ def run_project_hooks(
             "DML_PROJECT_NAME": project.name,
             "DML_PROJECT_OWNER": project.owner,
             "DML_CONFIG_HOME": str(config_home),
-            "DML_PROJECT_URI": project.project_uri,
-            "DML_REMOTE_URI": project.remote_uri,
+            "DML_REMOTE_PROJECT": project.remote_project,
+            "DML_REMOTE_ROOT": project.remote_uri,
         }
     )
     if remote_name is not None:

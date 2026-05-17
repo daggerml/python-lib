@@ -98,11 +98,11 @@ class TestHelpHelpers:
 
 
 class TestTopLevelCliParsing:
-    def test_cli_accepts_project_home_and_remote_uri(self):
+    def test_cli_accepts_project_home_and_remote_root(self):
         from daggerml._cli import cli
 
         old_argv = sys.argv
-        sys.argv = ["dml", "--project-home", "/repo", "--remote-uri", "s3://bucket/project", "status"]
+        sys.argv = ["dml", "--project-home", "/repo", "--remote-root", "s3://bucket/project", "status"]
         try:
             with patch("daggerml._cli.base.execute_command") as mock_execute:
                 cli()
@@ -111,13 +111,21 @@ class TestTopLevelCliParsing:
 
         args = mock_execute.call_args.args[0]
         assert args.project_home == "/repo"
-        assert args.runtime_remote_uri == "s3://bucket/project"
+        assert args.runtime_remote_root == "s3://bucket/project"
 
-    def test_cli_keeps_top_level_and_init_remote_uri_distinct(self):
+    def test_cli_keeps_top_level_and_init_remote_root_distinct(self):
         from daggerml._cli import cli
 
         old_argv = sys.argv
-        sys.argv = ["dml", "--remote-uri", "s3://bucket/runtime", "init", "--remote-uri", "s3://bucket/project", "demo"]
+        sys.argv = [
+            "dml",
+            "--remote-root",
+            "s3://bucket/runtime",
+            "init",
+            "--remote-root",
+            "s3://bucket/project",
+            "demo",
+        ]
         try:
             with patch("daggerml._cli.base.execute_command") as mock_execute:
                 cli()
@@ -125,8 +133,8 @@ class TestTopLevelCliParsing:
             sys.argv = old_argv
 
         args = mock_execute.call_args.args[0]
-        assert args.runtime_remote_uri == "s3://bucket/runtime"
-        assert args.remote_uri == "s3://bucket/project"
+        assert args.runtime_remote_root == "s3://bucket/runtime"
+        assert args.remote_root == "s3://bucket/project"
 
     def test_cli_help_lists_new_surface_and_not_legacy_commands(self):
         from daggerml._cli import cli
@@ -192,10 +200,10 @@ class TestExecuteCommand:
     @patch("daggerml._cli.base.get_repo_path")
     def test_successful_execution(self, mock_get_path, mock_dml):
         mock_get_path.return_value = "/repo/path"
-        mock_dml.return_value.config.show.return_value = {"remote": {"uri": "s3://test-bucket/test-prefix"}}
+        mock_dml.return_value.config.show.return_value = {"remote": {"root": "s3://test-bucket/test-prefix"}}
         args = Namespace(
             project_home=None,
-            runtime_remote_uri=None,
+            runtime_remote_root=None,
             op="show",
             func=Mock(return_value={"result": "ok"}),
         )
@@ -228,7 +236,7 @@ class TestExecuteCommand:
     def test_execution_error(self, mock_error, mock_get_path, mock_dml):
         mock_get_path.return_value = "/repo/path"
         mock_dml.side_effect = FileNotFoundError("repo not found")
-        args = Namespace(project_home=None, runtime_remote_uri=None, op="show", func=Mock())
+        args = Namespace(project_home=None, runtime_remote_root=None, op="show", func=Mock())
 
         execute_command(args)
 

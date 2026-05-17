@@ -33,7 +33,7 @@ def _reset_registries(tmp_path, monkeypatch):
 
 
 def _remote() -> dict[str, str]:
-    return {"root": os.environ["DML_REMOTE_URI"]}
+    return {"root": os.environ["DML_REMOTE_ROOT"]}
 
 
 def _sub_runnable() -> Runnable:

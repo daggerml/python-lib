@@ -32,7 +32,7 @@ The system SHALL resolve configurable values using explicit CLI/API arguments fi
 
 #### Scenario: Config used as fallback for non-checkout values
 - **WHEN** a command omits explicit overrides and no matching environment value is set
-- **THEN** the command uses configured values such as `project.uri`, `remote.uri`, or `default_branch` but not a config-derived current branch
+- **THEN** the command uses configured values such as `remote.project`, `remote.uri`, or `default_branch` but not a config-derived current branch
 
 #### Scenario: Remote storage env vars override config
 - **WHEN** `DML_REMOTE_BUCKET` or `DML_REMOTE_PREFIX` is set for a remote operation
@@ -54,7 +54,7 @@ The system SHALL support only the DML environment variables defined for the proj
 - **THEN** the system does not use it as checkout state or branch selection input
 
 #### Scenario: Project env overrides config
-- **WHEN** `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, or `DML_PROJECT_URI` is set
+- **WHEN** `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, or `DML_REMOTE_PROJECT` is set
 - **THEN** the corresponding supported project config value is overridden for that command
 
 #### Scenario: Remote env overrides config

@@ -13,8 +13,8 @@ def setup_config_parser(parser: ArgumentParser) -> None:
         examples=[
             "dml config show",
             "dml config show --contrib",
-            "dml config get project.uri",
-            "dml config set project.uri dml://alice/demo",
+            "dml config get remote.project",
+            "dml config set remote.project dml://alice/demo",
             "dml config set --global user alice@example",
         ],
     )
@@ -29,7 +29,7 @@ def setup_config_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         get_parser,
         description="Read one config value and print it as plain text.",
-        examples=["dml config get project.uri", "dml config get --global user"],
+        examples=["dml config get remote.project", "dml config get --global user"],
     )
     get_parser.add_argument("--global", dest="global_scope", action="store_true", help="Use global config scope")
     get_parser.add_argument("key", help="Config key")
@@ -39,7 +39,7 @@ def setup_config_parser(parser: ArgumentParser) -> None:
     apply_help_config(
         set_parser,
         description="Set one config value.",
-        examples=["dml config set project.uri dml://alice/demo", "dml config set --global user alice@example"],
+        examples=["dml config set remote.project dml://alice/demo", "dml config set --global user alice@example"],
     )
     set_parser.add_argument("--global", dest="global_scope", action="store_true", help="Use global config scope")
     set_parser.add_argument("key", help="Config key")

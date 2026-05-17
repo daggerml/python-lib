@@ -23,7 +23,7 @@ None.
 ### Modified Capabilities
 
 - `headops-pointer-management`: extend `HeadOps` to own persisted `.dml/HEAD` checkout state in addition to branch and index pointers.
-- `shared-internal-configuration`: redefine project-local config so `project.uri` is branchless identity and branch selection is no longer a configuration concern.
+- `shared-internal-configuration`: redefine project-local config so `remote.project` is branchless identity and branch selection is no longer a configuration concern.
 - `git-like-commit-ops`: resolve checkout state from `.dml/HEAD`, formalize immutable detached commits, and require attached `HEAD` for mutable project workflows.
 - `remote-project-refs`: remove `DML_BRANCH` and `[branch].current` assumptions from project-local config, init, hook environment, and project workflow defaults.
 - `revision-parsing-contract-matrix`: update revision-resolution ownership so `HEAD` cases are defined by file-backed checkout state rather than config-derived branch context.

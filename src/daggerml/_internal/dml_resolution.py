@@ -58,7 +58,7 @@ def _resolve_project_tag_ref(value: str, *, head_ops, project_dir: str):
         project = load_project_config(project_dir)
     except Exception:
         return None
-    return _resolve_local_tag_ref(f"{project.uri}@{value}", head_ops)
+    return _resolve_local_tag_ref(f"{project.remote_project}@{value}", head_ops)
 
 
 def _coerce_ref(value: str | Ref, expected_root_ns: str) -> Ref | None:

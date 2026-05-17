@@ -19,7 +19,7 @@ class DmlRuntimeContext:
 
     @property
     def remote_uri(self) -> str:
-        return self.config.remote.uri
+        return self.config.remote.root
 
     @property
     def user(self) -> str | None:
@@ -40,7 +40,7 @@ def resolve_runtime_context(
     config = DmlConfig.resolve(
         explicit={
             "project.home": project_home,
-            "remote.uri": remote_uri,
+            "remote.root": remote_uri,
             "user": user,
             "config_home": config_home,
         }

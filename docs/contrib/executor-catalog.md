@@ -80,7 +80,7 @@ Define concise runtime contracts for each contrib executor.
 **Invocation Surfaces**
 
 - Container invocation MUST call the nested adapter executable directly with S3 input/output URIs derived from `AdapterIO` and adapter CLI polling enabled.
-- Container invocation MUST pass `DML_REMOTE_URI` and required AWS environment variables to the container.
+- Container invocation MUST pass `DML_REMOTE_ROOT` and required AWS environment variables to the container.
 - Container invocation MUST NOT pass `DML_DYNAMODB_TABLE`.
 
 **Behavior/Semantics**
@@ -224,7 +224,7 @@ Define concise runtime contracts for each contrib executor.
 #### `batch` executor
 
 - Deterministic failure on invalid `lambda_uri`/image/sub/resource kwargs shape.
-- Deterministic failure when required Batch environment/configuration is missing (`CPU_QUEUE`, `GPU_QUEUE`, `BATCH_TASK_ROLE_ARN`, or an S3-backed `remote.uri`).
+- Deterministic failure when required Batch environment/configuration is missing (`CPU_QUEUE`, `GPU_QUEUE`, `BATCH_TASK_ROLE_ARN`, or an S3-backed `remote.root`).
 - Deterministic failure on Batch job-definition registration, submission, describe, cancel, or terminate errors.
 - Deterministic failure when a terminal Batch job produces no valid canonical adapter result payload.
 

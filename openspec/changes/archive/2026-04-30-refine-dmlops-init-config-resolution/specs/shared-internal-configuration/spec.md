@@ -16,20 +16,20 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **THEN** `DmlOps.init` resolves them through the shared internal resolver before mutating project state
 
 ### Requirement: Project URI is normalized and exposes helper accessors
-The system SHALL normalize `project.uri` so that resolved project configuration always includes a branch and never a tag. The resolved config object SHALL expose a `project.branch` helper derived from the normalized URI.
+The system SHALL normalize `remote.project` so that resolved project configuration always includes a branch and never a tag. The resolved config object SHALL expose a `project.branch` helper derived from the normalized URI.
 
 #### Scenario: Missing branch normalizes from default branch
-- **WHEN** `project.uri` is provided without a branch in `project/runtime` scope
-- **THEN** the resolver appends the effective default branch to the normalized `project.uri`
+- **WHEN** `remote.project` is provided without a branch in `project/runtime` scope
+- **THEN** the resolver appends the effective default branch to the normalized `remote.project`
 
 #### Scenario: Tag URI is rejected for project context
-- **WHEN** `project.uri` is provided with a tag selector
+- **WHEN** `remote.project` is provided with a tag selector
 - **THEN** project configuration resolution fails because active project context must target a branch, not an immutable tag
 
 #### Scenario: Project branch helper is derived from normalized URI
-- **WHEN** resolved configuration includes `project.uri`
+- **WHEN** resolved configuration includes `remote.project`
 - **THEN** `project.branch` returns the branch encoded in the normalized URI rather than reading a standalone branch config parameter
 
 #### Scenario: Init fails when required project URI cannot resolve validly
-- **WHEN** init flow requires `project.uri` for bootstrap behavior but resolver output leaves it invalid or unresolved
+- **WHEN** init flow requires `remote.project` for bootstrap behavior but resolver output leaves it invalid or unresolved
 - **THEN** `DmlOps.init` fails before creating or mutating repository state

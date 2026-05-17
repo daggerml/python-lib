@@ -11,12 +11,12 @@ The system SHALL treat `.dml/config.toml` + missing `.dml/db/` as a recoverable 
 - **THEN** initialization uses `dml_context` to resolve bootstrap context, creates `.dml/db/`, and completes without requiring manual repository repair
 
 ### Requirement: Recovery mode pulls when a project URI is configured
-The system SHALL perform project bootstrap pull during recovery when resolved configuration includes `project.uri`.
+The system SHALL perform project bootstrap pull during recovery when resolved configuration includes `remote.project`.
 
 #### Scenario: Recovery triggers pull when project URI is present
-- **WHEN** the `Dml` init/bootstrap workflow recovers a missing DB and resolved config includes `project.uri`
+- **WHEN** the `Dml` init/bootstrap workflow recovers a missing DB and resolved config includes `remote.project`
 - **THEN** it uses `dml_context` to obtain the resolved project and remote configuration and runs pull through the relevant ops-backed workflow to populate local repository state
 
 #### Scenario: Recovery skips pull when project URI is absent
-- **WHEN** the `Dml` init/bootstrap workflow recovers a missing DB and resolved config has no `project.uri`
+- **WHEN** the `Dml` init/bootstrap workflow recovers a missing DB and resolved config has no `remote.project`
 - **THEN** it creates local DB state without invoking pull

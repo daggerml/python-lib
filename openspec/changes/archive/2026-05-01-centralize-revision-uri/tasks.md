@@ -14,12 +14,12 @@
 
 ## 3. Align policy semantics (tags allowed in project URI)
 
-- [x] 3.1 Remove config-layer branch-only rejection for `project.uri`.
+- [x] 3.1 Remove config-layer branch-only rejection for `remote.project`.
 - [x] 3.2 Keep operation-level branch/tag capability checks (e.g., push-branch requires branch; push-tag requires tag).
 - [x] 3.3 Review and update `DmlProjectConfig` behavior to support tag-bearing project URI usage without breaking branch mutation flows.
 
 ## 4. Validate behavior and documentation
 
 - [x] 4.1 Update/add tests for centralized parse/stringify/canonicalize behavior and wrapper compatibility.
-- [x] 4.2 Update/add tests proving `project.uri` accepts tags while mutation constraints remain enforced by operation methods.
+- [x] 4.2 Update/add tests proving `remote.project` accepts tags while mutation constraints remain enforced by operation methods.
 - [x] 4.3 Update relevant OpenSpec spec deltas (`shared-internal-configuration`, `remote-project-refs`) to reflect centralized URI handling and tag-allowed project URI semantics.

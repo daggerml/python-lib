@@ -40,21 +40,21 @@ class TestSetupConfigParser:
                 parser.parse_args(["set", "--help"])
         set_help = mock_stdout.getvalue()
 
-        assert "dml config get project.uri" in get_help
-        assert "dml config set project.uri dml://alice/demo" in set_help
+        assert "dml config get remote.project" in get_help
+        assert "dml config set remote.project dml://alice/demo" in set_help
 
 
 class TestExecuteConfig:
     def test_set_and_get_local_value(self):
         with temporary_dml() as dml:
-            args_set = Namespace(global_scope=False, key="project.uri", value=["dml://alice/demo"])
+            args_set = Namespace(global_scope=False, key="remote.project", value=["dml://alice/demo"])
             assert execute_config_set(dml, args_set) == ""
-            args_get = Namespace(global_scope=False, key="project.uri")
+            args_get = Namespace(global_scope=False, key="remote.project")
             assert execute_config_get(dml, args_get) == "dml://alice/demo"
 
     def test_rejects_invalid_global_key(self):
         with temporary_dml() as dml:
-            args = Namespace(global_scope=True, key="project.uri", value=["dml://alice/demo"])
+            args = Namespace(global_scope=True, key="remote.project", value=["dml://alice/demo"])
             with pytest.raises(DmlRepoError, match="not valid in global scope"):
                 execute_config_set(dml, args)
 
@@ -70,13 +70,13 @@ class TestTopLevelConfigCli:
     def test_dml_config_get_prints_plain_text(self, tmp_path):
         dml_dir = tmp_path / ".dml"
         dml_dir.mkdir()
-        (dml_dir / "config.toml").write_text('[project]\nuri = "dml://alice/demo"\n')
+        (dml_dir / "config.toml").write_text('[remote]\nproject = "dml://alice/demo"\n')
 
         old_argv = sys.argv
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         old_cwd = os.getcwd()
-        sys.argv = ["dml", "config", "get", "project.uri"]
+        sys.argv = ["dml", "config", "get", "remote.project"]
         sys.stdout = StringIO()
         sys.stderr = StringIO()
         os.chdir(str(tmp_path))

@@ -38,7 +38,7 @@ class TestInitCLIIntegration:
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.chdir(temp_dir)
             stdout, stderr = self.run_cli_command(
-                ["init", "--config-home", temp_dir, "--remote-uri", "s3://test-bucket/test-prefix", "named-repo"]
+                ["init", "--config-home", temp_dir, "--remote-root", "s3://test-bucket/test-prefix", "named-repo"]
             )
             assert not stderr
             payload = json.loads(stdout.strip())
@@ -50,15 +50,15 @@ class TestInitCLIIntegration:
             assert payload["created"] == {"db": True, "config": True}
             assert (expected_repo / ".dml" / "db").exists()
 
-    def test_init_cli_requires_name_or_project_uri(self):
+    def test_init_cli_requires_name_or_remote_project(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             explicit = Path(temp_dir) / "db-only"
             explicit.mkdir()
             stdout, stderr = self.run_cli_command(
-                ["--project-home", str(explicit), "init", "--remote-uri", "s3://test-bucket/test-prefix"]
+                ["--project-home", str(explicit), "init", "--remote-root", "s3://test-bucket/test-prefix"]
             )
             assert not stdout
             payload = json.loads(stderr.strip())
             assert payload["type"] == "DmlRepoError"
             assert payload["command"] == "init"
-            assert payload["error"] == "init: Either NAME or project_uri is required"
+            assert payload["error"] == "init: Either NAME or remote_project is required"

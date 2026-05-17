@@ -21,7 +21,7 @@ The system SHALL expose one shared internal resolver that supports `project/runt
 - **THEN** the resolver applies `explicit > environment variables > global config > defaults` without requiring a project config file
 
 ### Requirement: Canonical config parameters are reduced to one normalized set
-The system SHALL normalize supported configuration inputs into the canonical internal parameters `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`.
+The system SHALL normalize supported configuration inputs into the canonical internal parameters `project.home`, `remote.project`, `db.path`, `remote.root`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`.
 
 #### Scenario: Branch context is not a canonical config parameter
 - **WHEN** project configuration is resolved
@@ -29,7 +29,7 @@ The system SHALL normalize supported configuration inputs into the canonical int
 
 #### Scenario: Legacy overlapping remote parameters are not canonical
 - **WHEN** remote-backed configuration is resolved
-- **THEN** the canonical remote parameter is `remote.uri` rather than separate `remote.root`, `remote.bucket`, or `remote.prefix` parameters
+- **THEN** the canonical remote parameter is `remote.root` rather than separate `remote.bucket` or `remote.prefix` parameters
 
 ### Requirement: Multiple config sources normalize into the shared internal model
 The system SHALL treat explicit arguments, environment variables, project-local config, and global config as sources that feed the shared internal configuration model. Source-specific loading may differ, but normalization and precedence MUST be centralized in the shared internal resolver.
@@ -51,18 +51,18 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **THEN** `DmlOps.init` resolves them through the shared internal resolver before mutating project state
 
 ### Requirement: Project URI is normalized and exposes helper accessors
-The system SHALL normalize and canonicalize local `project.uri` as a branchless project identity through shared revision URI utilities. Resolved configuration SHALL treat checkout state as repository state owned by `.dml/HEAD` rather than as a selector embedded in config.
+The system SHALL normalize and canonicalize local `remote.project` as a branchless project identity through shared revision URI utilities. Resolved configuration SHALL treat checkout state as repository state owned by `.dml/HEAD` rather than as a selector embedded in config.
 
 #### Scenario: Local project URI remains branchless
-- **WHEN** `project.uri` is resolved for local project configuration
+- **WHEN** `remote.project` is resolved for local project configuration
 - **THEN** shared configuration preserves canonical branchless form `dml://<owner>/<project>`
 
 #### Scenario: Tag or branch selector is not accepted for local project config
-- **WHEN** local project configuration provides `project.uri` with a branch or tag selector
+- **WHEN** local project configuration provides `remote.project` with a branch or tag selector
 - **THEN** configuration resolution fails instead of translating that selector into checkout state
 
 #### Scenario: Project helper accessors do not expose current checkout branch
-- **WHEN** resolved configuration includes `project.uri`
+- **WHEN** resolved configuration includes `remote.project`
 - **THEN** helper accessors expose project identity only and do not treat config as the source of the active branch or detached commit
 
 ### Requirement: DB path can be overridden but defaults from project home
@@ -95,11 +95,11 @@ The CLI SHALL name explicit configuration override flags after the canonical par
 - **THEN** it reads that value from a flag named after `project.home`
 - **AND** it forwards the value into shared resolution as `project.home`
 
-#### Scenario: Remote-uri flag maps to canonical parameter
+#### Scenario: Remote-root flag maps to canonical parameter
 - **WHEN** the CLI resolves an explicit remote project override
-- **THEN** it reads that value from a flag named after `remote.uri`
-- **AND** it forwards the value into shared resolution as `remote.uri`
+- **THEN** it reads that value from a flag named after `remote.root`
+- **AND** it forwards the value into shared resolution as `remote.root`
 
 #### Scenario: Existing canonical names remain unchanged
-- **WHEN** the CLI exposes other explicit config-shaped overrides such as `--project-uri` or `--config-home`
+- **WHEN** the CLI exposes other explicit config-shaped overrides such as `--remote-project` or `--config-home`
 - **THEN** those flags continue using the established canonical names rather than introducing alternate aliases

@@ -47,7 +47,7 @@ Historical cancellation traversal is stored separately in `execution_record.spaw
 
 ## Required Environment Variables
 
-- `DML_REMOTE_URI` — S3 URI prefix used for all remote operations, including lock, active execution, `launch_state`, `execution_record`, and live call-edge lineage.
+- `DML_REMOTE_ROOT` — S3 URI prefix used for all remote operations, including lock, active execution, `launch_state`, `execution_record`, and live call-edge lineage.
 
 `DML_DYNAMODB_TABLE` is no longer used or required.
 

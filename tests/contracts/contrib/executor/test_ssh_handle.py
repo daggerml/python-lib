@@ -19,7 +19,7 @@ def _reset_registries(tmp_path, monkeypatch):
     areg._reset_for_tests()
     ereg._reset_for_tests()
     monkeypatch.setenv("DML_TEST_FN_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("DML_REMOTE_URI", "s3://test-bucket/test-prefix")
+    monkeypatch.setenv("DML_REMOTE_ROOT", "s3://test-bucket/test-prefix")
     areg.register_adapter(LocalAdapter)
     ereg.register_executor(ScriptExecutor)
     ereg.register_executor(SshExecutor)
@@ -29,7 +29,7 @@ def _reset_registries(tmp_path, monkeypatch):
 
 
 def _remote() -> dict[str, str]:
-    return {"root": os.environ["DML_REMOTE_URI"]}
+    return {"root": os.environ["DML_REMOTE_ROOT"]}
 
 
 def _sub_runnable() -> Runnable:
@@ -134,7 +134,7 @@ def test_ssh_executor_handle_stage_matrix_SSH_HDL_001_to_SSH_HDL_004(
     assert seen["cmd"][:4] == ["ssh", "-p", "2222", "worker.example"]
     assert seen["cmd"][4].startswith("set -e; . /etc/dml.env; exec dml-local-adapter")
     assert ". /etc/dml.env" in seen["cmd"][4]
-    assert "DML_REMOTE_URI" not in seen["cmd"][4]
+    assert "DML_REMOTE_ROOT" not in seen["cmd"][4]
     assert "--poll" in seen["cmd"][4]
     assert seen["payload"]["runnable"]["target"] == "script"
     assert seen["payload"]["cache_key"] == "ck-ssh-handle"

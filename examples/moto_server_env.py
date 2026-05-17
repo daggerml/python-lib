@@ -49,7 +49,7 @@ def main() -> None:
             "AWS_DEFAULT_REGION": "us-east-1",
             "AWS_SHARED_CREDENTIALS_FILE": "/dev/null",
             "AWS_ENDPOINT_URL": endpoint,
-            "DML_REMOTE_URI": "s3://daggerml-example/artifacts",
+            "DML_REMOTE_ROOT": "s3://daggerml-example/artifacts",
         }
 
         for key, value in env_values.items():
@@ -61,7 +61,7 @@ def main() -> None:
         print("Moto server started.")
         print(f"  Endpoint: {endpoint}")
         print("  Bucket: daggerml-example")
-        print(f"  DML_REMOTE_URI: {env_values['DML_REMOTE_URI']}")
+        print(f"  DML_REMOTE_ROOT: {env_values['DML_REMOTE_ROOT']}")
         print()
         print(f"Env file written: {env_file}")
         print(f"Source it with: source {env_file}")

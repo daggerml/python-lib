@@ -39,16 +39,16 @@ The CLI SHALL expose explicit project and remote override flags using the canoni
 - **AND** the CLI does not advertise `--repo` as the supported flag name
 
 #### Scenario: Top-level remote override uses canonical name
-- **WHEN** a user passes an explicit remote project URI to any command
-- **THEN** the CLI accepts `--remote-uri <uri>` as the top-level override flag
-- **AND** the CLI does not advertise `--remote-root` as the supported flag name
+- **WHEN** a user passes an explicit remote project root to any command
+- **THEN** the CLI accepts `--remote-root <uri>` as the top-level override flag
+- **AND** the CLI does not advertise `--remote-uri` as the supported flag name
 
 ### Requirement: CLI guidance uses canonical flag names consistently
 CLI help text, examples, and normalized user-facing recovery hints SHALL use the same canonical flag names as the parser surface.
 
 #### Scenario: Help examples show canonical overrides
 - **WHEN** a user opens top-level or subcommand help for commands that mention explicit config overrides
-- **THEN** the examples and help text refer to `--project-home` and `--remote-uri` instead of legacy aliases
+- **THEN** the examples and help text refer to `--project-home` and `--remote-root` instead of legacy aliases
 
 #### Scenario: Missing project-home hint uses canonical flag name
 - **WHEN** command execution fails because no local project path can be resolved
@@ -57,7 +57,7 @@ CLI help text, examples, and normalized user-facing recovery hints SHALL use the
 ### Requirement: Shared public flag names do not create ambiguous CLI behavior
 When the CLI uses the same canonical public flag spelling in different parser scopes, command dispatch SHALL preserve the intended meaning for each command path.
 
-#### Scenario: Init keeps its own remote-uri input without shadowing the top-level override
-- **WHEN** the CLI exposes both a top-level `--remote-uri` option and `init --remote-uri`
+#### Scenario: Init keeps its own remote-root input without shadowing the top-level override
+- **WHEN** the CLI exposes both a top-level `--remote-root` option and `init --remote-root`
 - **THEN** parsing and command execution keep those inputs distinguishable
-- **AND** `init` continues to forward its own `--remote-uri` value to bootstrap project remote configuration
+- **AND** `init` continues to forward its own `--remote-root` value to bootstrap project remote configuration

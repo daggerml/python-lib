@@ -5,10 +5,10 @@ The `dml init` inputs currently force users to provide a project name even when 
 ## What Changes
 
 - Make `name` optional in `init` so callers can initialize from explicit URI-only inputs.
-- Make `name` and `project_uri` mutually exclusive at the `init` contract boundary.
-- When `name` is provided, derive `project_uri` from `name` plus resolved global config user.
+- Make `name` and `remote_project` mutually exclusive at the `init` contract boundary.
+- When `name` is provided, derive `remote_project` from `name` plus resolved global config user.
 - Raise a descriptive repository/config error when `name` is provided but global config user is unresolved.
-- Keep existing behavior for explicit `project_uri` initialization paths.
+- Keep existing behavior for explicit `remote_project` initialization paths.
 
 ## Capabilities
 
@@ -21,5 +21,5 @@ The `dml init` inputs currently force users to provide a project name even when 
 ## Impact
 
 - Affected code: init CLI handler and `DmlOps.init` identity validation/derivation paths.
-- Affected APIs: initialization argument semantics (`name` optional, `name`/`project_uri` exclusivity).
+- Affected APIs: initialization argument semantics (`name` optional, `name`/`remote_project` exclusivity).
 - Error behavior: clearer user-facing failure when user identity cannot be resolved for name-based initialization.

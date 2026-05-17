@@ -37,14 +37,14 @@ Rules:
 ```json
 {
   "project": {
-    "home": "string-or-null",
-    "uri": "string-or-null"
+    "home": "string-or-null"
   },
   "db": {
     "path": "string-or-null"
   },
   "remote": {
-    "uri": "string-or-empty",
+    "project": "string-or-null",
+    "root": "string-or-empty",
     "fetch_workers": "positive-integer"
   },
   "user": "string-or-null",
@@ -58,8 +58,8 @@ Rules:
 
 Rules:
 
-- canonical config parameters are `project.home`, `project.uri`, `db.path`, `remote.uri`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
-- `project.uri` for local project config is branchless project identity only: `dml://<owner>/<project>`.
+- canonical config parameters are `project.home`, `remote.project`, `db.path`, `remote.root`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
+- `remote.project` for local project config is branchless project identity only: `dml://<owner>/<project>`.
 - checkout state is not part of resolved configuration and MUST be read from `.dml/HEAD`.
 - config key names MUST remain stable across API, CLI, runtime, and ops boundaries.
 
@@ -83,9 +83,9 @@ Rules:
 ## Environment Variable Mapping
 
 - `project.home`: `DML_PROJECT_HOME`
-- `project.uri`: `DML_PROJECT_URI`
+- `remote.project`: `DML_REMOTE_PROJECT`
 - `db.path`: `DML_DB_PATH`
-- `remote.uri`: `DML_REMOTE_URI`
+- `remote.root`: `DML_REMOTE_ROOT`
 - `remote.fetch_workers`: `DML_REMOTE_FETCH_WORKERS`
 - `user`: `DML_USER`
 - `default_branch`: `DML_DEFAULT_BRANCH`
@@ -99,15 +99,15 @@ Rules:
 ## Field Constraints
 
 - `default_branch` default MUST be `main` unless explicitly overridden.
-- `project.uri`, when resolved from local project config, MUST NOT include a branch or tag selector.
-- `remote.uri`, when present, MUST be an `s3://bucket` or `s3://bucket/prefix` URI designating the project root.
+- `remote.project`, when resolved from local project config, MUST NOT include a branch or tag selector.
+- `remote.root`, when present, MUST be an `s3://bucket` or `s3://bucket/prefix` URI designating the project root.
 - `remote.fetch_workers` MUST be a positive integer and defaults to `16`.
 
 ## Project Config
 
 Git-like project commands store local state under `<project>/.dml/`:
 
-- `.dml/config.toml` contains `[project]` and optional `[remote]` tables.
+- `.dml/config.toml` contains a `[remote]` table and optional remote settings.
 - `.dml/HEAD` contains the current checkout state as either `ref: refs/local/heads/<branch>` or `commit:<id>`.
 - `.dml/db/` contains the local object database.
 - `.dml/.gitignore` contains `*`.
@@ -122,11 +122,11 @@ Project command resolution uses the shared internal resolver instead of frontend
 
 - when `db.path` is unset and `project.home` is present in `project/runtime` scope, `db.path` defaults to `<project.home>/.dml/db/`.
 - `default_branch` is bootstrap and fetch fallback state; it is not the active checkout branch.
-- when `remote.uri` is present, runtime derives the protocol root as `<remote.uri>/dml/`.
+- when `remote.root` is present, runtime derives the protocol root as `<remote.root>/dml/`.
 
 ## Breaking Change
 
-- Backward compatibility with selector-bearing local `project.uri` values is not supported.
+- Backward compatibility with selector-bearing local `remote.project` values is not supported.
 - `DML_BRANCH` is not a supported configuration input.
 - Repositories using the old local config format must be rewritten manually.
 

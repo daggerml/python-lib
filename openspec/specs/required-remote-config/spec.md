@@ -1,5 +1,5 @@
 ### Requirement: Remote-aware components require explicit remote configuration
-The system SHALL require explicit remote configuration at the constructor or helper boundary for any runtime or ops component that performs remote-backed behavior. Remote-aware interfaces MUST NOT model remote configuration as optional, MUST NOT provide `None` defaults for required remote parameters, and MUST receive normalized `remote.uri` configuration from the shared internal configuration resolver rather than reading raw environment variables or project config files themselves.
+The system SHALL require explicit remote configuration at the constructor or helper boundary for any runtime or ops component that performs remote-backed behavior. Remote-aware interfaces MUST NOT model remote configuration as optional, MUST NOT provide `None` defaults for required remote parameters, and MUST receive normalized `remote.root` configuration from the shared internal configuration resolver rather than reading raw environment variables or project config files themselves.
 
 #### Scenario: Remote-aware ops constructor requires remote URI
 - **WHEN** a remote-aware ops type is defined
@@ -14,5 +14,5 @@ The system SHALL require explicit remote configuration at the constructor or hel
 - **THEN** it receives already-resolved remote configuration from its caller instead of inspecting `DML_REMOTE`, older remote env-var forms, or project config files directly
 
 #### Scenario: Init fails when required remote URI cannot resolve validly
-- **WHEN** `DmlOps.init` requires remote-backed bootstrap behavior and shared config resolution does not produce a valid `remote.uri`
+- **WHEN** `DmlOps.init` requires remote-backed bootstrap behavior and shared config resolution does not produce a valid `remote.root`
 - **THEN** init fails with a configuration error instead of proceeding with unresolved or implicit remote configuration

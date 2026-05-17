@@ -12,7 +12,7 @@
 
 **GAP 3 — CLI help text contradicts the spec**
 
-`setup_init_parser` still shows `dml init --project-uri dml://alice/my-project#main` as an example. This is exactly the form the spec forbids. Validation rejects it at runtime, but the help text is misleading.
+`setup_init_parser` still shows `dml init --remote-project dml://alice/my-project#main` as an example. This is exactly the form the spec forbids. Validation rejects it at runtime, but the help text is misleading.
 
 **GAP 4 — `Dml.temporary()` overuses the branch override**
 

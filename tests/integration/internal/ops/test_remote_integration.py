@@ -142,7 +142,7 @@ class TestRemoteKeyMapping:
 
     def test_cas_key_with_prefix(self, remote_ops, monkeypatch):
         """Test CAS key generation with a different prefix."""
-        monkeypatch.setenv("DML_REMOTE_URI", "s3://test-bucket/myrepo")
+        monkeypatch.setenv("DML_REMOTE_ROOT", "s3://test-bucket/myrepo")
         # Need to recreate remote_ops to pick up the new prefix
         remote_ops_with_prefix = RemoteOps(
             _db=remote_ops._db,
@@ -176,7 +176,7 @@ class TestRemoteKeyMapping:
 
     def test_ref_key_with_prefix(self, remote_ops, monkeypatch):
         """Test ref key generation with a different prefix."""
-        monkeypatch.setenv("DML_REMOTE_URI", "s3://test-bucket/myrepo")
+        monkeypatch.setenv("DML_REMOTE_ROOT", "s3://test-bucket/myrepo")
         # Need to recreate remote_ops to pick up the new prefix
         remote_ops_with_prefix = RemoteOps(
             _db=remote_ops._db,

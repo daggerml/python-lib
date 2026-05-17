@@ -56,7 +56,7 @@ class DbConfigPayload(TypedDict):
 
 
 class RemoteConfigPayload(TypedDict):
-    uri: str
+    root: str
     fetch_workers: int
 
 
@@ -1179,17 +1179,17 @@ class Dml:
         remote_uri: str | None = None,
         user: str | None = None,
         config_home: str | None = None,
-        project_uri: str | None = None,
+        remote_project: str | None = None,
         no_hooks: bool = False,
     ) -> InitPayload:
         root = Path(project_home).resolve()
         if not root.exists():
             raise FileNotFoundError(f"{root} does not exist")
         project_home = str(root)
-        if name and project_uri:
+        if name and remote_project:
             raise ValueError(
-                "NAME and --project-uri are mutually exclusive; provide NAME to derive "
-                "project URI or use --project-uri for an explicit URI"
+                "NAME and --remote-project are mutually exclusive; provide NAME to derive "
+                "remote project or use --remote-project for an explicit URI"
             )
         global_context = resolve_global_context(project_home=project_home, user=user, config_home=config_home)
         dml_dir = root / ".dml"
@@ -1205,18 +1205,20 @@ class Dml:
         else:
             cfg_owner = owner
             cfg_name = name
-            if project_uri:
+            if remote_project:
                 from daggerml._internal.config import parse_dml_project_uri
 
-                parsed = parse_dml_project_uri(project_uri)
+                parsed = parse_dml_project_uri(remote_project)
                 cfg_owner = parsed.owner
                 cfg_name = parsed.project
             elif name:
-                resolved_user = require_user(resolved_user, message="user is required to derive project URI from NAME")
+                resolved_user = require_user(
+                    resolved_user, message="user is required to derive remote project from NAME"
+                )
                 cfg_owner = resolved_user.split("@", 1)[0]
                 cfg_name = name
             else:
-                raise DmlRepoError("Either NAME or project_uri is required")
+                raise DmlRepoError("Either NAME or remote_project is required")
             project_cfg = DmlProjectConfig(name=cfg_name, owner=cfg_owner, remote_uri=remote_uri or "")
 
         if not gitignore_exists(project_home):
@@ -1264,7 +1266,7 @@ class Dml:
             else:
                 head_ops(runtime).write_detached_head(fetched)
         elif config_existed and not db_existed and bool(project_cfg.uri):
-            raise DmlRepoError("remote.uri is required")
+            raise DmlRepoError("remote.root is required")
 
         return {
             "project_home": project_home,

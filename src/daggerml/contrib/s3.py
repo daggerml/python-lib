@@ -55,14 +55,14 @@ class S3Store:
         bucket = self.bucket
         prefix = self.prefix
         if bucket is None and prefix is None:
-            remote_root = Dml().config.show()["remote"]["uri"]
+            remote_root = Dml().config.show()["remote"]["root"]
             if not remote_root:
                 raise DmlRepoError(
-                    "S3Store requires configured remote.uri (set DML_REMOTE_URI or pass bucket/prefix)"
+                    "S3Store requires configured remote.root (set DML_REMOTE_ROOT or pass bucket/prefix)"
                 )
             p = urlparse(remote_root)
             if p.scheme != "s3" or not p.netloc:
-                raise DmlRepoError("remote.uri must be an s3:// URI")
+                raise DmlRepoError("remote.root must be an s3:// URI")
             bucket = p.netloc
             base = p.path.lstrip("/").rstrip("/")
             prefix = f"{base}/data" if base else "data"

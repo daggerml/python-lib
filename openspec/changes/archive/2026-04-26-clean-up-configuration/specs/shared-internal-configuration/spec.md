@@ -23,11 +23,11 @@ The system SHALL expose one shared internal resolver that supports `project/runt
 - **THEN** the resolver applies `explicit > environment variables > global config > defaults` without requiring a project config file
 
 ### Requirement: Canonical config parameters are reduced to one normalized set
-The system SHALL normalize supported configuration inputs into the canonical internal parameters `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`.
+The system SHALL normalize supported configuration inputs into the canonical internal parameters `project.home`, `remote.project`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`.
 
 #### Scenario: Legacy overlapping branch parameter is not canonical
 - **WHEN** project configuration is resolved
-- **THEN** branch context is carried by normalized `project.uri` rather than by a separate canonical `branch` parameter
+- **THEN** branch context is carried by normalized `remote.project` rather than by a separate canonical `branch` parameter
 
 #### Scenario: Legacy overlapping remote parameters are not canonical
 - **WHEN** remote-backed configuration is resolved
@@ -45,18 +45,18 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **THEN** the shared internal resolver, not the frontend, maps those values into the canonical internal configuration model
 
 ### Requirement: Project URI is normalized and exposes helper accessors
-The system SHALL normalize `project.uri` so that resolved project configuration always includes a branch and never a tag. The resolved config object SHALL expose a `project.branch` helper derived from the normalized URI.
+The system SHALL normalize `remote.project` so that resolved project configuration always includes a branch and never a tag. The resolved config object SHALL expose a `project.branch` helper derived from the normalized URI.
 
 #### Scenario: Missing branch normalizes from default branch
-- **WHEN** `project.uri` is provided without a branch in `project/runtime` scope
-- **THEN** the resolver appends the effective default branch to the normalized `project.uri`
+- **WHEN** `remote.project` is provided without a branch in `project/runtime` scope
+- **THEN** the resolver appends the effective default branch to the normalized `remote.project`
 
 #### Scenario: Tag URI is rejected for project context
-- **WHEN** `project.uri` is provided with a tag selector
+- **WHEN** `remote.project` is provided with a tag selector
 - **THEN** project configuration resolution fails because active project context must target a branch, not an immutable tag
 
 #### Scenario: Project branch helper is derived from normalized URI
-- **WHEN** resolved configuration includes `project.uri`
+- **WHEN** resolved configuration includes `remote.project`
 - **THEN** `project.branch` returns the branch encoded in the normalized URI rather than reading a standalone branch config parameter
 
 ### Requirement: DB path can be overridden but defaults from project home

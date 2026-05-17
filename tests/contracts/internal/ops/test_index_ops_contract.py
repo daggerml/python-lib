@@ -56,7 +56,7 @@ FN_ADAPTER = str(TEST_DIR / "python-fork-adapter.py")
 
 
 def _remote_root_from_env() -> str:
-    return os.environ["DML_REMOTE_URI"]
+    return os.environ["DML_REMOTE_ROOT"]
 
 
 def _remote_protocol_prefix_from_env() -> str:

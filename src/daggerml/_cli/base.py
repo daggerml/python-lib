@@ -132,7 +132,7 @@ def normalize_error_message(error: Exception, *, command: str | None) -> str:
     # Config errors are generally surfaced via DmlRepoError.
     if isinstance(error, DmlRepoError):
         lowered = message.lower()
-        if "remote root" in lowered or "remote uri" in lowered or "dml_remote_uri" in lowered or "boto3" in lowered:
+        if "remote root" in lowered or "dml_remote_root" in lowered or "boto3" in lowered:
             message = _with_hint(message, "check required flags/env vars")
 
     if command:
@@ -186,8 +186,8 @@ def execute_command(args) -> None:
         repo_path = get_repo_path(getattr(args, "project_home", None))
         resolved_remote_uri = Dml(
             project_home=repo_path,
-            remote_uri=getattr(args, "runtime_remote_uri", None),
-        ).config.show()["remote"]["uri"]
+            remote_uri=getattr(args, "runtime_remote_root", None),
+        ).config.show()["remote"]["root"]
         dml = Dml(project_home=repo_path, remote_uri=resolved_remote_uri)
         ops_obj = get_ops_object(dml, args.op)
         result = args.func(ops_obj, args)

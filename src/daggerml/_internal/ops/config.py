@@ -6,14 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from daggerml._internal.config import _validate_ref_name, validate_dml_project_uri, validate_remote_uri
+from daggerml._internal.config import _validate_ref_name, validate_dml_project_uri, validate_remote_root
 from daggerml._internal.types import DmlRepoError
 
 SCOPE_GLOBAL = "global"
 SCOPE_LOCAL = "local"
 
 GLOBAL_KEYS = {"user", "default_branch", "hooks.post-init", "remote.fetch_workers"}
-LOCAL_KEYS = {"project.uri", "remote.uri", "remote.fetch_workers"}
+LOCAL_KEYS = {"remote.project", "remote.root", "remote.fetch_workers"}
 ALL_KEYS = GLOBAL_KEYS | LOCAL_KEYS
 
 
@@ -81,11 +81,11 @@ class ConfigOps:
     def get(self, key: str, *, scope: Literal["global", "local"]) -> str | list[str] | None:
         self._validate_scope_key(scope, key)
         data = _read_toml(self._path_for_scope(scope))
-        if key == "project.uri":
-            value = (data.get("project") or {}).get("uri")
+        if key == "remote.project":
+            value = (data.get("remote") or {}).get("project")
             return str(value) if value else None
-        if key == "remote.uri":
-            value = (data.get("remote") or {}).get("uri")
+        if key == "remote.root":
+            value = (data.get("remote") or {}).get("root")
             return str(value) if value else None
         if key == "remote.fetch_workers":
             value = (data.get("remote") or {}).get("fetch_workers")
@@ -116,10 +116,10 @@ class ConfigOps:
                 raise DmlRepoError(f"Config key {key!r} requires exactly one value")
             value = values[0]
 
-        if key == "project.uri":
+        if key == "remote.project":
             value = validate_dml_project_uri(str(value))
-        elif key == "remote.uri":
-            value = validate_remote_uri(str(value))
+        elif key == "remote.root":
+            value = validate_remote_root(str(value))
         elif key == "default_branch":
             _validate_ref_name("branch", str(value))
         elif key == "remote.fetch_workers":
@@ -135,10 +135,10 @@ class ConfigOps:
 
         path = self._path_for_scope(scope)
         data = _read_toml(path)
-        if key == "project.uri":
-            _set_nested(data, "project", "uri", value)
-        elif key == "remote.uri":
-            _set_nested(data, "remote", "uri", value)
+        if key == "remote.project":
+            _set_nested(data, "remote", "project", value)
+        elif key == "remote.root":
+            _set_nested(data, "remote", "root", value)
         elif key == "remote.fetch_workers":
             _set_nested(data, "remote", "fetch_workers", int(str(value)))
         elif key == "user":

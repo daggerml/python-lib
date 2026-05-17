@@ -6,8 +6,8 @@ Configuration is currently split across runtime config, global config, and proje
 
 - Define one canonical internal configuration contract owned by `_internal` and used by both `api.py` and the CLI.
 - Normalize explicit arguments, environment variables, project-local config, and global config through one shared resolver with `project/runtime` and `global` scopes.
-- Reduce overlapping config names to a smaller canonical set: `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, and `hooks.post-{init,clone}`.
-- Make `project.uri` canonical for project identity and branch context by normalizing it to always include a branch, never a tag, with `project.branch` exposed as a helper rather than a standalone config parameter.
+- Reduce overlapping config names to a smaller canonical set: `project.home`, `remote.project`, `db.path`, `remote.uri`, `user`, `default_branch`, and `hooks.post-{init,clone}`.
+- Make `remote.project` canonical for project identity and branch context by normalizing it to always include a branch, never a tag, with `project.branch` exposed as a helper rather than a standalone config parameter.
 - Default `db.path` dynamically from `project.home/.dml/db/` so thin runtimes can operate by setting env vars directly.
 - Clarify which config values are canonical, where derived values come from, and which helpers are responsible for validation and precedence.
 - Update API and CLI call sites to use the same shared config resolution path instead of frontend-specific translation.

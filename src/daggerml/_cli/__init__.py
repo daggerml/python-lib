@@ -39,10 +39,10 @@ def cli() -> None:
         help="Project home path (defaults to $DML_PROJECT_HOME)",
     )
     parser.add_argument(
-        "--remote-uri",
-        dest="runtime_remote_uri",
+        "--remote-root",
+        dest="runtime_remote_root",
         type=str,
-        help="Remote project URI (defaults to $DML_REMOTE_URI)",
+        help="Remote project root (defaults to $DML_REMOTE_ROOT)",
     )
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity")
     subparsers = parser.add_subparsers(dest="op", metavar="<operation>", help="Operations")

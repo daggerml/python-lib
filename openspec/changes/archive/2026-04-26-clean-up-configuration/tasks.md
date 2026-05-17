@@ -1,9 +1,9 @@
 ## 1. Define Shared Internal Configuration
 
 - [x] 1.1 Refactor configuration code so `_internal` owns one canonical configuration model and one scope-aware resolver used by both API and CLI.
-- [x] 1.2 Implement the canonical config parameters `project.home`, `project.uri`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`, removing overlapping canonical params such as `branch`, `remote.root`, and named-remote config fields.
+- [x] 1.2 Implement the canonical config parameters `project.home`, `remote.project`, `db.path`, `remote.uri`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, and `config_home`, removing overlapping canonical params such as `branch`, `remote.root`, and named-remote config fields.
 - [x] 1.3 Keep explicit args, environment variables, project-local config, and global config as sources that normalize through the shared precedence rules for `project/runtime` and `global` scopes.
-- [x] 1.4 Normalize `project.uri` to always include a branch, reject tag-form project URIs, expose `project.branch` as a helper, and default `db.path` from `project.home/.dml/db/` when unset.
+- [x] 1.4 Normalize `remote.project` to always include a branch, reject tag-form project URIs, expose `project.branch` as a helper, and default `db.path` from `project.home/.dml/db/` when unset.
 - [x] 1.5 Keep remote configuration normalization in shared internal code so remote-aware ops receive resolved `remote.uri` values rather than reading raw env or config files directly.
 
 ## 2. Update API And CLI Frontends

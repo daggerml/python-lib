@@ -126,7 +126,7 @@ def _write_ssh_env_file(tmpdir: str) -> str:
     exports = {
         "PATH": f"{Path(sys.executable).parent}:{os.environ.get('PATH', '')}",
         "UV_PROJECT": str(REPO_ROOT),
-        "DML_REMOTE_URI": os.environ["DML_REMOTE_URI"],
+        "DML_REMOTE_ROOT": os.environ["DML_REMOTE_ROOT"],
         **{k: v for k, v in os.environ.items() if k.startswith("AWS_")},
     }
     env_file.write_text(

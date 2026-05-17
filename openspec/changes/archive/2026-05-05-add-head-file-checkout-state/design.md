@@ -1,6 +1,6 @@
 ## Context
 
-The current repository model splits branch state across mutable branch refs, branch-qualified `project.uri`, and runtime/config overrides. That leaves `HEAD` as a caller-provided concept instead of a persisted repository object, makes detached behavior only partially modeled, and lets mutable project workflows derive their target branch from configuration rather than checkout state.
+The current repository model splits branch state across mutable branch refs, branch-qualified `remote.project`, and runtime/config overrides. That leaves `HEAD` as a caller-provided concept instead of a persisted repository object, makes detached behavior only partially modeled, and lets mutable project workflows derive their target branch from configuration rather than checkout state.
 
 This change replaces that model with a Git-like repository truth boundary:
 
@@ -9,14 +9,14 @@ This change replaces that model with a Git-like repository truth boundary:
 - `.dml/refs/local/heads/<branch>` stores mutable local branch tips.
 - Detached commits and tags remain immutable commit selectors.
 
-This is an intentional breaking change. The design does not preserve compatibility with branch-qualified local `project.uri`, `DML_BRANCH`, or mixed old/new checkout semantics.
+This is an intentional breaking change. The design does not preserve compatibility with branch-qualified local `remote.project`, `DML_BRANCH`, or mixed old/new checkout semantics.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
 - Make `.dml/HEAD` the sole persisted source of local checkout state.
-- Separate project identity from branch selection by making local `project.uri` branchless.
+- Separate project identity from branch selection by making local `remote.project` branchless.
 - Make attached and detached checkout semantics explicit and testable.
 - Require mutable project workflows to operate only from an attached local branch.
 - Keep the Python API override surface available while making default repository behavior depend on `.dml/HEAD`.
@@ -50,7 +50,7 @@ Alternative considered:
 
 Alternative considered:
 
-- Keep branch-qualified `project.uri` and add `.dml/HEAD` on top. Rejected because it preserves two competing sources of truth for the active branch and leaves detached semantics ambiguous.
+- Keep branch-qualified `remote.project` and add `.dml/HEAD` on top. Rejected because it preserves two competing sources of truth for the active branch and leaves detached semantics ambiguous.
 
 ### Detached commits are immutable sources and do not advance `HEAD`
 
@@ -82,7 +82,7 @@ The implementation will reject old assumptions directly rather than silently tra
 
 - no `DML_BRANCH`
 - no `[branch].current`
-- no local branch-qualified `project.uri`
+- no local branch-qualified `remote.project`
 - no dual-resolution path that checks old config before `.dml/HEAD`
 
 Alternative considered:

@@ -44,7 +44,7 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
             "init",
             "--owner",
             owner,
-            "--remote-uri",
+            "--remote-root",
             remote_uri,
             name0,
         ]
@@ -79,7 +79,7 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
             "init",
             "--owner",
             owner,
-            "--remote-uri",
+            "--remote-root",
             remote_uri,
             name1,
         ]

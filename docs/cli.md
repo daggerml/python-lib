@@ -54,8 +54,8 @@ CLI is the public operational interface over the shared internal `Dml` boundary.
 
 Operational note:
 - Do not run local `admin gc` concurrently with `runtime.cancel(...)`. Cancellation reuses locally materialized adapter input state while it walks the rooted execution set.
-- runtime config naming follows [configuration.md](configuration.md): `project.home`, `project.uri`, `db.path`, `remote.uri`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
-- explicit CLI override flags mirror the canonical config naming, including `--project-home`, `--remote-uri`, `--project-uri`, and `--config-home`.
+- runtime config naming follows [configuration.md](configuration.md): `project.home`, `remote.project`, `db.path`, `remote.root`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
+- explicit CLI override flags mirror the canonical config naming, including `--project-home`, `--remote-root`, `--remote-project`, and `--config-home`.
 
 ## Serialization-Limited Gaps
 

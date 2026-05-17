@@ -14,5 +14,5 @@ The CLI SHALL name explicit configuration override flags after the canonical par
 - **AND** it forwards the value into shared resolution as `remote.uri`
 
 #### Scenario: Existing canonical names remain unchanged
-- **WHEN** the CLI exposes other explicit config-shaped overrides such as `--project-uri` or `--config-home`
+- **WHEN** the CLI exposes other explicit config-shaped overrides such as `--remote-project` or `--config-home`
 - **THEN** those flags continue using the established canonical names rather than introducing alternate aliases
