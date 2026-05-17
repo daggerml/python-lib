@@ -8,7 +8,7 @@ import pytest
 
 import daggerml._internal.dml as dml_module
 from daggerml._internal._db import Ref
-from daggerml._internal.config import DmlProjectConfig, init_project_layout
+from daggerml._internal.config import DmlProjectConfig
 from daggerml._internal.dml import Dml
 from daggerml._internal.types import DmlRepoError
 
@@ -355,22 +355,21 @@ def test_dml_init_recovers_when_config_exists_and_db_missing(tmp_path):
     (dml_dir / "config.toml").write_text('[project]\nuri = "dml://alice/demo"\n[remote]\nuri = "s3://bucket/prefix"\n')
 
     with (
-        patch("daggerml._internal.dml.DmlOps.create") as mock_create,
-        patch("daggerml._internal.dml.Dml.pull", return_value=Ref("commit:9")) as mock_pull,
+        patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")) as mock_fetch,
         patch("daggerml._internal.dml.create_s3_client", return_value=object()),
     ):
         result = Dml.init(str(repo_dir), remote_uri="s3://bucket/prefix")
 
-    mock_create.assert_called_once()
-    mock_pull.assert_called_once()
-    assert result["branch"] == "main"
+    mock_fetch.assert_called_once_with("origin", None)
+    assert (dml_dir / "db").exists()
+    assert result["created"] == {"db": True, "config": False}
 
 
 def test_dml_boundary_keeps_only_allowed_private_helpers():
     dml = Dml(project_home="/repo")
 
     assert hasattr(dml, "_context")
-    assert hasattr(dml, "_tempdirs")
+    assert not hasattr(dml, "_tempdirs")
     assert not hasattr(dml, "_with_ops")
     assert not hasattr(dml, "_head_ops")
     assert not hasattr(dml, "_commit_ops")
@@ -385,34 +384,29 @@ def test_dml_init_uses_init_project_layout_for_bootstrap(tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
 
-    create_context = Mock()
-    create_context.__enter__ = Mock(return_value=None)
-    create_context.__exit__ = Mock(return_value=None)
-
-    with (
-        patch("daggerml._internal.dml.DmlOps.create", return_value=create_context) as mock_create,
-        patch("daggerml._internal.dml.init_project_layout", wraps=init_project_layout) as mock_init_layout,
-    ):
+    with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")) as mock_fetch:
         result = Dml.init(
             str(repo_dir),
             name="demo",
             owner="ignored-owner",
-            branch="main",
             remote_uri="s3://bucket/prefix",
             user="alice@example-host",
             no_hooks=True,
         )
 
-    mock_init_layout.assert_called_once()
-    init_root, init_cfg = mock_init_layout.call_args.args
-    assert init_root == repo_dir
-    assert isinstance(init_cfg, DmlProjectConfig)
+    init_cfg = DmlProjectConfig.load(repo_dir)
     assert init_cfg.name == "demo"
     assert init_cfg.owner == "alice"
     assert init_cfg.project_uri == "dml://alice/demo"
     assert init_cfg.remote_uri == "s3://bucket/prefix"
-    mock_create.assert_called_once()
-    assert result["branch"] == "main"
+    assert (repo_dir / ".dml").is_dir()
+    assert (repo_dir / ".dml" / "config.toml").exists()
+    assert (repo_dir / ".dml" / "db").exists()
+    mock_fetch.assert_called_once_with("origin", None)
+    assert result["project_home"] == str(repo_dir.resolve())
+    assert result["remote_uri"] == "s3://bucket/prefix"
+    assert result["user"] == "alice@example-host"
+    assert result["created"] == {"db": True, "config": True}
 
 
 def test_dml_init_rejects_name_and_project_uri_together(tmp_path):

@@ -50,7 +50,7 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
         ]
     )
     assert not stderr
-    assert json.loads(stdout)["branch"] == "main"
+    assert json.loads(stdout)["created"] == {"db": True, "config": True}
 
     expected_result = {"score": 7, "ok": True}
     with Dml(project_home=str(source_repo), user=owner) as dml:
@@ -84,7 +84,7 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
         ]
     )
     assert not stderr
-    assert json.loads(stdout)["branch"] == "main"
+    assert json.loads(stdout)["created"] == {"db": True, "config": True}
 
     source_uri = f"dml://{owner_from_remote}/{name0}"
     stdout, stderr = _run_cli(["--project-home", str(target_repo), "fetch", source_uri])

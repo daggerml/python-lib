@@ -6,11 +6,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any, Literal, TypedDict, cast, overload
 
 from daggerml._internal._db import Ref
-from daggerml._internal.config import DmlProjectConfig, init_project_layout, run_project_hooks
+from daggerml._internal.config import DmlProjectConfig, run_project_hooks
 from daggerml._internal.dml_context import (
     config_dict,
     current_head_branch,
@@ -38,8 +37,9 @@ from daggerml._internal.dml_resolution import (
 )
 from daggerml._internal.ops import DmlOps
 from daggerml._internal.ops.config import ConfigOps
-from daggerml._internal.types import DEFAULT_HEAD, DmlRepoError
+from daggerml._internal.types import DmlRepoError
 
+# FIXME: remove the `id` and `ref` duplication and just return with something descriptive like `dag: Ref` (if its a dag)
 _RUNTIME_CANCEL_MAX_ATTEMPTS = 3
 _RUNTIME_CANCEL_BACKOFF_SECONDS = 0.05
 
@@ -297,16 +297,17 @@ class AdminGcRunPayload(TypedDict):
     deleted: int
 
 
-class InitRecoveredPayload(TypedDict):
-    branch: str
-    project_home: str
-    recovered: Literal[True]
+class InitCreatedStatePayload(TypedDict):
+    db: bool
+    config: bool
 
 
-class InitCreatedPayload(TypedDict):
-    branch: str
+class InitPayload(TypedDict):
     project_home: str
-    project_uri: str | None
+    remote_uri: str | None
+    user: str | None
+    config_home: str | None
+    created: InitCreatedStatePayload
 
 
 @dataclass(frozen=True)
@@ -629,9 +630,7 @@ class _RuntimeNamespace:
                     delay = _RUNTIME_CANCEL_BACKOFF_SECONDS
                     if adapter_retry_candidates:
                         delay *= 2 ** (max(retry_counts[candidate_id] for candidate_id in adapter_retry_candidates) - 1)
-                    time.sleep(
-                        delay
-                    )
+                    time.sleep(delay)
                     adapter_retry_candidates.clear()
             index._complete_index_cancellation(
                 index_id,
@@ -1025,17 +1024,6 @@ class Dml:
             user=user,
             config_home=config_home,
         )
-        self._tempdirs: list[TemporaryDirectory[str]] = []
-
-    def __enter__(self) -> "Dml":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self.cleanup()
-
-    def cleanup(self) -> None:
-        while self._tempdirs:
-            self._tempdirs.pop().cleanup()
 
     @property
     def config(self) -> _ConfigNamespace:
@@ -1181,62 +1169,20 @@ class Dml:
         target_branch = mutable_branch(branch=branch, head_ops=head_ops(self))
         return commit_ops(self).revert(target_branch, resolve_dml_revision_ref(self, revision), user)
 
-    def load(self, name_or_node):
-        from daggerml.api import Dag, Node
-
-        if isinstance(name_or_node, Node):
-            desc = node_ops(self).describe(name_or_node.ref)
-            dag_ref = desc.get("dag")
-            if dag_ref is None:
-                raise DmlRepoError("Node is not linked to a DAG")
-            return Dag(dml=self, ref=dag_ref)
-        commit = head_ops(self).resolve_head_commit()
-        dag_ref = commit_ops(self).get_dag(commit, name_or_node)
-        if dag_ref is None:
-            raise DmlRepoError(f"DAG '{name_or_node}' not found")
-        return Dag(dml=self, ref=dag_ref, name=name_or_node)
-
-    @classmethod
-    def temporary(
-        cls,
-        repo: str = "test",
-        user: str = "user",
-        branch: str = "main",
-        remote_root: str | None = None,
-    ):
-        @contextmanager
-        def _temporary_context():
-            with TemporaryDirectory() as tmpdir:
-                project_home = str(Path(tmpdir) / repo)
-                Path(project_home).mkdir(parents=True, exist_ok=True)
-                runtime = cls(
-                    project_home=project_home, remote_uri=remote_root or "s3://test-bucket/test-prefix", user=user
-                )
-                init_project_layout(
-                    project_home,
-                    DmlProjectConfig(name=repo, owner=user.split("@", 1)[0], remote_uri=runtime._context.remote_uri),
-                )
-                with DmlOps.create(project_home, user=user, branch=branch, remote_root=runtime._context.remote_uri):
-                    with runtime:
-                        yield runtime
-
-        return _temporary_context()
-
     @classmethod
     def init(
         cls,
-        project_home: str | None = None,
+        project_home: str = ".",
         *,
         name: str | None = None,
         owner: str | None = None,
-        branch: str | None = None,
         remote_uri: str | None = None,
         user: str | None = None,
         config_home: str | None = None,
         project_uri: str | None = None,
         no_hooks: bool = False,
-    ) -> InitRecoveredPayload | InitCreatedPayload:
-        root = Path(project_home or ".").resolve()
+    ) -> InitPayload:
+        root = Path(project_home).resolve()
         if not root.exists():
             raise FileNotFoundError(f"{root} does not exist")
         project_home = str(root)
@@ -1245,63 +1191,85 @@ class Dml:
                 "NAME and --project-uri are mutually exclusive; provide NAME to derive "
                 "project URI or use --project-uri for an explicit URI"
             )
-
         global_context = resolve_global_context(project_home=project_home, user=user, config_home=config_home)
-        resolved_branch = branch or global_context.default_branch or DEFAULT_HEAD
+        dml_dir = root / ".dml"
+        dml_dir.mkdir(parents=True, exist_ok=True)
 
-        recovering = project_config_exists(project_home) and not db_path_for_project(project_home).exists()
-        if recovering:
-            runtime = cls(project_home=project_home, remote_uri=remote_uri, user=user, config_home=config_home)
+        config_existed = project_config_exists(project_home)
+        db_existed = db_path_for_project(project_home).exists()
+
+        resolved_user = user or global_context.user
+        project_cfg: DmlProjectConfig
+        if config_existed:
+            project_cfg = load_project_config(project_home)
+        else:
+            cfg_owner = owner
+            cfg_name = name
+            if project_uri:
+                from daggerml._internal.config import parse_dml_project_uri
+
+                parsed = parse_dml_project_uri(project_uri)
+                cfg_owner = parsed.owner
+                cfg_name = parsed.project
+            elif name:
+                resolved_user = require_user(resolved_user, message="user is required to derive project URI from NAME")
+                cfg_owner = resolved_user.split("@", 1)[0]
+                cfg_name = name
+            else:
+                raise DmlRepoError("Either NAME or project_uri is required")
+            project_cfg = DmlProjectConfig(name=cfg_name, owner=cfg_owner, remote_uri=remote_uri or "")
+
+        if not gitignore_exists(project_home):
+            (dml_dir / ".gitignore").write_text("db\nHEAD\nrefs\n")
+        if not config_existed:
+            project_cfg.save(root)
+
+        runtime = cls(project_home=project_home, remote_uri=remote_uri, user=user, config_home=config_home)
+        resolved_branch = runtime._context.default_branch
+
+        if not config_existed and project_cfg.remote_uri != runtime._context.remote_uri:
+            project_cfg = DmlProjectConfig(
+                name=project_cfg.name,
+                owner=project_cfg.owner,
+                remote_uri=runtime._context.remote_uri,
+            )
+            project_cfg.save(root)
+
+        if not db_existed:
             with DmlOps.create(
                 project_home,
                 user=runtime._context.user,
                 branch=resolved_branch,
                 remote_root=runtime._context.remote_uri,
             ):
-                if load_project_config(project_home).uri:
-                    if not runtime._context.remote_uri:
-                        raise DmlRepoError("remote.uri is required")
-                    runtime.pull(
-                        "origin",
-                        None,
-                        branch=None,
-                        user=require_user(runtime._context.user, message="user is required"),
-                    )
-            return {"branch": resolved_branch, "project_home": project_home, "recovered": True}
+                pass
 
-        resolved_user = user or global_context.user
-        cfg_owner = owner
-        cfg_name = name
-        if project_uri:
-            project = DmlProjectConfig.load(project_home) if project_config_exists(project_home) else None
-            if project is not None:
-                cfg_owner = project.owner
-                cfg_name = project.name
+        project_cfg = load_project_config(project_home)
+        run_project_hooks(
+            "post-init",
+            runtime._context.config.hooks.post_init,
+            project_dir=project_home,
+            project=project_cfg,
+            config_home=runtime._context.config.config_home,
+            remote_name="origin" if runtime._context.remote_uri else None,
+            no_hooks=no_hooks,
+        )
+
+        if runtime._context.remote_uri:
+            try:
+                fetched = runtime.fetch("origin", None)
+            except DmlRepoError:
+                if config_existed and not db_existed:
+                    raise
             else:
-                from daggerml._internal.config import parse_dml_project_uri
+                head_ops(runtime).write_detached_head(fetched)
+        elif config_existed and not db_existed and bool(project_cfg.uri):
+            raise DmlRepoError("remote.uri is required")
 
-                parsed = parse_dml_project_uri(project_uri)
-                cfg_owner = parsed.owner
-                cfg_name = parsed.project
-        elif name:
-            resolved_user = require_user(resolved_user, message="user is required to derive project URI from NAME")
-            cfg_owner = resolved_user.split("@", 1)[0]
-            cfg_name = name
-        else:
-            raise DmlRepoError("Either NAME or project_uri is required")
-
-        project_cfg = DmlProjectConfig(name=cfg_name, owner=cfg_owner, remote_uri=remote_uri or "")
-        init_project_layout(root, project_cfg)
-        if not gitignore_exists(project_home):
-            (root / ".dml" / ".gitignore").write_text("db\nHEAD\nrefs\n")
-        with DmlOps.create(project_home, user=resolved_user, branch=resolved_branch, remote_root=remote_uri or ""):
-            run_project_hooks(
-                "post-init",
-                global_context.config.hooks.post_init,
-                project_dir=project_home,
-                project=project_cfg,
-                config_home=global_context.config.config_home,
-                remote_name="origin" if remote_uri else None,
-                no_hooks=no_hooks,
-            )
-        return {"branch": resolved_branch, "project_home": project_home, "project_uri": project_cfg.project_uri}
+        return {
+            "project_home": project_home,
+            "remote_uri": runtime._context.remote_uri,
+            "user": runtime._context.user,
+            "config_home": runtime._context.config.config_home,
+            "created": {"db": not db_existed, "config": not config_existed},
+        }

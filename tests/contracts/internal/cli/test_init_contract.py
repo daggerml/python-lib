@@ -8,19 +8,25 @@ from unittest.mock import patch
 import pytest
 
 from daggerml._cli.init import execute_init, setup_init_parser
+from daggerml._internal._db import Ref
 from daggerml._internal.types import DmlRepoError
 
 
 @patch("daggerml._cli.init.Dml.init")
-def test_execute_init_forwards_branch_argument_without_local_derivation(mock_dml_init):
-    mock_dml_init.return_value = {"branch": "dev"}
+def test_execute_init_does_not_forward_branch_argument(mock_dml_init):
+    mock_dml_init.return_value = {
+        "project_home": "/repo",
+        "remote_uri": "",
+        "user": None,
+        "config_home": None,
+        "created": {"db": True, "config": True},
+    }
 
     args = Namespace(
         name="demo",
         config_home=None,
         project_home=None,
         owner=None,
-        branch=None,
         project_uri=None,
         remote_uri="s3://test-bucket/test-prefix",
         no_hooks=True,
@@ -29,7 +35,7 @@ def test_execute_init_forwards_branch_argument_without_local_derivation(mock_dml
     execute_init(args)
 
     mock_dml_init.assert_called_once()
-    assert mock_dml_init.call_args.kwargs["branch"] is None
+    assert "branch" not in mock_dml_init.call_args.kwargs
     assert mock_dml_init.call_args.kwargs["user"] is None
 
 
@@ -56,16 +62,14 @@ class TestExecuteInit:
                 remote_uri="s3://test-bucket/test-prefix",
                 no_hooks=True,
             )
-            result = execute_init(args)
+            with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")):
+                result = execute_init(args)
             expected_repo = Path(temp_dir)
-            tmp = {k: str(type(v)) for k, v in result.items()}
-            print(f"{tmp = }")
-            # print(f"{result.keys() = }")
-            assert result["branch"] == "main"
-            assert result["project_uri"] == "dml://alice/my-repo"
             repo_path = result["project_home"]
             assert repo_path is not None
             assert Path(repo_path).resolve() == expected_repo.resolve()
+            assert result["remote_uri"] == "s3://test-bucket/test-prefix"
+            assert result["created"] == {"db": True, "config": True}
             assert (expected_repo / ".dml" / "config.toml").exists()
             assert (expected_repo / ".dml" / "db").exists()
 
@@ -85,9 +89,11 @@ class TestExecuteInit:
                 remote_uri="s3://test-bucket/test-prefix",
                 no_hooks=True,
             )
-            result = execute_init(args)
-            assert result["branch"] == "main"
-            assert result["project_uri"] == "dml://alice/demo"
+            with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")):
+                result = execute_init(args)
+            assert result["project_home"] == str(Path(temp_dir).resolve())
+            assert result["remote_uri"] == "s3://test-bucket/test-prefix"
+            assert result["created"] == {"db": True, "config": True}
 
     def test_execute_init_rejects_name_with_project_uri(self):
         args = Namespace(
@@ -95,7 +101,6 @@ class TestExecuteInit:
             config_home=None,
             project_home=None,
             owner=None,
-            branch=None,
             project_uri="dml://alice/demo",
             remote_uri="s3://test-bucket/test-prefix",
             no_hooks=True,
@@ -120,7 +125,6 @@ class TestExecuteInit:
                 config_home=None,
                 project_home=None,
                 owner=None,
-                branch=None,
                 project_uri=None,
                 remote_uri="s3://test-bucket/test-prefix",
                 no_hooks=True,

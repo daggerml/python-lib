@@ -6,7 +6,7 @@ from argparse import ArgumentParser
 
 from daggerml._cli.base import apply_help_config
 from daggerml._internal import Dml
-from daggerml._internal.dml import InitCreatedPayload, InitRecoveredPayload
+from daggerml._internal.dml import InitPayload
 
 
 def setup_init_parser(parser: ArgumentParser) -> None:
@@ -23,7 +23,6 @@ def setup_init_parser(parser: ArgumentParser) -> None:
     )
     parser.add_argument("name", nargs="?", help="Project name")
     parser.add_argument("--owner", default=None, help="Project owner (default: global user)")
-    parser.add_argument("--branch", default=None, help="Initial branch (default: global default branch or main)")
     parser.add_argument(
         "--project-uri",
         default=None,
@@ -43,13 +42,12 @@ def setup_init_parser(parser: ArgumentParser) -> None:
     parser.set_defaults(func=execute_init)
 
 
-def execute_init(args) -> InitRecoveredPayload | InitCreatedPayload:
+def execute_init(args) -> InitPayload:
     """Execute init command."""
     return Dml.init(
-        project_home=getattr(args, "project_home", None),
+        project_home=getattr(args, "project_home", None) or ".",
         name=args.name.strip() if args.name else None,
         owner=getattr(args, "owner", None),
-        branch=getattr(args, "branch", None),
         project_uri=getattr(args, "project_uri", None),
         remote_uri=getattr(args, "remote_uri", None),
         user=None,

@@ -46,7 +46,8 @@ class TestInitCLIIntegration:
             project_home = payload["project_home"]
             assert project_home is not None
             assert Path(project_home).resolve() == expected_repo.resolve()
-            assert payload["branch"] == "main"
+            assert payload["remote_uri"] == "s3://test-bucket/test-prefix"
+            assert payload["created"] == {"db": True, "config": True}
             assert (expected_repo / ".dml" / "db").exists()
 
     def test_init_cli_requires_name_or_project_uri(self):
