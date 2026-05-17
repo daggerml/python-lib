@@ -95,7 +95,12 @@ class SshExecutor(ExecutorBase):
                 stdout,
             )
             return {"status": "failed", "error": f"SSH nested adapter returned invalid JSON: {e}"}
-        if not isinstance(result, dict) or result.get("status") not in {"succeeded", "failed", "running", "cancelled"}:
+        if not isinstance(result, dict) or result.get("status") not in {
+            "succeeded",
+            "failed",
+            "running",
+            "cancel-detached",
+        }:
             logger.debug("ssh executor unexpected result execution_id=%s result=%r", execution_id, result)
             return {"status": "failed", "error": f"SSH nested adapter returned unexpected result: {result}"}
         logger.debug(

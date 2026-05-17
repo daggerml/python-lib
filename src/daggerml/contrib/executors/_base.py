@@ -72,7 +72,7 @@ class ExecutorBase:
         self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
     ) -> dict[str, Any]:
         self.cleanup(cache_key=cache_key, execution_id=execution_id, remote=remote, state=state)
-        return {"status": "cancelled", "error": None}
+        return {"status": "cancel-detached", "error": None}
 
     # ------------------------------------------------------------------
     # Main dispatch
@@ -95,7 +95,7 @@ class ExecutorBase:
         executor = cls()
         executor.execution_status = execution_status
         executor.cancel_requested_by = cancel_requested_by
-        if execution_status == "cancel-requested" and state is not None:
+        if execution_status == "cancel-pending" and state is not None:
             return executor.cancel(
                 cache_key=cache_key,
                 execution_id=execution_id,

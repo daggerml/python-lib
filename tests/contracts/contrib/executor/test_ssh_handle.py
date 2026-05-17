@@ -181,12 +181,12 @@ def test_ssh_executor_handle_forwards_cancel_update_fields(monkeypatch):
     def _fake_run(cmd, input=None, capture_output=None, check=None):
         del cmd, capture_output, check
         payload = json.loads(cast(bytes, input).decode("utf-8"))
-        assert payload["execution_status"] == "cancel-requested"
+        assert payload["execution_status"] == "cancel-pending"
         assert payload["cancel_requested_by"] == "alice@example.com"
         return subprocess.CompletedProcess(
             args=[],
             returncode=0,
-            stdout=json.dumps({"status": "cancelled", "error": None}).encode(),
+            stdout=json.dumps({"status": "cancel-detached", "error": None}).encode(),
             stderr=b"",
         )
 
@@ -196,10 +196,10 @@ def test_ssh_executor_handle_forwards_cancel_update_fields(monkeypatch):
         cache_key="ck-ssh-cancel",
         execution_id="exec-ssh-cancel",
         state={"job_id": "123"},
-        execution_status="cancel-requested",
+        execution_status="cancel-pending",
         cancel_requested_by="alice@example.com",
         runnable=runnable,
         argv_ptr="s3://bucket/argv",
         remote=_remote(),
     )
-    assert result == {"status": "cancelled", "error": None}
+    assert result == {"status": "cancel-detached", "error": None}

@@ -32,8 +32,8 @@ The execution model defines end-to-end function execution: call preparation, run
 1. Attempt builtin execution for supported `daggerml:` URIs.
 2. If not builtin, resolve cache via remote refs using argv identity.
 3. If cache miss, publish `argv_ptr` via remote manifest upload, acquire the `cache_key` lock, and inspect the active execution pointer for that `cache_key`.
-4. If no active execution exists, runtime allocates the next `execution_number` for the `cache_key`, creates a new `execution_id`, invokes the adapter with `state = null`, and on `running` persists an immutable execution record plus an active pointer.
-5. If an active execution exists, runtime resumes it by invoking the adapter with the immutable stored launch-time `state` from `fn-exec/records/<cache_key>/<execution_number>.json`.
+4. If no active execution exists, runtime creates a new `execution_id`, invokes the adapter with `state = null`, and on `running` persists caller-owned `launch_state`, runtime-owned `execution_record`, and an active pointer.
+5. If an active execution exists, runtime resumes it by invoking the adapter with `resume_state` from `exec/launch/<execution_id>.json` while reading lifecycle from `exec/state/<execution_id>.json`.
 6. On adapter `succeeded`, caller resolves the result DAG from remote cache refs using argv identity.
 7. On adapter `failed`, caller materializes a failed DAG, publishes it to cache, and raises the resulting DAG error to the caller.
 8. On adapter `running`, caller returns without materializing a result node.
@@ -41,15 +41,20 @@ The execution model defines end-to-end function execution: call preparation, run
 Cache rules:
 
 - execution cache identity and adapter `cache_key` contracts are defined in [adapter-execution-contract.md](adapter-execution-contract.md).
-- runtime maintains `fn-exec/active/<cache_key>` as the authoritative mapping from computation identity to the current in-flight `execution_number`.
-- runtime stores immutable execution records at `fn-exec/records/<cache_key>/<execution_number>.json`; each record contains both `execution_number` and `execution_id`, and only the first `running` result persists adapter state.
+- runtime maintains `dml/active/<cache_key>` as the authoritative mapping from computation identity to the current in-flight `execution_id`.
+- runtime stores caller-owned resumable launch data at `dml/exec/launch/<execution_id>.json` and runtime-owned lifecycle data at `dml/exec/state/<execution_id>.json`.
+- `launch_state` stores only `execution_id`, `cache_key`, `resume_state`, and `created_at`.
+- `execution_record` stores only `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `spawned_execution_ids`, and `cancellation_requested_by`.
+- live caller edges under `dml/exec/edges/<callee>/<caller>.json` are caller-owned and are used for orphan detection and invalidation.
+- `execution_record.spawned_execution_ids` is runtime-owned historical cancellation traversal state and is not removed when live caller edges are dropped.
+- cancellation is best-effort across `spawned_execution_ids`; descendants behind already-terminal intermediates may remain running.
 - adapter `remote` context contracts are defined in [adapter-execution-contract.md](adapter-execution-contract.md).
 - `remote` context MUST be populated for non-builtin adapter execution and SHOULD be propagated in nested calls.
 - remote cache-ref layout and cache-key path constraints are defined in [remote-data-model.md](remote-data-model.md).
 - non-builtin adapter execution MUST fail deterministically when remote context is unavailable.
 - non-builtin function execution without a configured remote cache context MUST fail deterministically.
 - cache lookup/write policy is caller-owned; adapters/executors return adapter status/output per [adapter-execution-contract.md](adapter-execution-contract.md).
-- stale-lock recovery keeps the active `execution_id` when the corresponding immutable execution record still exists.
+- stale-lock recovery keeps the active `execution_id` when the corresponding `launch_state` and non-terminal `execution_record` still exist.
 
 ## Adapter Path
 

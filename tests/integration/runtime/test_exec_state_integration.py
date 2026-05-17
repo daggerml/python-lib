@@ -248,12 +248,10 @@ def test_execution_record_is_create_only():
     record = {
         "execution_id": "exec-1",
         "cache_key": "record-1",
-        "created_at": 1,
-        "status": "running",
-        "state": {"pid": 1},
-        "dependencies": [],
+        "lifecycle": "running",
         "updated_at": 1,
-        "cancel_requested_by": None,
+        "spawned_execution_ids": [],
+        "cancellation_requested_by": None,
     }
     assert es.create_execution_record(record) is True
     assert es.read_execution_record("exec-1") == record
@@ -266,31 +264,37 @@ def test_execution_record_updates_merge_monotonically():
     created = {
         "execution_id": "exec-0",
         "cache_key": "record-2",
-        "created_at": 10,
-        "status": "running",
-        "state": {"token": "first"},
-        "dependencies": [],
+        "lifecycle": "running",
         "updated_at": 10,
-        "cancel_requested_by": None,
+        "spawned_execution_ids": [],
+        "cancellation_requested_by": None,
     }
     assert es.create_execution_record(created)
     merged = es.update_execution_record(
         {
             "execution_id": "exec-0",
             "cache_key": "record-2",
-            "created_at": 999,
-            "status": "cancel-requested",
-            "state": {"token": "replacement"},
-            "dependencies": ["exec-2"],
+            "lifecycle": "cancel-pending",
             "updated_at": 11,
-            "cancel_requested_by": "user@example.com",
+            "spawned_execution_ids": ["exec-2"],
+            "cancellation_requested_by": "user@example.com",
         }
     )
-    assert merged["created_at"] == 10
-    assert merged["state"] == {"token": "first"}
-    assert merged["dependencies"] == ["exec-2"]
-    assert merged["status"] == "cancel-requested"
-    assert merged["cancel_requested_by"] == "user@example.com"
+    assert merged["spawned_execution_ids"] == ["exec-2"]
+    assert merged["lifecycle"] == "cancel-pending"
+    assert merged["cancellation_requested_by"] == "user@example.com"
+
+
+def test_launch_state_round_trip():
+    es = _es("launch-1")
+    launch_state = {
+        "execution_id": "exec-launch-1",
+        "cache_key": "launch-1",
+        "resume_state": {"pid": 1},
+        "created_at": 1,
+    }
+    assert es.create_launch_state(launch_state) is True
+    assert es.read_launch_state("exec-launch-1") == launch_state
 
 
 def test_call_edge_records_are_canonical_and_idempotent():

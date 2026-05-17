@@ -3,7 +3,9 @@
 Public API:
     AdapterIO       - Scoped S3 stdin/stdout surrogate for fire-and-monitor executors
     ExecutionState  - S3-backed lock + execution metadata helper
-    ExecutionRecord - TypedDict for mutable execution state objects
+    CancelledExecutionError - Raised when execution updates are interrupted by cancellation
+    LaunchState     - TypedDict for caller-owned resumable launch objects
+    ExecutionRecord - TypedDict for runtime-owned execution lifecycle objects
     LockRecord      - TypedDict for the lock file contents
     LOCK_TTL        - Default lock time-to-live in seconds
 """
@@ -30,15 +32,24 @@ class LockRecord(TypedDict):
     lock_expires_ts: float
 
 
-class ExecutionRecord(TypedDict):
+class CancelledExecutionError(Exception):
+    pass
+
+
+class LaunchState(TypedDict):
     execution_id: str
     cache_key: str
     created_at: int
-    status: Literal["running", "cancel-requested", "cancelled", "succeeded", "failed"]
-    state: dict[str, Any] | None
-    dependencies: list[str]
+    resume_state: dict[str, Any]
+
+
+class ExecutionRecord(TypedDict):
+    execution_id: str
+    cache_key: str
+    lifecycle: Literal["running", "cancel-pending", "cancel-detached", "succeeded", "failed"]
     updated_at: int
-    cancel_requested_by: str | None
+    spawned_execution_ids: list[str]
+    cancellation_requested_by: str | None
 
 
 class AdapterIO:
@@ -142,6 +153,9 @@ class ExecutionState:
     def _s3():
         return boto3.client("s3", config=Config(max_pool_connections=S3_MAX_POOL_CONNECTIONS))
 
+    def _key_for_launch_state(self, execution_id: str) -> str:
+        return f"{self._exec_prefix}/exec/launch/{execution_id}.json"
+
     def _key_for_execution(self, execution_id: str) -> str:
         return f"{self._exec_prefix}/exec/state/{execution_id}.json"
 
@@ -153,6 +167,9 @@ class ExecutionState:
 
     def _key_for_invalidation(self, execution_id: str) -> str:
         return f"{self._exec_prefix}/exec/invalidate/{execution_id}.json"
+
+    def _key_for_cancellation_tombstone(self, execution_id: str) -> str:
+        return f"{self._exec_prefix}/exec/cancelled/{execution_id}.json"
 
     def _get_object_bytes(self, key: str) -> tuple[bytes, str] | None:
         """Return object bytes and ETag, or None if the file does not exist."""
@@ -229,36 +246,37 @@ class ExecutionState:
             if_match=etag,
         )
 
+    def _write_json(self, key: str, value: Any) -> None:
+        self._put_object(key, json.dumps(value, separators=(",", ":"), sort_keys=True).encode())
+
     @staticmethod
-    def _status_rank(status: str) -> int:
+    def _lifecycle_rank(lifecycle: str) -> int:
         ranks = {
             "running": 0,
-            "cancel-requested": 1,
-            "cancelled": 2,
+            "cancel-pending": 1,
+            "cancel-detached": 2,
             "succeeded": 3,
             "failed": 3,
         }
-        if status not in ranks:
-            raise DmlRepoError(f"Invalid execution status: {status}")
-        return ranks[status]
+        if lifecycle not in ranks:
+            raise DmlRepoError(f"Invalid execution lifecycle: {lifecycle}")
+        return ranks[lifecycle]
 
     def _merge_execution_record(self, current: ExecutionRecord, incoming: ExecutionRecord) -> ExecutionRecord:
-        state = current["state"] if current["state"] is not None else incoming["state"]
-        status = current["status"]
-        if self._status_rank(incoming["status"]) > self._status_rank(current["status"]):
-            status = incoming["status"]
-        created_at = current["created_at"]
-        dependencies = sorted({*current.get("dependencies", []), *incoming.get("dependencies", [])})
-        cancel_requested_by = current["cancel_requested_by"] or incoming["cancel_requested_by"]
+        lifecycle = current["lifecycle"]
+        if self._lifecycle_rank(incoming["lifecycle"]) > self._lifecycle_rank(current["lifecycle"]):
+            lifecycle = incoming["lifecycle"]
+        spawned_execution_ids = sorted(
+            {*current.get("spawned_execution_ids", []), *incoming.get("spawned_execution_ids", [])}
+        )
+        cancellation_requested_by = current["cancellation_requested_by"] or incoming["cancellation_requested_by"]
         merged: ExecutionRecord = {
             "execution_id": current["execution_id"],
             "cache_key": current["cache_key"],
-            "created_at": created_at,
-            "status": status,
-            "state": state,
-            "dependencies": dependencies,
+            "lifecycle": lifecycle,
             "updated_at": max(current["updated_at"], incoming["updated_at"]),
-            "cancel_requested_by": cancel_requested_by,
+            "spawned_execution_ids": spawned_execution_ids,
+            "cancellation_requested_by": cancellation_requested_by,
         }
         return merged
 
@@ -337,6 +355,19 @@ class ExecutionState:
     def delete_active_execution(self) -> None:
         self._delete_object(self._active_key)
 
+    def read_launch_state(self, execution_id: str) -> LaunchState | None:
+        payload = self._get_object_bytes(self._key_for_launch_state(execution_id))
+        if payload is None:
+            return None
+        return json.loads(payload[0])
+
+    def create_launch_state(self, launch_state: LaunchState) -> bool:
+        return self._write_json_if_absent(self._key_for_launch_state(launch_state["execution_id"]), launch_state)
+
+    def update_launch_state(self, launch_state: LaunchState) -> LaunchState:
+        self._write_json(self._key_for_launch_state(launch_state["execution_id"]), launch_state)
+        return launch_state
+
     def read_execution_record(self, execution_id: str) -> ExecutionRecord | None:
         payload = self._get_object_bytes(self._key_for_execution(execution_id))
         if payload is None:
@@ -354,7 +385,10 @@ class ExecutionState:
                 if self._write_json_if_absent(key, record):
                     return record
             else:
-                merged = self._merge_execution_record(cast(ExecutionRecord, current), record)
+                current_record = cast(ExecutionRecord, current)
+                if current_record["lifecycle"].startswith("cancel-") and not record["lifecycle"].startswith("cancel-"):
+                    raise CancelledExecutionError(f"Execution cancelled: {record['execution_id']}")
+                merged = self._merge_execution_record(current_record, record)
                 if self._write_json_if_match(key, merged, cast(str, etag)):
                     return merged
         raise DmlRepoError(f"Failed to update execution state object: {key}")
@@ -379,6 +413,9 @@ class ExecutionState:
                 return
         raise DmlRepoError(f"Failed to write execution edge object: {key}")
 
+    def delete_execution_dependency(self, *, caller_execution_id: str, callee_execution_id: str) -> None:
+        self._delete_object(self._key_for_edge(callee_execution_id, caller_execution_id))
+
     def create_invalidation_record(
         self,
         *,
@@ -389,6 +426,19 @@ class ExecutionState:
     ) -> bool:
         return self._write_json_if_absent(
             self._key_for_invalidation(execution_id),
+            {
+                "execution_id": execution_id,
+                "cache_key": cache_key,
+                "requested_by": requested_by,
+                "requested_at": requested_at,
+            },
+        )
+
+    def create_cancellation_tombstone(
+        self, *, execution_id: str, cache_key: str, requested_by: str, requested_at: int
+    ) -> bool:
+        return self._write_json_if_absent(
+            self._key_for_cancellation_tombstone(execution_id),
             {
                 "execution_id": execution_id,
                 "cache_key": cache_key,

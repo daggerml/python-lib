@@ -1782,12 +1782,10 @@ class TestDagPublicationHelpers:
             {
                 "execution_id": "e-root",
                 "cache_key": "ck-root",
-                "created_at": now,
-                "status": "succeeded",
-                "state": None,
-                "dependencies": [],
+                "lifecycle": "succeeded",
                 "updated_at": now,
-                "cancel_requested_by": None,
+                "spawned_execution_ids": [],
+                "cancellation_requested_by": None,
             },
         )
         _put_remote_json(
@@ -1796,12 +1794,10 @@ class TestDagPublicationHelpers:
             {
                 "execution_id": "e-caller",
                 "cache_key": "ck-caller",
-                "created_at": now,
-                "status": "succeeded",
-                "state": None,
-                "dependencies": ["e-root"],
+                "lifecycle": "succeeded",
                 "updated_at": now,
-                "cancel_requested_by": None,
+                "spawned_execution_ids": ["e-root"],
+                "cancellation_requested_by": None,
             },
         )
         _put_remote_json(
@@ -1829,52 +1825,42 @@ class TestDagPublicationHelpers:
             {
                 "execution_id": "e-root",
                 "cache_key": "ck-root",
-                "created_at": now,
-                "status": "running",
-                "state": {"token": "root"},
-                "dependencies": ["e-sole", "e-shared", "e-terminal"],
+                "lifecycle": "running",
                 "updated_at": now,
-                "cancel_requested_by": None,
+                "spawned_execution_ids": ["e-sole", "e-shared", "e-terminal"],
+                "cancellation_requested_by": None,
             },
             {
                 "execution_id": "e-sole",
                 "cache_key": "ck-sole",
-                "created_at": now,
-                "status": "running",
-                "state": {"token": "sole"},
-                "dependencies": [],
+                "lifecycle": "running",
                 "updated_at": now,
-                "cancel_requested_by": None,
+                "spawned_execution_ids": [],
+                "cancellation_requested_by": None,
             },
             {
                 "execution_id": "e-shared",
                 "cache_key": "ck-shared",
-                "created_at": now,
-                "status": "running",
-                "state": {"token": "shared"},
-                "dependencies": [],
+                "lifecycle": "running",
                 "updated_at": now,
-                "cancel_requested_by": None,
+                "spawned_execution_ids": [],
+                "cancellation_requested_by": None,
             },
             {
                 "execution_id": "e-other",
                 "cache_key": "ck-other",
-                "created_at": now,
-                "status": "running",
-                "state": {"token": "other"},
-                "dependencies": ["e-shared"],
+                "lifecycle": "running",
                 "updated_at": now,
-                "cancel_requested_by": None,
+                "spawned_execution_ids": ["e-shared"],
+                "cancellation_requested_by": None,
             },
             {
                 "execution_id": "e-terminal",
                 "cache_key": "ck-terminal",
-                "created_at": now,
-                "status": "succeeded",
-                "state": None,
-                "dependencies": [],
+                "lifecycle": "succeeded",
                 "updated_at": now,
-                "cancel_requested_by": None,
+                "spawned_execution_ids": [],
+                "cancellation_requested_by": None,
             },
         ]:
             _put_remote_json(remote_ops, f"exec/state/{state['execution_id']}.json", state)
@@ -1892,15 +1878,15 @@ class TestDagPublicationHelpers:
 
         result = remote_ops.cancel_executions(["e-root"], requested_by="alice@example.com")
 
-        assert result["cancel_requested_execution_ids"] == ["e-sole", "e-root"]
+        assert result["cancel_pending_execution_ids"] == ["e-sole", "e-root"]
         root_state, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_state_key("e-root"))
         sole_state, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_state_key("e-sole"))
         shared_state, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_state_key("e-shared"))
         terminal_state, _ = remote_ops._get_json_key_with_etag(remote_ops._execution_state_key("e-terminal"))
-        assert root_state["status"] == "cancel-requested"
-        assert sole_state["status"] == "cancel-requested"
-        assert shared_state["status"] == "running"
-        assert terminal_state["status"] == "succeeded"
+        assert root_state["lifecycle"] == "cancel-pending"
+        assert sole_state["lifecycle"] == "cancel-pending"
+        assert shared_state["lifecycle"] == "running"
+        assert terminal_state["lifecycle"] == "succeeded"
 
     def test_put_cache_ref_rejects_invalid_targets(self, remote_ops):
         """Test cache ref validation rejects malformed targets."""

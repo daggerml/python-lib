@@ -196,4 +196,4 @@ class BatchExecutor(LambdaExecutorBase):
                 client.deregister_job_definition(jobDefinition=job_definition)
             except Exception:
                 pass
-        return {"status": "cancelled", "error": None}
+        return {"status": "cancel-detached", "error": None}

@@ -41,25 +41,26 @@ Define the canonical external adapter invocation contract used by runtime execut
   - `running` schema: JSON object containing exactly `status`, `error`, and `state`,
   - `succeeded` schema: JSON object containing exactly `status`, `error`, and `dag_id`,
   - `failed` schema: JSON object containing exactly `status` and `error`,
-  - `status` is one of `running|succeeded|failed`.
+  - `cancel-detached` schema: JSON object containing exactly `status` and `error`,
+  - `status` is one of `running|succeeded|failed|cancel-detached`.
 
 ### Invariants
 
 - `argv_ptr` is opaque at the adapter and executor boundary and is forwarded unchanged.
 - `execution_id` identifies the current in-flight execution attempt and is runtime-assigned.
-- `state` in the adapter payload is `null` on first launch and the immutable stored launch-time state on later polls.
-- `execution_status` in the adapter payload is `null` on first launch and the last stored execution status on later polls.
+- `state` in the adapter payload is `null` on first launch and the stored `launch_state.resume_state` on later polls.
+- `execution_status` in the adapter payload is `null` on first launch and the last stored `execution_record.lifecycle` on later polls.
 - `cancel_requested_by` in the adapter payload is `null` unless cancellation has been requested for that execution.
 - Internal execution-state `done` is not an adapter-boundary status and MUST NOT be emitted by adapters.
 - Adapter and executor invocation is kickoff-or-poll and must be bounded.
-- Long-running execution is asynchronous and resumed by repeated invocations using `execution_id` plus the immutable stored launch-time `state`.
+- Long-running execution is asynchronous and resumed by repeated invocations using `execution_id` plus stored `launch_state.resume_state`.
 - Built-in adapters and executors MUST NOT publish remote cache refs directly.
 - `IndexOps.start_fn` publishes cache entries after observing terminal execution state.
 - Runtime result resolution on success is cache-driven via execution cache identity, not adapter-returned commit pointers.
 - Cache key basis is `argv_ref.id()` and is authoritative for execution-state lookup.
 - Adapter payload `cache_key` is a helper token and MUST NOT override canonical cache identity derived from `argv`.
 - Adapters MUST return all durable resume handles needed for later polling in the first `running` result.
-- Runtime ignores replacement `state` returned by later `running` results after it has created `fn-exec/records/<cache_key>/<execution_number>.json`.
+- Runtime ignores replacement `state` returned by later `running` results after it has created `launch_state` for the execution.
 
 ### Error Semantics
 
@@ -69,7 +70,7 @@ Define the canonical external adapter invocation contract used by runtime execut
 
 ### Authority Handoffs
 
-- If `runnable.sub` exists, the current adapter invokes `sub.adapter` with the same `argv_ptr`, same `cache_key`, same `execution_id`, same `remote`, `state = null`, and `runnable=sub` unless the selected executor contract defines a different child execution identity.
+- If `runnable.sub` exists, the current adapter invokes `sub.adapter` with the same `argv_ptr`, same `cache_key`, same `execution_id`, same `remote`, current `state`, and `runnable=sub` unless the selected executor contract defines a different child execution identity.
 - Local contrib runtime may route adapter payload through a supervisor; adapter output shape remains unchanged.
 
 ## Compatibility

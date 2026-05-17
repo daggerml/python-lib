@@ -158,8 +158,8 @@ class AdapterBase:
         if not isinstance(result, dict):
             raise DmlRepoError("Adapter output must be a dict")
         status = result.get("status")
-        if status not in {"running", "succeeded", "failed", "cancelled"}:
-            raise DmlRepoError("Adapter output status must be one of running|succeeded|failed|cancelled")
+        if status not in {"running", "succeeded", "failed", "cancel-detached"}:
+            raise DmlRepoError("Adapter output status must be one of running|succeeded|failed|cancel-detached")
         allowed_keys = {"status", "error"}
         if status == "succeeded":
             allowed_keys.add("dag_id")
@@ -172,9 +172,9 @@ class AdapterBase:
         if status == "failed":
             if error is None:
                 raise DmlRepoError("Adapter output failed requires error")
-        elif status == "cancelled":
+        elif status == "cancel-detached":
             if error is not None:
-                raise DmlRepoError("Adapter output cancelled requires error=None")
+                raise DmlRepoError("Adapter output cancel-detached requires error=None")
         elif status == "running":
             if error is not None:
                 raise DmlRepoError("Adapter output running requires error=None")
@@ -222,11 +222,17 @@ class AdapterBase:
     def _refresh_execution_payload(
         *, cache_key: str, execution_id: str, remote: dict[str, str], fallback_state: dict[str, Any] | None
     ) -> tuple[dict[str, Any] | None, str | None, str | None]:
-        record = ExecutionState(cache_key, remote_root=remote["root"]).read_execution_record(execution_id)
-        if record is None:
+        state_backend = ExecutionState(cache_key, remote_root=remote["root"])
+        launch_state = state_backend.read_launch_state(execution_id)
+        record = state_backend.read_execution_record(execution_id)
+        if launch_state is None and record is None:
             return fallback_state, None, None
-        state = fallback_state if fallback_state is not None else record.get("state")
-        return state, record.get("status"), record.get("cancel_requested_by")
+        state = fallback_state
+        if state is None and launch_state is not None:
+            state = launch_state.get("resume_state")
+        return state, (record.get("lifecycle") if record is not None else None), (
+            record.get("cancellation_requested_by") if record is not None else None
+        )
 
     @classmethod
     def cli(cls, argv: list[str] | None = None) -> int:
@@ -262,7 +268,7 @@ class AdapterBase:
             persisted_state = state
             current_status = execution_status
             current_cancel_requested_by = cancel_requested_by
-            while args.poll and result.get("status") not in {"succeeded", "failed", "cancelled"}:
+            while args.poll and result.get("status") not in {"succeeded", "failed", "cancel-detached"}:
                 persisted_state, current_status, current_cancel_requested_by = cls._refresh_execution_payload(
                     cache_key=cache_key,
                     execution_id=execution_id,

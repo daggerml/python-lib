@@ -264,6 +264,6 @@ def test_batch_executor_cancel_cleans_up_backend_resources(monkeypatch):
         remote=_REMOTE,
     )
 
-    assert result == {"status": "cancelled", "error": None}
+    assert result == {"status": "cancel-detached", "error": None}
     assert fake_client.canceled == [{"jobId": "job-123", "reason": "daggerml cancellation requested"}]
     assert fake_client.deregistered == [{"jobDefinition": "arn:batch:def/123"}]

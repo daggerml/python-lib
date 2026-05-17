@@ -215,11 +215,11 @@ class DockerExecutor(ExecutorBase):
         del cache_key, execution_id, remote
         docker_bin = shutil.which("docker")
         if docker_bin is None:
-            return {"status": "cancelled", "error": None}
+            return {"status": "cancel-detached", "error": None}
         container_id = state.get("container_id")
         if isinstance(container_id, str) and container_id:
             _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
-        return {"status": "cancelled", "error": None}
+        return {"status": "cancel-detached", "error": None}
 
 
 def _cleanup_docker(container_id: str, cleanup_image: str | None, docker_bin: str) -> None:

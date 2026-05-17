@@ -256,7 +256,7 @@ def test_cfn_cancel_starts_rollback_or_delete_and_reports_cancelled(monkeypatch)
         remote=_REMOTE,
     )
 
-    assert result == {"status": "cancelled", "error": None}
+    assert result == {"status": "cancel-detached", "error": None}
     assert calls == [("cancel_update_stack", "stack-name")]
 
 

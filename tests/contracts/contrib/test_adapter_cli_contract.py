@@ -23,11 +23,24 @@ def test_adapter_cli_poll_preserves_launch_state_over_execution_record_state(mon
 
     monkeypatch.setattr(
         ExecutionState,
+        "read_launch_state",
+        lambda self, execution_id: {
+            "resume_state": {"container_id": "cid-123"},
+            "created_at": 1,
+            "execution_id": execution_id,
+            "cache_key": self.cache_key,
+        },
+    )
+    monkeypatch.setattr(
+        ExecutionState,
         "read_execution_record",
         lambda self, execution_id: {
-            "state": {"container_id": "cid-123"},
-            "status": "running",
-            "cancel_requested_by": None,
+            "execution_id": execution_id,
+            "cache_key": self.cache_key,
+            "lifecycle": "running",
+            "updated_at": 1,
+            "spawned_execution_ids": [],
+            "cancellation_requested_by": None,
         },
     )
     monkeypatch.setattr("daggerml.contrib.adapters.time.sleep", lambda _: None)

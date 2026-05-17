@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from daggerml._internal._db import DmlDbInvalidPathError, DmlDbInvalidRefError, Ref
 from daggerml._internal.dml import Dml
-from daggerml._internal.exec_state import ExecutionState
+from daggerml._internal.exec_state import CancelledExecutionError, ExecutionState
 from daggerml._internal.execution_context import execution_context
 from daggerml._internal.types import (
     DmlRepoError,
@@ -19,6 +19,7 @@ __all__ = (
     "DmlDbInvalidRefError",
     "DmlRepoError",
     "Error",
+    "CancelledExecutionError",
     "ExecutionState",
     "Ref",
     "Runnable",

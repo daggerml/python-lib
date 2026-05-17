@@ -140,7 +140,7 @@ Rules:
 ## Ownership
 
 - `IndexOps.start_fn` owns the mutex lifecycle: it acquires before inspecting or mutating the active execution and releases after the adapter returns.
-- Runtime owns `fn-exec/active/<cache_key>` and `fn-exec/records/<cache_key>/<execution_number>.json`; adapters and executors no longer own a mutable S3 execution-state prefix.
+- Runtime owns `dml/active/<cache_key>`, caller-owned `dml/exec/launch/<execution_id>.json`, and runtime-owned `dml/exec/state/<execution_id>.json`; adapters and executors do not own those records.
 - `done` tombstone semantics are removed; terminal result flows back via adapter stdout and cache publication.
 
 ## References

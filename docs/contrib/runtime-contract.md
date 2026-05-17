@@ -53,7 +53,7 @@ This document does not define:
   - `poll(*, cache_key, execution_id, state, remote)`,
   - `cleanup(*, cache_key, execution_id, state, remote)`.
 - Shared executor lifecycle:
-  - runtime coordination MUST acquire the `cache_key` mutex, inspect `fn-exec/active/<cache_key>`, and dispatch either a first `start(...)` call or a resumed `poll(...)` call,
+  - runtime coordination MUST acquire the `cache_key` mutex, inspect `dml/active/<cache_key>`, and dispatch either a first `start(...)` call or a resumed `poll(...)` call,
   - first launch uses `state = null`,
   - resumed execution dispatches to `poll(...)` with the immutable stored launch-time `state`,
   - kickoff and poll invocations MUST be bounded,
@@ -61,11 +61,11 @@ This document does not define:
   - `poll(...)` MAY be a no-op for supervisor-backed executors,
   - `cleanup(...)` MUST be idempotent.
 - Shared state handling:
-  - runtime owns `fn-exec/active/<cache_key>` and immutable `fn-exec/records/<cache_key>/<execution_number>.json` records,
-  - active execution pointers identify the current `execution_number` for the cache key,
+  - runtime owns `dml/active/<cache_key>`, caller-owned `dml/exec/launch/<execution_id>.json`, and runtime-owned `dml/exec/state/<execution_id>.json`,
+  - active execution pointers identify the current `execution_id` for the cache key,
   - built-in launch coordination MUST use the active pointer plus mutex so concurrent callers do not launch duplicate work,
   - executors MUST return all durable resume handles in the first `running` result,
-  - later executor `running` results MAY include `state`, but runtime MAY ignore replacement state after creating the immutable execution record,
+  - later executor `running` results MAY include `state`, but runtime MAY ignore replacement state after creating `launch_state`,
   - built-in adapters and executors MUST NOT publish cache refs directly,
   - built-in adapters and executors MUST NOT write terminal `done`; `start_fn` owns terminal cache publication.
 - Result publication:

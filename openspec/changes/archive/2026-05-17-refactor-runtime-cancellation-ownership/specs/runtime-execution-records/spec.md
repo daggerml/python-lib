@@ -1,35 +1,6 @@
-### Requirement: Runtime SHALL separate cache identity from execution identity
-The runtime SHALL treat `cache_key` as the stable computation identity and `execution_id` as the stable identity of one execution attempt. The runtime SHALL acquire execution coordination locks by `cache_key` for launch, resume, and cancellation, SHALL propagate `execution_id` in the adapter envelope, and SHALL use execution id as the identity for dependency edges, execution state objects, and invalidation records.
+## MODIFIED Requirements
 
-#### Scenario: First launch creates a new execution identity
-- **WHEN** `start_fn` observes a cache miss and confirms there is no active execution for the computed `cache_key`
-- **THEN** it creates a new `execution_id` for that launch attempt
-- **AND** it invokes the adapter with both `cache_key` and `execution_id`
-
-#### Scenario: Resume preserves the current execution identity
-- **WHEN** `start_fn` observes an active execution for a `cache_key`
-- **THEN** it SHALL reuse the referenced `execution_id`
-- **AND** it SHALL NOT create a new `execution_id` for that execution while resuming it
-
-#### Scenario: Cancellation resolves lock identity from the execution record
-- **WHEN** cancellation targets execution `e1`
-- **AND** `exec/state/e1.json` records `cache_key = "ck1"`
-- **THEN** the runtime SHALL acquire the execution coordination lock for `ck1`
-- **AND** it SHALL continue to use `e1` as the execution-record and dependency-graph identity
-
-### Requirement: Runtime SHALL maintain an active execution pointer per cache key
-The runtime SHALL persist the currently active execution for a `cache_key` at `active/<cache_key>` as plain text containing only the `execution_id`.
-
-#### Scenario: Active pointer is created for a new running execution
-- **WHEN** the first adapter call for a new execution returns `running`
-- **THEN** the runtime SHALL create `active/<cache_key>` containing that execution's `execution_id`
-
-#### Scenario: Stale active pointer is discarded
-- **WHEN** `active/<cache_key>` exists but `exec/state/<execution_id>.json` does not exist
-- **THEN** the runtime SHALL delete `active/<cache_key>`
-- **AND** it SHALL treat the cache key as having no active execution
-
-### Requirement: Runtime SHALL maintain one mutable execution record per execution id
+### Requirement: Runtime SHALL maintain one mutable execution object per execution id
 The runtime SHALL persist one mutable lifecycle object per execution id as `execution_record`, separate from caller-owned `launch_state`. `execution_record` SHALL include `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `spawned_execution_ids`, and `cancellation_requested_by`, where `cancellation_requested_by` is `str | null`. `lifecycle` SHALL be one of `running`, `cancel-pending`, `cancel-detached`, `succeeded`, or `failed`. `spawned_execution_ids` SHALL be the deduped set of child execution ids started by that execution for cancellation traversal. `execution_record` updates SHALL use compare-and-swap with the latest known ETag. If a compare-and-swap update observes ETag drift, the runtime SHALL reread the record and SHALL raise cancellation interruption only when the reread lifecycle is already a `cancel-*` value; otherwise it SHALL continue from the latest valid reread state.
 
 The same `execution_record` schema SHALL also be used for each live index id. For index-root records, the object path SHALL be `exec/state/<index_id>.json`, `execution_id` SHALL equal the `index_id`, `cache_key` SHALL equal the `index_id`, and `spawned_execution_ids` SHALL track the deduped set of execution ids started from that index.
@@ -67,20 +38,6 @@ The `execution_record` schema SHALL be:
 - **WHEN** index `idx1` starts execution `e1`
 - **THEN** the runtime SHALL update `exec/state/idx1.json` so that `spawned_execution_ids` contains `e1`
 
-### Requirement: Cache refs SHALL remain proper refs and record execution ids
-The runtime SHALL publish `refs/cache/<cache_key>.json` as a normal cache ref to the current manifest for that cache key, and that ref SHALL also record `execution_id` for the current execution. Readers that materialize cached results SHALL continue resolving the cached manifest through the ref target, and graph planners SHALL read `execution_id` from the same cache ref.
-
-#### Scenario: Successful execution updates cache pointer
-- **WHEN** execution `e7` becomes the terminal cached result for cache key `ck1`
-- **THEN** the runtime SHALL write `refs/cache/ck1.json` with `execution_id = "e7"`
-- **AND** that object SHALL remain a valid cache ref with its manifest `target`
-
-#### Scenario: Re-run requires prior invalidation
-- **WHEN** a later execution `e8` attempts to publish a terminal cached result for cache key `ck1`
-- **AND** `refs/cache/ck1.json` already exists for an earlier execution
-- **THEN** the runtime SHALL reject that cache publication
-- **AND** the earlier cache ref MUST be invalidated or deleted before `e8` can publish `refs/cache/ck1.json`
-
 ### Requirement: Adapter envelope and result schema SHALL follow the runtime-owned execution contract
 The adapter envelope SHALL include `argv_ptr`, `cache_key`, `execution_id`, `remote`, `runnable`, `state`, `execution_status`, and `cancel_requested_by`. The adapter result SHALL use only `running`, `succeeded`, `failed`, or `cancel-detached` statuses. `running` MUST include durable `state`. `succeeded` MUST include `dag_id`. `failed` MUST include `error`. `cancel-detached` MUST identify a successful cancellation update that detached runtime ownership and MAY omit durable execution output.
 
@@ -101,26 +58,7 @@ The adapter envelope SHALL include `argv_ptr`, `cache_key`, `execution_id`, `rem
 - **WHEN** an adapter returns `pending`
 - **THEN** the runtime SHALL reject that result as invalid adapter output
 
-### Requirement: Stale lock recovery SHALL preserve active execution ownership
-The runtime SHALL use the lock for `cache_key` only to coordinate mutation of the active execution. If a lock is stale and an active execution record exists, the runtime SHALL recover the lock and resume that execution instead of creating a new one.
-
-#### Scenario: Stale lock with active execution resumes existing execution
-- **WHEN** the lock for a `cache_key` is stale and `active/<cache_key>` points to an existing execution record
-- **THEN** the runtime SHALL recover the lock
-- **AND** it SHALL resume the existing `execution_id`
-- **AND** it SHALL NOT launch a duplicate execution
-
-### Requirement: Failed execution SHALL be cached as a terminal result
-If an adapter returns `failed`, the runtime SHALL complete the DAG with the error and SHALL publish that failed terminal outcome to cache for the `cache_key`.
-
-#### Scenario: Failed adapter result populates cache
-- **WHEN** an adapter returns `failed` for a cache key
-- **THEN** the runtime SHALL complete the DAG with the reported error
-- **AND** it SHALL publish the failed outcome into cache for that cache key
-
-#### Scenario: Failed execution clears active pointer
-- **WHEN** an active execution returns `failed`
-- **THEN** the runtime SHALL delete `active/<cache_key>` before surfacing the failure
+## ADDED Requirements
 
 ### Requirement: Runtime SHALL separate caller-owned launch state from runtime-owned lifecycle state
 The runtime SHALL treat `launch_state` as caller-owned state for launch and resume, and `execution_record` as execution-runtime-owned state for lifecycle, spawned execution summaries, and cancellation metadata. The caller runtime MAY transition a callee `execution_record` only to `cancel-pending` or `cancel-detached` during orphan-triggered cancellation, and SHALL NOT otherwise mutate lifecycle state owned by the callee execution runtime.

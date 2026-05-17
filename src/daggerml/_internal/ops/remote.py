@@ -1264,11 +1264,10 @@ class RemoteOps(BaseOps):
             create table states (
                 execution_id text primary key,
                 cache_key text not null,
-                status text not null,
-                created_at integer not null,
+                lifecycle text not null,
                 updated_at integer not null,
-                cancel_requested_by text,
-                dependencies_json text not null
+                cancellation_requested_by text,
+                spawned_execution_ids_json text not null
             );
             create table edges (
                 callee_execution_id text not null,
@@ -1291,15 +1290,14 @@ class RemoteOps(BaseOps):
         )
         for _key, state in self._list_json_prefix("exec/state/"):
             conn.execute(
-                "insert or replace into states values (?, ?, ?, ?, ?, ?, ?)",
+                "insert or replace into states values (?, ?, ?, ?, ?, ?)",
                 (
                     state["execution_id"],
                     state["cache_key"],
-                    state["status"],
-                    state["created_at"],
+                    state["lifecycle"],
                     state["updated_at"],
-                    state.get("cancel_requested_by"),
-                    json.dumps(state.get("dependencies", []), separators=(",", ":"), sort_keys=True),
+                    state.get("cancellation_requested_by"),
+                    json.dumps(state.get("spawned_execution_ids", []), separators=(",", ":"), sort_keys=True),
                 ),
             )
         for _key, edge in self._list_json_prefix("exec/edges/"):
@@ -1331,24 +1329,26 @@ class RemoteOps(BaseOps):
         self,
         execution_id: str,
         *,
-        status: str | None = None,
-        dependencies: list[str] | None = None,
-        cancel_requested_by: str | None = None,
+        lifecycle: str | None = None,
+        spawned_execution_ids: list[str] | None = None,
+        cancellation_requested_by: str | None = None,
         retries: int = 8,
     ) -> dict[str, Any] | None:
         key = self._execution_state_key(execution_id)
-        status_rank = {"running": 0, "cancel-requested": 1, "cancelled": 2, "succeeded": 3, "failed": 3}
+        lifecycle_rank = {"running": 0, "cancel-pending": 1, "cancel-detached": 2, "succeeded": 3, "failed": 3}
         for _ in range(retries):
             current, etag = self._get_json_key_with_etag(key)
             if current is None or etag is None:
                 return None
             merged = dict(current)
-            if status is not None and status_rank[status] > status_rank[merged["status"]]:
-                merged["status"] = status
-            if dependencies:
-                merged["dependencies"] = sorted({*merged.get("dependencies", []), *dependencies})
-            if cancel_requested_by is not None and merged.get("cancel_requested_by") is None:
-                merged["cancel_requested_by"] = cancel_requested_by
+            if lifecycle is not None and lifecycle_rank[lifecycle] > lifecycle_rank[merged["lifecycle"]]:
+                merged["lifecycle"] = lifecycle
+            if spawned_execution_ids:
+                merged["spawned_execution_ids"] = sorted(
+                    {*merged.get("spawned_execution_ids", []), *spawned_execution_ids}
+                )
+            if cancellation_requested_by is not None and merged.get("cancellation_requested_by") is None:
+                merged["cancellation_requested_by"] = cancellation_requested_by
             merged["updated_at"] = int(time.time())
             if self._put_json_key_if_match(key, merged, etag):
                 return merged
@@ -1417,12 +1417,12 @@ class RemoteOps(BaseOps):
         seen: list[str] = []
         seen_set: set[str] = set()
         unseen = set(execution_ids)
-        terminal = {"succeeded", "failed", "cancelled"}
-        inactive = terminal | {"cancel-requested"}
+        terminal = {"succeeded", "failed", "cancel-detached"}
+        inactive = terminal | {"cancel-pending"}
         while unseen:
             exec_id = unseen.pop()
             row = conn.execute(
-                "select status, dependencies_json from states where execution_id = ?",
+                "select lifecycle, spawned_execution_ids_json from states where execution_id = ?",
                 (exec_id,),
             ).fetchone()
             if row is None or row[0] in terminal or exec_id in seen_set:
@@ -1433,7 +1433,7 @@ class RemoteOps(BaseOps):
         committed: list[str] = []
         for exec_id in reversed(seen):
             row = conn.execute(
-                "select status from states where execution_id = ?",
+                "select lifecycle from states where execution_id = ?",
                 (exec_id,),
             ).fetchone()
             if row is None or row[0] in terminal:
@@ -1444,7 +1444,7 @@ class RemoteOps(BaseOps):
                 (exec_id,),
             ):
                 caller_state = conn.execute(
-                    "select status from states where execution_id = ?",
+                    "select lifecycle from states where execution_id = ?",
                     (caller_row[0],),
                 ).fetchone()
                 if caller_state is not None and caller_state[0] not in inactive:
@@ -1453,17 +1453,17 @@ class RemoteOps(BaseOps):
                 continue
             updated = self._update_execution_state_record(
                 exec_id,
-                status="cancel-requested",
-                cancel_requested_by=requested_by,
+                lifecycle="cancel-pending",
+                cancellation_requested_by=requested_by,
             )
             if updated is not None:
                 conn.execute(
-                    "update states set status = ?, cancel_requested_by = ? where execution_id = ?",
-                    (updated["status"], updated.get("cancel_requested_by"), exec_id),
+                    "update states set lifecycle = ?, cancellation_requested_by = ? where execution_id = ?",
+                    (updated["lifecycle"], updated.get("cancellation_requested_by"), exec_id),
                 )
                 committed.append(exec_id)
         conn.commit()
-        return {"requested": execution_ids, "cancel_requested_execution_ids": committed}
+        return {"requested": execution_ids, "cancel_pending_execution_ids": committed}
 
     def _push_upload_objects(self, local_manifest: dict) -> None:
         """Upload missing CAS objects from local manifest closure.

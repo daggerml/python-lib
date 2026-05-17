@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from daggerml._internal._db import Ref
 from daggerml._internal.builtins import BUILTIN_FNS
-from daggerml._internal.exec_state import ExecutionRecord, ExecutionState
+from daggerml._internal.exec_state import ExecutionRecord, ExecutionState, LaunchState
 from daggerml._internal.execution_context import get_current_execution_context
 from daggerml._internal.ops.base_ops import BaseOps, with_retry
 from daggerml._internal.ops.cache import CacheOps
@@ -124,98 +124,125 @@ class IndexOps(BaseOps):
         if not es.lock():
             # Another process is driving this cycle
             return None
+        locked = True
 
-        # Step 2: post-lock cache check
-        with self._tx(readonly=False) as txn:
-            cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-            dag_ref = cops._get(prepared.argv_ref, txn)
-            if dag_ref is not None:
-                es.unlock()
-                post_lock_dag_ref = dag_ref
-        if "post_lock_dag_ref" in locals():
-            return self._finish_fn_result(post_lock_dag_ref, argv, name, None, index_id)
-
-        execution_id = es.read_active_execution_id()
-        execution_record = None
-        if execution_id is not None:
-            execution_record = es.read_execution_record(execution_id)
-            if execution_record is None or execution_record["status"] in {"succeeded", "failed", "cancelled"}:
-                es.delete_active_execution()
-                execution_id = None
-        if execution_id is None:
-            assert execution_record is None
-            execution_id = str(uuid7())
-            state = None
-        else:
-            assert execution_record is not None
-            state = cast(dict[str, Any] | None, execution_record["state"])
-
-        # Step 3: call adapter (holding the lock)
         try:
+            # Step 2: post-lock cache check
+            with self._tx(readonly=False) as txn:
+                cops = CacheOps(_db=self._db, remote_root=self.remote_root)
+                dag_ref = cops._get(prepared.argv_ref, txn)
+                if dag_ref is not None:
+                    es.unlock()
+                    locked = False
+                    post_lock_dag_ref = dag_ref
+            if "post_lock_dag_ref" in locals():
+                return self._finish_fn_result(post_lock_dag_ref, argv, name, None, index_id)
+
+            execution_id = es.read_active_execution_id()
+            execution_record = None
+            launch_state = None
+            if execution_id is not None:
+                execution_record = es.read_execution_record(execution_id)
+                launch_state = es.read_launch_state(execution_id)
+                if (
+                    execution_record is None
+                    or launch_state is None
+                    or execution_record["lifecycle"] in {"succeeded", "failed", "cancel-detached"}
+                ):
+                    es.delete_active_execution()
+                    execution_id = None
+                    execution_record = None
+                    launch_state = None
+            if execution_id is None:
+                assert execution_record is None
+                execution_id = str(uuid7())
+                state = None
+            else:
+                assert execution_record is not None
+                assert launch_state is not None
+                state = cast(dict[str, Any] | None, launch_state["resume_state"])
+
+            # Step 3: call adapter (holding the lock)
             result = self._call_adapter(
                 prepared,
                 argv_ptr,
                 execution_id=execution_id,
                 state=state,
-                execution_status=(cast(str, execution_record["status"]) if execution_record is not None else None),
+                execution_status=(cast(str, execution_record["lifecycle"]) if execution_record is not None else None),
                 cancel_requested_by=(
-                    cast(str | None, execution_record["cancel_requested_by"]) if execution_record is not None else None
+                    cast(str | None, execution_record["cancellation_requested_by"])
+                    if execution_record is not None
+                    else None
                 ),
             )
-        except Exception:
-            es.unlock()
-            raise
 
-        self._record_call_edges(prepared, es, execution_id=execution_id)
+            self._record_call_edges(prepared, es, execution_id=execution_id)
 
-        # Step 4: handle adapter result
-        status = result["status"]
-        execution_state: ExecutionRecord = {
-            "execution_id": execution_id,
-            "cache_key": prepared.cache_key,
-            "created_at": int(execution_record["created_at"]) if execution_record is not None else int(time.time()),
-            "status": status,
-            "state": result.get("state") if (status == "running" and state is None) else None,
-            "dependencies": [],
-            "updated_at": int(time.time()),
-            "cancel_requested_by": execution_record["cancel_requested_by"] if execution_record is not None else None,
-        }
-        execution_state = es.update_execution_record(execution_state)
-        if status == "succeeded":
-            es.delete_active_execution()
-            es.unlock()
-            with self._tx(readonly=False) as txn:
-                cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-                dag_ref = cops._get(prepared.argv_ref, txn)
-                if dag_ref is not None:
-                    terminal_dag_ref = dag_ref
-            if "terminal_dag_ref" in locals():
-                return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
-            raise DmlRepoError("Adapter reported success but no cached DAG was published")
-        elif status == "failed":
-            self._publish_terminal_state(prepared.argv_ref, result, execution_id=execution_id)
-            es.delete_active_execution()
-            es.unlock()
-            with self._tx(readonly=False) as txn:
-                cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-                dag_ref = cops._get(prepared.argv_ref, txn)
-                if dag_ref is not None:
-                    terminal_dag_ref = dag_ref
-            if "terminal_dag_ref" in locals():
-                return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
-            raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
-        elif status == "cancelled":
-            es.delete_active_execution()
-            es.unlock()
-            return None
-        else:
-            if state is None:
-                if not es.create_active_execution(execution_id):
-                    es.unlock()
-                    raise DmlRepoError(f"Active execution already exists for cache key: {prepared.cache_key}")
-            # running — adapter is still working asynchronously
-            es.unlock()
-            return None
+            # Step 4: handle adapter result
+            status = result["status"]
+            execution_state: ExecutionRecord = {
+                "execution_id": execution_id,
+                "cache_key": prepared.cache_key,
+                "lifecycle": status,
+                "updated_at": int(time.time()),
+                "spawned_execution_ids": (
+                    list(cast(list[str], execution_record.get("spawned_execution_ids", [])))
+                    if execution_record is not None
+                    else []
+                ),
+                "cancellation_requested_by": (
+                    execution_record["cancellation_requested_by"] if execution_record is not None else None
+                ),
+            }
+            execution_state = es.update_execution_record(execution_state)
+            if status == "succeeded":
+                es.delete_active_execution()
+                es.unlock()
+                locked = False
+                with self._tx(readonly=False) as txn:
+                    cops = CacheOps(_db=self._db, remote_root=self.remote_root)
+                    dag_ref = cops._get(prepared.argv_ref, txn)
+                    if dag_ref is not None:
+                        terminal_dag_ref = dag_ref
+                if "terminal_dag_ref" in locals():
+                    return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
+                raise DmlRepoError("Adapter reported success but no cached DAG was published")
+            elif status == "failed":
+                self._publish_terminal_state(prepared.argv_ref, result, execution_id=execution_id)
+                es.delete_active_execution()
+                es.unlock()
+                locked = False
+                with self._tx(readonly=False) as txn:
+                    cops = CacheOps(_db=self._db, remote_root=self.remote_root)
+                    dag_ref = cops._get(prepared.argv_ref, txn)
+                    if dag_ref is not None:
+                        terminal_dag_ref = dag_ref
+                if "terminal_dag_ref" in locals():
+                    return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
+                raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
+            elif status == "cancel-detached":
+                es.delete_active_execution()
+                es.unlock()
+                locked = False
+                return None
+            else:
+                if state is None:
+                    launch_state_record: LaunchState = {
+                        "execution_id": execution_id,
+                        "cache_key": prepared.cache_key,
+                        "resume_state": cast(dict[str, Any], result["state"]),
+                        "created_at": int(time.time()),
+                    }
+                    es.update_launch_state(launch_state_record)
+                    if not es.create_active_execution(execution_id):
+                        raise DmlRepoError(f"Active execution already exists for cache key: {prepared.cache_key}")
+                # running — adapter is still working asynchronously
+                es.unlock()
+                locked = False
+                return None
+        finally:
+            if locked:
+                es.unlock()
 
     def delete(self, index_id: str) -> None:
         """Delete an index object from db."""
@@ -224,6 +251,7 @@ class IndexOps(BaseOps):
     def cancel(self, index_id: str, *, requested_by: str) -> dict[str, Any]:
         cancelled_path = self._resolve_index_for_cancellation(index_id)
         root_record = self._mark_index_root_cancel_requested(index_id, requested_by=requested_by)
+        self._drop_live_caller_edges(index_id, cast(list[str], root_record.get("spawned_execution_ids", [])))
         graph = self._collect_cancellation_graph(index_id, root_record)
         candidate_set = {callee_id for _caller_id, callee_id in graph}
         own_executions = set(candidate_set)
@@ -661,7 +689,7 @@ class IndexOps(BaseOps):
         if not isinstance(payload, dict):
             raise DmlRepoError("Adapter output schema invalid")
         status = payload.get("status")
-        if status not in {"running", "succeeded", "failed", "cancelled"}:
+        if status not in {"running", "succeeded", "failed", "cancel-detached"}:
             raise DmlRepoError("Adapter output schema invalid")
         if status == "succeeded":
             allowed = {"status", "error", "dag_id"}
@@ -677,7 +705,7 @@ class IndexOps(BaseOps):
                 raise DmlRepoError("Adapter output schema invalid")
             if payload.get("error") is None:
                 raise DmlRepoError("Adapter output schema invalid")
-        elif status == "cancelled":
+        elif status == "cancel-detached":
             if set(payload.keys()) != {"status", "error"}:
                 raise DmlRepoError("Adapter output schema invalid")
             if payload.get("error") is not None:
@@ -794,12 +822,10 @@ class IndexOps(BaseOps):
                 {
                     "execution_id": prepared.caller_execution_id,
                     "cache_key": prepared.caller_cache_key,
-                    "created_at": int(time.time()),
-                    "status": "running",
-                    "state": None,
-                    "dependencies": [execution_id],
+                    "lifecycle": "running",
                     "updated_at": int(time.time()),
-                    "cancel_requested_by": None,
+                    "spawned_execution_ids": [execution_id],
+                    "cancellation_requested_by": None,
                 }
             )
 
@@ -809,12 +835,10 @@ class IndexOps(BaseOps):
             {
                 "execution_id": index_id,
                 "cache_key": index_id,
-                "created_at": timestamp,
-                "status": "running",
-                "state": None,
-                "dependencies": [],
+                "lifecycle": "running",
                 "updated_at": timestamp,
-                "cancel_requested_by": None,
+                "spawned_execution_ids": [],
+                "cancellation_requested_by": None,
             }
         )
 
@@ -824,12 +848,10 @@ class IndexOps(BaseOps):
             {
                 "execution_id": index_id,
                 "cache_key": cast(str, record["cache_key"]),
-                "created_at": int(record["created_at"]),
-                "status": "cancel-requested",
-                "state": cast(dict[str, Any] | None, record["state"]),
-                "dependencies": list(cast(list[str], record.get("dependencies", []))),
+                "lifecycle": "cancel-pending",
                 "updated_at": int(time.time()),
-                "cancel_requested_by": requested_by,
+                "spawned_execution_ids": list(cast(list[str], record.get("spawned_execution_ids", []))),
+                "cancellation_requested_by": requested_by,
             }
         )
 
@@ -855,7 +877,10 @@ class IndexOps(BaseOps):
 
     def _collect_cancellation_graph(self, index_id: str, root_record: ExecutionRecord) -> set[tuple[str, str]]:
         graph: set[tuple[str, str]] = set()
-        pending = [(index_id, dependency_id) for dependency_id in cast(list[str], root_record.get("dependencies", []))]
+        pending = [
+            (index_id, dependency_id)
+            for dependency_id in cast(list[str], root_record.get("spawned_execution_ids", []))
+        ]
         seen: set[str] = set()
         while pending:
             caller_id, candidate_id = pending.pop()
@@ -867,9 +892,17 @@ class IndexOps(BaseOps):
             if record is None:
                 continue
             pending.extend(
-                (candidate_id, dependency_id) for dependency_id in cast(list[str], record.get("dependencies", []))
+                (candidate_id, dependency_id)
+                for dependency_id in cast(list[str], record.get("spawned_execution_ids", []))
             )
         return graph
+
+    def _drop_live_caller_edges(self, caller_execution_id: str, callee_execution_ids: list[str]) -> None:
+        for callee_execution_id in callee_execution_ids:
+            ExecutionState(callee_execution_id, remote_root=self.remote_root).delete_execution_dependency(
+                caller_execution_id=caller_execution_id,
+                callee_execution_id=callee_execution_id,
+            )
 
     def _cancel_execution_candidate(
         self,
@@ -904,21 +937,21 @@ class IndexOps(BaseOps):
                     "lock_retry": False,
                     "cancel_requested": False,
                 }
-            if record["status"] == "cancelled":
+            if record["lifecycle"] == "cancel-detached":
                 return {
                     "execution_id": candidate_id,
                     "cancel_requested": False,
                     "lock_retry": False,
                     "outcome": 1,
                 }
-            if record["status"] in {"succeeded", "failed"}:
+            if record["lifecycle"] in {"succeeded", "failed"}:
                 return {
                     "execution_id": candidate_id,
                     "cancel_requested": False,
                     "lock_retry": False,
                     "outcome": -1,
                 }
-            inactive = {"cancel-requested", "cancelled", "succeeded", "failed"}
+            inactive = {"cancel-pending", "cancel-detached", "succeeded", "failed"}
             active_callers = self._active_callers(candidate_id, inactive)
             if active_callers - own_executions:
                 return {
@@ -927,49 +960,61 @@ class IndexOps(BaseOps):
                     "lock_retry": False,
                     "outcome": -1,
                 }
-            updated = lock_state.update_execution_record(
+            lock_state.delete_active_execution()
+            pending_record = lock_state.update_execution_record(
                 {
                     "execution_id": candidate_id,
                     "cache_key": cast(str, record["cache_key"]),
-                    "created_at": int(record["created_at"]),
-                    "status": "cancel-requested",
-                    "state": cast(dict[str, Any] | None, record["state"]),
-                    "dependencies": list(cast(list[str], record.get("dependencies", []))),
+                    "lifecycle": "cancel-pending",
                     "updated_at": int(time.time()),
-                    "cancel_requested_by": requested_by,
+                    "spawned_execution_ids": list(cast(list[str], record.get("spawned_execution_ids", []))),
+                    "cancellation_requested_by": requested_by,
                 }
             )
-            result = self._invoke_cancel_update(candidate_id, updated)
-            if result["status"] == "cancelled":
-                lock_state.update_execution_record({**updated, "status": "cancelled", "updated_at": int(time.time())})
-                return {
-                    "execution_id": candidate_id,
-                    "cancel_requested": True,
-                    "lock_retry": False,
-                    "outcome": 1,
-                }
+        finally:
+            lock_state.unlock()
+
+        result = self._invoke_cancel_update(candidate_id, pending_record)
+        if result["status"] == "cancel-detached":
+            record_state.update_execution_record(
+                {**pending_record, "lifecycle": "cancel-detached", "updated_at": int(time.time())}
+            )
+            self._drop_live_caller_edges(
+                candidate_id,
+                cast(list[str], pending_record.get("spawned_execution_ids", [])),
+            )
+            record_state.create_cancellation_tombstone(
+                execution_id=candidate_id,
+                cache_key=cast(str, pending_record["cache_key"]),
+                requested_by=requested_by,
+                requested_at=int(time.time()),
+            )
             return {
                 "execution_id": candidate_id,
                 "cancel_requested": True,
                 "lock_retry": False,
-                "outcome": None,
+                "outcome": 1,
             }
-        finally:
-            lock_state.unlock()
+        return {
+            "execution_id": candidate_id,
+            "cancel_requested": True,
+            "lock_retry": False,
+            "outcome": None,
+        }
 
     def _active_callers(self, execution_id: str, inactive: set[str]) -> set[str]:
         callers: set[str] = set()
         state = ExecutionState(execution_id, remote_root=self.remote_root)
         for caller_id in state.list_execution_callers(execution_id):
             caller_record = ExecutionState(caller_id, remote_root=self.remote_root).read_execution_record(caller_id)
-            if caller_record is not None and caller_record["status"] not in inactive:
+            if caller_record is not None and caller_record["lifecycle"] not in inactive:
                 callers.add(caller_id)
         return callers
 
     def _owned_executions_cancelled(self, own_executions: set[str]) -> bool:
         for execution_id in own_executions:
             record = ExecutionState(execution_id, remote_root=self.remote_root).read_execution_record(execution_id)
-            if record is None or record["status"] != "cancelled":
+            if record is None or record["lifecycle"] != "cancel-detached":
                 return False
         return True
 
@@ -980,7 +1025,9 @@ class IndexOps(BaseOps):
         root_record = root_state.read_execution_record(index_id)
         if root_record is None:
             raise DmlRepoError(f"Missing synthetic root execution record: {index_id}")
-        root_state.update_execution_record({**root_record, "status": "cancelled", "updated_at": int(time.time())})
+        root_state.update_execution_record(
+            {**root_record, "lifecycle": "cancel-detached", "updated_at": int(time.time())}
+        )
         try:
             cancelled_path.unlink()
         except FileNotFoundError:
@@ -988,7 +1035,7 @@ class IndexOps(BaseOps):
 
     @staticmethod
     def _is_synthetic_index_root(record: ExecutionRecord) -> bool:
-        return record["execution_id"] == record["cache_key"] and record["state"] is None
+        return record["execution_id"] == record["cache_key"]
 
     def _invoke_cancel_update(self, execution_id: str, record: ExecutionRecord) -> dict[str, Any]:
         argv_ref = Ref(f"node-argv:{cast(str, record['cache_key'])}")
@@ -1001,13 +1048,16 @@ class IndexOps(BaseOps):
                 caller_cache_key=cast(str, record["cache_key"]),
             )
             argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
+            launch_state = ExecutionState(
+                cast(str, record["cache_key"]), remote_root=self.remote_root
+            ).read_launch_state(execution_id)
             return self._call_adapter(
                 prepared,
                 argv_ptr,
                 execution_id=execution_id,
-                state=cast(dict[str, Any] | None, record["state"]),
-                execution_status="cancel-requested",
-                cancel_requested_by=cast(str | None, record.get("cancel_requested_by")),
+                state=(cast(dict[str, Any] | None, launch_state["resume_state"]) if launch_state is not None else None),
+                execution_status="cancel-pending",
+                cancel_requested_by=cast(str | None, record.get("cancellation_requested_by")),
             )
 
     def _call_adapter(

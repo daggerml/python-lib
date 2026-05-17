@@ -149,4 +149,4 @@ class CfnExecutor(ExecutorBase):
                     client.delete_stack(StackName=stack_name)
                 except Exception:
                     pass
-        return {"status": "cancelled", "error": None}
+        return {"status": "cancel-detached", "error": None}

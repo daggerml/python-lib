@@ -240,7 +240,7 @@ None identified in this spec. Handled by generic execution environment assumptio
 
 ### Observability
 
-- Stateful executor status is observable via the runtime-owned immutable execution record plus executor-specific external handles.
+- Stateful executor status is observable via runtime-owned `execution_record`, caller-owned `launch_state`, and executor-specific external handles.
 - `script` executor observability includes supervisor-owned local `stdout.log` and `stderr.log` files plus best-effort CloudWatch streams `/run/{cache_key}/stdout` and `/run/{cache_key}/stderr` in log group `dml`.
 - `batch` executor observability includes recorded Batch job id and job-definition arn in launch-time state; input/output S3 locations are derived from `AdapterIO` and not stored in state.
 - `ssh` executor observability includes the execution-scoped nested payload forwarded over SSH.

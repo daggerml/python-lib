@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -38,6 +39,9 @@ from daggerml._internal.dml_resolution import (
 from daggerml._internal.ops import DmlOps
 from daggerml._internal.ops.config import ConfigOps
 from daggerml._internal.types import DEFAULT_HEAD, DmlRepoError
+
+_RUNTIME_CANCEL_MAX_ATTEMPTS = 3
+_RUNTIME_CANCEL_BACKOFF_SECONDS = 0.05
 
 logger = logging.getLogger(__name__)
 
@@ -562,6 +566,8 @@ class _RuntimeNamespace:
             plan = index.cancel(index_id, requested_by=requested_by)
             candidate_set = set(cast(set[str], plan["candidate_set"]))
             own_executions = set(cast(set[str], plan["own_executions"]))
+            retry_counts = {candidate_id: 0 for candidate_id in candidate_set}
+            adapter_retry_candidates: set[str] = set()
             stats: RuntimeCancelPayload = {
                 "index_id": index_id,
                 "iterations": 0,
@@ -575,6 +581,7 @@ class _RuntimeNamespace:
             while candidate_set:
                 stats["iterations"] += 1
                 batch = sorted(candidate_set)
+                normal_retry_pending = False
                 logger.info(
                     "runtime.cancel iteration=%s index_id=%s candidates=%s owned=%s",
                     stats["iterations"],
@@ -593,10 +600,20 @@ class _RuntimeNamespace:
                         for candidate_id in batch
                     }
                     for future in as_completed(futures):
-                        result = future.result()
-                        candidate_id = cast(str, result["execution_id"])
+                        candidate_id = futures[future]
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            retry_counts[candidate_id] += 1
+                            if retry_counts[candidate_id] >= _RUNTIME_CANCEL_MAX_ATTEMPTS:
+                                raise DmlRepoError(
+                                    f"runtime.cancel exceeded retry limit for execution {candidate_id}: {exc}"
+                                ) from exc
+                            adapter_retry_candidates.add(candidate_id)
+                            continue
                         if cast(bool, result["lock_retry"]):
                             stats["lock_retry_count"] += 1
+                            normal_retry_pending = True
                         outcome = cast(int | None, result["outcome"])
                         if outcome == 1:
                             candidate_set.discard(candidate_id)
@@ -606,6 +623,16 @@ class _RuntimeNamespace:
                             if candidate_id in own_executions:
                                 own_executions.discard(candidate_id)
                                 stats["dropped_count"] += 1
+                        elif outcome is None:
+                            normal_retry_pending = True
+                if adapter_retry_candidates or normal_retry_pending:
+                    delay = _RUNTIME_CANCEL_BACKOFF_SECONDS
+                    if adapter_retry_candidates:
+                        delay *= 2 ** (max(retry_counts[candidate_id] for candidate_id in adapter_retry_candidates) - 1)
+                    time.sleep(
+                        delay
+                    )
+                    adapter_retry_candidates.clear()
             index._complete_index_cancellation(
                 index_id,
                 cancelled_path=cast(Path, plan["cancelled_path"]),

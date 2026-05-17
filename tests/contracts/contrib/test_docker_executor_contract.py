@@ -227,7 +227,7 @@ def test_docker_executor_cancel_removes_container_and_reports_cancelled(monkeypa
         remote=_remote(),
     )
 
-    assert result == {"status": "cancelled", "error": None}
+    assert result == {"status": "cancel-detached", "error": None}
     assert cleanup_calls == [("cid-cancel", "img:tmp", "/usr/bin/docker")]
 
 

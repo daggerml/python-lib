@@ -209,7 +209,11 @@ def test_runtime_cancel_runs_retry_loop_and_returns_stats(caplog):
         return outcomes[(len(own_executions), execution_id)]
 
     index._cancel_execution_candidate.side_effect = _cancel_candidate
-    with patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(index)):
+    sleeps = []
+    with (
+        patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(index)),
+        patch.object(dml_module.time, "sleep", side_effect=lambda delay: sleeps.append(delay)),
+    ):
         result = ops.runtime.cancel("idx-1")
 
     index.cancel.assert_called_once_with("idx-1", requested_by="alice")
@@ -228,7 +232,44 @@ def test_runtime_cancel_runs_retry_loop_and_returns_stats(caplog):
         "dropped_count": 1,
         "lock_retry_count": 1,
     }
+    assert sleeps == [0.05]
     assert "runtime.cancel iteration=1 index_id=idx-1 candidates=2 owned=2" in caplog.text
+
+
+def test_runtime_cancel_retries_candidate_errors_with_backoff():
+    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix", user="alice")
+    index = Mock()
+    index.cancel.return_value = {
+        "index_id": "idx-1",
+        "requested_by": "alice",
+        "cancelled_path": Path("/tmp/cancelled/idx-1"),
+        "graph": {("idx-1", "exec-1")},
+        "candidate_set": {"exec-1"},
+        "own_executions": {"exec-1"},
+    }
+    attempts = {"count": 0}
+
+    def _cancel_candidate(execution_id, *, requested_by, own_executions):
+        assert execution_id == "exec-1"
+        assert requested_by == "alice"
+        assert own_executions == {"exec-1"}
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise DmlRepoError("boom")
+        return {"execution_id": "exec-1", "outcome": 1, "lock_retry": False, "cancel_requested": True}
+
+    index._cancel_execution_candidate.side_effect = _cancel_candidate
+    sleeps = []
+    with (
+        patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(index)),
+        patch.object(dml_module.time, "sleep", side_effect=lambda delay: sleeps.append(delay)),
+    ):
+        result = ops.runtime.cancel("idx-1")
+
+    assert attempts["count"] == 3
+    assert sleeps == [0.05, 0.1]
+    assert result["iterations"] == 3
+    assert result["cancelled_count"] == 1
 
 
 def test_dag_describe_node_resolves_named_node_with_revision_context():
