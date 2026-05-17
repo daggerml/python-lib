@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict, cast, overload
 
 from daggerml._internal._db import Ref
-from daggerml._internal.config import DmlProjectConfig, run_project_hooks
+from daggerml._internal.config import DmlProjectConfig, parse_dml_project_uri, run_project_hooks
 from daggerml._internal.dml_context import (
     config_dict,
     current_head_branch,
@@ -22,7 +22,6 @@ from daggerml._internal.dml_context import (
     project_remote_uri,
     require_project_home,
     require_user,
-    resolve_global_context,
     resolve_runtime_context,
 )
 from daggerml._internal.dml_resolution import (
@@ -1151,6 +1150,8 @@ class Dml:
 
     def push(self, tag: str | None, *, branch: str | None, create: bool, force: bool, s3_client=None) -> str:
         project = load_project_config(require_project_home(self._context.project_home))
+        if not project.uri:
+            raise DmlRepoError("remote.project is required for project sync")
         source_branch = branch or head_ops(self).require_attached_head_branch()
         client = s3_client or create_s3_client()
         with with_ops(self) as ops:
@@ -1174,8 +1175,6 @@ class Dml:
         cls,
         project_home: str = ".",
         *,
-        name: str | None = None,
-        owner: str | None = None,
         remote_uri: str | None = None,
         user: str | None = None,
         config_home: str | None = None,
@@ -1186,40 +1185,23 @@ class Dml:
         if not root.exists():
             raise FileNotFoundError(f"{root} does not exist")
         project_home = str(root)
-        if name and remote_project:
-            raise ValueError(
-                "NAME and --remote-project are mutually exclusive; provide NAME to derive "
-                "remote project or use --remote-project for an explicit URI"
-            )
-        global_context = resolve_global_context(project_home=project_home, user=user, config_home=config_home)
+        if remote_project is not None and not remote_uri:
+            raise DmlRepoError("remote.root is required when remote.project is configured")
         dml_dir = root / ".dml"
         dml_dir.mkdir(parents=True, exist_ok=True)
 
         config_existed = project_config_exists(project_home)
         db_existed = db_path_for_project(project_home).exists()
 
-        resolved_user = user or global_context.user
         project_cfg: DmlProjectConfig
         if config_existed:
             project_cfg = load_project_config(project_home)
         else:
-            cfg_owner = owner
-            cfg_name = name
             if remote_project:
-                from daggerml._internal.config import parse_dml_project_uri
-
                 parsed = parse_dml_project_uri(remote_project)
-                cfg_owner = parsed.owner
-                cfg_name = parsed.project
-            elif name:
-                resolved_user = require_user(
-                    resolved_user, message="user is required to derive remote project from NAME"
-                )
-                cfg_owner = resolved_user.split("@", 1)[0]
-                cfg_name = name
+                project_cfg = DmlProjectConfig(name=parsed.project, owner=parsed.owner, remote_uri=remote_uri or "")
             else:
-                raise DmlRepoError("Either NAME or remote_project is required")
-            project_cfg = DmlProjectConfig(name=cfg_name, owner=cfg_owner, remote_uri=remote_uri or "")
+                project_cfg = DmlProjectConfig(remote_uri=remote_uri or "")
 
         if not gitignore_exists(project_home):
             (dml_dir / ".gitignore").write_text("db\nHEAD\nrefs\n")
@@ -1257,7 +1239,10 @@ class Dml:
             no_hooks=no_hooks,
         )
 
-        if runtime._context.remote_uri:
+        if project_cfg.remote_project and not runtime._context.remote_uri:
+            raise DmlRepoError("remote.root is required")
+
+        if project_cfg.remote_project and runtime._context.remote_uri:
             try:
                 fetched = runtime.fetch("origin", None)
             except DmlRepoError:
@@ -1265,8 +1250,6 @@ class Dml:
                     raise
             else:
                 head_ops(runtime).write_detached_head(fetched)
-        elif config_existed and not db_existed and bool(project_cfg.uri):
-            raise DmlRepoError("remote.root is required")
 
         return {
             "project_home": project_home,

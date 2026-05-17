@@ -45,6 +45,17 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     assert loaded.remote_project == "dml://alice/demo"
 
 
+def test_project_config_layout_allows_missing_remote_project(tmp_path: Path):
+    cfg = DmlProjectConfig(remote_uri="s3://bucket/team/dml")
+    init_project_layout(tmp_path, cfg)
+
+    loaded = DmlProjectConfig.load(tmp_path)
+    assert loaded.name is None
+    assert loaded.owner is None
+    assert loaded.remote_uri == "s3://bucket/team/dml"
+    assert loaded.remote_project is None
+
+
 def test_head_advance_and_revision_resolution(temp_bo_fn):
     head_ops = HeadOps(_db=temp_bo_fn._db)
     commit_ops = CommitOps(_db=temp_bo_fn._db)

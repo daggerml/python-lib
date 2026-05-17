@@ -436,21 +436,27 @@ class DmlGlobalConfig:
 
 @dataclass(frozen=True)
 class DmlProjectConfig:
-    name: str
-    owner: str
+    name: str | None = None
+    owner: str | None = None
     remote_uri: str = ""
 
     @property
-    def uri(self) -> str:
+    def uri(self) -> str | None:
+        if self.owner is None or self.name is None:
+            return None
         return validate_dml_project_uri(f"dml://{self.owner}/{self.name}")
 
     @property
-    def remote_project(self) -> str:
+    def remote_project(self) -> str | None:
         return self.uri
 
     def __post_init__(self) -> None:
-        _validate_name("project name", self.name)
-        _validate_name("project owner", self.owner)
+        if (self.name is None) != (self.owner is None):
+            raise ValueError("Project config requires both name and owner when remote.project is configured")
+        if self.name is not None:
+            _validate_name("project name", self.name)
+        if self.owner is not None:
+            _validate_name("project owner", self.owner)
         if self.remote_uri:
             validate_remote_root(self.remote_uri)
 
@@ -458,17 +464,16 @@ class DmlProjectConfig:
     def load(cls, project_dir: Path | str = ".") -> "DmlProjectConfig":
         resolved = DmlConfig.resolve(explicit={"project.home": str(project_dir)}, env={})
         if not resolved.remote.project:
-            raise ValueError("Project config must define remote.project")
+            return cls(remote_uri=resolved.remote.root)
         parsed = parse_dml_project_uri(resolved.remote.project, require_identifier=False)
         return cls(name=parsed.project, owner=parsed.owner, remote_uri=resolved.remote.root)
 
     def save(self, project_dir: Path | str = ".") -> None:
         dml_dir = Path(project_dir) / ".dml"
         dml_dir.mkdir(parents=True, exist_ok=True)
-        lines = [
-            "[remote]",
-            f'project = "{self.remote_project}"',
-        ]
+        lines = ["[remote]"]
+        if self.remote_project:
+            lines.append(f'project = "{self.remote_project}"')
         if self.remote_uri:
             lines.append(f'root = "{validate_remote_root(self.remote_uri)}"')
         (dml_dir / "config.toml").write_text("\n".join(lines) + "\n")
@@ -501,10 +506,10 @@ def run_project_hooks(
         {
             "DML_HOOK": hook,
             "DML_PROJECT_HOME": str(Path(project_dir).resolve()),
-            "DML_PROJECT_NAME": project.name,
-            "DML_PROJECT_OWNER": project.owner,
+            "DML_PROJECT_NAME": project.name or "",
+            "DML_PROJECT_OWNER": project.owner or "",
             "DML_CONFIG_HOME": str(config_home),
-            "DML_REMOTE_PROJECT": project.remote_project,
+            "DML_REMOTE_PROJECT": project.remote_project or "",
             "DML_REMOTE_ROOT": project.remote_uri,
         }
     )

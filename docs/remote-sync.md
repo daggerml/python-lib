@@ -42,6 +42,12 @@ Conceptually:
 - DAG publication/discovery uses per-DAG refs under `refs/dags/**`,
 - pull materializes referenced state locally.
 
+Capability split:
+
+- `remote.root` provides the remote transport and protocol root required for remote-backed runtime mutation and execution.
+- `remote.project` provides the repository publication identity required for project-addressed sync such as push, pull, and fetch.
+- a repo with `remote.root` but no `remote.project` can still use remote-backed runtime behavior but cannot sync project refs.
+
 ## Operations
 
 - Push publishes local state to remote and updates discoverable refs.

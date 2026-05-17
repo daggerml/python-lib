@@ -90,7 +90,7 @@ def load(name: str, dml=None) -> "Dag":
 @contextmanager
 def temporary(**kw):
     """Create a temporary Dml runtime with an initial commit."""
-    kw["name"] = kw.get("name", "temp")
+    kw.pop("name", None)
     with TemporaryDirectory() as tmpdir:
         resp = Dml.init(project_home=tmpdir, **kw)
         yield Dml(resp["project_home"], remote_uri=resp["remote_uri"])

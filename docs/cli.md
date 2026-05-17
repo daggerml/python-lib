@@ -51,6 +51,10 @@ CLI is the public operational interface over the shared internal `Dml` boundary.
 - `admin remote list [--owner OWNER]` lists canonical project URIs and `admin remote list dml://<owner>/<project>` lists that project's tracked branches and tags,
 - `admin remote gc` runs remote maintenance,
 - `admin gc [--dry-run]` runs or previews local garbage collection,
+- `init` accepts optional `--remote-root` and optional `--remote-project`,
+- `init --remote-project` requires `--remote-root`,
+- `init` performs project fetch/bootstrap only when `--remote-project` is configured,
+- `push`, `pull`, and `fetch` require configured `remote.project`; `remote.root` alone is not sufficient for project sync,
 
 Operational note:
 - Do not run local `admin gc` concurrently with `runtime.cancel(...)`. Cancellation reuses locally materialized adapter input state while it walks the rooted execution set.

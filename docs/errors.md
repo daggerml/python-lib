@@ -57,6 +57,10 @@ These messages are contract-level for execution paths:
 - `DmlRepoError("Provide exactly one of head or argv_ptr.")` when index creation input mode is invalid.
 - `DmlRepoError("Remote context required for argv_ptr")` when argv-pointer index creation is requested without remote context.
 
+## Project Sync Error Contracts
+
+- `DmlRepoError("remote.project is required for project sync")`
+
 Additional execution validation errors (e.g., missing argv node, invalid runnable first arg, invalid builtin shape) are also surfaced as `DmlRepoError`.
 
 Contrib-runtime-specific error contracts are defined by contrib runtime docs, including [contrib/runtime-contract.md](contrib/runtime-contract.md) and [contrib/api.md](contrib/api.md).

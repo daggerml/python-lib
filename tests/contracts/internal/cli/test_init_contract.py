@@ -23,10 +23,8 @@ def test_execute_init_does_not_forward_branch_argument(mock_dml_init):
     }
 
     args = Namespace(
-        name="demo",
         config_home=None,
         project_home=None,
-        owner=None,
         remote_project=None,
         remote_root="s3://test-bucket/test-prefix",
         no_hooks=True,
@@ -45,24 +43,23 @@ class TestSetupInitParser:
     def test_parser_creation(self):
         parser = ArgumentParser()
         setup_init_parser(parser)
-        args = parser.parse_args(["my-repo"])
-        assert args.name == "my-repo"
+        args = parser.parse_args(["--remote-root", "s3://bucket/prefix"])
+        assert args.remote_root == "s3://bucket/prefix"
 
 
 class TestExecuteInit:
     """Test init command execution helper."""
 
     def test_execute_init_initializes_current_directory(self, monkeypatch):
-        monkeypatch.setenv("USER", "alice")
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.chdir(temp_dir)
             args = Namespace(
-                name="my-repo",
                 config_home=temp_dir,
                 remote_root="s3://test-bucket/test-prefix",
+                remote_project=None,
                 no_hooks=True,
             )
-            with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")):
+            with patch("daggerml._internal.dml.Dml.fetch") as mock_fetch:
                 result = execute_init(args)
             expected_repo = Path(temp_dir)
             repo_path = result["project_home"]
@@ -72,17 +69,27 @@ class TestExecuteInit:
             assert result["created"] == {"db": True, "config": True}
             assert (expected_repo / ".dml" / "config.toml").exists()
             assert (expected_repo / ".dml" / "db").exists()
+            mock_fetch.assert_not_called()
 
-    def test_execute_init_rejects_path_separators(self):
-        args = Namespace(name="bad/name", config_home="~/.config/dml/", project_home=None)
-        with pytest.raises(ValueError, match="Invalid project name: 'bad/name'"):
-            execute_init(args)
+    def test_execute_init_allows_local_only_init(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            monkeypatch.chdir(temp_dir)
+            monkeypatch.delenv("DML_REMOTE_ROOT", raising=False)
+            args = Namespace(
+                config_home=None,
+                project_home=None,
+                remote_project=None,
+                remote_root=None,
+                no_hooks=True,
+            )
+            result = execute_init(args)
+            assert result["project_home"] == str(Path(temp_dir).resolve())
+            assert result["remote_uri"] == ""
 
     def test_execute_init_accepts_remote_project_without_name(self, monkeypatch):
         with tempfile.TemporaryDirectory() as temp_dir:
             monkeypatch.chdir(temp_dir)
             args = Namespace(
-                name=None,
                 config_home=None,
                 project_home=None,
                 remote_project="dml://alice/demo",
@@ -95,39 +102,13 @@ class TestExecuteInit:
             assert result["remote_uri"] == "s3://test-bucket/test-prefix"
             assert result["created"] == {"db": True, "config": True}
 
-    def test_execute_init_rejects_name_with_remote_project(self):
+    def test_execute_init_rejects_remote_project_without_remote_root(self):
         args = Namespace(
-            name="demo",
             config_home=None,
             project_home=None,
-            owner=None,
             remote_project="dml://alice/demo",
-            remote_root="s3://test-bucket/test-prefix",
+            remote_root=None,
             no_hooks=True,
         )
-        with pytest.raises(
-            ValueError,
-            match=(
-                "NAME and --remote-project are mutually exclusive; provide NAME to derive remote project "
-                "or use --remote-project for an explicit URI"
-            ),
-        ):
+        with pytest.raises(DmlRepoError, match="remote.root is required when remote.project is configured"):
             execute_init(args)
-
-    def test_execute_init_requires_resolved_user_for_name_mode(self, monkeypatch):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            monkeypatch.chdir(temp_dir)
-            monkeypatch.setenv("USER", "")
-            monkeypatch.setattr("daggerml._internal.config.getuser", lambda: (_ for _ in ()).throw(RuntimeError()))
-            monkeypatch.setattr("daggerml._internal.config.gethostname", lambda: (_ for _ in ()).throw(RuntimeError()))
-            args = Namespace(
-                name="demo",
-                config_home=None,
-                project_home=None,
-                owner=None,
-                remote_project=None,
-                remote_root="s3://test-bucket/test-prefix",
-                no_hooks=True,
-            )
-            with pytest.raises(DmlRepoError, match="user is required to derive remote project from NAME"):
-                execute_init(args)

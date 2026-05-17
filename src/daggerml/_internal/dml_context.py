@@ -79,6 +79,8 @@ def mutable_branch(*, branch: str | None, head_ops) -> str:
 
 def project_remote_uri(*, project_home: str, remote_or_uri: str, branch: str | None, default_branch: str) -> str:
     project = DmlProjectConfig.load(project_home)
+    if not project.remote_project or project.owner is None or project.name is None:
+        raise DmlRepoError("remote.project is required for project sync")
     if remote_or_uri.startswith("dml://"):
         if "#" in remote_or_uri or "@" in remote_or_uri:
             return remote_or_uri

@@ -59,7 +59,9 @@ Rules:
 Rules:
 
 - canonical config parameters are `project.home`, `remote.project`, `db.path`, `remote.root`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
-- `remote.project` for local project config is branchless project identity only: `dml://<owner>/<project>`.
+- `remote.project` for local project config is optional branchless project identity only: `dml://<owner>/<project>` when present.
+- `remote.root` is the capability gate for remote-backed mutation and execution.
+- `remote.project` is the additional capability gate for project-addressed sync such as push, pull, and fetch.
 - checkout state is not part of resolved configuration and MUST be read from `.dml/HEAD`.
 - config key names MUST remain stable across API, CLI, runtime, and ops boundaries.
 
@@ -100,6 +102,7 @@ Rules:
 
 - `default_branch` default MUST be `main` unless explicitly overridden.
 - `remote.project`, when resolved from local project config, MUST NOT include a branch or tag selector.
+- local project config MAY omit `remote.project`.
 - `remote.root`, when present, MUST be an `s3://bucket` or `s3://bucket/prefix` URI designating the project root.
 - `remote.fetch_workers` MUST be a positive integer and defaults to `16`.
 
@@ -111,6 +114,12 @@ Git-like project commands store local state under `<project>/.dml/`:
 - `.dml/HEAD` contains the current checkout state as either `ref: refs/local/heads/<branch>` or `commit:<id>`.
 - `.dml/db/` contains the local object database.
 - `.dml/.gitignore` contains `*`.
+
+Rules:
+
+- init creates `.dml/config.toml` even when neither `remote.root` nor `remote.project` is configured.
+- local repos without `remote.root` are read-only at the remote-backed runtime boundary.
+- local repos with `remote.root` but without `remote.project` may execute remote-backed runtime flows but cannot use project-addressed sync.
 
 Global project config is loaded from `$DML_CONFIG_HOME/config.toml`, `$XDG_CONFIG_HOME/dml/config.toml`, or `~/.config/dml/config.toml`. It may define `[user].name`, `[defaults].branch`, and ordered `[hooks]` list for `post-init`.
 

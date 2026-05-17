@@ -124,7 +124,6 @@ class TestTopLevelCliParsing:
             "init",
             "--remote-root",
             "s3://bucket/project",
-            "demo",
         ]
         try:
             with patch("daggerml._cli.base.execute_command") as mock_execute:

@@ -15,19 +15,16 @@ def setup_init_parser(parser: ArgumentParser) -> None:
         parser,
         description="Initialize .dml-managed state in the current project directory.",
         examples=[
-            "dml init my-project",
             "dml init --remote-project dml://alice/my-project",
-            "dml init --project-home /path/to/project my-project",
+            "dml init --remote-root s3://bucket/prefix",
             "dml --project-home /path/to/project init",
         ],
     )
-    parser.add_argument("name", nargs="?", help="Project name")
-    parser.add_argument("--owner", default=None, help="Project owner (default: global user)")
     parser.add_argument(
         "--remote-project",
         dest="remote_project",
         default=None,
-        help="Explicit remote project URI (dml://owner/project). Mutually exclusive with NAME.",
+        help="Explicit remote project URI (dml://owner/project). Requires --remote-root.",
     )
     parser.add_argument(
         "--remote-root",
@@ -48,8 +45,6 @@ def execute_init(args) -> InitPayload:
     """Execute init command."""
     return Dml.init(
         project_home=getattr(args, "project_home", None) or ".",
-        name=args.name.strip() if args.name else None,
-        owner=getattr(args, "owner", None),
         remote_project=getattr(args, "remote_project", None),
         remote_uri=getattr(args, "remote_root", None),
         user=None,

@@ -42,11 +42,10 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
             "--project-home",
             str(source_repo),
             "init",
-            "--owner",
-            owner,
             "--remote-root",
             remote_uri,
-            name0,
+            "--remote-project",
+            f"dml://{owner}/{name0}",
         ]
     )
     assert not stderr
@@ -77,11 +76,10 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
             "--project-home",
             str(target_repo),
             "init",
-            "--owner",
-            owner,
             "--remote-root",
             remote_uri,
-            name1,
+            "--remote-project",
+            f"dml://{owner}/{name1}",
         ]
     )
     assert not stderr

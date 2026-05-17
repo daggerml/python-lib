@@ -27,7 +27,7 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
     head_ops = Mock()
     head_ops.get_attached_head_branch.return_value = "main"
     head_ops.require_attached_head_branch.return_value = "main"
-    project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo")
+    project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo", remote_project="dml://alice/demo")
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
         patch.object(dml_module, "head_ops", return_value=head_ops),
@@ -62,7 +62,7 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
     head_ops = Mock()
     head_ops.get_attached_head_branch.return_value = "main"
     head_ops.require_attached_head_branch.return_value = "main"
-    project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo")
+    project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo", remote_project="dml://alice/demo")
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
         patch.object(dml_module, "head_ops", return_value=head_ops),
@@ -91,7 +91,7 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
 def test_fetch_project_origin_falls_back_to_default_branch_without_attached_head():
     ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
     remote_ops = Mock()
-    project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo")
+    project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo", remote_project="dml://alice/demo")
     detached_head_ops = Mock(get_attached_head_branch=Mock(return_value=None))
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
@@ -387,8 +387,7 @@ def test_dml_init_uses_init_project_layout_for_bootstrap(tmp_path):
     with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")) as mock_fetch:
         result = Dml.init(
             str(repo_dir),
-            name="demo",
-            owner="ignored-owner",
+            remote_project="dml://alice/demo",
             remote_uri="s3://bucket/prefix",
             user="alice@example-host",
             no_hooks=True,
@@ -409,39 +408,43 @@ def test_dml_init_uses_init_project_layout_for_bootstrap(tmp_path):
     assert result["created"] == {"db": True, "config": True}
 
 
-def test_dml_init_rejects_name_and_remote_project_together(tmp_path):
+def test_dml_init_allows_local_only_bootstrap(tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "NAME and --remote-project are mutually exclusive; provide NAME to derive remote project "
-            "or use --remote-project for an explicit URI"
-        ),
+    with (
+        patch.dict("os.environ", {}, clear=True),
+        patch("daggerml._internal.dml.Dml.fetch") as mock_fetch,
     ):
-        Dml.init(
-            str(repo_dir),
-            name="demo",
-            remote_project="dml://alice/demo",
-            remote_uri="s3://bucket/prefix",
-        )
+        result = Dml.init(str(repo_dir), no_hooks=True)
+
+    project_cfg = DmlProjectConfig.load(repo_dir)
+    assert project_cfg.remote_project is None
+    assert project_cfg.remote_uri == ""
+    mock_fetch.assert_not_called()
+    assert result["created"] == {"db": True, "config": True}
 
 
-def test_dml_init_name_mode_requires_resolved_user(tmp_path, monkeypatch):
+def test_dml_init_allows_remote_root_without_remote_project(tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
 
-    monkeypatch.setenv("USER", "")
-    monkeypatch.setattr("daggerml._internal.config.getuser", lambda: (_ for _ in ()).throw(RuntimeError()))
-    monkeypatch.setattr("daggerml._internal.config.gethostname", lambda: (_ for _ in ()).throw(RuntimeError()))
+    with patch("daggerml._internal.dml.Dml.fetch") as mock_fetch:
+        result = Dml.init(str(repo_dir), remote_uri="s3://bucket/prefix", no_hooks=True)
 
-    with pytest.raises(DmlRepoError, match="user is required to derive remote project from NAME"):
-        Dml.init(
-            str(repo_dir),
-            name="demo",
-            remote_uri="s3://bucket/prefix",
-        )
+    project_cfg = DmlProjectConfig.load(repo_dir)
+    assert project_cfg.remote_project is None
+    assert project_cfg.remote_uri == "s3://bucket/prefix"
+    mock_fetch.assert_not_called()
+    assert result["remote_uri"] == "s3://bucket/prefix"
+
+
+def test_dml_init_rejects_remote_project_without_remote_root(tmp_path):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    with pytest.raises(DmlRepoError, match="remote.root is required when remote.project is configured"):
+        Dml.init(str(repo_dir), remote_project="dml://alice/demo")
 
 
 def test_dml_init_requires_remote_uri_for_recovery_pull(tmp_path):
@@ -458,3 +461,33 @@ def test_dml_init_requires_existing_project_directory(tmp_path):
     missing = tmp_path / "missing"
     with pytest.raises(FileNotFoundError, match="does not exist"):
         Dml.init(str(missing), remote_project="dml://alice/demo", remote_uri="s3://bucket/prefix")
+
+
+def test_project_sync_requires_remote_project(tmp_path):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    Dml.init(str(repo_dir), remote_uri="s3://bucket/prefix", no_hooks=True)
+    dml = Dml(project_home=str(repo_dir), remote_uri="s3://bucket/prefix")
+
+    with pytest.raises(DmlRepoError, match="remote.project is required for project sync"):
+        dml.fetch("origin", None)
+
+    with pytest.raises(DmlRepoError, match="remote.project is required for project sync"):
+        dml.pull("origin", None, branch="main", user="alice")
+
+    with pytest.raises(DmlRepoError, match="remote.project is required for project sync"):
+        dml.push(None, branch="main", create=False, force=False)
+
+
+def test_remote_root_only_repo_can_create_indexes(tmp_path):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    Dml.init(str(repo_dir), remote_uri="s3://bucket/prefix", no_hooks=True)
+    dml = Dml(project_home=str(repo_dir), remote_uri="s3://bucket/prefix")
+
+    with patch("daggerml._internal.exec_state.ExecutionState.update_execution_record", return_value={}):
+        index_id = dml.runtime.create()
+    node = dml.runtime.put_literal(index_id, 42, name="answer")
+
+    assert index_id
+    assert node.ns() == "node-literal"
