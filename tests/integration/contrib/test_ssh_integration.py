@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import pytest
 
-from daggerml import Dml, Uri, new
+from daggerml import Uri, new
 from daggerml._internal.dml import with_ops
 from daggerml._internal.types import Runnable
 from daggerml.contrib import adapter_registry as areg
@@ -24,6 +24,7 @@ from daggerml.contrib import api
 from daggerml.contrib import executor_registry as ereg
 from daggerml.contrib.adapters import LocalAdapter
 from daggerml.contrib.executors import ScriptExecutor, SshExecutor
+from tests import temporary_dml
 
 pytestmark = pytest.mark.slow
 
@@ -185,7 +186,7 @@ def _remote() -> dict[str, str]:
 
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         dag = new(dml=dml, name="argv-src", message="argv-src")
         index_ref = dag._require_index_ref()
         head = argv0 if argv0 is not None else Runnable(target=Uri("daggerml:list"), kwargs={}, adapter="")
@@ -236,7 +237,7 @@ def test_ssh_executor_integration_runs_script_over_local_sshd(ssh_resource_data)
 
         return os.environ["DML_TEST_SSH_VALUE"]
 
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         dag = new(dml=dml, name="ssh-int", message="ssh-int")
         runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
 

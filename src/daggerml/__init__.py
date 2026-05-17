@@ -19,6 +19,7 @@ from daggerml.api import (
     new,
     set_default_dml,
     status,
+    temporary,
     use_default_dml,
 )
 
@@ -26,8 +27,6 @@ try:
     from daggerml.__about__ import __version__
 except ImportError:
     __version__ = "local"
-
-temporary = Dml.temporary
 
 __all__ = (
     "Dag",
@@ -44,4 +43,5 @@ __all__ = (
     "new",
     "load",
     "status",
+    "temporary",
 )

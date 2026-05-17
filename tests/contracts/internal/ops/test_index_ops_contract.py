@@ -36,6 +36,7 @@ from daggerml._internal.types import (
     Tree,
     Uri,
 )
+from tests import temporary_dml
 from tests.contracts.internal.support.conftest_support import remote_bucket_and_prefix_from_env
 from tests.contracts.internal.support.test_db_support import (
     REF_ALPHABET,
@@ -1295,7 +1296,7 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(LowCodec(), priority=1)
             literal_codec.register_codec(HighCodec(), priority=10)
-            with Dml.temporary() as dml:
+            with temporary_dml() as dml:
                 dag = new(dml=dml, name="codec-priority", message="codec-priority")
                 assert dag.put("input").value() == "high"
             assert calls == ["high:can", "high:encode", "high:can", "high:encode"]
@@ -1334,7 +1335,7 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(FirstCodec(), priority=0)
             literal_codec.register_codec(SecondCodec(), priority=0)
-            with Dml.temporary() as dml:
+            with temporary_dml() as dml:
                 dag = new(dml=dml, name="codec-short-circuit", message="codec-short-circuit")
                 assert dag.put("input").value() == "first"
             assert calls == ["first:can", "first:encode", "first:can", "first:encode"]
@@ -1373,7 +1374,7 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(IntCodec(), priority=10)
             literal_codec.register_codec(DictCodec(), priority=0)
-            with Dml.temporary() as dml:
+            with temporary_dml() as dml:
                 dag = new(dml=dml, name="codec-reencode", message="codec-reencode")
                 assert dag.put(7).value() == "wrapped=v7"
             assert calls.count("int:encode") == 1
@@ -1401,7 +1402,7 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec._literal_codec_max_reencodes = 4
             literal_codec.register_codec(FlappingCodec(), priority=0)
-            with Dml.temporary() as dml:
+            with temporary_dml() as dml:
                 dag = new(dml=dml, name="codec-recursion", message="codec-recursion")
                 with pytest.raises(DmlRepoError, match=r"Literal codec recursion failed to converge"):
                     dag.put("left")
@@ -1427,7 +1428,7 @@ class TestIndexOps:
             literal_codec._literal_codec_seq = 0
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(FailingCodec(), priority=0)
-            with Dml.temporary() as dml:
+            with temporary_dml() as dml:
                 dag = new(dml=dml, name="codec-failure", message="codec-failure")
                 with pytest.raises(DmlRepoError, match=r"Literal codec FailingCodec failed: boom"):
                     dag.put("input")
@@ -1460,7 +1461,7 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(SeedCodec(), priority=10)
             literal_codec.register_codec(IntCodec(), priority=0)
-            with Dml.temporary() as dml:
+            with temporary_dml() as dml:
                 dag = new(dml=dml, name="codec-collection", message="codec-collection")
                 assert dag.put("seed").value() == [11, 12]
         finally:
@@ -1492,7 +1493,7 @@ class TestIndexOps:
             literal_codec._plugins_loaded = True
             literal_codec.register_codec(SeedCodec(), priority=10)
             literal_codec.register_codec(IntCodec(), priority=0)
-            with Dml.temporary() as dml:
+            with temporary_dml() as dml:
                 dag = new(dml=dml, name="codec-runnable", message="codec-runnable")
                 encoded = dag.put("seed").value()
                 assert isinstance(encoded, Runnable)
@@ -1504,7 +1505,7 @@ class TestIndexOps:
             literal_codec._plugins_loaded = old_plugins_loaded
 
     def test_start_fn_applies_codec_to_argv_and_kwargv(self, temp_bo):
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             dag0 = new(dml=dml, name="codec-call", message="codec-call")
             fn = Runnable(target=Uri("daggerml:list"), adapter="", kwargs={"x": 0}, sub=None)
             result_ref = dag0.put(42).ref

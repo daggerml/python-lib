@@ -47,33 +47,37 @@ def test_cfn_tmpdag_is_context_manager(monkeypatch):
     calls = []
 
     @contextmanager
-    def _temporary(*, remote_root):
-        calls.append(("temporary", remote_root))
+    def _temporary(*, remote_uri, name):
+        calls.append(("temporary", remote_uri, name))
         yield _FakeDml(dag, calls)
 
-    class _FakeDmlApi:
-        temporary = staticmethod(_temporary)
-
-    monkeypatch.setattr("daggerml.contrib.executors.cfn.Dml", _FakeDmlApi)
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.cfn.temporary",
+        lambda **kwargs: _temporary(**kwargs),
+    )
     monkeypatch.setattr("daggerml.contrib.executors.cfn.new", lambda **kwargs: _fake_new(**kwargs, fake_dag=dag))
 
     with CfnExecutor._tmpdag("argv://ptr", remote_root=_REMOTE["root"]) as result:
         assert result is dag
 
-    assert calls == [("temporary", _REMOTE["root"]), ("runtime.create", "argv://ptr")]
+    assert calls == [
+        ("temporary", _REMOTE["root"], calls[0][2]),
+        ("runtime.create", "argv://ptr"),
+    ]
 
 
 def test_cfn_tmpdag_propagates_setup_errors(monkeypatch):
     @contextmanager
-    def _temporary(*, remote_root):
-        assert remote_root == _REMOTE["root"]
+    def _temporary(*, remote_uri, name):
+        assert remote_uri == _REMOTE["root"]
+        assert name
         raise RuntimeError("boom")
         yield
 
-    class _FakeDmlApi:
-        temporary = staticmethod(_temporary)
-
-    monkeypatch.setattr("daggerml.contrib.executors.cfn.Dml", _FakeDmlApi)
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.cfn.temporary",
+        lambda **kwargs: _temporary(**kwargs),
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         with CfnExecutor._tmpdag("argv://ptr", remote_root=_REMOTE["root"]):
@@ -110,12 +114,10 @@ def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
     dag = _ArgvDag((None, "stack-name", {"Resources": {}}, {"Param": "Value"}))
 
     @contextmanager
-    def _temporary(*, remote_root):
-        assert remote_root == _REMOTE["root"]
+    def _temporary(*, remote_uri, name):
+        assert remote_uri == _REMOTE["root"]
+        assert name
         yield _StartDml(dag)
-
-    class _FakeDmlApi:
-        temporary = staticmethod(_temporary)
 
     class _FakeClient:
         def describe_stacks(self, *, StackName):
@@ -132,7 +134,10 @@ def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
         poll_calls.append({"cache_key": cache_key, "execution_id": execution_id, "state": state})
         return {"status": "running", "error": None, "state": state}
 
-    monkeypatch.setattr("daggerml.contrib.executors.cfn.Dml", _FakeDmlApi)
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.cfn.temporary",
+        lambda **kwargs: _temporary(**kwargs),
+    )
     monkeypatch.setattr("daggerml.contrib.executors.cfn.new", lambda **kwargs: _fake_new(**kwargs, fake_dag=dag))
     monkeypatch.setattr(CfnExecutor, "_client", staticmethod(lambda: _FakeClient()))
     monkeypatch.setattr(CfnExecutor, "poll", _poll)

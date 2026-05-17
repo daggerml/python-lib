@@ -4,6 +4,7 @@ import pytest
 
 import daggerml as dml
 from daggerml.api import Dml
+from tests import temporary_dml
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +49,7 @@ def test_default_runtime_status_DRT_STS_002_get_default_dml_is_cached_process_de
 
 
 def test_default_runtime_status_DRT_STS_003_set_and_scoped_default_runtime_resolution():
-    with Dml.temporary(repo="a") as raw_a, Dml.temporary(repo="b") as raw_b:
+    with temporary_dml(repo="a") as raw_a, temporary_dml(repo="b") as raw_b:
         dml_a = cast(Dml, raw_a)
         dml_b = cast(Dml, raw_b)
         dml.set_default_dml(dml_a)
@@ -66,20 +67,20 @@ def test_default_runtime_status_DRT_STS_003_set_and_scoped_default_runtime_resol
 
 
 def test_default_runtime_status_DRT_STS_004_top_level_new_and_load_delegate_to_default_runtime():
-    with Dml.temporary(repo="default-runtime") as raw_dml:
+    with temporary_dml(repo="default-runtime") as raw_dml:
         default_dml = cast(Dml, raw_dml)
         dml.set_default_dml(default_dml)
         with dml.new(dml=default_dml, name="d0", message="msg") as dag:
             dag.put(42, name="n0")
             dag.commit("ok")
 
-        loaded = dml.load("d0")
+        loaded = dml.load("d0", dml=default_dml)
         assert loaded.result.value() == "ok"
         assert loaded["n0"].value() == 42
 
 
-def test_temporary_runtime_uses_head_state_for_active_branch():
-    with Dml.temporary(repo="temp-head", branch="feature") as raw_runtime:
+def test_temporary_runtime_uses_default_branch_for_active_head():
+    with temporary_dml(repo="temp-head") as raw_runtime:
         runtime = cast(Dml, raw_runtime)
         assert runtime._context.project_home is not None
-        assert runtime.branch()["head"] == "feature"
+        assert runtime.branch()["head"] == "main"

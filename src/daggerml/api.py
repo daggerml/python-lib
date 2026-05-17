@@ -3,6 +3,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from tempfile import TemporaryDirectory
 from typing import Any, Iterator, Optional, Union, cast, overload
 
 from daggerml._internal import (
@@ -77,9 +78,22 @@ def new(name="", *, message="", argv_ptr=None, dml: Dml | None = None) -> "Dag":
     return Dag(dml=runtime, token=index_id, name=name, message=message)
 
 
-def load(name: Union[str, "Node"]) -> "Dag":
+def load(name: str, dml=None) -> "Dag":
     """Load a DAG using the active default Dml runtime."""
-    return get_default_dml().load(name)
+    dml = dml or get_default_dml()
+    dag_info = dml.dag.get(name)
+    if dag_info is None:
+        raise DmlRepoError(f"DAG not found: {name}")
+    return Dag(dml=dml, ref=dag_info["dag"]["ref"], name=name)
+
+
+@contextmanager
+def temporary(**kw):
+    """Create a temporary Dml runtime with an initial commit."""
+    kw["name"] = kw.get("name", "temp")
+    with TemporaryDirectory() as tmpdir:
+        resp = Dml.init(project_home=tmpdir, **kw)
+        yield Dml(resp["project_home"], remote_uri=resp["remote_uri"])
 
 
 def status() -> dict[str, object]:
@@ -95,7 +109,7 @@ def status() -> dict[str, object]:
     }
 
 
-def make_node(dag: "Dag", ref: Ref) -> "Node":
+def _make_node(dag: "Dag", ref: Ref) -> "Node":
     """
     Create a Node from a Dag and Ref.
 
@@ -200,9 +214,9 @@ class Dag:
     def _get_named_node(self, name: str) -> "Node":
         if self.ref is None:
             node_ref = self.dml.runtime.get_node(self._require_index_ref(), name)
-            return make_node(self, node_ref)
+            return _make_node(self, node_ref)
         node_ref = self.dml.dag.describe_node(name, dag_selector=cast(Ref, self.ref))["node"]["ref"]
-        return make_node(self, node_ref)
+        return _make_node(self, node_ref)
 
     def _set_named_node(self, name: str, value: Any) -> None:
         if self.ref is not None:
@@ -246,66 +260,26 @@ class Dag:
         """Get the list of all nodes in the dag"""
         if self.ref is None:
             info = self.dml.runtime.describe(self._require_index_ref())
-            return [make_node(self, ref) for ref in info["names"].values()]
+            return [_make_node(self, ref) for ref in info["names"].values()]
         names_dict = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["names"]
-        return [make_node(self, ref) for ref in names_dict.values()]
+        return [_make_node(self, ref) for ref in names_dict.values()]
 
     @property
     def argv(self) -> "ListNode":
         "Access the dag's argv node"
         if self.ref is None:
             argv_ref = self.dml.runtime.get_argv(self._require_index_ref())
-            return cast(ListNode, make_node(self, argv_ref))
+            return cast(ListNode, _make_node(self, argv_ref))
         argv_ref = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["argv"]
         assert isinstance(argv_ref, Ref), f"'{self.__class__.__name__}' dag has no argv"
-        return cast(ListNode, make_node(self, argv_ref))
+        return cast(ListNode, _make_node(self, argv_ref))
 
     @property
     def result(self) -> "Node":
         """Get the result node of the dag"""
         ref = self.dml.dag.describe(cast(Ref, self.ref))["dag"].get("result")
         assert isinstance(ref, Ref), f"'{self.__class__.__name__}' dag has not been committed yet"
-        return make_node(self, ref)
-
-    @overload
-    def load(self, dag_name: str, /, key: str = "result", *, name=None) -> "Node": ...
-    @overload
-    def load(self, node: "Node", /, *, name=None) -> "Node": ...
-    def load(self, dag_or_node: Union[str, "Node"], /, key: str = "result", *, name=None) -> "Node":
-        """Load a node from a different dag into this one.
-
-        Parameters
-        ----------
-        dag_or_node : str or Node
-            Source dag name or source node to import.
-        key : str, default="result"
-            Node name to import when dag_or_node is a dag name.
-        name : str, optional
-            Name to assign the resulting node in this dag
-
-        Returns
-        -------
-        Node
-            Import Node representing the result of the loaded dag
-
-        Examples
-        --------
-        >>> dml = Dml.temporary()
-        >>> new(dml=dml, name="my-dag-0", message="going to import this").commit(42)
-        >>> dag = new(dml=dml, name="my-dag-1", message="importing my-dag-0")
-        >>> node = dag.load("my-dag-0")
-        >>> node.value()
-        42
-        """
-        source = dag_or_node
-        if isinstance(source, str):
-            if self.ref is None and source == self.name:
-                return self.result if key == "result" else self[key]
-            loaded = self.dml.load(source)
-            source = loaded.result if key == "result" else loaded[key]
-        source_dag = cast(Ref, source.dag.ref)
-        node_ref = self.dml.runtime.put_import(self._require_index_ref(), source_dag, node=source.ref, name=name)
-        return make_node(self, node_ref)
+        return _make_node(self, ref)
 
     @overload
     def put(self, value: Union[list, "ListNode"], *, name=None) -> "ListNode": ...
@@ -334,7 +308,8 @@ class Dag:
 
         Examples
         --------
-        >>> dml = Dml.temporary()
+        >>> import daggerml as _dml
+        >>> dml = _dml.temporary()
         >>> dag = new(dml=dml, name="test", message="test")
         >>> n1 = dag.put(42, name="answer")
         >>> n1.value()
@@ -346,7 +321,7 @@ class Dag:
         >>> n3.value()
         {'a': 1, 'b': [42, '23']}
         """
-        return make_node(self, self._stage_value(value, name=name))
+        return _make_node(self, self._stage_value(value, name=name))
 
     def call(
         self,
@@ -398,7 +373,7 @@ class Dag:
             argv_refs = [self._stage_value(value) for value in argv_seed]
             resp = self._start_fn(argv_refs, kwargv=kwargv_refs, name=name)
             if resp:
-                return make_node(self, resp)
+                return _make_node(self, resp)
             time.sleep(sleep() / 1000)
         raise TimeoutError(f"invoking function: {fn}")
 
@@ -476,7 +451,7 @@ class Node:  # noqa: F811
         argv = node_info.get("argv")
         if argv is None:
             raise Error("Node has no argv", origin="dml", type="TypeError")
-        return make_node(self.dag, argv)
+        return _make_node(self.dag, argv)
 
     def backtrack(self, *keys: Union[str, int]) -> "Node":
         """
@@ -495,7 +470,8 @@ class Node:  # noqa: F811
 
         Examples
         --------
-        >>> dml = Dml.temporary()
+        >>> import daggerml as _dml
+        >>> dml = _dml.temporary()
         >>> dag = new(dml=dml, name="test", message="test")
         >>> l0 = dag.put(42)
         >>> c0 = dag.put({"a": 1, "b": [l0, "23"]})
@@ -508,14 +484,18 @@ class Node:  # noqa: F811
 
     def load(self) -> Dag:
         """
-        Convenience wrapper around `dml.load(node)`
+        Load this node's execution context (DAG).
 
         Returns
         -------
         Dag
-            The dag that this node was imported from (or in the case of a function call, this returns the fndag)
+            This node's execution dag.
         """
-        return self.dag.dml.load(self)
+        node_info = self.dag.dml.dag.describe_node(self.ref)["node"]
+        dag_ref = node_info.get("dag")
+        if isinstance(dag_ref, Ref):
+            return Dag(dml=self.dag.dml, ref=dag_ref)
+        return self.dag
 
     @property
     def type(self):
@@ -607,7 +587,7 @@ class CollectionNode(Node):  # noqa: F811
         """
         item_ref = item.ref if isinstance(item, Node) else item
         result = self.dag._call_builtin("daggerml:contains", self.ref, item_ref, name=name)
-        return cast(ScalarNode, make_node(self.dag, result))
+        return cast(ScalarNode, _make_node(self.dag, result))
 
     def __contains__(self, item):
         return self.contains(item).value()  # has to return boolean
@@ -652,7 +632,7 @@ class ListNode(CollectionNode):  # noqa: F811
             start = key.start if key.start is not None else 0
             stop = key.stop if key.stop is not None else len(self)
             key = [start, stop]
-        return make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key))
+        return _make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key))
 
     def __iter__(self):
         """
@@ -687,7 +667,7 @@ class ListNode(CollectionNode):  # noqa: F811
         """
         item_ref = item.ref if isinstance(item, Node) else item
         resp = self.dag._call_builtin("daggerml:conj", self.ref, item_ref, name=name)
-        return cast(ListNode, make_node(self.dag, resp))
+        return cast(ListNode, _make_node(self.dag, resp))
 
     def append(self, item, *, name=None) -> "ListNode":
         """
@@ -707,7 +687,7 @@ class ListNode(CollectionNode):  # noqa: F811
 
 class DictNode(CollectionNode):  # noqa: F811
     def __getitem__(self, key: Union[str, "Node"]) -> "Node":
-        return make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key))
+        return _make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key))
 
     def keys(self) -> list[str]:
         """
@@ -749,7 +729,7 @@ class DictNode(CollectionNode):  # noqa: F811
 
         If default is not given, it defaults to None, so that this method never raises a KeyError.
         """
-        return make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key, name=name, default=default))
+        return _make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key, name=name, default=default))
 
     def items(self) -> Iterator[tuple[str, "Node"]]:
         """
@@ -792,7 +772,7 @@ class DictNode(CollectionNode):  # noqa: F811
         """
         value_ref = value.ref if isinstance(value, Node) else value
         resp = self.dag._call_builtin("daggerml:assoc", self.ref, key, value_ref, name=name)
-        return cast(DictNode, make_node(self.dag, resp))
+        return cast(DictNode, _make_node(self.dag, resp))
 
     def update(self, update) -> "DictNode":
         """

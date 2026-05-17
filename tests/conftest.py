@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from daggerml import Dml
+from tests import temporary_dml
 
 
 @pytest.fixture(scope="session")
@@ -72,7 +72,7 @@ def debug(clear_envvars):
 
 @pytest.fixture
 def dml():
-    with Dml.temporary() as _dml:
+    with temporary_dml() as _dml:
         # Set function cache dir to repo so tests can find debug files
         with patch.dict(os.environ, DML_TEST_FN_STATE_DIR=_dml._context.project_home):
             yield _dml

@@ -9,11 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from daggerml import Dml, Uri, new
+from daggerml import Uri, new
 from daggerml.contrib import api
 from daggerml.contrib.funks import docker_build
 from daggerml.contrib.s3 import S3Store
 from daggerml.contrib.testing import MockNode, defunkify
+from tests import temporary_dml
 
 pytestmark = pytest.mark.slow
 
@@ -111,7 +112,7 @@ def test_docker_build_in_dag_builds_runnable_image(tmp_path):
     context_tarball = store.tar(ASSETS_DIR)
     call = defunkify(docker_build)
 
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         with new(dml=dml, name="docker-build-int", message="docker-build-int") as dag:
             image_tar_uri = call(dag, context_tarball)
 

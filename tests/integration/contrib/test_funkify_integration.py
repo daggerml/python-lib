@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from daggerml import Dml, clear_default_dml, new, set_default_dml
+from daggerml import clear_default_dml, load, new, set_default_dml
 from daggerml._internal.dml import with_ops
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib import adapter_registry as areg
@@ -17,6 +17,7 @@ from daggerml.contrib.adapters import LocalAdapter
 from daggerml.contrib.executors import ScriptExecutor
 from daggerml.contrib.executors.script import run_payload
 from daggerml.contrib.testing import defunkify
+from tests import temporary_dml
 
 pytestmark = pytest.mark.slow
 
@@ -87,7 +88,7 @@ def _remote() -> dict[str, str]:
 
 
 def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         dag = new(dml=dml, name="argv-src", message="argv-src")
         index_ref = dag._require_index_ref()
         head = argv0 if argv0 is not None else Runnable(target=Uri("daggerml:list"), kwargs={}, adapter="")
@@ -163,7 +164,7 @@ def test_funkify_invalid_input_fails():
 
 
 def test_funkify_with_ref_and_load_normalizes_via_codec():
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         src = new(dml=dml, name="src", message="src")
         src.commit(9)
 
@@ -187,7 +188,7 @@ def test_funkify_script_runnable_contains_executable_fn_script():
     def fn(dag, x, y=2):
         return helper(x) + y
 
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         dag = new(dml=dml, name="dst", message="dst")
         delayed = api.funkify(fn, uri="script", adapter="local", extra_objs=[helper])
         node = dag.put(cast(Any, delayed))
@@ -240,7 +241,7 @@ def test_funkify_script_lifecycle_stage_matrix_FKY_LFC_001_to_FKY_LFC_004(contra
         def fn(dag, x, y=2, *, z=3, nonce=nonce):
             return x.value() + y.value() + z.value()  # pyright: ignore[reportAttributeAccessIssue]
 
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         dag_name = "dst-prepop" if use_prepop else "dst-int"
         dag = new(dml=dml, name=dag_name, message=dag_name)
         runnable = cast(Runnable, dag.put(cast(Any, fn)).value())
@@ -310,13 +311,13 @@ def test_dagclass_compiled_method_executes_through_local_script_runtime():
         def main(self, a, b=1):
             return self.x.value() + a.value() * b.value()  # pyright: ignore[reportAttributeAccessIssue]
 
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         set_default_dml(dml)
         try:
             result = api.run(Example(), 4, b=3, name="dagclass-runtime-int")
             assert result is None
 
-            loaded = dml.load("dagclass-runtime-int")
+            loaded = load("dagclass-runtime-int", dml=dml)
             assert loaded["x"].value() == 2
             assert loaded["<dagclass-call>"].value() == 14
             assert loaded.result.value() == 14
@@ -331,7 +332,7 @@ def test_funkify_script_runtime_executes_generated_source_with_args_and_kwargs(t
         return x.value() + y.value() + z.value()  # pyright: ignore[reportAttributeAccessIssue]
 
     delayed = api.funkify(fn, uri="script", adapter="local")
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         dag = new(dml=dml, name="dst-worker", message="dst-worker")
         runnable = cast(Runnable, dag.put(cast(Any, delayed)).value())
         os.environ["DML_PROJECT_HOME"] = cast(str, dml._context.project_home)
@@ -373,7 +374,7 @@ def test_funkify_resolve_runnable_requires_runnable_return():
 
     areg.register_adapter(BadAdapter())
 
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         dag = new(dml=dml, name="d0", message="d0")
         delayed = api.funkify(lambda dag: None, uri="script", adapter="bad")
         with pytest.raises(DmlRepoError, match="resolve_runnable must return Runnable"):

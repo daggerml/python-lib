@@ -5,10 +5,11 @@ from typing import Any
 
 import pytest
 
-from daggerml import Dml, clear_default_dml, set_default_dml
+from daggerml import clear_default_dml, load, set_default_dml
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
+from tests import temporary_dml
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +34,7 @@ def _runtime_setup():
             return 0
 
     areg.register_adapter(TestAdapter())
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         set_default_dml(dml)
         yield dml
     clear_default_dml()
@@ -48,7 +49,7 @@ def test_run_executes_entrypoint_and_returns_none(_runtime_setup):
 
     result = api.run(RunExample(), 1, 2, name="run-example")
     assert result is None
-    loaded = _runtime_setup.load("run-example")
+    loaded = load("run-example", dml=_runtime_setup)
     assert "x" in loaded.keys()
     assert loaded["x"].value() == 7
     assert "main" in loaded.keys()
@@ -66,7 +67,7 @@ def test_run_materializes_additional_delayed_runnable_members_by_name(_runtime_s
 
     result = api.run(RunExample(), 9, name="run-funkified")
     assert result is None
-    loaded = _runtime_setup.load("run-funkified")
+    loaded = load("run-funkified", dml=_runtime_setup)
     assert "x" in loaded.keys()
     assert loaded["x"].value() == 3
     assert "main" in loaded.keys()
@@ -83,7 +84,7 @@ def test_run_materializes_same_namespace_refs_in_dependency_order(_runtime_setup
 
     result = api.run(RunExample(), name="run-ref-order")
     assert result is None
-    loaded = _runtime_setup.load("run-ref-order")
+    loaded = load("run-ref-order", dml=_runtime_setup)
     assert loaded["y"].value() == 3
     assert loaded["x"].value() == 3
 

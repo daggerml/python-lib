@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from daggerml._internal import Dml
 from daggerml.api import new
+from tests import temporary_dml
 
 
 def test_show_log_and_diff_return_spec_shapes():
-    with Dml.temporary() as dml:
+    with temporary_dml() as dml:
         with new(dml=dml, name="baseline", message="baseline") as dag:
             result = dag.put(1, name="result")
             dag.commit(result)
@@ -21,12 +21,12 @@ def test_show_log_and_diff_return_spec_shapes():
 
 
 def test_branch_lists_local_and_remote_tracking_views(tmp_path):
-    with Dml.temporary(repo="source") as source:
+    with temporary_dml(repo="source") as source:
         remote_uri = source._context.remote_uri
         source.push(None, branch="main", create=True, force=False)
         source_uri = source.config.get("project.uri")
 
-        with Dml.temporary(repo="target", remote_root=remote_uri) as target:
+        with temporary_dml(repo="target", remote_root=remote_uri) as target:
             target.fetch(source_uri, None)
             local = target.branch()
             remote = target.branch(remote=True)

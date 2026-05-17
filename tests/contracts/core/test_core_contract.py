@@ -6,7 +6,8 @@ from unittest import TestCase
 import pytest
 
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
-from daggerml.api import Dag, DictNode, Dml, Error, ListNode, Node, new
+from daggerml.api import Dag, DictNode, Error, ListNode, Node, load, new
+from tests import temporary_dml
 
 SUM_URI = "./tests/assets/fns/sum.py"
 ASYNC_URI = "./tests/assets/fns/async.py"
@@ -61,18 +62,18 @@ class TestSetAttrs:
             dag.put(42, name="n0")
             dag.commit("foo")
         with new(dml=dml, name="d1", message="d1") as dag:
-            node = dag.load("d0", name="n1")
+            node = dag.put(load("d0", dml=dml).result, name="n1")
             assert node.dag == dag
             assert node.value() == "foo"
             assert node.load()["n0"].value() == 42
-            assert dag.load("d0", key="n0").value() == 42
+            assert dag.put(load("d0", dml=dml)["n0"]).value() == 42
 
     def test_put_node_from_other_dag_auto_imports(self, dml):
         with new(dml=dml, name="src", message="src") as src:
             src.put(99, name="n0")
             src.commit(src.n0)
 
-        foreign_node = dml.load("src")["n0"]
+        foreign_node = load("src", dml=dml)["n0"]
         with new(dml=dml, name="dst", message="dst") as dst:
             imported = dst.put(foreign_node, name="imported")
             assert imported.value() == 99
@@ -131,7 +132,7 @@ class TestSetAttrs:
         with new(dml=dml, name="d0", message="d0") as dag:
             dag.commit(dag.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums, name="n1"))
         d1 = new(dml=dml, name="d1", message="d1")
-        n1 = d1.load(dml.load("d0")["n1"], name="n1_1")
+        n1 = d1.put(load("d0", dml=dml)["n1"], name="n1_1")
         assert n1.dag == d1
         n2 = n1.load()["n1"].load()["num_args"]
         assert n2.value() == len(nums)
@@ -139,11 +140,11 @@ class TestSetAttrs:
 
     def test_no_caching(self):
         nums = [1, 2, 3]
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             with new(dml=dml, name="d0", message="d0") as d1:
                 n1 = d1.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums)
                 uid = n1.load()["uuid"].value()
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             with new(dml=dml, name="d1", message="d0") as d1:
                 n1 = d1.call(self._mk_runnable(dml, SUM_URI, FN_ADAPTER), *nums)
                 uid1 = n1.load()["uuid"].value()
@@ -203,7 +204,7 @@ class TestSetAttrs:
         with new(dml=dml, name="d0", message="d0") as dag:
             dag.put(42, name="n0")
             dag.commit("foo")
-        dl = dml.load("d0")
+        dl = load("d0", dml=dml)
         assert isinstance(dl, Dag)
         assert dl["n0"].value() == 42
         assert dl.result.value() == "foo"
@@ -218,7 +219,7 @@ class TestSetAttrs:
 
 class TestBasic(TestCase):
     def test_dag_named_node_access_roundtrip(self):
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             d0 = new(dml=dml, name="d0", message="d0")
             self.assertIsInstance(d0, Dag)
             n0 = d0.put([42], name="n0")
@@ -235,7 +236,7 @@ class TestBasic(TestCase):
             self.assertEqual(d0.x1.value(), 42)
 
     def test_dag_collection_materialization_roundtrip(self):
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             d0 = new(dml=dml, name="d0", message="d0")
             n0 = d0.put([42], name="n0")
             d0.x2 = 99
@@ -247,7 +248,7 @@ class TestBasic(TestCase):
             self.assertEqual([x.value() for x in n0], [d0.n1.value()])
             self.assertEqual(d0.n1.value(), 42)
             d0.n2 = {"x": n0, "y": "z"}
-            n2 = cast(DictNode, d0.load("d0", "n2"))
+            n2 = cast(DictNode, d0.n2)
             self.assertNotEqual(n2["x"], n0)
             self.assertEqual(n2["x"].value(), n0.value())
             d0.n3 = list(n2.items())
@@ -257,11 +258,11 @@ class TestBasic(TestCase):
                 {"x": n0.value(), "y": "z"},
             )
             d0.n4 = [1, 2, 3, 4, 5]
-            d0.n5 = cast(ListNode, d0.load("d0", "n4"))[1:]
+            d0.n5 = cast(ListNode, d0.n4)[1:]
             self.assertListEqual([x.value() for x in d0.n5], [2, 3, 4, 5])
 
     def test_dag_commit_result_and_delete_then_gc(self):
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             d0 = new(dml=dml, name="d0", message="d0")
             n0 = d0.put([42], name="n0")
             d0.commit(n0)

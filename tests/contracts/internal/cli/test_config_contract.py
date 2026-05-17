@@ -15,8 +15,8 @@ from daggerml._cli.config import (
     execute_config_show,
     setup_config_parser,
 )
-from daggerml._internal import Dml
 from daggerml._internal.types import DmlRepoError
+from tests import temporary_dml
 
 
 class TestSetupConfigParser:
@@ -46,14 +46,14 @@ class TestSetupConfigParser:
 
 class TestExecuteConfig:
     def test_set_and_get_local_value(self):
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             args_set = Namespace(global_scope=False, key="project.uri", value=["dml://alice/demo"])
             assert execute_config_set(dml, args_set) == ""
             args_get = Namespace(global_scope=False, key="project.uri")
             assert execute_config_get(dml, args_get) == "dml://alice/demo"
 
     def test_rejects_invalid_global_key(self):
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             args = Namespace(global_scope=True, key="project.uri", value=["dml://alice/demo"])
             with pytest.raises(DmlRepoError, match="not valid in global scope"):
                 execute_config_set(dml, args)
@@ -61,7 +61,7 @@ class TestExecuteConfig:
     @patch("daggerml.contrib.status.status")
     def test_show_can_include_contrib_status(self, mock_status):
         mock_status.return_value = {"schema_version": 0}
-        with Dml.temporary() as dml:
+        with temporary_dml() as dml:
             result = execute_config_show(dml, Namespace(contrib=True))
         assert result["contrib"] == {"schema_version": 0}
 

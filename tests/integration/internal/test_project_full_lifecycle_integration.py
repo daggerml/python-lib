@@ -6,7 +6,7 @@ from io import StringIO
 import pytest
 
 from daggerml._cli import cli
-from daggerml.api import Dml, new
+from daggerml.api import Dml, load, new
 
 pytestmark = pytest.mark.slow
 
@@ -53,13 +53,14 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
     assert json.loads(stdout)["created"] == {"db": True, "config": True}
 
     expected_result = {"score": 7, "ok": True}
-    with Dml(project_home=str(source_repo), user=owner) as dml:
-        with new(dml=dml, name="baseline", message="baseline") as dag:
-            result = dag.put(expected_result, name="result")
-            dag.commit(result)
-        with new(dml=dml, name="candidate", message="candidate") as dag:
-            candidate = dag.put(11, name="candidate")
-            dag.commit(candidate)
+    dml = Dml(project_home=str(source_repo), user=owner)
+
+    with new(dml=dml, name="baseline", message="baseline") as dag:
+        result = dag.put(expected_result, name="result")
+        dag.commit(result)
+    with new(dml=dml, name="candidate", message="candidate") as dag:
+        candidate = dag.put(11, name="candidate")
+        dag.commit(candidate)
 
     stdout, stderr = _run_cli(["--project-home", str(source_repo), "push", "--branch", "main", "--create"])
     assert not stderr
@@ -106,5 +107,5 @@ def test_cli_full_project_lifecycle_across_two_repos(tmp_path):
     assert not stderr
     assert "commit:" in json.loads(stdout)
 
-    with Dml(project_home=str(target_repo), user=owner) as dml:
-        assert dml.load("baseline").result.value() == expected_result
+    dml = Dml(project_home=str(target_repo), user=owner)
+    assert load("baseline", dml=dml).result.value() == expected_result

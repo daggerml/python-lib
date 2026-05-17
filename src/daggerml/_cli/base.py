@@ -188,14 +188,14 @@ def execute_command(args) -> None:
             project_home=repo_path,
             remote_uri=getattr(args, "runtime_remote_uri", None),
         ).config.show()["remote"]["uri"]
-        with Dml(project_home=repo_path, remote_uri=resolved_remote_uri) as dml:
-            ops_obj = get_ops_object(dml, args.op)
-            result = args.func(ops_obj, args)
-            if isinstance(result, str) and getattr(args, "raw_output", False):
-                sys.stdout.write(result)
-                if not result.endswith("\n"):
-                    sys.stdout.write("\n")
-                return
-            output_json(result)
+        dml = Dml(project_home=repo_path, remote_uri=resolved_remote_uri)
+        ops_obj = get_ops_object(dml, args.op)
+        result = args.func(ops_obj, args)
+        if isinstance(result, str) and getattr(args, "raw_output", False):
+            sys.stdout.write(result)
+            if not result.endswith("\n"):
+                sys.stdout.write("\n")
+            return
+        output_json(result)
     except Exception as e:
         output_error(e, _command_context_from_args(args))

@@ -192,10 +192,7 @@ class TestExecuteCommand:
     @patch("daggerml._cli.base.get_repo_path")
     def test_successful_execution(self, mock_get_path, mock_dml):
         mock_get_path.return_value = "/repo/path"
-        mock_runtime = Mock()
         mock_dml.return_value.config.show.return_value = {"remote": {"uri": "s3://test-bucket/test-prefix"}}
-        mock_dml.return_value.__enter__.return_value = mock_runtime
-        mock_dml.return_value.__exit__.return_value = None
         args = Namespace(
             project_home=None,
             runtime_remote_uri=None,
@@ -210,7 +207,7 @@ class TestExecuteCommand:
             call(project_home="/repo/path", remote_uri=None),
             call(project_home="/repo/path", remote_uri="s3://test-bucket/test-prefix"),
         ]
-        args.func.assert_called_once_with(mock_runtime, args)
+        args.func.assert_called_once_with(mock_dml.return_value, args)
         mock_output.assert_called_once_with({"result": "ok"})
 
     @patch("daggerml._cli.base.get_repo_path")
