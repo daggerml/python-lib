@@ -43,9 +43,7 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
 
     remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo#main")
     remote_ops.pull_uri_into_branch.assert_called_once_with("dml://alice/demo#main", "main", user="alice")
-    remote_ops.push_project_branch.assert_called_once_with(
-        "dml://alice/demo#main", "main", create=False, force=False
-    )
+    remote_ops.push_project_branch.assert_called_once_with("dml://alice/demo#main", "main", create=False, force=False)
     remote_ops.push_project_tag.assert_called_once_with("dml://alice/demo@v1.0", "main")
     assert fetched == Ref("commit:1")
     assert pulled == Ref("commit:2")
@@ -79,9 +77,7 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
     assert mock_create_s3.call_count == 3
     remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo#main")
     remote_ops.pull_uri_into_branch.assert_called_once_with("dml://alice/demo#main", "main", user="alice")
-    remote_ops.push_project_branch.assert_called_once_with(
-        "dml://alice/demo#main", "main", create=False, force=False
-    )
+    remote_ops.push_project_branch.assert_called_once_with("dml://alice/demo#main", "main", create=False, force=False)
     assert fetched == Ref("commit:1")
     assert pulled == Ref("commit:2")
     assert pushed == "projects/alice/demo/heads/main.json"
@@ -181,7 +177,9 @@ def test_dag_checkout_requires_user_if_not_resolved():
     with (
         patch.object(type(ops._context), "user", new_callable=PropertyMock, return_value=None),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_head_ops", return_value=Mock(require_attached_head_branch=Mock(return_value="main"))),
+        patch.object(
+            dml_module, "make_head_ops", return_value=Mock(require_attached_head_branch=Mock(return_value="main"))
+        ),
         patch.object(dml_module, "resolve_dml_revision_ref", return_value=Ref("commit:2")),
     ):
         with pytest.raises(DmlRepoError, match="user is required for dag checkout"):

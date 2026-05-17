@@ -36,12 +36,12 @@ from daggerml._internal.dml_resolution import (
 )
 from daggerml._internal.ops.cache import CacheOps
 from daggerml._internal.ops.commit import CommitOps
+from daggerml._internal.ops.config import ConfigOps
 from daggerml._internal.ops.dag import DagOps
 from daggerml._internal.ops.gc import GcOps
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.ops.node import NodeOps
-from daggerml._internal.ops.config import ConfigOps
 from daggerml._internal.ops.remote import RemoteOps
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
 
@@ -292,6 +292,15 @@ class AdminRemoteProjectRefsPayload(TypedDict):
     project: str
     branches: list[str]
     tags: list[str]
+
+
+class AdminRemoteGcPayload(TypedDict):
+    deleted: int
+    kept_live: int
+    kept_young: int
+
+
+MalformedPolicy = Literal["raise", "warn", "ignore"]
 
 
 class AdminGcDryRunPayload(TypedDict):
@@ -558,7 +567,7 @@ class _RuntimeNamespace:
 
     def describe(self, index_id: str) -> IndexDescribePayload:
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).describe(index_id)
+            return cast(IndexDescribePayload, make_index_ops(db, self._dml).describe(index_id))
 
     def get_node(self, index_id: str, name: str) -> Ref:
         with with_db(self._dml) as db:
@@ -1026,9 +1035,12 @@ class _AdminRemoteNamespace:
                 tags.append(f"dml://{parsed.owner}/{parsed.project}@{name}")
         return {"project": project, "branches": sorted(branches), "tags": sorted(tags)}
 
-    def gc(self, *, min_age_seconds: int = 24 * 3600, malformed: str = "warn") -> dict[str, int]:
+    def gc(self, *, min_age_seconds: int = 24 * 3600, malformed: MalformedPolicy = "warn") -> AdminRemoteGcPayload:
         with with_db(self._dml) as db:
-            return make_remote_ops(db, self._dml).gc(min_age_seconds=min_age_seconds, malformed=malformed)
+            return cast(
+                AdminRemoteGcPayload,
+                make_remote_ops(db, self._dml).gc(min_age_seconds=min_age_seconds, malformed=malformed),
+            )
 
 
 @dataclass(frozen=True)
@@ -1059,7 +1071,7 @@ class _AdminNamespace:
             if dry_run:
                 orphans = gc_ops.list_orphans()
                 return {"dry_run": True, "would_delete": len(orphans), "orphans": orphans}
-            return {"dry_run": False, "deleted": gc_ops.gc()}
+            return {"dry_run": False, "deleted": sum(gc_ops.gc().values())}
 
 
 class Dml:
@@ -1120,10 +1132,8 @@ class Dml:
 
     @overload
     def branch(self, *, remote: Literal[False] = False) -> BranchLocalPayload: ...
-
     @overload
     def branch(self, *, remote: Literal[True]) -> BranchRemotePayload: ...
-
     def branch(self, *, remote: bool = False) -> BranchLocalPayload | BranchRemotePayload:
         if remote:
             return {"branches": remote_tracking_branches(self), "remote": True}
@@ -1140,7 +1150,7 @@ class Dml:
         with with_db(self) as db:
             commit_ops = make_commit_ops(db)
             refs = list(commit_ops.list(resolved.commit, limit=limit))
-            commits = [commit_ops.describe(ref) for ref in refs]
+            commits = [cast(CommitPayload, commit_ops.describe(ref)) for ref in refs]
         return {
             "revision": revision_payload(revision, resolved),
             "commits": commits,
@@ -1149,7 +1159,7 @@ class Dml:
     def show(self, revision: str = "HEAD") -> ShowPayload:
         resolved = resolve_dml_revision(self, revision)
         with with_db(self) as db:
-            commit = make_commit_ops(db).describe(resolved.commit)
+            commit = cast(CommitPayload, make_commit_ops(db).describe(resolved.commit))
         dags = dag_map_for_commit(self, resolved.commit)
         base_commit = commit["parents"][0] if commit["parents"] else None
         base_dags = dag_map_for_commit(self, base_commit) if base_commit is not None else {}
