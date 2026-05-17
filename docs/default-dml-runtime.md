@@ -34,7 +34,7 @@ Rules:
 - scoped override takes precedence over process default,
 - implicit default creation occurs only when no scoped or process default is set,
 - the implicit default is cached as the process default after first creation,
-- constructing `DmlOps` from the default runtime requires `remote.root` to be configured.
+- remote-backed workflows reached through the default runtime require `remote.root` to be configured.
 - runtime checkout behavior derives from `.dml/HEAD`; constructor arguments do not override the active branch.
 
 ## Runtime API

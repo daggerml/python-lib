@@ -230,9 +230,8 @@ class _FakeExecutionState:
 
 
 @contextmanager
-def _opened_index_ops(index_ops: IndexOps):
-    runtime_ops = SimpleNamespace(index=lambda: index_ops)
-    yield runtime_ops
+def _opened_db(db=None):
+    yield db if db is not None else SimpleNamespace()
 
 
 class TestIndexOps:
@@ -760,7 +759,8 @@ class TestIndexOps:
         cancelled_dir = Path(temp_bo._db.path).resolve().parent / "refs" / "local" / "indexes" / ".cancelled"
 
         with (
-            patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_index_ops(ops)),
+            patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+            patch.object(dml_module, "make_index_ops", return_value=ops),
             pytest.raises(DmlRepoError, match=r"exceeded retry limit for execution exec-live: boom"),
         ):
             dml.runtime.cancel(index_ref)

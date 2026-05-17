@@ -50,15 +50,14 @@ class TestInitCLIIntegration:
             assert payload["created"] == {"db": True, "config": True}
             assert (expected_repo / ".dml" / "db").exists()
 
-    def test_init_cli_rejects_remote_project_without_remote_root(self):
+    def test_init_cli_uses_env_remote_root_for_remote_project(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             explicit = Path(temp_dir) / "db-only"
             explicit.mkdir()
             stdout, stderr = self.run_cli_command(
                 ["--project-home", str(explicit), "init", "--remote-project", "dml://alice/demo"]
             )
-            assert not stdout
-            payload = json.loads(stderr.strip())
-            assert payload["type"] == "DmlRepoError"
-            assert payload["command"] == "init"
-            assert payload["error"] == "init: remote.root is required when remote.project is configured"
+            assert not stderr
+            payload = json.loads(stdout.strip())
+            assert payload["remote_uri"] == "s3://test-bucket/test-prefix"
+            assert payload["created"] == {"db": True, "config": True}

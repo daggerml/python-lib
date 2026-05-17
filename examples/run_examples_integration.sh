@@ -171,7 +171,7 @@ project0="project-0"
 log "Initializing DML repo in ${project0}"
 mkdir "${scratch_dir}/${project0}"
 cd "${scratch_dir}/${project0}"
-dml init "$project0"
+dml init --remote-root "${DML_REMOTE_ROOT}" --remote-project "dml://${dml_user}/${project0}"
 
 log "DML repo initialized. Current status:"
 dml status | jq .
@@ -198,7 +198,7 @@ project1="project-1"
 log "Initializing DML repo in ${project1}"
 mkdir "${scratch_dir}/${project1}"
 cd "${scratch_dir}/${project1}"
-dml init $project1
+dml init --remote-root "${DML_REMOTE_ROOT}" --remote-project "dml://${dml_user}/${project1}"
 dml fetch "dml://${dml_user}/${project0}"
 dml dag checkout "dml://${dml_user}/${project0}#main" "examples/01-docker-dataset"
 

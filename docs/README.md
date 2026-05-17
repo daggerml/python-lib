@@ -67,7 +67,6 @@ This index defines the docs layout and the canonical docs for each module and ob
 - Internal storage model: [internal/storage.md](internal/storage.md)
 - Internal type-system contracts: [internal/type-system-contracts.md](internal/type-system-contracts.md)
 - Internal storage and refs: [internal/storage-and-refs.md](internal/storage-and-refs.md)
-- `DmlOps`: [internal/ops/dml-ops.md](internal/ops/dml-ops.md)
 - `BaseOps`: [internal/ops/base-ops.md](internal/ops/base-ops.md)
 - `HeadOps`: [internal/ops/head-ops.md](internal/ops/head-ops.md)
 - `CommitOps`: [internal/ops/commit-ops.md](internal/ops/commit-ops.md)

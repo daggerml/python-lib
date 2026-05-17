@@ -79,4 +79,4 @@ The CLI surface is intentionally breaking in this redesign and no legacy aliases
 ## References
 
 - [configuration.md](configuration.md)
-- [internal/ops/dml-ops.md](internal/ops/dml-ops.md)
+- [internal/ops/README.md](internal/ops/README.md)

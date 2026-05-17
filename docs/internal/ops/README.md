@@ -17,14 +17,12 @@ The ops module defines repository-domain operations over shared transactional st
 
 ## Layering
 
-- `DmlOps`: repository/session facade and subsystem factory.
 - `BaseOps`/`TxnContext`: shared transaction and object IO mechanics.
 - Specialized ops modules: `head`, `commit`, `index`, `dag`, `node`, `cache`, `gc`, `remote`.
 
 
 ## Submodule Docs
 
-- `DmlOps`: [dml-ops.md](dml-ops.md)
 - `BaseOps`: [base-ops.md](base-ops.md)
 - `HeadOps`: [head-ops.md](head-ops.md)
 - `CommitOps`: [commit-ops.md](commit-ops.md)

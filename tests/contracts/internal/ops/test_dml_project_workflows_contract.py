@@ -14,11 +14,8 @@ from daggerml._internal.types import DmlRepoError
 
 
 @contextmanager
-def _opened_ops(remote_ops):
-    runtime_ops = Mock()
-    runtime_ops.remote.return_value = remote_ops
-    runtime_ops.index.return_value = remote_ops
-    yield runtime_ops
+def _opened_db(db=None):
+    yield db if db is not None else Mock()
 
 
 def test_fetch_pull_push_workflows_delegate_to_remote_ops():
@@ -30,8 +27,9 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
     project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo", remote_project="dml://alice/demo")
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
-        patch.object(dml_module, "head_ops", return_value=head_ops),
-        patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(remote_ops)),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_head_ops", return_value=head_ops),
+        patch.object(dml_module, "make_remote_ops", return_value=remote_ops),
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
         remote_ops.pull_uri_into_branch.return_value = Ref("commit:2")
@@ -65,9 +63,10 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
     project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo", remote_project="dml://alice/demo")
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
-        patch.object(dml_module, "head_ops", return_value=head_ops),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_head_ops", return_value=head_ops),
+        patch.object(dml_module, "make_remote_ops", return_value=remote_ops),
         patch.object(dml_module, "create_s3_client", return_value=s3_client) as mock_create_s3,
-        patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(remote_ops)),
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
         remote_ops.pull_uri_into_branch.return_value = Ref("commit:2")
@@ -95,8 +94,9 @@ def test_fetch_project_origin_falls_back_to_default_branch_without_attached_head
     detached_head_ops = Mock(get_attached_head_branch=Mock(return_value=None))
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
-        patch.object(dml_module, "head_ops", return_value=detached_head_ops),
-        patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(remote_ops)),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_head_ops", return_value=detached_head_ops),
+        patch.object(dml_module, "make_remote_ops", return_value=remote_ops),
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
         fetched = ops.fetch("origin", None, s3_client=object())
@@ -112,7 +112,8 @@ def test_push_project_requires_attached_head_or_explicit_branch():
     detached_head_ops = Mock(require_attached_head_branch=Mock(side_effect=detached_error))
     with (
         patch("daggerml._internal.dml.load_project_config", return_value=project_cfg),
-        patch.object(dml_module, "head_ops", return_value=detached_head_ops),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_head_ops", return_value=detached_head_ops),
     ):
         with pytest.raises(DmlRepoError, match="Current checkout is detached"):
             ops.push(None, branch=None, create=False, force=False, s3_client=object())
@@ -127,8 +128,9 @@ def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
     head_ops.require_attached_head_branch.return_value = "main"
 
     with (
-        patch.object(dml_module, "commit_ops", return_value=commit_ops),
-        patch.object(dml_module, "head_ops", return_value=head_ops),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_commit_ops", return_value=commit_ops),
+        patch.object(dml_module, "make_head_ops", return_value=head_ops),
         patch.object(
             dml_module,
             "resolve_dml_revision",
@@ -156,8 +158,9 @@ def test_dag_checkout_delegates_to_commit_ops_with_resolved_defaults():
     head_ops.require_attached_head_branch.return_value = "main"
 
     with (
-        patch.object(dml_module, "commit_ops", return_value=commit_ops),
-        patch.object(dml_module, "head_ops", return_value=head_ops),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_commit_ops", return_value=commit_ops),
+        patch.object(dml_module, "make_head_ops", return_value=head_ops),
         patch.object(dml_module, "resolve_dml_revision_ref", return_value=Ref("commit:2")),
     ):
         result = ops.dag.checkout("origin/main", "train")
@@ -177,9 +180,8 @@ def test_dag_checkout_requires_user_if_not_resolved():
     ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix", user=None)
     with (
         patch.object(type(ops._context), "user", new_callable=PropertyMock, return_value=None),
-        patch.object(
-            dml_module, "head_ops", return_value=Mock(require_attached_head_branch=Mock(return_value="main"))
-        ),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_head_ops", return_value=Mock(require_attached_head_branch=Mock(return_value="main"))),
         patch.object(dml_module, "resolve_dml_revision_ref", return_value=Ref("commit:2")),
     ):
         with pytest.raises(DmlRepoError, match="user is required for dag checkout"):
@@ -211,7 +213,8 @@ def test_runtime_cancel_runs_retry_loop_and_returns_stats(caplog):
     index._cancel_execution_candidate.side_effect = _cancel_candidate
     sleeps = []
     with (
-        patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(index)),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_index_ops", return_value=index),
         patch.object(dml_module.time, "sleep", side_effect=lambda delay: sleeps.append(delay)),
     ):
         result = ops.runtime.cancel("idx-1")
@@ -261,7 +264,8 @@ def test_runtime_cancel_retries_candidate_errors_with_backoff():
     index._cancel_execution_candidate.side_effect = _cancel_candidate
     sleeps = []
     with (
-        patch.object(dml_module, "with_ops", side_effect=lambda _dml: _opened_ops(index)),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_index_ops", return_value=index),
         patch.object(dml_module.time, "sleep", side_effect=lambda delay: sleeps.append(delay)),
     ):
         result = ops.runtime.cancel("idx-1")
@@ -282,7 +286,8 @@ def test_dag_describe_node_resolves_named_node_with_revision_context():
             "daggerml._internal.dml.resolve_node_ref",
             return_value=SimpleNamespace(ref=Ref("node:4"), dag_selector="train", revision=revision),
         ),
-        patch.object(dml_module, "node_ops", return_value=node_ops),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_node_ops", return_value=node_ops),
     ):
         result = ops.dag.describe_node("result", dag_selector="train", revision="HEAD")
 
@@ -304,7 +309,8 @@ def test_dag_get_node_resolves_named_node_with_explicit_dag_ref():
             "daggerml._internal.dml.resolve_node_ref",
             return_value=SimpleNamespace(ref=Ref("node:4"), dag_selector="dag:3", revision=None),
         ),
-        patch.object(dml_module, "node_ops", return_value=node_ops),
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_node_ops", return_value=node_ops),
     ):
         result = ops.dag.get_node("result", dag_selector="dag:3")
 
@@ -321,7 +327,10 @@ def test_dag_describe_node_accepts_explicit_node_ref_without_dag_context():
     node_ref = Ref("node-literal:4")
     node_ops = Mock(describe=Mock(return_value={"id": "4", "ref": node_ref, "type": "LiteralNode"}))
 
-    with patch.object(dml_module, "node_ops", return_value=node_ops):
+    with (
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_node_ops", return_value=node_ops),
+    ):
         result = ops.dag.describe_node(node_ref)
 
     node_ops.describe.assert_called_once_with(node_ref)
@@ -337,7 +346,10 @@ def test_dag_get_node_accepts_explicit_node_ref_without_dag_context():
     node_ref = Ref("node-fn:4")
     node_ops = Mock(get=Mock(return_value={"answer": Ref("datum:5")}))
 
-    with patch.object(dml_module, "node_ops", return_value=node_ops):
+    with (
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_node_ops", return_value=node_ops),
+    ):
         result = ops.dag.get_node(node_ref.to, dag_selector="train", revision="HEAD")
 
     node_ops.get.assert_called_once_with(node_ref)
@@ -443,8 +455,24 @@ def test_dml_init_rejects_remote_project_without_remote_root(tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
 
-    with pytest.raises(DmlRepoError, match="remote.root is required when remote.project is configured"):
-        Dml.init(str(repo_dir), remote_project="dml://alice/demo")
+    with patch.dict("os.environ", {}, clear=True):
+        with pytest.raises(DmlRepoError, match="remote.root is required"):
+            Dml.init(str(repo_dir), remote_project="dml://alice/demo")
+
+
+def test_dml_init_resolves_remote_root_from_env_for_remote_project(tmp_path, monkeypatch):
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    monkeypatch.setenv("DML_REMOTE_ROOT", "s3://bucket/prefix")
+
+    with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")) as mock_fetch:
+        result = Dml.init(str(repo_dir), remote_project="dml://alice/demo", no_hooks=True)
+
+    project_cfg = DmlProjectConfig.load(repo_dir)
+    assert project_cfg.remote_project == "dml://alice/demo"
+    assert project_cfg.remote_uri == "s3://bucket/prefix"
+    assert result["remote_uri"] == "s3://bucket/prefix"
+    mock_fetch.assert_called_once_with("origin", None)
 
 
 def test_dml_init_requires_remote_uri_for_recovery_pull(tmp_path):

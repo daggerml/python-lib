@@ -165,13 +165,13 @@ def test_project_home_defaults_to_cwd_when_unset(tmp_path, monkeypatch):
         os.chdir(old)
 
 
-@patch("daggerml._internal.ops.remote.RemoteOps")
+@patch("daggerml._internal.dml.RemoteOps")
 def test_dml_ops_remote_uses_configured_fetch_workers(mock_remote_ops):
-    from daggerml._internal.ops import DmlOps
+    from daggerml._internal.dml import Dml, make_remote_ops
 
-    ops = DmlOps(path="/tmp/repo", remote_root="s3://bucket/prefix", _db=Mock())
-    with patch("daggerml._internal.ops.DmlConfig.resolve", return_value=Mock(remote=Mock(fetch_workers=9))):
-        ops.remote(client=object())
+    dml = Dml(project_home="/tmp/repo", remote_uri="s3://bucket/prefix")
+    object.__setattr__(dml._context.config.remote, "fetch_workers", 9)
+    make_remote_ops(Mock(), dml, client=object())
 
     kwargs = mock_remote_ops.call_args.kwargs
     assert kwargs["bucket"] == "bucket"

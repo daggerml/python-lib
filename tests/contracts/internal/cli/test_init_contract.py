@@ -110,5 +110,21 @@ class TestExecuteInit:
             remote_root=None,
             no_hooks=True,
         )
-        with pytest.raises(DmlRepoError, match="remote.root is required when remote.project is configured"):
-            execute_init(args)
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(DmlRepoError, match="remote.root is required"):
+                execute_init(args)
+
+    def test_execute_init_uses_env_remote_root_for_remote_project(self, monkeypatch):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            monkeypatch.chdir(temp_dir)
+            monkeypatch.setenv("DML_REMOTE_ROOT", "s3://test-bucket/test-prefix")
+            args = Namespace(
+                config_home=None,
+                project_home=None,
+                remote_project="dml://alice/demo",
+                remote_root=None,
+                no_hooks=True,
+            )
+            with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")):
+                result = execute_init(args)
+            assert result["remote_uri"] == "s3://test-bucket/test-prefix"

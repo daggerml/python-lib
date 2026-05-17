@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 from daggerml import clear_default_dml, load, new, set_default_dml
-from daggerml._internal.dml import with_ops
+from daggerml._internal.dml import make_index_ops, with_db
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
@@ -92,8 +92,8 @@ def _mk_argv_ptr(*args: Any, argv0: Any | None = None) -> str:
         dag = new(dml=dml, name="argv-src", message="argv-src")
         index_ref = dag._require_index_ref()
         head = argv0 if argv0 is not None else Runnable(target=Uri("daggerml:list"), kwargs={}, adapter="")
-        with with_ops(dml) as ops:
-            index_ops = ops.index()
+        with with_db(dml) as db:
+            index_ops = make_index_ops(db, dml)
             fn_ref = index_ops.put_literal(index_ref, head)
             arg_refs = [index_ops.put_literal(index_ref, value) for value in args]
             with index_ops._tx(readonly=False) as txn:

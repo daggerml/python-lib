@@ -22,7 +22,8 @@ def _repo_status(status: dict) -> dict:
     return status["status"]
 
 
-def test_default_runtime_status_DRT_STS_001_reports_implicit_default_creation_source():
+def test_default_runtime_status_DRT_STS_001_reports_implicit_default_creation_source(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     dml.clear_default_dml()
     status = dml.status()
     info = _default_info(status)

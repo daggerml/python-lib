@@ -19,7 +19,7 @@ This document defines canonical config keys and shape, resolution precedence, an
 ## Contract References
 
 - Default runtime behavior and `status()` contract: [default-dml-runtime.md](default-dml-runtime.md)
-- Internal runtime facade config usage: [internal/ops/dml-ops.md](internal/ops/dml-ops.md)
+- Internal ops boundary and shared transaction layering: [internal/ops/README.md](internal/ops/README.md)
 - Adapter invocation remote field naming: [adapter-execution-contract.md](adapter-execution-contract.md)
 
 ## Shared Internal Boundary
@@ -154,5 +154,5 @@ Examples:
 
 - [default-dml-runtime.md](default-dml-runtime.md)
 - [adapter-execution-contract.md](adapter-execution-contract.md)
-- [internal/ops/dml-ops.md](internal/ops/dml-ops.md)
+- [internal/ops/README.md](internal/ops/README.md)
 - [remote-data-model.md](remote-data-model.md)
