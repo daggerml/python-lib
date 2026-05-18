@@ -1,27 +1,17 @@
-### Requirement: Init identity inputs are mutually exclusive
-The init operation MUST reject requests that provide both a project name and an explicit project URI, and it MUST return a descriptive validation error that explains only one identity source can be used.
+### Requirement: Init accepts optional remote capabilities
+The init operation MUST accept optional `remote_project` and optional `remote_root` inputs. Init MUST allow both values to be omitted for local read-only repository bootstrap.
 
-#### Scenario: Name and project URI are both provided
-- **WHEN** init is called with both `name` and `remote_project`
-- **THEN** init fails with an error stating these inputs are mutually exclusive and one must be removed
+#### Scenario: Init without remote configuration
+- **WHEN** init is called with no `remote_project` and no `remote_root`
+- **THEN** init succeeds without deriving or persisting project publication identity
 
-### Requirement: Init accepts URI-only identity
-The init operation MUST allow `name` to be omitted when `remote_project` is provided and MUST initialize project identity from the explicit URI.
+#### Scenario: Init with remote root only
+- **WHEN** init is called with `remote_root` and no `remote_project`
+- **THEN** init succeeds and configures remote-backed mutation and execution capability without project sync capability
 
-#### Scenario: Project URI without name
-- **WHEN** init is called with `remote_project` and no `name`
-- **THEN** init succeeds and project configuration uses the provided project URI
+### Requirement: Init rejects project identity without remote root
+The init operation MUST reject `remote_project` when `remote_root` is absent.
 
-### Requirement: Init derives URI from name using resolved user
-When init is called with `name` and without `remote_project`, the system MUST resolve the global config user and derive the canonical project URI from that user and the provided name.
-
-#### Scenario: Name-only init with resolved user
-- **WHEN** init is called with `name`, no `remote_project`, and a resolvable global config user
-- **THEN** init succeeds and stores a project URI derived from the resolved user and provided name
-
-### Requirement: Name-based init fails when user cannot be resolved
-When init is called with `name` and without `remote_project`, and global config user cannot be resolved, init MUST fail with a descriptive configuration error explaining that name-based init requires a resolved user identity.
-
-#### Scenario: Name-only init with unresolved user
-- **WHEN** init is called with `name`, no `remote_project`, and no resolvable global config user
-- **THEN** init fails with an error that states user resolution is required for name-derived project URI generation
+#### Scenario: Project URI without remote root
+- **WHEN** init is called with `remote_project` and no `remote_root`
+- **THEN** init fails with a descriptive validation error stating that `remote.root` is required when `remote.project` is configured

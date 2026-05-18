@@ -181,6 +181,39 @@ def test_funkify_with_ref_and_load_normalizes_via_codec():
         assert rv.kwargs["y"] == 9
 
 
+@pytest.mark.parametrize("resolved_adapter", ["podman-adapter", "/opt/acme/bin/acme-adapter"])
+def test_funkify_plugin_adapter_sugar_resolves_to_concrete_runtime_adapter(resolved_adapter):
+    @dataclass
+    class PluginAdapter:
+        name: str = "gpu"
+        executable: str = resolved_adapter
+
+        def resolve_runnable(self, uri, kwargs, sub):
+            return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter=self.executable)
+
+        @staticmethod
+        def send(
+            *, runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by
+        ):
+            return {"status": "running", "error": None, "state": {"token": execution_id}}
+
+        @staticmethod
+        def cli(argv=None):
+            return 0
+
+    areg.register_adapter(PluginAdapter())
+
+    with temporary_dml() as dml:
+        dag = new(dml=dml, name="gpu", message="gpu")
+        inner = api.DelayedRunnable(uri="inner", adapter="local", sub=None, kwargs={})
+        delayed = api.funkify(inner, uri="custom", adapter="gpu")
+        rv = dag.put(cast(Any, delayed)).value()
+
+    assert isinstance(rv, Runnable)
+    assert rv.target.uri == "custom"
+    assert rv.adapter == resolved_adapter
+
+
 def test_funkify_script_runnable_contains_executable_fn_script():
     def helper(x):
         return x + 1

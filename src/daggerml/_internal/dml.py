@@ -550,6 +550,7 @@ class _ConfigNamespace:
 class _RuntimeNamespace:
     _dml: "Dml"
 
+    ######## Dag runtime operations ########
     def create(
         self,
         *,
@@ -564,10 +565,6 @@ class _RuntimeNamespace:
                 head = head_state.branch
                 commit = head_state.commit if head is None else None
             return make_index_ops(db, self._dml).create(head=head, commit=commit, argv_ptr=argv_ptr, index_id=index_id)
-
-    def describe(self, index_id: str) -> IndexDescribePayload:
-        with with_db(self._dml) as db:
-            return cast(IndexDescribePayload, make_index_ops(db, self._dml).describe(index_id))
 
     def get_node(self, index_id: str, name: str) -> Ref:
         with with_db(self._dml) as db:
@@ -599,6 +596,27 @@ class _RuntimeNamespace:
     ) -> Ref | None:
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).start_fn(index_id, argv, kwargv=kwargv, name=name)
+
+    def commit(
+        self,
+        index_id: str,
+        value: Ref | Any,
+        *,
+        head: str | None = None,
+        message: str | None = None,
+        dag_name: str | None = None,
+    ) -> Ref:
+        with with_db(self._dml) as db:
+            return make_index_ops(db, self._dml).commit(index_id, value, head=head, message=message, dag_name=dag_name)
+
+    ######## Meta runtime operations ########
+    def list(self) -> list[str]:
+        with with_db(self._dml) as db:
+            return make_head_ops(db).list_indexes()
+
+    def describe(self, index_id: str) -> IndexDescribePayload:
+        with with_db(self._dml) as db:
+            return cast(IndexDescribePayload, make_index_ops(db, self._dml).describe(index_id))
 
     def cancel(self, index_id: str) -> RuntimeCancelPayload:
         requested_by = require_user(self._dml._context.user, message="user is required for runtime cancel")
@@ -687,18 +705,6 @@ class _RuntimeNamespace:
                 stats["lock_retry_count"],
             )
             return stats
-
-    def commit(
-        self,
-        index_id: str,
-        value: Ref | Any,
-        *,
-        head: str | None = None,
-        message: str | None = None,
-        dag_name: str | None = None,
-    ) -> Ref:
-        with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).commit(index_id, value, head=head, message=message, dag_name=dag_name)
 
 
 @dataclass(frozen=True)

@@ -43,19 +43,23 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **THEN** the shared internal resolver, not the frontend, maps those values into the canonical internal configuration model
 
 #### Scenario: Init project layout creation delegates to shared internal helper
-- **WHEN** `DmlOps.init` must create missing project layout artifacts for a local project
-- **THEN** it delegates filesystem bootstrap work to shared internal project-layout helper logic instead of duplicating directory and config-file writes in ops code
+- **WHEN** the shared `Dml` init/bootstrap workflow must create missing project layout artifacts for a local project
+- **THEN** it delegates filesystem bootstrap work to shared internal project-layout helper logic instead of duplicating directory and config-file writes across orchestration helpers
 
 #### Scenario: Init resolves explicit options through shared resolver
 - **WHEN** a caller provides init-time options for project/runtime configuration
-- **THEN** `DmlOps.init` resolves them through the shared internal resolver before mutating project state
+- **THEN** the shared `Dml` init/bootstrap workflow resolves them through the shared internal resolver before mutating project state
 
 ### Requirement: Project URI is normalized and exposes helper accessors
-The system SHALL normalize and canonicalize local `remote.project` as a branchless project identity through shared revision URI utilities. Resolved configuration SHALL treat checkout state as repository state owned by `.dml/HEAD` rather than as a selector embedded in config.
+The system SHALL normalize and canonicalize local `remote.project` as an optional branchless project identity through shared revision URI utilities. Resolved configuration SHALL treat checkout state as repository state owned by `.dml/HEAD` rather than as a selector embedded in config.
 
-#### Scenario: Local project URI remains branchless
+#### Scenario: Local project URI remains branchless when configured
 - **WHEN** `remote.project` is resolved for local project configuration
 - **THEN** shared configuration preserves canonical branchless form `dml://<owner>/<project>`
+
+#### Scenario: Local project configuration may omit project URI
+- **WHEN** local project configuration omits `remote.project`
+- **THEN** shared configuration resolves successfully without deriving project identity from other inputs
 
 #### Scenario: Tag or branch selector is not accepted for local project config
 - **WHEN** local project configuration provides `remote.project` with a branch or tag selector

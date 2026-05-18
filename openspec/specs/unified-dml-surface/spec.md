@@ -100,7 +100,7 @@ Lower-level ops classes used by `Dml` SHALL accept exact refs, exact branch name
 - **THEN** the lower-level ops calls receive already-resolved commits, branches, or ids instead of revision grammar strings
 
 ### Requirement: `Dml` delegates repository behavior to the relevant ops classes
-The shared `Dml` class SHALL orchestrate workflows by delegating repository actions to the relevant subsystem ops classes rather than re-implementing those mechanics inline.
+The shared `Dml` class SHALL orchestrate workflows by delegating repository actions to the relevant subsystem ops classes rather than re-implementing those mechanics inline. Module-level helper functions in `daggerml._internal.dml` SHALL construct the owning concrete ops classes directly and SHALL NOT route calls through a facade object or string-dispatch proxy layer.
 
 #### Scenario: Commit-oriented workflow delegates to CommitOps
 - **WHEN** a caller invokes `dml.show`, `dml.log`, `dml.diff`, `dml.merge`, or `dml.revert`
@@ -113,6 +113,11 @@ The shared `Dml` class SHALL orchestrate workflows by delegating repository acti
 #### Scenario: Admin workflow delegates to the owning subsystem
 - **WHEN** a caller invokes an admin cache, remote, or gc workflow
 - **THEN** `Dml` delegates the repository action to `CacheOps`, `RemoteOps`, or `GcOps` respectively after preparing resolved inputs
+
+#### Scenario: Helper construction instantiates concrete ops directly
+- **WHEN** a shared `Dml` workflow needs an ops object such as `CommitOps`, `HeadOps`, `IndexOps`, or `RemoteOps`
+- **THEN** the helper logic in `daggerml._internal.dml` constructs that concrete ops class directly against the active DB handle
+- **AND** it does not dispatch through a `DmlOps` facade or `_OpsProxy`-style string factory
 
 ### Requirement: Shared `Dml` returns JSON-ready payloads
 Shared `Dml` methods SHALL return JSON-ready dict/list payloads for container structure, while allowing typed leaves such as `Ref`, `Uri`, `Error`, and `Runnable`.

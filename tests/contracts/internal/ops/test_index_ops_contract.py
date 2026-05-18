@@ -459,6 +459,49 @@ class TestIndexOps:
         finally:
             ops.delete(index)
 
+    def test_prepare_adapter_call_accepts_concrete_command_without_dml_prefix(self, temp_bo, monkeypatch):
+        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
+        try:
+            fn_node = _put_runnable_literal(ops, index_ref, uri="noop://fn", adapter="podman-adapter")
+            with ops._tx(readonly=False) as txn:
+                argv_ref = ops._prepare_fn(index_ref, [fn_node], {}, txn)
+
+            monkeypatch.setattr("daggerml._internal.ops.index.shutil.which", lambda name: "/usr/bin/podman-adapter")
+
+            with ops._tx(readonly=True) as txn:
+                prepared = ops._prepare_adapter_call(index_ref, argv_ref, txn)
+
+            assert prepared.adapter_path == "/usr/bin/podman-adapter"
+            assert prepared.runnable["adapter"] == "podman-adapter"
+        finally:
+            ops.delete(index_ref)
+
+    def test_prepare_adapter_call_rejects_missing_concrete_adapter_command(self, temp_bo, monkeypatch):
+        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
+        try:
+            fn_node = _put_runnable_literal(ops, index_ref, uri="noop://fn", adapter="missing-adapter")
+            with ops._tx(readonly=False) as txn:
+                argv_ref = ops._prepare_fn(index_ref, [fn_node], {}, txn)
+
+            monkeypatch.setattr("daggerml._internal.ops.index.shutil.which", lambda name: None)
+
+            with ops._tx(readonly=True) as txn:
+                with pytest.raises(DmlRepoError, match="No such adapter: missing-adapter"):
+                    ops._prepare_adapter_call(index_ref, argv_ref, txn)
+        finally:
+            ops.delete(index_ref)
+
+    def test_start_fn_rejects_empty_adapter_for_non_builtin_execution(self, temp_bo, monkeypatch):
+        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
+        try:
+            fn_node = _put_runnable_literal(ops, index_ref, uri="noop://fn", adapter="")
+            monkeypatch.setattr("daggerml._internal.ops.index.shutil.which", lambda name: None)
+
+            with pytest.raises(DmlRepoError, match="Invalid builtin URI scheme: noop"):
+                ops.start_fn(index_ref, [fn_node])
+        finally:
+            ops.delete(index_ref)
+
     def test_start_fn_runnable_sub_cycle_raises(self, temp_bo):
         ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         try:

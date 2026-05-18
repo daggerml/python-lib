@@ -50,8 +50,6 @@ from daggerml._internal.types import (
 )
 from daggerml._internal.util import now, unnest, uuid7
 
-_CANCEL_LOCK_SLEEP_SECONDS = 0.05
-
 
 @dataclass(frozen=True)
 class _PreparedAdapterCall:
@@ -59,7 +57,6 @@ class _PreparedAdapterCall:
     adapter_path: str
     cache_key: str
     runnable: dict[str, Any]
-    adapter_cmd: tuple[str, ...] | None = None
     caller_execution_id: str | None = None
     caller_cache_key: str | None = None
 
@@ -737,51 +734,22 @@ class IndexOps(BaseOps):
         caller_execution_id: str | None = None,
         caller_cache_key: str | None = None,
     ) -> _PreparedAdapterCall:
-        argv_node: ArgvNode = txn.get(argv_ref)
-        argv_datum: ListDatum = txn.get(argv_node.datum_ref(txn))
+        argv_datum: ListDatum = txn.get(txn.get(argv_ref).datum_ref(txn))
         if len(argv_datum.data) == 0:
             raise DmlRepoError("argv is empty")
         fn_runnable_ref = argv_datum.data[0]
         fn_runnable: RunnableDatum = txn.get(fn_runnable_ref)
         if not isinstance(fn_runnable, RunnableDatum):
             raise DmlRepoError("First arg must resolve to a Runnable datum")
-        adapter = fn_runnable.adapter
-        adapter_path = shutil.which(adapter) if "/" not in adapter else adapter
-        adapter_cmd: tuple[str, ...] | None = None
+        adapter_path = shutil.which(fn_runnable.adapter)
         if not adapter_path:
-            from daggerml.contrib.adapter_registry import get_adapter, list_adapters
-
-            adapter_spec = None
-            for adapter_name in list_adapters():
-                candidate = get_adapter(adapter_name)
-                if getattr(candidate, "executable", None) == fn_runnable.adapter:
-                    adapter_spec = candidate
-                    break
-            if adapter_spec is None:
-                raise DmlRepoError(f"No such adapter: {fn_runnable.adapter}")
-            module_name = getattr(adapter_spec, "__module__", None)
-            qualname = getattr(adapter_spec, "__qualname__", None)
-            if not isinstance(module_name, str) or not isinstance(qualname, str):
-                raise DmlRepoError(f"No such adapter: {fn_runnable.adapter}")
-            adapter_path = adapter
-            adapter_cmd = (
-                sys.executable,
-                "-c",
-                (
-                    "import importlib, sys\n"
-                    f"obj = importlib.import_module({module_name!r})\n"
-                    f"for part in {qualname.split('.')!r}:\n"
-                    "    obj = getattr(obj, part)\n"
-                    "raise SystemExit(obj.cli())\n"
-                ),
-            )
+            raise DmlRepoError(f"No such adapter: {fn_runnable.adapter}")
         node_ops = NodeOps(_db=self._db)
         if caller_execution_id is None and caller_cache_key is None:
             caller_execution_id, caller_cache_key = self._caller_identity(index_id=index_id, txn=txn)
         return _PreparedAdapterCall(
             argv_ref=argv_ref,
             adapter_path=adapter_path,
-            adapter_cmd=adapter_cmd,
             cache_key=argv_ref.id(),
             runnable=self._runnable_envelope(fn_runnable_ref, txn, node_ops),
             caller_execution_id=caller_execution_id,
@@ -878,8 +846,7 @@ class IndexOps(BaseOps):
     def _collect_cancellation_graph(self, index_id: str, root_record: ExecutionRecord) -> set[tuple[str, str]]:
         graph: set[tuple[str, str]] = set()
         pending = [
-            (index_id, dependency_id)
-            for dependency_id in cast(list[str], root_record.get("spawned_execution_ids", []))
+            (index_id, dependency_id) for dependency_id in cast(list[str], root_record.get("spawned_execution_ids", []))
         ]
         seen: set[str] = set()
         while pending:
@@ -1082,8 +1049,8 @@ class IndexOps(BaseOps):
             "execution_status": execution_status,
             "cancel_requested_by": cancel_requested_by,
         }
-        cmd = list(prepared.adapter_cmd) if prepared.adapter_cmd is not None else [prepared.adapter_path]
-        if prepared.adapter_cmd is None and prepared.adapter_path.endswith(".py"):
+        cmd = [prepared.adapter_path]
+        if prepared.adapter_path.endswith(".py"):
             cmd = [sys.executable, prepared.adapter_path]
         result_data = run(
             cmd,

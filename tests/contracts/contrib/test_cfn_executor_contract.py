@@ -145,7 +145,7 @@ def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
     CfnExecutor().start(
         cache_key="cache-key",
         execution_id="exec-cfn-start",
-        runnable=Runnable(target=Uri("cfn"), kwargs={}, adapter="local"),
+        runnable=Runnable(target=Uri("cfn"), kwargs={}, adapter="dml-local-adapter"),
         argv_ptr="argv://ptr",
         remote=_REMOTE,
     )
