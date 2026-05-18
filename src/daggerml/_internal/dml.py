@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast, overload
+from typing import Annotated, Any, Literal, TypedDict, cast, overload
 
 from daggerml._internal._db import DmlDbEnv, Ref
 from daggerml._internal.config import DmlProjectConfig, parse_dml_project_uri, run_project_hooks
@@ -523,12 +523,27 @@ def create_s3_client():
 
 @dataclass(frozen=True)
 class _ConfigNamespace:
+    """Read and update resolved DaggerML configuration values."""
+
     _dml: "Dml"
 
-    def get(self, key: str, *, scope: Literal["global", "local"] = "local"):
+    def get(
+        self,
+        key: Annotated[str, "Configuration setting to resolve, such as remote.root or user."],
+        *,
+        scope: Annotated[Literal["global", "local"], "Config scope to read from."] = "local",
+    ):
+        """Return the resolved value for a configuration setting in the selected scope."""
         return config_ops(self._dml).get(key, scope=scope)
 
-    def set(self, key: str, values: list[str], *, scope: Literal["global", "local"] = "local"):
+    def set(
+        self,
+        key: Annotated[str, "Configuration setting to update."],
+        values: Annotated[list[str], "Replacement value to write for the setting."],
+        *,
+        scope: Annotated[Literal["global", "local"], "Config scope to update."] = "local",
+    ):
+        """Persist one configuration setting in the selected config file."""
         return config_ops(self._dml).set(key, values, scope=scope)
 
     @overload
@@ -537,7 +552,12 @@ class _ConfigNamespace:
     @overload
     def show(self, *, contrib: Literal[True]) -> ConfigShowContribPayload: ...
 
-    def show(self, *, contrib: bool = False) -> ConfigShowPayload:
+    def show(
+        self,
+        *,
+        contrib: Annotated[bool, "Include contrib runtime status alongside core config data."] = False,
+    ) -> ConfigShowPayload:
+        """Return the active configuration payload, optionally with contrib status."""
         payload = cast(ConfigShowPayload, config_dict(self._dml._context.config))
         if contrib:
             from daggerml.contrib import status as contrib_status
@@ -548,17 +568,23 @@ class _ConfigNamespace:
 
 @dataclass(frozen=True)
 class _RuntimeNamespace:
+    """Manage mutable runtime indexes and staged DAG execution state."""
+
     _dml: "Dml"
 
     ######## Dag runtime operations ########
     def create(
         self,
         *,
-        head: str | None = None,
-        commit: Ref | None = None,
-        argv_ptr: str | None = None,
-        index_id: str | None = None,
+        head: Annotated[str | None, "Branch name to base the index on."] = None,
+        commit: Annotated[Ref | None, "Commit to base the index on when not using a branch."] = None,
+        argv_ptr: Annotated[
+            str | None,
+            "Remote argv pointer to import when resuming external execution state.",
+        ] = None,
+        index_id: Annotated[str | None, "Explicit runtime identifier to reuse or create."] = None,
     ) -> str:
+        """Create a runtime workspace from HEAD, a branch, a commit, or an argv pointer."""
         with with_db(self._dml) as db:
             if head is None and commit is None and argv_ptr is None:
                 head_state = make_head_ops(db).get_head_state()
@@ -566,59 +592,94 @@ class _RuntimeNamespace:
                 commit = head_state.commit if head is None else None
             return make_index_ops(db, self._dml).create(head=head, commit=commit, argv_ptr=argv_ptr, index_id=index_id)
 
-    def get_node(self, index_id: str, name: str) -> Ref:
+    def get_node(
+        self,
+        index_id: Annotated[str, "Runtime workspace to read from."],
+        name: Annotated[str, "Named node to resolve inside the runtime workspace."],
+    ) -> Ref:
+        """Return the stored identifier for a named node in a runtime workspace."""
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).get_node(index_id, name)
 
-    def get_argv(self, index_id: str) -> Ref:
+    def get_argv(self, index_id: Annotated[str, "Runtime workspace to read from."]) -> Ref:
+        """Return the argv node for a runtime workspace."""
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).get_argv(index_id)
 
-    def put_literal(self, index_id: str, value: Any, *, name: str | None = None) -> Ref:
+    def put_literal(
+        self,
+        index_id: Annotated[str, "Runtime workspace to mutate."],
+        value: Annotated[Any, "Literal value to stage into the workspace."],
+        *,
+        name: Annotated[str | None, "Optional name to assign to the staged value."] = None,
+    ) -> Ref:
+        """Stage a literal value in the runtime workspace and optionally name it."""
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).put_literal(index_id, value, name=name)
 
-    def put_import(self, index_id: str, dag: Ref, *, node: Ref | None = None, name: str | None = None) -> Ref:
+    def put_import(
+        self,
+        index_id: Annotated[str, "Runtime workspace to mutate."],
+        dag: Annotated[Ref, "Committed DAG to import from."],
+        *,
+        node: Annotated[Ref | None, "Specific node to import from that DAG."] = None,
+        name: Annotated[str | None, "Optional name for the imported node."] = None,
+    ) -> Ref:
+        """Import a committed DAG node into the runtime workspace."""
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).put_import(index_id, dag, node=node, name=name)
 
-    def set_node_name(self, index_id: str, name: str, node: Ref) -> Ref:
+    def set_node_name(
+        self,
+        index_id: Annotated[str, "Runtime workspace to mutate."],
+        name: Annotated[str, "Name to bind inside the runtime index."],
+        node: Annotated[Ref, "Existing node to bind to that name."],
+    ) -> Ref:
+        """Bind an existing node to a name in the runtime workspace."""
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).set_node_name(index_id, name, node)
 
     def start_fn(
         self,
-        index_id: str,
-        argv: list[Ref],
+        index_id: Annotated[str, "Runtime workspace to execute in."],
+        argv: Annotated[list[Ref], "Ordered arguments with the callable in the first position."],
         *,
-        kwargv: dict[str, Ref] | None = None,
-        name: str | None = None,
+        kwargv: Annotated[dict[str, Ref] | None, "Optional keyword arguments keyed by parameter name."] = None,
+        name: Annotated[str | None, "Optional result name for the staged call."] = None,
     ) -> Ref | None:
+        """Stage a function call in the runtime workspace and return the result node."""
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).start_fn(index_id, argv, kwargv=kwargv, name=name)
 
     def commit(
         self,
-        index_id: str,
-        value: Ref | Any,
+        index_id: Annotated[str, "Runtime workspace to commit."],
+        value: Annotated[Ref | Any, "Final DAG result as an existing node or a literal value."],
         *,
-        head: str | None = None,
-        message: str | None = None,
-        dag_name: str | None = None,
+        head: Annotated[str | None, "Branch to update; defaults to the mutable current branch."] = None,
+        message: Annotated[str | None, "Commit message to store with the new commit."] = None,
+        dag_name: Annotated[str | None, "Optional DAG name to update in the target commit."] = None,
     ) -> Ref:
+        """Commit a runtime workspace into repository history."""
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).commit(index_id, value, head=head, message=message, dag_name=dag_name)
 
     ######## Meta runtime operations ########
     def list(self) -> list[str]:
+        """List runtime workspaces currently tracked in the repository."""
         with with_db(self._dml) as db:
             return make_head_ops(db).list_indexes()
 
-    def describe(self, index_id: str) -> IndexDescribePayload:
+    def describe(self, index_id: Annotated[str, "Runtime workspace to inspect."]) -> IndexDescribePayload:
+        """Return structural metadata for a runtime workspace."""
         with with_db(self._dml) as db:
             return cast(IndexDescribePayload, make_index_ops(db, self._dml).describe(index_id))
 
-    def cancel(self, index_id: str) -> RuntimeCancelPayload:
+    def cancel(
+        self,
+        index_id: Annotated[str, "Runtime workspace whose active executions should be cancelled."],
+    ) -> RuntimeCancelPayload:
+        """Cancel tracked executions for a runtime workspace and report cancellation statistics."""
         requested_by = require_user(self._dml._context.user, message="user is required for runtime cancel")
         with with_db(self._dml) as db:
             index = make_index_ops(db, self._dml)
@@ -709,9 +770,15 @@ class _RuntimeNamespace:
 
 @dataclass(frozen=True)
 class _DagNamespace:
+    """Inspect committed DAG state and apply DAG-level history operations."""
+
     _dml: "Dml"
 
-    def list(self, revision: str = "HEAD") -> DagListPayload:
+    def list(
+        self,
+        revision: Annotated[str, "Revision selector such as HEAD, HEAD~1, main, or origin/main."] = "HEAD",
+    ) -> DagListPayload:
+        """List named DAGs visible from the selected revision."""
         resolved = resolve_dml_revision(self._dml, revision)
         return {
             "revision": revision_payload(revision, resolved),
@@ -724,7 +791,13 @@ class _DagNamespace:
     @overload
     def describe(self, value: str | Ref, *, revision: str) -> DagDescribeWithRevisionPayload: ...
 
-    def describe(self, value: str | Ref, *, revision: str | None = None) -> DagDescribePayload:
+    def describe(
+        self,
+        value: Annotated[str | Ref, "DAG selector by name or identifier."],
+        *,
+        revision: Annotated[str | None, "Optional revision selector when the DAG selector is name-based."] = None,
+    ) -> DagDescribePayload:
+        """Return DAG metadata without materializing full node values."""
         with with_db(self._dml) as db:
             resolved = resolve_dag_ref(
                 value=value,
@@ -751,7 +824,13 @@ class _DagNamespace:
     @overload
     def get(self, value: str | Ref, *, revision: str) -> DagGetWithRevisionPayload: ...
 
-    def get(self, value: str | Ref, *, revision: str | None = None) -> DagGetPayload:
+    def get(
+        self,
+        value: Annotated[str | Ref, "DAG selector by name or identifier."],
+        *,
+        revision: Annotated[str | None, "Optional revision selector when the DAG selector is name-based."] = None,
+    ) -> DagGetPayload:
+        """Return a DAG payload including described nodes from the selected revision."""
         with with_db(self._dml) as db:
             resolved = resolve_dag_ref(
                 value=value,
@@ -789,11 +868,18 @@ class _DagNamespace:
 
     def describe_node(
         self,
-        node_selector: str | Ref,
+        node_selector: Annotated[
+            str | Ref,
+            "Node selector by name or identifier; examples: result, answer, node-literal:1.",
+        ],
         *,
-        dag_selector: str | Ref | None = None,
-        revision: str | None = None,
+        dag_selector: Annotated[
+            str | Ref | None,
+            "Optional DAG selector when the node selector is name-based; examples: train, dag:1.",
+        ] = None,
+        revision: Annotated[str | None, "Optional revision selector such as HEAD or main."] = None,
     ) -> NodeSelectorPayload:
+        """Describe a committed node without loading its full value."""
         with with_db(self._dml) as db:
             resolved = resolve_node_ref(
                 value=node_selector,
@@ -838,11 +924,18 @@ class _DagNamespace:
 
     def get_node(
         self,
-        node_selector: str | Ref,
+        node_selector: Annotated[
+            str | Ref,
+            "Node selector by name or identifier; examples: result, answer, node-literal:1.",
+        ],
         *,
-        dag_selector: str | Ref | None = None,
-        revision: str | None = None,
+        dag_selector: Annotated[
+            str | Ref | None,
+            "Optional DAG selector when the node selector is name-based; examples: train, dag:1.",
+        ] = None,
+        revision: Annotated[str | None, "Optional revision selector such as HEAD or main."] = None,
     ) -> NodeSelectorPayload:
+        """Return the value for a committed node selector."""
         with with_db(self._dml) as db:
             resolved = resolve_node_ref(
                 value=node_selector,
@@ -887,11 +980,18 @@ class _DagNamespace:
 
     def unroll_node(
         self,
-        node_selector: str | Ref,
+        node_selector: Annotated[
+            str | Ref,
+            "Node selector by name or identifier; examples: result, answer, node-literal:1.",
+        ],
         *,
-        dag_selector: str | Ref | None = None,
-        revision: str | None = None,
+        dag_selector: Annotated[
+            str | Ref | None,
+            "Optional DAG selector when the node selector is name-based; examples: train, dag:1.",
+        ] = None,
+        revision: Annotated[str | None, "Optional revision selector such as HEAD or main."] = None,
     ) -> NodeSelectorPayload:
+        """Return the recursively unrolled value for a committed node selector."""
         with with_db(self._dml) as db:
             resolved = resolve_node_ref(
                 value=node_selector,
@@ -918,14 +1018,15 @@ class _DagNamespace:
 
     def checkout(
         self,
-        revision: str,
-        dag_name: str,
+        revision: Annotated[str, "Revision selector to copy from; examples: HEAD, main, origin/main."],
+        dag_name: Annotated[str, "Name of the DAG to copy from the source revision."],
         *,
-        branch: str | None = None,
-        target_name: str | None = None,
-        replace: bool = False,
-        user: str | None = None,
+        branch: Annotated[str | None, "Target branch to mutate; defaults to the active attached branch."] = None,
+        target_name: Annotated[str | None, "Optional new name for the checked-out DAG."] = None,
+        replace: Annotated[bool, "Replace an existing DAG with the same target name if present."] = False,
+        user: Annotated[str | None, "User recorded as the DAG checkout author."] = None,
     ) -> Ref:
+        """Copy a DAG from a revision into a mutable branch."""
         author = require_user(user or self._dml._context.user, message="user is required for dag checkout")
         resolved_revision = resolve_dml_revision_ref(self._dml, revision)
         with with_db(self._dml) as db:
@@ -939,7 +1040,14 @@ class _DagNamespace:
                 user=author,
             )
 
-    def delete(self, name: str, *, branch: str | None = None, user: str | None = None):
+    def delete(
+        self,
+        name: Annotated[str, "Name of the DAG to remove from the branch."],
+        *,
+        branch: Annotated[str | None, "Target branch to mutate; defaults to the active attached branch."] = None,
+        user: Annotated[str | None, "User recorded as the delete author."] = None,
+    ):
+        """Delete a named DAG from a mutable branch."""
         author = require_user(user or self._dml._context.user, message="user is required for dag delete")
         with with_db(self._dml) as db:
             return make_commit_ops(db).delete_dag(name, branch, author)
@@ -947,14 +1055,18 @@ class _DagNamespace:
 
 @dataclass(frozen=True)
 class _AdminIndexNamespace:
+    """Inspect and manage runtime workspaces directly for administrative workflows."""
+
     _dml: "Dml"
 
     def list(self) -> AdminIndexListPayload:
+        """List runtime workspaces with their commit summaries."""
         with with_db(self._dml) as db:
             indexes = [self.get(index_id)["index"] for index_id in make_head_ops(db).list_indexes()]
         return {"indexes": indexes}
 
-    def get(self, index_id: str) -> AdminIndexGetPayload:
+    def get(self, index_id: Annotated[str, "Runtime workspace to inspect."]) -> AdminIndexGetPayload:
+        """Return a runtime workspace payload with embedded commit summary data."""
         with with_db(self._dml) as db:
             index = dict(make_index_ops(db, self._dml).describe(index_id))
             commit_ref = index["commit"]
@@ -964,7 +1076,8 @@ class _AdminIndexNamespace:
             }
         return {"index": cast(AdminIndexItemPayload, index)}
 
-    def delete(self, index_id: str) -> AdminIndexDeletePayload:
+    def delete(self, index_id: Annotated[str, "Runtime workspace to delete."]) -> AdminIndexDeletePayload:
+        """Delete a runtime workspace immediately."""
         with with_db(self._dml) as db:
             make_index_ops(db, self._dml).delete(index_id)
         return {"index": index_id, "deleted": True}
@@ -972,9 +1085,15 @@ class _AdminIndexNamespace:
 
 @dataclass(frozen=True)
 class _AdminCacheNamespace:
+    """Perform administrative operations against remote-backed cache state."""
+
     _dml: "Dml"
 
-    def invalidate(self, cache_keys: list[str]) -> AdminCacheInvalidatePayload:
+    def invalidate(
+        self,
+        cache_keys: Annotated[list[str], "Exact cache entries to invalidate; wildcards and prefixes are not accepted."],
+    ) -> AdminCacheInvalidatePayload:
+        """Invalidate exact remote cache keys and return the backend response."""
         if not cache_keys:
             raise DmlRepoError("At least one cache key is required")
         for cache_key in cache_keys:
@@ -988,6 +1107,8 @@ class _AdminCacheNamespace:
 
 @dataclass(frozen=True)
 class _AdminRemoteNamespace:
+    """Inspect and clean remote project metadata stored under the configured remote root."""
+
     _dml: "Dml"
 
     @overload
@@ -997,8 +1118,12 @@ class _AdminRemoteNamespace:
     def list(self, project: str, *, owner: None = None) -> AdminRemoteProjectRefsPayload: ...
 
     def list(
-        self, project: str | None = None, *, owner: str | None = None
+        self,
+        project: Annotated[str | None, "Bare project URI such as dml://alice/demo."] = None,
+        *,
+        owner: Annotated[str | None, "Filter project listing to one owner when project is omitted."] = None,
     ) -> AdminRemoteProjectsPayload | AdminRemoteProjectRefsPayload:
+        """List remote projects or the branch and tag refs for one remote project."""
         with with_db(self._dml) as db:
             remote = make_remote_ops(db, self._dml)
             refs = remote.list("projects")
@@ -1041,7 +1166,13 @@ class _AdminRemoteNamespace:
                 tags.append(f"dml://{parsed.owner}/{parsed.project}@{name}")
         return {"project": project, "branches": sorted(branches), "tags": sorted(tags)}
 
-    def gc(self, *, min_age_seconds: int = 24 * 3600, malformed: MalformedPolicy = "warn") -> AdminRemoteGcPayload:
+    def gc(
+        self,
+        *,
+        min_age_seconds: Annotated[int, "Minimum object age in seconds before remote GC may delete it."] = 24 * 3600,
+        malformed: Annotated[MalformedPolicy, "How to handle malformed remote metadata during GC."] = "warn",
+    ) -> AdminRemoteGcPayload:
+        """Delete old remote objects that are no longer live under the configured remote root."""
         with with_db(self._dml) as db:
             return cast(
                 AdminRemoteGcPayload,
@@ -1051,6 +1182,8 @@ class _AdminRemoteNamespace:
 
 @dataclass(frozen=True)
 class _AdminNamespace:
+    """Administrative maintenance surface for indexes, cache state, remotes, and GC."""
+
     _dml: "Dml"
 
     @property
@@ -1071,7 +1204,12 @@ class _AdminNamespace:
     @overload
     def gc(self, *, dry_run: Literal[True]) -> AdminGcDryRunPayload: ...
 
-    def gc(self, *, dry_run: bool = False) -> AdminGcDryRunPayload | AdminGcRunPayload:
+    def gc(
+        self,
+        *,
+        dry_run: Annotated[bool, "Report orphaned refs without deleting them."] = False,
+    ) -> AdminGcDryRunPayload | AdminGcRunPayload:
+        """Run local repository garbage collection or report what would be deleted."""
         with with_db(self._dml) as db:
             gc_ops = make_gc_ops(db)
             if dry_run:
@@ -1081,14 +1219,17 @@ class _AdminNamespace:
 
 
 class Dml:
+    """Shared orchestration boundary for repository, runtime, DAG, and admin workflows."""
+
     def __init__(
         self,
-        project_home: str | None = None,
+        project_home: Annotated[str | None, "Project directory containing the .dml state."] = None,
         *,
-        remote_uri: str | None = None,
-        user: str | None = None,
-        config_home: str | None = None,
+        remote_uri: Annotated[str | None, "Remote root URI such as s3://bucket/prefix."] = None,
+        user: Annotated[str | None, "User identity recorded for mutating operations."] = None,
+        config_home: Annotated[str | None, "Override directory for global DaggerML config files."] = None,
     ):
+        """Resolve runtime context for a project-scoped DaggerML session."""
         self._context = resolve_runtime_context(
             project_home=project_home,
             remote_uri=remote_uri,
@@ -1113,6 +1254,7 @@ class Dml:
         return _AdminNamespace(self)
 
     def status(self) -> StatusPayload:
+        """Return current HEAD, branches, visible DAGs, and open runtime workspaces."""
         if not self._context.project_home or not project_config_exists(
             require_project_home(self._context.project_home)
         ):
@@ -1140,7 +1282,12 @@ class Dml:
     def branch(self, *, remote: Literal[False] = False) -> BranchLocalPayload: ...
     @overload
     def branch(self, *, remote: Literal[True]) -> BranchRemotePayload: ...
-    def branch(self, *, remote: bool = False) -> BranchLocalPayload | BranchRemotePayload:
+    def branch(
+        self,
+        *,
+        remote: Annotated[bool, "List remote-tracking branches instead of local branches."] = False,
+    ) -> BranchLocalPayload | BranchRemotePayload:
+        """List local branches or discovered remote-tracking branches."""
         if remote:
             return {"branches": remote_tracking_branches(self), "remote": True}
         with with_db(self) as db:
@@ -1151,7 +1298,13 @@ class Dml:
                 "remote": False,
             }
 
-    def log(self, revision: str = "HEAD", *, limit: int | None = None) -> LogPayload:
+    def log(
+        self,
+        revision: Annotated[str, "Revision selector such as HEAD, HEAD~1, main, or origin/main."] = "HEAD",
+        *,
+        limit: Annotated[int | None, "Maximum number of commits to return from newest to oldest."] = None,
+    ) -> LogPayload:
+        """Return commit summaries reachable from the selected revision."""
         resolved = resolve_dml_revision(self, revision)
         with with_db(self) as db:
             commit_ops = make_commit_ops(db)
@@ -1162,7 +1315,11 @@ class Dml:
             "commits": commits,
         }
 
-    def show(self, revision: str = "HEAD") -> ShowPayload:
+    def show(
+        self,
+        revision: Annotated[str, "Revision selector such as HEAD, HEAD~1, main, or origin/main."] = "HEAD",
+    ) -> ShowPayload:
+        """Return one commit summary together with the DAG map and DAG-level diff to its first parent."""
         resolved = resolve_dml_revision(self, revision)
         with with_db(self) as db:
             commit = cast(CommitPayload, make_commit_ops(db).describe(resolved.commit))
@@ -1176,7 +1333,12 @@ class Dml:
             "change": {"base": base_commit, **dag_map_diff(base_dags, dags)},
         }
 
-    def diff(self, left: str = "HEAD~1", right: str = "HEAD") -> DiffPayload:
+    def diff(
+        self,
+        left: Annotated[str, "Base revision selector; for example HEAD~1 or main."] = "HEAD~1",
+        right: Annotated[str, "Compare-against revision selector; for example HEAD or origin/main."] = "HEAD",
+    ) -> DiffPayload:
+        """Return DAG-map additions, removals, and updates between two revisions."""
         left_resolved = resolve_dml_revision(self, left)
         right_resolved = resolve_dml_revision(self, right)
         left_dags = dag_map_for_commit(self, left_resolved.commit)
@@ -1187,7 +1349,11 @@ class Dml:
             **dag_map_diff(left_dags, right_dags),
         }
 
-    def checkout(self, revision: str) -> CheckoutAttachedPayload | CheckoutDetachedPayload:
+    def checkout(
+        self,
+        revision: Annotated[str, "Revision selector to attach or detach HEAD to."] ,
+    ) -> CheckoutAttachedPayload | CheckoutDetachedPayload:
+        """Move HEAD to a branch or detached commit without changing repository contents."""
         resolved = resolve_dml_revision(self, revision)
         with with_db(self) as db:
             current_head_ops = make_head_ops(db)
@@ -1197,7 +1363,17 @@ class Dml:
             current_head_ops.write_detached_head(resolved.commit)
             return {"mode": "detached", "branch": None}
 
-    def fetch(self, remote_or_uri: str, branch: str | None, *, s3_client=None) -> Ref:
+    def fetch(
+        self,
+        remote_or_uri: Annotated[
+            str,
+            "Remote name like origin or explicit project URI such as dml://alice/demo.",
+        ],
+        branch: Annotated[str | None, "Branch selector to fetch; defaults to the active or configured default branch."],
+        *,
+        s3_client: Annotated[Any | None, "Optional preconfigured boto3 S3 client."] = None,
+    ) -> Ref:
+        """Fetch a remote branch into local history."""
         project_home = require_project_home(self._context.project_home)
         uri = project_remote_uri(
             project_home=project_home,
@@ -1210,8 +1386,18 @@ class Dml:
             return make_remote_ops(db, self, client=client).fetch_uri(uri)
 
     def pull(
-        self, remote_or_uri: str, remote_branch: str | None, *, branch: str | None, user: str, s3_client=None
+        self,
+        remote_or_uri: Annotated[
+            str,
+            "Remote name like origin or explicit project URI such as dml://alice/demo.",
+        ],
+        remote_branch: Annotated[str | None, "Remote branch selector to pull; defaults to the target branch."],
+        *,
+        branch: Annotated[str | None, "Local branch to update; defaults to the active attached branch."] ,
+        user: Annotated[str, "User identity recorded for the merge commit created by the pull."] ,
+        s3_client: Annotated[Any | None, "Optional preconfigured boto3 S3 client."] = None,
     ) -> Ref:
+        """Fetch a remote branch and merge it into a local branch in one operation."""
         project_home = require_project_home(self._context.project_home)
         with with_db(self) as db:
             target_branch = mutable_branch(branch=branch, head_ops=make_head_ops(db))
@@ -1225,7 +1411,16 @@ class Dml:
         with with_db(self) as db:
             return make_remote_ops(db, self, client=client).pull_uri_into_branch(uri, target_branch, user=user)
 
-    def push(self, tag: str | None, *, branch: str | None, create: bool, force: bool, s3_client=None) -> str:
+    def push(
+        self,
+        tag: Annotated[str | None, "Optional tag name to publish instead of pushing a branch."] ,
+        *,
+        branch: Annotated[str | None, "Local branch to publish; defaults to the active attached branch."] ,
+        create: Annotated[bool, "Allow creating a missing remote branch when pushing by branch."] ,
+        force: Annotated[bool, "Allow non-fast-forward remote branch updates."] ,
+        s3_client: Annotated[Any | None, "Optional preconfigured boto3 S3 client."] = None,
+    ) -> str:
+        """Push a branch or tag to the configured remote project and return the remote ref path."""
         project = load_project_config(require_project_home(self._context.project_home))
         if not project.uri:
             raise DmlRepoError("remote.project is required for project sync")
@@ -1240,13 +1435,25 @@ class Dml:
                 f"{project.uri}#{source_branch}", source_branch, create=create, force=force
             )
 
-    def merge(self, revision: str, branch: str | None, user: str):
+    def merge(
+        self,
+        revision: Annotated[str, "Revision selector to merge into the target branch."] ,
+        branch: Annotated[str | None, "Branch to update; defaults to the active attached branch."] ,
+        user: Annotated[str, "User identity recorded for the merge commit."] ,
+    ):
+        """Merge one revision into a mutable branch."""
         revision_ref = resolve_dml_revision_ref(self, revision)
         with with_db(self) as db:
             target_branch = mutable_branch(branch=branch, head_ops=make_head_ops(db))
             return make_commit_ops(db).merge_into_head(target_branch, revision_ref, user)
 
-    def revert(self, revision: str, branch: str | None, user: str):
+    def revert(
+        self,
+        revision: Annotated[str, "Revision selector whose changes should be reverted."] ,
+        branch: Annotated[str | None, "Branch to update; defaults to the active attached branch."] ,
+        user: Annotated[str, "User identity recorded for the revert commit."] ,
+    ):
+        """Create a revert commit for one revision on a mutable branch."""
         revision_ref = resolve_dml_revision_ref(self, revision)
         with with_db(self) as db:
             target_branch = mutable_branch(branch=branch, head_ops=make_head_ops(db))
@@ -1255,14 +1462,15 @@ class Dml:
     @classmethod
     def init(
         cls,
-        project_home: str = ".",
+        project_home: Annotated[str, "Directory to initialize as a DaggerML project."] = ".",
         *,
-        remote_uri: str | None = None,
-        user: str | None = None,
-        config_home: str | None = None,
-        remote_project: str | None = None,
-        no_hooks: bool = False,
+        remote_uri: Annotated[str | None, "Remote root URI such as s3://bucket/prefix."] = None,
+        user: Annotated[str | None, "Default user identity for the initialized runtime."] = None,
+        config_home: Annotated[str | None, "Override directory for global DaggerML config files."] = None,
+        remote_project: Annotated[str | None, "Remote project URI such as dml://alice/demo to seed from."] = None,
+        no_hooks: Annotated[bool, "Skip configured post-init hooks during initialization."] = False,
     ) -> InitPayload:
+        """Initialize project state, config, and database for a DaggerML repository."""
         root = Path(project_home).resolve()
         if not root.exists():
             raise FileNotFoundError(f"{root} does not exist")

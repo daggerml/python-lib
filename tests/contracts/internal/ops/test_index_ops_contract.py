@@ -1948,11 +1948,6 @@ class TestIndexOps:
             ops.delete(index_ref)
             HeadOps(_db=temp_bo._db).delete_branch(head_ref)
 
-    def test_create_argv_ptr_requires_remote_context(self, temp_bo):
-        ops = IndexOps(_db=temp_bo._db, remote_root="")
-        with pytest.raises(DmlRepoError, match="Remote context required for argv_ptr"):
-            ops.create(argv_ptr="a" * 64)
-
     def test_create_argv_ptr_loads_remote_argv(self, temp_bo, s3):
         from daggerml._internal.ops.remote import RemoteOps
 

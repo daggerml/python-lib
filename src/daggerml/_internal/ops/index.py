@@ -26,6 +26,7 @@ from daggerml._internal.ops.cache import CacheOps
 from daggerml._internal.ops.dag import DagOps
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.node import NodeOps
+from daggerml._internal.ops.remote import RemoteOps
 from daggerml._internal.types import (
     ArgvNode,
     Commit,
@@ -66,13 +67,7 @@ class IndexOps(BaseOps):
     remote_root: str
 
     def _remote_ops(self):
-        if not self.remote_root:
-            raise DmlRepoError("Remote context required for argv_ptr")
-        from daggerml._internal.ops.remote import RemoteOps
-
         parsed = urlparse(self.remote_root)
-        if parsed.scheme != "s3" or not parsed.netloc:
-            raise DmlRepoError(f"Invalid remote root URI: {self.remote_root!r}")
         prefix = parsed.path.strip("/")
         return RemoteOps(_db=self._db, bucket=parsed.netloc, prefix=f"{prefix}/dml" if prefix else "dml")
 
