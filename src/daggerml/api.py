@@ -93,7 +93,7 @@ def temporary(**kw):
     kw.pop("name", None)
     with TemporaryDirectory() as tmpdir:
         resp = Dml.init(project_home=tmpdir, **kw)
-        yield Dml(resp["project_home"], remote_uri=resp["remote_uri"])
+        yield Dml(resp["project_home"], remote_root=resp["remote_root"])
 
 
 def status() -> dict[str, object]:

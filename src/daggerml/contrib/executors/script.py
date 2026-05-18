@@ -280,7 +280,7 @@ def run_payload(argv_ptr: str, *, execution_id: str, cache_key: str, remote_root
         return {"status": "succeeded", "error": None, "dag_id": dag.ref.id()}
 
     with execution_context(execution_id, cache_key):
-        with dml.temporary(remote_uri=remote_root) as dml_instance:
+        with dml.temporary(remote_root=remote_root) as dml_instance:
             try:
                 dag = dml.new(dml=dml_instance, argv_ptr=argv_ptr)
             except Exception as e:

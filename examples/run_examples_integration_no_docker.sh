@@ -72,7 +72,7 @@ trap cleanup EXIT
 mkdir -p "${moto_dir}"
 mkdir -p "${DML_CONFIG_HOME}"
 dml_user="cool-guy"
-dml config set --global user $dml_user
+dml config set --scope global user $dml_user
 
 log "Starting moto server and preparing env..."
 python - "${moto_env_file}" >"${moto_log_file}" 2>&1 <<'PY' &
@@ -92,10 +92,10 @@ from moto.server import ThreadedMotoServer
 
 def main() -> None:
     env_file = Path(sys.argv[1])
-    remote_uri = os.environ.get("DML_EXAMPLE_REMOTE_URI", "s3://daggerml-example/artifacts")
-    parsed = urlparse(remote_uri)
+    remote_root = os.environ.get("DML_EXAMPLE_REMOTE_ROOT", "s3://daggerml-example/artifacts")
+    parsed = urlparse(remote_root)
     if parsed.scheme != "s3" or not parsed.netloc:
-        raise RuntimeError(f"DML_EXAMPLE_REMOTE_URI must be s3://bucket[/prefix], got: {remote_uri!r}")
+        raise RuntimeError(f"DML_EXAMPLE_REMOTE_ROOT must be s3://bucket[/prefix], got: {remote_root!r}")
     bucket = parsed.netloc
 
     server = ThreadedMotoServer(port=0, verbose=False)
@@ -110,7 +110,7 @@ def main() -> None:
         "AWS_DEFAULT_REGION": "us-east-1",
         "AWS_SHARED_CREDENTIALS_FILE": "/dev/null",
         "AWS_ENDPOINT_URL": endpoint,
-        "DML_REMOTE_ROOT": remote_uri,
+        "DML_REMOTE_ROOT": remote_root,
     }
 
     for key, value in env_values.items():

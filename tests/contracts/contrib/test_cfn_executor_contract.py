@@ -47,8 +47,8 @@ def test_cfn_tmpdag_is_context_manager(monkeypatch):
     calls = []
 
     @contextmanager
-    def _temporary(*, remote_uri, name):
-        calls.append(("temporary", remote_uri, name))
+    def _temporary(*, remote_root, name):
+        calls.append(("temporary", remote_root, name))
         yield _FakeDml(dag, calls)
 
     monkeypatch.setattr(
@@ -68,8 +68,8 @@ def test_cfn_tmpdag_is_context_manager(monkeypatch):
 
 def test_cfn_tmpdag_propagates_setup_errors(monkeypatch):
     @contextmanager
-    def _temporary(*, remote_uri, name):
-        assert remote_uri == _REMOTE["root"]
+    def _temporary(*, remote_root, name):
+        assert remote_root == _REMOTE["root"]
         assert name
         raise RuntimeError("boom")
         yield
@@ -114,8 +114,8 @@ def test_cfn_start_uses_existing_stack_id_on_no_update(monkeypatch):
     dag = _ArgvDag((None, "stack-name", {"Resources": {}}, {"Param": "Value"}))
 
     @contextmanager
-    def _temporary(*, remote_uri, name):
-        assert remote_uri == _REMOTE["root"]
+    def _temporary(*, remote_root, name):
+        assert remote_root == _REMOTE["root"]
         assert name
         yield _StartDml(dag)
 

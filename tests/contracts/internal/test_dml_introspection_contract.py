@@ -77,24 +77,24 @@ def test_public_dml_classes_and_methods_have_docstrings():
 
 
 def test_public_dml_annotations_include_help_metadata():
-    _assert_annotated_help(Dml.__init__, ["project_home", "remote_uri", "user", "config_home"])
+    _assert_annotated_help(Dml.__init__, ["project_home", "remote_root", "user", "config_home"])
     _assert_annotated_help(Dml.branch, ["remote"])
     _assert_annotated_help(Dml.log, ["revision", "limit"])
     _assert_annotated_help(Dml.show, ["revision"])
     _assert_annotated_help(Dml.diff, ["left", "right"])
     _assert_annotated_help(Dml.checkout, ["revision"])
-    _assert_annotated_help(Dml.fetch, ["remote_or_uri", "branch", "s3_client"])
-    _assert_annotated_help(Dml.pull, ["remote_or_uri", "remote_branch", "branch", "user", "s3_client"])
-    _assert_annotated_help(Dml.push, ["tag", "branch", "create", "force", "s3_client"])
+    _assert_annotated_help(Dml.fetch, ["remote_or_uri", "branch"])
+    _assert_annotated_help(Dml.pull, ["remote_or_uri", "remote_branch", "branch", "user"])
+    _assert_annotated_help(Dml.push, ["tag", "branch", "create", "force"])
     _assert_annotated_help(Dml.merge, ["revision", "branch", "user"])
     _assert_annotated_help(Dml.revert, ["revision", "branch", "user"])
     _assert_annotated_help(
         Dml.init,
-        ["project_home", "remote_uri", "user", "config_home", "remote_project", "no_hooks"],
+        ["project_home", "remote_root", "user", "config_home", "remote_project"],
     )
 
     _assert_annotated_help(_ConfigNamespace.get, ["key", "scope"])
-    _assert_annotated_help(_ConfigNamespace.set, ["key", "values", "scope"])
+    _assert_annotated_help(_ConfigNamespace.set, ["key", "value", "scope"])
     _assert_annotated_help(_ConfigNamespace.show, ["contrib"])
 
     _assert_annotated_help(_RuntimeNamespace.create, ["head", "commit", "argv_ptr", "index_id"])

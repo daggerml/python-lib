@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict, cast, overload
 
 from daggerml._internal._db import DmlDbEnv, Ref
-from daggerml._internal.config import DmlProjectConfig, parse_dml_project_uri, run_project_hooks
+from daggerml._internal.config import DmlProjectConfig, parse_dml_project_uri
 from daggerml._internal.dml_context import (
     config_dict,
     current_head_branch,
@@ -19,7 +19,7 @@ from daggerml._internal.dml_context import (
     load_project_config,
     mutable_branch,
     project_config_exists,
-    project_remote_uri,
+    project_remote_root,
     require_project_home,
     require_user,
     resolve_runtime_context,
@@ -45,15 +45,14 @@ from daggerml._internal.ops.node import NodeOps
 from daggerml._internal.ops.remote import RemoteOps
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError
 
-# FIXME: remove the `id` and `ref` duplication and just return with something descriptive like `dag: Ref` (if its a dag)
-_RUNTIME_CANCEL_MAX_ATTEMPTS = 3
-_RUNTIME_CANCEL_BACKOFF_SECONDS = 0.05
-
 logger = logging.getLogger(__name__)
 
+_RUNTIME_CANCEL_MAX_ATTEMPTS = 3
+_RUNTIME_CANCEL_BACKOFF_SECONDS = 0.05
 _DB_MAP_SIZE = 1024**3
 
 
+# FIXME: remove the `id` and `ref` duplication and just return with something descriptive like `dag: Ref` (if its a dag)
 class ProjectConfigPayload(TypedDict):
     home: str | None
     uri: str | None
@@ -68,16 +67,12 @@ class RemoteConfigPayload(TypedDict):
     fetch_workers: int
 
 
-HooksConfigPayload = TypedDict("HooksConfigPayload", {"post-init": list[str]})
-
-
 class ConfigShowPayload(TypedDict):
     project: ProjectConfigPayload
     db: DbConfigPayload
     remote: RemoteConfigPayload
     user: str | None
     default_branch: str
-    hooks: HooksConfigPayload
     config_home: str
 
 
@@ -321,7 +316,7 @@ class InitCreatedStatePayload(TypedDict):
 
 class InitPayload(TypedDict):
     project_home: str
-    remote_uri: str | None
+    remote_root: str | None
     user: str | None
     config_home: str | None
     created: InitCreatedStatePayload
@@ -363,7 +358,7 @@ def make_head_ops(db: DmlDbEnv) -> HeadOps:
 
 
 def make_index_ops(db: DmlDbEnv, dml: "Dml") -> IndexOps:
-    return IndexOps(_db=db, remote_root=dml._context.remote_uri)
+    return IndexOps(_db=db, remote_root=dml._context.remote_root)
 
 
 def make_dag_ops(db: DmlDbEnv) -> DagOps:
@@ -375,7 +370,7 @@ def make_node_ops(db: DmlDbEnv) -> NodeOps:
 
 
 def make_cache_ops(db: DmlDbEnv, dml: "Dml") -> CacheOps:
-    return CacheOps(_db=db, remote_root=dml._context.remote_uri)
+    return CacheOps(_db=db, remote_root=dml._context.remote_root)
 
 
 def make_gc_ops(db: DmlDbEnv) -> GcOps:
@@ -395,15 +390,14 @@ def split_remote_root(remote_root: str) -> tuple[str, str]:
     return bucket, f"{prefix}/dml" if prefix else "dml"
 
 
-def make_remote_ops(db: DmlDbEnv, dml: "Dml", *, client=None) -> RemoteOps:
-    bucket, prefix = split_remote_root(dml._context.remote_uri)
+def make_remote_ops(db: DmlDbEnv, dml: "Dml") -> RemoteOps:
+    bucket, prefix = split_remote_root(dml._context.remote_root)
     remote_kwargs: dict[str, Any] = {
         "bucket": bucket,
         "prefix": prefix,
         "fetch_workers": dml._context.config.remote.fetch_workers,
+        "client": dml._s3_client,
     }
-    if client is not None:
-        remote_kwargs["client"] = client
     return RemoteOps(_db=db, **remote_kwargs)
 
 
@@ -539,12 +533,11 @@ class _ConfigNamespace:
     def set(
         self,
         key: Annotated[str, "Configuration setting to update."],
-        values: Annotated[list[str], "Replacement value to write for the setting."],
-        *,
+        value: Annotated[str, "Replacement value to write for the setting."],
         scope: Annotated[Literal["global", "local"], "Config scope to update."] = "local",
     ):
         """Persist one configuration setting in the selected config file."""
-        return config_ops(self._dml).set(key, values, scope=scope)
+        return config_ops(self._dml).set(key, value, scope=scope)
 
     @overload
     def show(self, *, contrib: Literal[False] = False) -> ConfigShowPayload: ...
@@ -1225,17 +1218,18 @@ class Dml:
         self,
         project_home: Annotated[str | None, "Project directory containing the .dml state."] = None,
         *,
-        remote_uri: Annotated[str | None, "Remote root URI such as s3://bucket/prefix."] = None,
+        remote_root: Annotated[str | None, "Remote root URI such as s3://bucket/prefix."] = None,
         user: Annotated[str | None, "User identity recorded for mutating operations."] = None,
         config_home: Annotated[str | None, "Override directory for global DaggerML config files."] = None,
     ):
         """Resolve runtime context for a project-scoped DaggerML session."""
         self._context = resolve_runtime_context(
             project_home=project_home,
-            remote_uri=remote_uri,
+            remote_root=remote_root,
             user=user,
             config_home=config_home,
         )
+        self._s3_client = create_s3_client() if self._context.remote_root else None
 
     @property
     def config(self) -> _ConfigNamespace:
@@ -1351,7 +1345,7 @@ class Dml:
 
     def checkout(
         self,
-        revision: Annotated[str, "Revision selector to attach or detach HEAD to."] ,
+        revision: Annotated[str, "Revision selector to attach or detach HEAD to."],
     ) -> CheckoutAttachedPayload | CheckoutDetachedPayload:
         """Move HEAD to a branch or detached commit without changing repository contents."""
         resolved = resolve_dml_revision(self, revision)
@@ -1369,21 +1363,20 @@ class Dml:
             str,
             "Remote name like origin or explicit project URI such as dml://alice/demo.",
         ],
-        branch: Annotated[str | None, "Branch selector to fetch; defaults to the active or configured default branch."],
-        *,
-        s3_client: Annotated[Any | None, "Optional preconfigured boto3 S3 client."] = None,
+        branch: Annotated[
+            str | None, "Branch selector to fetch; defaults to the active or configured default branch."
+        ] = None,
     ) -> Ref:
         """Fetch a remote branch into local history."""
         project_home = require_project_home(self._context.project_home)
-        uri = project_remote_uri(
+        uri = project_remote_root(
             project_home=project_home,
             remote_or_uri=remote_or_uri,
             branch=branch,
             default_branch=self._context.default_branch,
         )
-        client = s3_client or create_s3_client()
         with with_db(self) as db:
-            return make_remote_ops(db, self, client=client).fetch_uri(uri)
+            return make_remote_ops(db, self).fetch_uri(uri)
 
     def pull(
         self,
@@ -1391,34 +1384,31 @@ class Dml:
             str,
             "Remote name like origin or explicit project URI such as dml://alice/demo.",
         ],
-        remote_branch: Annotated[str | None, "Remote branch selector to pull; defaults to the target branch."],
+        remote_branch: Annotated[str | None, "Remote branch selector to pull; defaults to the target branch."] = None,
         *,
-        branch: Annotated[str | None, "Local branch to update; defaults to the active attached branch."] ,
-        user: Annotated[str, "User identity recorded for the merge commit created by the pull."] ,
-        s3_client: Annotated[Any | None, "Optional preconfigured boto3 S3 client."] = None,
+        branch: Annotated[str | None, "Local branch to update; defaults to the active attached branch."] = None,
+        user: Annotated[str, "User identity recorded for the merge commit created by the pull."],
     ) -> Ref:
         """Fetch a remote branch and merge it into a local branch in one operation."""
         project_home = require_project_home(self._context.project_home)
         with with_db(self) as db:
             target_branch = mutable_branch(branch=branch, head_ops=make_head_ops(db))
-        uri = project_remote_uri(
+        uri = project_remote_root(
             project_home=project_home,
             remote_or_uri=remote_or_uri,
             branch=remote_branch or target_branch,
             default_branch=self._context.default_branch,
         )
-        client = s3_client or create_s3_client()
         with with_db(self) as db:
-            return make_remote_ops(db, self, client=client).pull_uri_into_branch(uri, target_branch, user=user)
+            return make_remote_ops(db, self).pull_uri_into_branch(uri, target_branch, user=user)
 
     def push(
         self,
-        tag: Annotated[str | None, "Optional tag name to publish instead of pushing a branch."] ,
+        tag: Annotated[str | None, "Optional tag name to publish instead of pushing a branch."] = None,
         *,
-        branch: Annotated[str | None, "Local branch to publish; defaults to the active attached branch."] ,
-        create: Annotated[bool, "Allow creating a missing remote branch when pushing by branch."] ,
-        force: Annotated[bool, "Allow non-fast-forward remote branch updates."] ,
-        s3_client: Annotated[Any | None, "Optional preconfigured boto3 S3 client."] = None,
+        branch: Annotated[str | None, "Local branch to publish; defaults to the active attached branch."] = None,
+        create: Annotated[bool, "Allow creating a missing remote branch when pushing by branch."] = False,
+        force: Annotated[bool, "Allow non-fast-forward remote branch updates."] = False,
     ) -> str:
         """Push a branch or tag to the configured remote project and return the remote ref path."""
         project = load_project_config(require_project_home(self._context.project_home))
@@ -1426,9 +1416,8 @@ class Dml:
             raise DmlRepoError("remote.project is required for project sync")
         with with_db(self) as db:
             source_branch = branch or make_head_ops(db).require_attached_head_branch()
-        client = s3_client or create_s3_client()
         with with_db(self) as db:
-            remote = make_remote_ops(db, self, client=client)
+            remote = make_remote_ops(db, self)
             if tag:
                 return remote.push_project_tag(f"{project.uri}@{tag}", source_branch)
             return remote.push_project_branch(
@@ -1437,9 +1426,10 @@ class Dml:
 
     def merge(
         self,
-        revision: Annotated[str, "Revision selector to merge into the target branch."] ,
-        branch: Annotated[str | None, "Branch to update; defaults to the active attached branch."] ,
-        user: Annotated[str, "User identity recorded for the merge commit."] ,
+        revision: Annotated[str, "Revision selector to merge into the target branch."],
+        *,
+        branch: Annotated[str | None, "Branch to update; defaults to the active attached branch."] = None,
+        user: Annotated[str, "User identity recorded for the merge commit."],
     ):
         """Merge one revision into a mutable branch."""
         revision_ref = resolve_dml_revision_ref(self, revision)
@@ -1449,9 +1439,10 @@ class Dml:
 
     def revert(
         self,
-        revision: Annotated[str, "Revision selector whose changes should be reverted."] ,
-        branch: Annotated[str | None, "Branch to update; defaults to the active attached branch."] ,
-        user: Annotated[str, "User identity recorded for the revert commit."] ,
+        revision: Annotated[str, "Revision selector whose changes should be reverted."],
+        *,
+        branch: Annotated[str | None, "Branch to update; defaults to the active attached branch."] = None,
+        user: Annotated[str, "User identity recorded for the revert commit."],
     ):
         """Create a revert commit for one revision on a mutable branch."""
         revision_ref = resolve_dml_revision_ref(self, revision)
@@ -1464,11 +1455,10 @@ class Dml:
         cls,
         project_home: Annotated[str, "Directory to initialize as a DaggerML project."] = ".",
         *,
-        remote_uri: Annotated[str | None, "Remote root URI such as s3://bucket/prefix."] = None,
+        remote_root: Annotated[str | None, "Remote root URI such as s3://bucket/prefix."] = None,
         user: Annotated[str | None, "Default user identity for the initialized runtime."] = None,
         config_home: Annotated[str | None, "Override directory for global DaggerML config files."] = None,
         remote_project: Annotated[str | None, "Remote project URI such as dml://alice/demo to seed from."] = None,
-        no_hooks: Annotated[bool, "Skip configured post-init hooks during initialization."] = False,
     ) -> InitPayload:
         """Initialize project state, config, and database for a DaggerML repository."""
         root = Path(project_home).resolve()
@@ -1477,54 +1467,36 @@ class Dml:
         project_home = str(root)
         dml_dir = root / ".dml"
         dml_dir.mkdir(parents=True, exist_ok=True)
-
         config_existed = project_config_exists(project_home)
         db_existed = db_path_for_project(project_home).exists()
-
         project_cfg: DmlProjectConfig
         if config_existed:
             project_cfg = load_project_config(project_home)
         else:
             if remote_project:
                 parsed = parse_dml_project_uri(remote_project)
-                project_cfg = DmlProjectConfig(name=parsed.project, owner=parsed.owner, remote_uri=remote_uri or "")
+                project_cfg = DmlProjectConfig(name=parsed.project, owner=parsed.owner, remote_root=remote_root or "")
             else:
-                project_cfg = DmlProjectConfig(remote_uri=remote_uri or "")
-
+                project_cfg = DmlProjectConfig(remote_root=remote_root or "")
         if not gitignore_exists(project_home):
             (dml_dir / ".gitignore").write_text("db\nHEAD\nrefs\n")
         if not config_existed:
             project_cfg.save(root)
-
-        runtime = cls(project_home=project_home, remote_uri=remote_uri, user=user, config_home=config_home)
+        runtime = cls(project_home=project_home, remote_root=remote_root, user=user, config_home=config_home)
         resolved_branch = runtime._context.default_branch
-
-        if not config_existed and project_cfg.remote_uri != runtime._context.remote_uri:
+        if not config_existed and project_cfg.remote_root != runtime._context.remote_root:
             project_cfg = DmlProjectConfig(
                 name=project_cfg.name,
                 owner=project_cfg.owner,
-                remote_uri=runtime._context.remote_uri,
+                remote_root=runtime._context.remote_root,
             )
             project_cfg.save(root)
-
         if not db_existed:
             create_db(project_home, branch=resolved_branch)
-
         project_cfg = load_project_config(project_home)
-        run_project_hooks(
-            "post-init",
-            runtime._context.config.hooks.post_init,
-            project_dir=project_home,
-            project=project_cfg,
-            config_home=runtime._context.config.config_home,
-            remote_name="origin" if runtime._context.remote_uri else None,
-            no_hooks=no_hooks,
-        )
-
-        if project_cfg.remote_project and not runtime._context.remote_uri:
+        if project_cfg.remote_project and not runtime._context.remote_root:
             raise DmlRepoError("remote.root is required")
-
-        if project_cfg.remote_project and runtime._context.remote_uri:
+        if project_cfg.remote_project and runtime._context.remote_root:
             try:
                 fetched = runtime.fetch("origin", None)
             except DmlRepoError:
@@ -1533,10 +1505,9 @@ class Dml:
             else:
                 with with_db(runtime) as db:
                     make_head_ops(db).write_detached_head(fetched)
-
         return {
             "project_home": project_home,
-            "remote_uri": runtime._context.remote_uri,
+            "remote_root": runtime._context.remote_root,
             "user": runtime._context.user,
             "config_home": runtime._context.config.config_home,
             "created": {"db": not db_existed, "config": not config_existed},

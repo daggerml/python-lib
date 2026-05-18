@@ -32,7 +32,7 @@ class CfnExecutor(ExecutorBase):
     @classmethod
     @contextmanager
     def _tmpdag(cls, argv_ptr, *, remote_root: str):
-        with temporary(remote_uri=remote_root, name=f"cfn-{uuid4().hex}") as dml:
+        with temporary(remote_root=remote_root, name=f"cfn-{uuid4().hex}") as dml:
             with new(dml=dml, argv_ptr=argv_ptr) as dag:
                 yield dag
 
@@ -58,7 +58,7 @@ class CfnExecutor(ExecutorBase):
         remote: dict[str, str],
     ) -> dict[str, Any]:
         del runnable
-        with temporary(remote_uri=remote["root"], name=f"cfn-{execution_id}") as dml_inst:
+        with temporary(remote_root=remote["root"], name=f"cfn-{execution_id}") as dml_inst:
             with new(dml=dml_inst, argv_ptr=argv_ptr) as dag:
                 name, template, params = dag.argv[1:4].value()
 

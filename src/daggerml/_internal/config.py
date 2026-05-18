@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import tomllib
 from dataclasses import dataclass, field
 from getpass import getuser
@@ -101,6 +100,7 @@ def validate_remote_root(value: str) -> str:
         raise ValueError("remote.root prefix must be non-empty when '/' is provided")
     return value.rstrip("/")
 
+
 def global_config_home(env: Mapping[str, str] | None = None) -> Path:
     env_map = os.environ if env is None else env
     if env_map.get("DML_CONFIG_HOME"):
@@ -141,16 +141,6 @@ def _coerce_path(value: object) -> str | None:
     return os.path.expanduser(value)
 
 
-def _coerce_commands(value: object) -> tuple[str, ...] | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return (value,)
-    if isinstance(value, (list, tuple)):
-        return tuple(str(item) for item in value)
-    raise ValueError("Hook commands must be a string or sequence of strings")
-
-
 def _coerce_positive_int(value: object, *, key: str) -> int | None:
     if value is None:
         return None
@@ -179,13 +169,11 @@ def _load_global_layer(config_home: str, env: Mapping[str, str]) -> dict[str, ob
     if not path.exists():
         return layer
     data = _read_toml(path)
-    hooks = data.get("hooks", {}) or {}
     defaults = data.get("defaults", {}) or {}
     remote = data.get("remote", {}) or {}
     user = data.get("user", {}) or {}
     layer["user"] = user.get("name")
     layer["default_branch"] = defaults.get("branch")
-    layer["hooks.post-init"] = hooks.get("post-init")
     layer["remote.fetch_workers"] = remote.get("fetch_workers")
     return layer
 
@@ -261,18 +249,12 @@ class DmlRemoteSettings:
 
 
 @dataclass(frozen=True)
-class DmlHookSettings:
-    post_init: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
 class DmlConfig:
     project: DmlProjectSettings = field(default_factory=DmlProjectSettings)
     db: DmlDbSettings = field(default_factory=DmlDbSettings)
     remote: DmlRemoteSettings = field(default_factory=DmlRemoteSettings)
     user: str | None = None
     default_branch: str = "main"
-    hooks: DmlHookSettings = field(default_factory=DmlHookSettings)
     config_home: str = ""
 
     @property
@@ -302,7 +284,6 @@ class DmlConfig:
         defaults_layer = _normalize_inputs(defaults)
         explicit_layer = _normalize_inputs(explicit)
         env_layer = _env_layer(env_map)
-
         raw_config_home = (
             explicit_layer.get("config_home") or env_layer.get("config_home") or defaults_layer.get("config_home")
         )
@@ -310,7 +291,6 @@ class DmlConfig:
         base: dict[str, object] = {"config_home": config_home}
         merged = _overlay(base, defaults_layer)
         merged = _overlay(merged, _load_global_layer(config_home, env_map))
-
         project_home_input = (
             explicit_layer.get("project.home") or env_layer.get("project.home") or merged.get("project.home")
         )
@@ -321,25 +301,21 @@ class DmlConfig:
             merged = _overlay(merged, _load_project_layer(project_home))
         merged = _overlay(merged, env_layer)
         merged = _overlay(merged, explicit_layer)
-
         project_home = _coerce_path(merged.get("project.home"))
         if project_home is None and scope == _PROJECT_SCOPE:
             project_home = str(Path.cwd())
         default_branch_value = merged.get("default_branch")
         default_branch = str(default_branch_value) if default_branch_value else "main"
         _validate_ref_name("branch", default_branch)
-
         remote_project: str | None = None
         raw_remote_project = merged.get("remote.project")
         if raw_remote_project is not None:
             if not isinstance(raw_remote_project, str):
                 raise ValueError("remote.project must be a string")
             remote_project = validate_dml_project_uri(raw_remote_project)
-
         db_path = _coerce_path(merged.get("db.path"))
         if db_path is None and project_home and scope == _PROJECT_SCOPE:
             db_path = str(Path(project_home) / ".dml" / "db")
-
         remote_root = merged.get("remote.root")
         if remote_root is None:
             remote_root_s = ""
@@ -347,24 +323,17 @@ class DmlConfig:
             if not isinstance(remote_root, str):
                 raise ValueError("remote.root must be a string")
             remote_root_s = validate_remote_root(remote_root)
-
         remote_fetch_workers = _coerce_positive_int(merged.get("remote.fetch_workers"), key="remote.fetch_workers")
         if remote_fetch_workers is None:
             remote_fetch_workers = 16
-
         user_value = merged.get("user")
         user = str(user_value) if user_value else default_user(env_map)
-
-        hooks = DmlHookSettings(
-            post_init=_coerce_commands(merged.get("hooks.post-init")) or (),
-        )
         return cls(
             project=DmlProjectSettings(home=project_home),
             db=DmlDbSettings(path=db_path),
             remote=DmlRemoteSettings(project=remote_project, root=remote_root_s, fetch_workers=remote_fetch_workers),
             user=user,
             default_branch=default_branch,
-            hooks=hooks,
             config_home=config_home,
         )
 
@@ -396,9 +365,6 @@ class DmlConfig:
             },
             "user": self.user,
             "default_branch": self.default_branch,
-            "hooks": {
-                "post-init": list(self.hooks.post_init),
-            },
             "config_home": self.config_home,
         }
 
@@ -418,7 +384,6 @@ def validate_dml_project_uri(uri: str) -> str:
 class DmlGlobalConfig:
     user: str | None = None
     default_branch: str = "main"
-    post_init: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, config_home: Path | str | None = None, *, env: Mapping[str, str] | None = None) -> "DmlGlobalConfig":
@@ -430,7 +395,6 @@ class DmlGlobalConfig:
         return cls(
             user=resolved.user,
             default_branch=resolved.default_branch,
-            post_init=resolved.hooks.post_init,
         )
 
 
@@ -438,7 +402,7 @@ class DmlGlobalConfig:
 class DmlProjectConfig:
     name: str | None = None
     owner: str | None = None
-    remote_uri: str = ""
+    remote_root: str = ""
 
     @property
     def uri(self) -> str | None:
@@ -457,16 +421,16 @@ class DmlProjectConfig:
             _validate_name("project name", self.name)
         if self.owner is not None:
             _validate_name("project owner", self.owner)
-        if self.remote_uri:
-            validate_remote_root(self.remote_uri)
+        if self.remote_root:
+            validate_remote_root(self.remote_root)
 
     @classmethod
     def load(cls, project_dir: Path | str = ".") -> "DmlProjectConfig":
         resolved = DmlConfig.resolve(explicit={"project.home": str(project_dir)}, env={})
         if not resolved.remote.project:
-            return cls(remote_uri=resolved.remote.root)
+            return cls(remote_root=resolved.remote.root)
         parsed = parse_dml_project_uri(resolved.remote.project, require_identifier=False)
-        return cls(name=parsed.project, owner=parsed.owner, remote_uri=resolved.remote.root)
+        return cls(name=parsed.project, owner=parsed.owner, remote_root=resolved.remote.root)
 
     def save(self, project_dir: Path | str = ".") -> None:
         dml_dir = Path(project_dir) / ".dml"
@@ -474,8 +438,8 @@ class DmlProjectConfig:
         lines = ["[remote]"]
         if self.remote_project:
             lines.append(f'project = "{self.remote_project}"')
-        if self.remote_uri:
-            lines.append(f'root = "{validate_remote_root(self.remote_uri)}"')
+        if self.remote_root:
+            lines.append(f'root = "{validate_remote_root(self.remote_root)}"')
         (dml_dir / "config.toml").write_text("\n".join(lines) + "\n")
 
 
@@ -487,35 +451,3 @@ def init_project_layout(project_dir: Path | str, cfg: DmlProjectConfig) -> Path:
     (dml_dir / ".gitignore").write_text("db\nHEAD\nrefs\n")
     cfg.save(root)
     return db_dir
-
-
-def run_project_hooks(
-    hook: str,
-    commands: tuple[str, ...],
-    *,
-    project_dir: Path | str,
-    project: DmlProjectConfig,
-    config_home: Path | str,
-    remote_name: str | None = None,
-    no_hooks: bool = False,
-) -> None:
-    if no_hooks:
-        return
-    env = os.environ.copy()
-    env.update(
-        {
-            "DML_HOOK": hook,
-            "DML_PROJECT_HOME": str(Path(project_dir).resolve()),
-            "DML_PROJECT_NAME": project.name or "",
-            "DML_PROJECT_OWNER": project.owner or "",
-            "DML_CONFIG_HOME": str(config_home),
-            "DML_REMOTE_PROJECT": project.remote_project or "",
-            "DML_REMOTE_ROOT": project.remote_uri,
-        }
-    )
-    if remote_name is not None:
-        env["DML_REMOTE_NAME"] = remote_name
-    for command in commands:
-        completed = subprocess.run(command, cwd=project_dir, env=env, shell=True, check=False)
-        if completed.returncode != 0:
-            raise RuntimeError(f"Hook {hook!r} failed ({completed.returncode}): {command}")

@@ -7,6 +7,6 @@ def temporary_dml(*, repo: str | None = None, remote_root: str | None = None, **
     if repo is not None and "remote_project" not in kw:
         kw["remote_project"] = f"dml://test/{repo}"
     return _temporary(
-        remote_uri=remote_root or os.environ["DML_REMOTE_ROOT"],
+        remote_root=remote_root or os.environ["DML_REMOTE_ROOT"],
         **kw,
     )

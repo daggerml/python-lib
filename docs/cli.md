@@ -10,7 +10,7 @@ This document is authoritative for CLI subsystem contracts.
 
 ## Purpose
 
-Define the thin command wrapper around `daggerml._internal.Dml` with automatic configuration resolution plus JSON and plain-text output handling.
+Define the generated thin command wrapper around `daggerml._internal.Dml` with automatic configuration resolution and JSON-only output handling.
 
 ## Scope
 
@@ -18,23 +18,28 @@ CLI is the public operational interface over the shared internal `Dml` boundary.
 
 ## Routing Model
 
-- top-level `dml` dispatches by public porcelain verb or namespace,
+- top-level `dml` dispatches by generated public `Dml` verb or namespace,
 - handlers call public `Dml` methods and namespaces only,
 - CLI handlers do not reach into `Dml.ops` or private `_...ops()` helpers,
-- repository inspection verbs are `status`, `show`, `log`, `diff`, `checkout`, `branch`, `fetch`, `pull`, `push`, `merge`, and `revert`,
+- repository inspection verbs are generated from public `Dml` methods such as `status`, `show`, `log`, `diff`, `checkout`, `branch`, `fetch`, `pull`, `push`, `merge`, and `revert`,
 - DAG workflows live under `dml dag`,
 - maintenance workflows live under `dml admin`,
-- `dml config show [--contrib]` is the JSON config-status entrypoint,
+- runtime workflows with CLI-generatable parameter types live under `dml runtime`,
 - errors are normalized into structured JSON payloads.
 
 ## Behavior Contracts
 
 - default output is compact JSON,
-- `config get` and `config set` are the plain-text exceptions to default JSON output,
+- there are no plain-text command exceptions; `config get` and `config set` also return JSON,
 - repo-path resolution is delegated to the shared internal resolver,
 - remote project-root resolution is delegated to the shared internal resolver,
 - verbosity controls logging level only,
 - expected domain errors MUST NOT emit unstructured tracebacks,
+- command generation uses public signatures, docstrings, and `Annotated` metadata,
+- required parameters become positional arguments and defaulted parameters become options,
+- option names use kebab case and boolean defaults use `--flag` or `--no-flag`,
+- methods with unsupported public parameter annotations such as `Any` are omitted from CLI generation,
+- overloaded Python methods generate one CLI command from the runtime-visible implementation signature,
 - top-level git-like project commands include `status`, `show`, `log`, `diff`, `checkout`, `branch`, `fetch`, `pull`, `push`, `merge`, and `revert`,
 - `checkout <revision>` resolves revisions locally (branch, tag, commit ref, or ancestry expression), reports attached vs detached mode explicitly, and does not perform implicit network fetches,
 - `status` reports repository state as JSON with `head`, `branches`, `dags`, and `indexes`,
@@ -58,7 +63,7 @@ CLI is the public operational interface over the shared internal `Dml` boundary.
 
 Operational note:
 - Do not run local `admin gc` concurrently with `runtime.cancel(...)`. Cancellation reuses locally materialized adapter input state while it walks the rooted execution set.
-- runtime config naming follows [configuration.md](configuration.md): `project.home`, `remote.project`, `db.path`, `remote.root`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
+- runtime config naming follows [configuration.md](configuration.md): `project.home`, `remote.project`, `db.path`, `remote.root`, `remote.fetch_workers`, `user`, `default_branch`, and `config_home`.
 - explicit CLI override flags mirror the canonical config naming, including `--project-home`, `--remote-root`, `--remote-project`, and `--config-home`.
 
 ## Serialization-Limited Gaps

@@ -49,16 +49,13 @@ Rules:
   },
   "user": "string-or-null",
   "default_branch": "string",
-  "hooks": {
-    "post-init": ["string"]
-  },
   "config_home": "string"
 }
 ```
 
 Rules:
 
-- canonical config parameters are `project.home`, `remote.project`, `db.path`, `remote.root`, `remote.fetch_workers`, `user`, `default_branch`, `hooks.post-init`, and `config_home`.
+- canonical config parameters are `project.home`, `remote.project`, `db.path`, `remote.root`, `remote.fetch_workers`, `user`, `default_branch`, and `config_home`.
 - `remote.project` for local project config is optional branchless project identity only: `dml://<owner>/<project>` when present.
 - `remote.root` is the capability gate for remote-backed mutation and execution.
 - `remote.project` is the additional capability gate for project-addressed sync such as push, pull, and fetch.
@@ -121,7 +118,7 @@ Rules:
 - local repos without `remote.root` are read-only at the remote-backed runtime boundary.
 - local repos with `remote.root` but without `remote.project` may execute remote-backed runtime flows but cannot use project-addressed sync.
 
-Global project config is loaded from `$DML_CONFIG_HOME/config.toml`, `$XDG_CONFIG_HOME/dml/config.toml`, or `~/.config/dml/config.toml`. It may define `[user].name`, `[defaults].branch`, and ordered `[hooks]` list for `post-init`.
+Global project config is loaded from `$DML_CONFIG_HOME/config.toml`, `$XDG_CONFIG_HOME/dml/config.toml`, or `~/.config/dml/config.toml`. It may define `[user].name` and `[defaults].branch`.
 
 The global config home is referred to as `config_home` in CLI and internal project-config APIs.
 

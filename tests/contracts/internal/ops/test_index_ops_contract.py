@@ -768,7 +768,7 @@ class TestIndexOps:
     def test_runtime_cancel_leaves_cancelled_index_pointer_when_cancellation_fails(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-        dml = Dml(project_home="/repo", remote_uri=_remote_root_from_env(), user="alice@example.com")
+        dml = Dml(project_home="/repo", remote_root=_remote_root_from_env(), user="alice@example.com")
         _FakeExecutionState.reset()
         _FakeExecutionState.records["exec-live"] = {
             "execution_id": "exec-live",

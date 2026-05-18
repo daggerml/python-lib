@@ -22,11 +22,11 @@ def test_show_log_and_diff_return_spec_shapes():
 
 def test_branch_lists_local_and_remote_tracking_views(tmp_path):
     with temporary_dml(repo="source") as source:
-        remote_uri = source._context.remote_uri
+        remote_root = source._context.remote_root
         source.push(None, branch="main", create=True, force=False)
         source_uri = source.config.get("remote.project")
 
-        with temporary_dml(repo="target", remote_root=remote_uri) as target:
+        with temporary_dml(repo="target", remote_root=remote_root) as target:
             target.fetch(source_uri, None)
             local = target.branch()
             remote = target.branch(remote=True)

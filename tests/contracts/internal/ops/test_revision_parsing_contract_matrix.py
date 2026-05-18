@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-from daggerml._cli.base import parse_ref
 from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlProjectConfig, init_project_layout
 from daggerml._internal.dml_resolution import resolve_dag_ref, resolve_node_ref, resolve_revision
@@ -12,20 +11,6 @@ from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.ops.remote import RemoteOps
 from daggerml._internal.types import Commit, DmlRepoError, Tree
-
-
-@pytest.mark.parametrize(
-    "contract_id,label,ref_string",
-    [
-        ("revision-parse-ref-roundtrip", "index-ref", "index:default"),
-    ],
-    ids=[
-        "revision-parse-ref-roundtrip:index-ref",
-    ],
-)
-def test_ref_parse_matrix(contract_id, label, ref_string):
-    del contract_id, label
-    assert parse_ref(ref_string) == Ref(ref_string)
 
 
 @pytest.mark.parametrize(
@@ -62,7 +47,7 @@ def test_uri_canonicalization_rejects_oversized_identifier(remote_ops):
 
 
 def _seed_project_commit_history(temp_bo_fn, tmp_path: Path) -> tuple[CommitOps, Ref, Ref]:
-    project = DmlProjectConfig(name="demo", owner="alice", remote_uri="s3://bucket/prefix")
+    project = DmlProjectConfig(name="demo", owner="alice", remote_root="s3://bucket/prefix")
     init_project_layout(tmp_path, project)
     head_ops = HeadOps(_db=temp_bo_fn._db)
     commit_ops = CommitOps(_db=temp_bo_fn._db)
@@ -81,7 +66,7 @@ def _seed_project_commit_history(temp_bo_fn, tmp_path: Path) -> tuple[CommitOps,
 
 
 def _seed_named_dags(temp_bo_fn, tmp_path: Path, dag_nodes: dict[str, str]):
-    project = DmlProjectConfig(name="demo", owner="alice", remote_uri="s3://bucket/prefix")
+    project = DmlProjectConfig(name="demo", owner="alice", remote_root="s3://bucket/prefix")
     init_project_layout(tmp_path, project)
     head_ops = HeadOps(_db=temp_bo_fn._db)
     commit_ops = CommitOps(_db=temp_bo_fn._db)
@@ -172,7 +157,7 @@ def test_revision_form_classification_matrix(
     assert resolved.commit == expected_commit(initial, next_commit)
 
 
-def test_revision_rejects_unfetched_remote_uri_boundary(temp_bo_fn, tmp_path: Path):
+def test_revision_rejects_unfetched_remote_root_boundary(temp_bo_fn, tmp_path: Path):
     commit_ops, _initial, _next_commit = _seed_project_commit_history(temp_bo_fn, tmp_path)
     with pytest.raises(DmlRepoError, match="cannot be resolved locally"):
         resolve_revision(

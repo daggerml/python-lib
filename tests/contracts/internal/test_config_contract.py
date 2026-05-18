@@ -43,12 +43,7 @@ def test_dml_uses_config_resolution_from_env(monkeypatch):
     monkeypatch.setenv("DML_REMOTE_PROJECT", "dml://alice/demo")
     dml = Dml()
     assert dml._context.project_home == "/tmp/from-env"
-    assert dml._context.remote_uri == dml._context.config.remote.root
-
-
-def test_dml_constructor_rejects_legacy_aliases():
-    with pytest.raises(TypeError):
-        Dml(repo="/tmp/test-repo")
+    assert dml._context.remote_root == dml._context.config.remote.root
 
 
 def test_remote_config_from_canonical_env():
@@ -169,9 +164,9 @@ def test_project_home_defaults_to_cwd_when_unset(tmp_path, monkeypatch):
 def test_dml_ops_remote_uses_configured_fetch_workers(mock_remote_ops):
     from daggerml._internal.dml import Dml, make_remote_ops
 
-    dml = Dml(project_home="/tmp/repo", remote_uri="s3://bucket/prefix")
+    dml = Dml(project_home="/tmp/repo", remote_root="s3://bucket/prefix")
     object.__setattr__(dml._context.config.remote, "fetch_workers", 9)
-    make_remote_ops(Mock(), dml, client=object())
+    make_remote_ops(Mock(), dml)
 
     kwargs = mock_remote_ops.call_args.kwargs
     assert kwargs["bucket"] == "bucket"

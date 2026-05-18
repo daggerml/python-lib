@@ -32,7 +32,7 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     cfg = DmlProjectConfig(
         name="demo",
         owner="alice",
-        remote_uri="s3://bucket/team/dml",
+        remote_root="s3://bucket/team/dml",
     )
     db_path = init_project_layout(tmp_path, cfg)
 
@@ -41,18 +41,18 @@ def test_project_config_layout_roundtrip(tmp_path: Path):
     loaded = DmlProjectConfig.load(tmp_path)
     assert loaded.name == "demo"
     assert loaded.owner == "alice"
-    assert loaded.remote_uri == "s3://bucket/team/dml"
+    assert loaded.remote_root == "s3://bucket/team/dml"
     assert loaded.remote_project == "dml://alice/demo"
 
 
 def test_project_config_layout_allows_missing_remote_project(tmp_path: Path):
-    cfg = DmlProjectConfig(remote_uri="s3://bucket/team/dml")
+    cfg = DmlProjectConfig(remote_root="s3://bucket/team/dml")
     init_project_layout(tmp_path, cfg)
 
     loaded = DmlProjectConfig.load(tmp_path)
     assert loaded.name is None
     assert loaded.owner is None
-    assert loaded.remote_uri == "s3://bucket/team/dml"
+    assert loaded.remote_root == "s3://bucket/team/dml"
     assert loaded.remote_project is None
 
 

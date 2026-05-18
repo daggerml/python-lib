@@ -12,7 +12,7 @@ from daggerml._internal.types import DmlRepoError
 SCOPE_GLOBAL = "global"
 SCOPE_LOCAL = "local"
 
-GLOBAL_KEYS = {"user", "default_branch", "hooks.post-init", "remote.fetch_workers"}
+GLOBAL_KEYS = {"user", "default_branch", "remote.fetch_workers"}
 LOCAL_KEYS = {"remote.project", "remote.root", "remote.fetch_workers"}
 ALL_KEYS = GLOBAL_KEYS | LOCAL_KEYS
 
@@ -35,7 +35,7 @@ def _toml_value(value: Any) -> str:
 
 def _write_toml(path: Path, data: dict[str, Any]) -> None:
     lines: list[str] = []
-    for section in ("project", "remote", "user", "defaults", "hooks"):
+    for section in ("project", "remote", "user", "defaults"):
         section_data = data.get(section)
         if not isinstance(section_data, dict) or not section_data:
             continue
@@ -96,26 +96,10 @@ class ConfigOps:
         if key == "default_branch":
             value = (data.get("defaults") or {}).get("branch")
             return str(value) if value else None
-        if key == "hooks.post-init":
-            value = (data.get("hooks") or {}).get("post-init")
-            if value is None:
-                return None
-            if isinstance(value, str):
-                return [value]
-            return [str(item) for item in value]
         raise DmlRepoError(f"Unsupported config key: {key}")
 
-    def set(self, key: str, values: list[str], *, scope: Literal["global", "local"]) -> str | list[str]:
+    def set(self, key: str, value: str, *, scope: Literal["global", "local"]) -> str | list[str]:
         self._validate_scope_key(scope, key)
-        if key == "hooks.post-init":
-            if not values:
-                raise DmlRepoError(f"Config key {key!r} requires at least one value")
-            value: str | list[str] = values
-        else:
-            if len(values) != 1:
-                raise DmlRepoError(f"Config key {key!r} requires exactly one value")
-            value = values[0]
-
         if key == "remote.project":
             value = validate_dml_project_uri(str(value))
         elif key == "remote.root":
@@ -132,7 +116,6 @@ class ConfigOps:
             value = str(workers)
         elif key == "user" and not str(value):
             raise DmlRepoError("user must be a non-empty string")
-
         path = self._path_for_scope(scope)
         data = _read_toml(path)
         if key == "remote.project":
@@ -145,8 +128,6 @@ class ConfigOps:
             _set_nested(data, "user", "name", value)
         elif key == "default_branch":
             _set_nested(data, "defaults", "branch", value)
-        elif key == "hooks.post-init":
-            _set_nested(data, "hooks", "post-init", value)
         else:
             raise DmlRepoError(f"Unsupported config key: {key}")
         _write_toml(path, data)

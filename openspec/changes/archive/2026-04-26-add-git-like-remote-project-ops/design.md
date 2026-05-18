@@ -111,7 +111,7 @@ Configuration resolution uses waterfall precedence:
 explicit CLI/API argument > environment variable > config file value
 ```
 
-Environment variables use `DML_` names for config values, including `DML_USER`, `DML_DEFAULT_BRANCH`, `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, `DML_REMOTE_PROJECT`, `DML_BRANCH`, `DML_REMOTE`, `DML_REMOTE_URI`, `DML_REMOTE_BUCKET`, and `DML_REMOTE_PREFIX`. Explicit command arguments always win over environment variables and config.
+Environment variables use `DML_` names for config values, including `DML_USER`, `DML_DEFAULT_BRANCH`, `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, `DML_REMOTE_PROJECT`, `DML_BRANCH`, `DML_REMOTE`, `DML_REMOTE_ROOT`, `DML_REMOTE_BUCKET`, and `DML_REMOTE_PREFIX`. Explicit command arguments always win over environment variables and config.
 
 The supported DML environment variable surface for this project model is:
 
@@ -128,7 +128,7 @@ The supported DML environment variable surface for this project model is:
 | `DML_HOOK` | Hook context: hook name such as `post-init` or `post-clone`. |
 | `DML_REMOTE` | Selected named remote override. |
 | `DML_REMOTE_NAME` | Hook context: remote name such as `origin`. |
-| `DML_REMOTE_URI` | Remote project URI override. |
+| `DML_REMOTE_ROOT` | Remote project URI override. |
 | `DML_REMOTE_BUCKET` | Remote S3 bucket override. |
 | `DML_REMOTE_PREFIX` | Remote S3 prefix override. |
 
@@ -184,7 +184,7 @@ Clone hooks also receive:
 
 ```text
 DML_REMOTE_NAME=origin
-DML_REMOTE_URI=dml://<owner>/<project>
+DML_REMOTE_ROOT=dml://<owner>/<project>
 ```
 
 Hooks are intentionally shell commands rather than Python callbacks so users can reuse their normal project setup tools.

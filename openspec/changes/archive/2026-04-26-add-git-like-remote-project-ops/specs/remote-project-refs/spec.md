@@ -130,7 +130,7 @@ The system SHALL support only the DML environment variables defined for the proj
 - **THEN** the corresponding project config value is overridden for that command
 
 #### Scenario: Remote env overrides config
-- **WHEN** `DML_REMOTE`, `DML_REMOTE_URI`, `DML_REMOTE_BUCKET`, or `DML_REMOTE_PREFIX` is set
+- **WHEN** `DML_REMOTE`, `DML_REMOTE_ROOT`, `DML_REMOTE_BUCKET`, or `DML_REMOTE_PREFIX` is set
 - **THEN** the corresponding remote selection or storage value is overridden for that command
 
 #### Scenario: Hook context env is provided by DML

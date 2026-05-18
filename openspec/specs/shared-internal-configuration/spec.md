@@ -81,11 +81,15 @@ The system SHALL resolve `db.path` with the same precedence as other `project/ru
 - **THEN** `db.path` resolves to `<project.home>/.dml/db/`
 
 ### Requirement: CLI limitations caused by serialization are documented, not treated as config divergence
-The system SHALL document operations that remain unavailable in the CLI because command-line serialization cannot faithfully represent the required Python-level inputs or outputs. These omissions MUST NOT create a separate CLI-specific configuration model.
+The system SHALL document only those public `Dml` workflows that remain unavailable in the CLI because their public parameter types cannot be generated faithfully from command-line input. These omissions MUST NOT create a separate CLI-specific configuration model.
 
-#### Scenario: Serialization-limited API behavior stays API-only
-- **WHEN** an operation such as `start_fn` depends on Python object or function serialization that the CLI cannot represent cleanly
-- **THEN** the documentation identifies that operation as unavailable in the CLI while preserving the shared internal configuration model for supported operations
+#### Scenario: Unsupported public parameter types remain API-only
+- **WHEN** a public workflow exposes parameter types that the CLI generator cannot represent cleanly
+- **THEN** the documentation identifies that workflow as unavailable in the CLI while preserving the shared internal configuration model for supported operations
+
+#### Scenario: CLI-generatable public workflows are not excluded for historical reasons
+- **WHEN** a public workflow uses only CLI-generatable parameter types
+- **THEN** the CLI exposes that workflow instead of treating it as API-only based on prior manual CLI limitations
 
 #### Scenario: Missing CLI feature does not imply different config rules
 - **WHEN** a capability is supported by both API and CLI

@@ -239,7 +239,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     workdir = tempfile.mkdtemp(prefix=f"dml-supervisor-{execution_id[:8]}-")
     repo_dir = Path(workdir) / "repo"
     repo_dir.mkdir(parents=True, exist_ok=True)
-    Dml.init(str(repo_dir), remote_uri=remote["root"], user="worker", no_hooks=True)
+    Dml.init(str(repo_dir), remote_root=remote["root"], user="worker")
     env = dict(env)
     env["DML_PROJECT_HOME"] = str(repo_dir)
     result_path = Path(workdir) / "result.json"

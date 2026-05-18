@@ -141,7 +141,7 @@ def test_is_s3_uri_validation_matrix():
     assert is_s3_uri("") is False
 
 
-def test_s3_store_requires_remote_uri_or_explicit_bucket(monkeypatch, tmp_path):
+def test_s3_store_requires_remote_root_or_explicit_bucket(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DML_REMOTE_ROOT", raising=False)
     with pytest.raises(DmlRepoError, match="requires configured remote.root"):

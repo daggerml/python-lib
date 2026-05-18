@@ -18,7 +18,7 @@ class DmlRuntimeContext:
         return self.config.project.home
 
     @property
-    def remote_uri(self) -> str:
+    def remote_root(self) -> str:
         return self.config.remote.root
 
     @property
@@ -33,14 +33,14 @@ class DmlRuntimeContext:
 def resolve_runtime_context(
     *,
     project_home: str | None = None,
-    remote_uri: str | None = None,
+    remote_root: str | None = None,
     user: str | None = None,
     config_home: str | None = None,
 ) -> DmlRuntimeContext:
     config = DmlConfig.resolve(
         explicit={
             "project.home": project_home,
-            "remote.root": remote_uri,
+            "remote.root": remote_root,
             "user": user,
             "config_home": config_home,
         }
@@ -77,7 +77,7 @@ def mutable_branch(*, branch: str | None, head_ops) -> str:
     return branch or head_ops.require_attached_head_branch()
 
 
-def project_remote_uri(*, project_home: str, remote_or_uri: str, branch: str | None, default_branch: str) -> str:
+def project_remote_root(*, project_home: str, remote_or_uri: str, branch: str | None, default_branch: str) -> str:
     project = DmlProjectConfig.load(project_home)
     if not project.remote_project or project.owner is None or project.name is None:
         raise DmlRepoError("remote.project is required for project sync")

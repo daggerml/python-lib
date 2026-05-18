@@ -20,7 +20,7 @@
 
 **GAP 5 — `_default_project_branch` has a config-derived branch fallback**
 
-`_default_project_branch(branch)` resolves as `branch or attached_head or config.default_branch`. The third arm reaches `DmlConfig.default_branch`. The design does carve out `default_branch` for bootstrap/fetch scenarios, but this method is used in `_project_remote_uri` for both `fetch_project` and `pull_project` remote URI construction with no documentation distinguishing the carve-out case from a mutable workflow context.
+`_default_project_branch(branch)` resolves as `branch or attached_head or config.default_branch`. The third arm reaches `DmlConfig.default_branch`. The design does carve out `default_branch` for bootstrap/fetch scenarios, but this method is used in `_project_remote_root` for both `fetch_project` and `pull_project` remote URI construction with no documentation distinguishing the carve-out case from a mutable workflow context.
 
 **MINOR — `_project_home()` has a silent temp-dir fallback**
 

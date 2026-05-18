@@ -19,7 +19,7 @@ def _opened_db(db=None):
 
 
 def test_fetch_pull_push_workflows_delegate_to_remote_ops():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     remote_ops = Mock()
     head_ops = Mock()
     head_ops.get_attached_head_branch.return_value = "main"
@@ -36,10 +36,10 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
         remote_ops.push_project_branch.return_value = "projects/alice/demo/heads/main.json"
         remote_ops.push_project_tag.return_value = "projects/alice/demo/tags/v1.0.json"
 
-        fetched = ops.fetch("origin", None, s3_client=object())
-        pulled = ops.pull("origin", None, branch=None, user="alice", s3_client=object())
-        pushed = ops.push(None, branch=None, create=False, force=False, s3_client=object())
-        pushed_tag = ops.push("v1.0", branch=None, create=False, force=False, s3_client=object())
+        fetched = ops.fetch("origin", None)
+        pulled = ops.pull("origin", None, branch=None, user="alice")
+        pushed = ops.push(None, branch=None, create=False, force=False)
+        pushed_tag = ops.push("v1.0", branch=None, create=False, force=False)
 
     remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo#main")
     remote_ops.pull_uri_into_branch.assert_called_once_with("dml://alice/demo#main", "main", user="alice")
@@ -51,10 +51,9 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
     assert pushed_tag == "projects/alice/demo/tags/v1.0.json"
 
 
-def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+def test_project_workflows_use_dml_owned_s3_client():
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     remote_ops = Mock()
-    s3_client = object()
     head_ops = Mock()
     head_ops.get_attached_head_branch.return_value = "main"
     head_ops.require_attached_head_branch.return_value = "main"
@@ -64,7 +63,6 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
         patch.object(dml_module, "make_head_ops", return_value=head_ops),
         patch.object(dml_module, "make_remote_ops", return_value=remote_ops),
-        patch.object(dml_module, "create_s3_client", return_value=s3_client) as mock_create_s3,
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
         remote_ops.pull_uri_into_branch.return_value = Ref("commit:2")
@@ -74,17 +72,17 @@ def test_project_workflows_create_s3_client_when_not_explicitly_supplied():
         pulled = ops.pull("origin", None, branch=None, user="alice")
         pushed = ops.push(None, branch=None, create=False, force=False)
 
-    assert mock_create_s3.call_count == 3
     remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo#main")
     remote_ops.pull_uri_into_branch.assert_called_once_with("dml://alice/demo#main", "main", user="alice")
     remote_ops.push_project_branch.assert_called_once_with("dml://alice/demo#main", "main", create=False, force=False)
     assert fetched == Ref("commit:1")
     assert pulled == Ref("commit:2")
     assert pushed == "projects/alice/demo/heads/main.json"
+    assert ops._s3_client is not None
 
 
 def test_fetch_project_origin_falls_back_to_default_branch_without_attached_head():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     remote_ops = Mock()
     project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo", remote_project="dml://alice/demo")
     detached_head_ops = Mock(get_attached_head_branch=Mock(return_value=None))
@@ -95,14 +93,14 @@ def test_fetch_project_origin_falls_back_to_default_branch_without_attached_head
         patch.object(dml_module, "make_remote_ops", return_value=remote_ops),
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
-        fetched = ops.fetch("origin", None, s3_client=object())
+        fetched = ops.fetch("origin", None)
 
     remote_ops.fetch_uri.assert_called_once_with("dml://alice/demo#main")
     assert fetched == Ref("commit:1")
 
 
 def test_push_project_requires_attached_head_or_explicit_branch():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     detached_error = DmlRepoError("Current checkout is detached; attach HEAD or pass an explicit branch")
     project_cfg = SimpleNamespace(owner="alice", name="demo", uri="dml://alice/demo")
     detached_head_ops = Mock(require_attached_head_branch=Mock(side_effect=detached_error))
@@ -112,11 +110,11 @@ def test_push_project_requires_attached_head_or_explicit_branch():
         patch.object(dml_module, "make_head_ops", return_value=detached_head_ops),
     ):
         with pytest.raises(DmlRepoError, match="Current checkout is detached"):
-            ops.push(None, branch=None, create=False, force=False, s3_client=object())
+            ops.push(None, branch=None, create=False, force=False)
 
 
 def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     commit_ops = Mock()
     commit_ops.merge_into_head.return_value = Ref("commit:3")
     commit_ops.revert.return_value = Ref("commit:4")
@@ -135,8 +133,8 @@ def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
         patch.object(dml_module, "resolve_dml_revision_ref", return_value=Ref("commit:2")),
     ):
         checkout = ops.checkout("feature")
-        merged = ops.merge("origin/main", None, "alice")
-        reverted = ops.revert("origin/main", None, "alice")
+        merged = ops.merge("origin/main", branch=None, user="alice")
+        reverted = ops.revert("origin/main", branch=None, user="alice")
 
     commit_ops.merge_into_head.assert_called_once_with("main", Ref("commit:2"), "alice")
     commit_ops.revert.assert_called_once_with("main", Ref("commit:2"), "alice")
@@ -147,7 +145,7 @@ def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
 
 
 def test_dag_checkout_delegates_to_commit_ops_with_resolved_defaults():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix", user="alice")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix", user="alice")
     commit_ops = Mock()
     commit_ops.checkout_dag.return_value = Ref("commit:3")
     head_ops = Mock()
@@ -173,7 +171,7 @@ def test_dag_checkout_delegates_to_commit_ops_with_resolved_defaults():
 
 
 def test_dag_checkout_requires_user_if_not_resolved():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix", user=None)
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix", user=None)
     with (
         patch.object(type(ops._context), "user", new_callable=PropertyMock, return_value=None),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
@@ -188,7 +186,7 @@ def test_dag_checkout_requires_user_if_not_resolved():
 
 def test_runtime_cancel_runs_retry_loop_and_returns_stats(caplog):
     caplog.set_level(logging.INFO)
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix", user="alice")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix", user="alice")
     index = Mock()
     index.cancel.return_value = {
         "index_id": "idx-1",
@@ -238,7 +236,7 @@ def test_runtime_cancel_runs_retry_loop_and_returns_stats(caplog):
 
 
 def test_runtime_cancel_retries_candidate_errors_with_backoff():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix", user="alice")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix", user="alice")
     index = Mock()
     index.cancel.return_value = {
         "index_id": "idx-1",
@@ -275,7 +273,7 @@ def test_runtime_cancel_retries_candidate_errors_with_backoff():
 
 
 def test_dag_describe_node_resolves_named_node_with_revision_context():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     revision = SimpleNamespace(commit=Ref("commit:2"), kind="branch", branch="main", tag=None)
     node_ops = Mock(describe=Mock(return_value={"id": "4", "ref": Ref("node:4"), "type": "LiteralNode"}))
 
@@ -299,7 +297,7 @@ def test_dag_describe_node_resolves_named_node_with_revision_context():
 
 
 def test_dag_get_node_resolves_named_node_with_explicit_dag_ref():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     node_ops = Mock(get=Mock(return_value={"answer": Ref("datum:5")}))
 
     with (
@@ -321,7 +319,7 @@ def test_dag_get_node_resolves_named_node_with_explicit_dag_ref():
 
 
 def test_dag_describe_node_accepts_explicit_node_ref_without_dag_context():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     node_ref = Ref("node-literal:4")
     node_ops = Mock(describe=Mock(return_value={"id": "4", "ref": node_ref, "type": "LiteralNode"}))
 
@@ -340,7 +338,7 @@ def test_dag_describe_node_accepts_explicit_node_ref_without_dag_context():
 
 
 def test_dag_get_node_accepts_explicit_node_ref_without_dag_context():
-    ops = Dml(project_home="/repo", remote_uri="s3://bucket/prefix")
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     node_ref = Ref("node-fn:4")
     node_ops = Mock(get=Mock(return_value={"answer": Ref("datum:5")}))
 
@@ -366,9 +364,8 @@ def test_dml_init_recovers_when_config_exists_and_db_missing(tmp_path):
 
     with (
         patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")) as mock_fetch,
-        patch("daggerml._internal.dml.create_s3_client", return_value=object()),
     ):
-        result = Dml.init(str(repo_dir), remote_uri="s3://bucket/prefix")
+        result = Dml.init(str(repo_dir), remote_root="s3://bucket/prefix")
 
     mock_fetch.assert_called_once_with("origin", None)
     assert (dml_dir / "db").exists()
@@ -379,7 +376,7 @@ def test_dml_boundary_keeps_only_allowed_private_helpers():
     dml = Dml(project_home="/repo")
 
     assert hasattr(dml, "_context")
-    assert not hasattr(dml, "_tempdirs")
+    assert hasattr(dml, "_s3_client")
     assert not hasattr(dml, "_with_ops")
     assert not hasattr(dml, "_head_ops")
     assert not hasattr(dml, "_commit_ops")
@@ -398,22 +395,21 @@ def test_dml_init_uses_init_project_layout_for_bootstrap(tmp_path):
         result = Dml.init(
             str(repo_dir),
             remote_project="dml://alice/demo",
-            remote_uri="s3://bucket/prefix",
+            remote_root="s3://bucket/prefix",
             user="alice@example-host",
-            no_hooks=True,
         )
 
     init_cfg = DmlProjectConfig.load(repo_dir)
     assert init_cfg.name == "demo"
     assert init_cfg.owner == "alice"
     assert init_cfg.remote_project == "dml://alice/demo"
-    assert init_cfg.remote_uri == "s3://bucket/prefix"
+    assert init_cfg.remote_root == "s3://bucket/prefix"
     assert (repo_dir / ".dml").is_dir()
     assert (repo_dir / ".dml" / "config.toml").exists()
     assert (repo_dir / ".dml" / "db").exists()
     mock_fetch.assert_called_once_with("origin", None)
     assert result["project_home"] == str(repo_dir.resolve())
-    assert result["remote_uri"] == "s3://bucket/prefix"
+    assert result["remote_root"] == "s3://bucket/prefix"
     assert result["user"] == "alice@example-host"
     assert result["created"] == {"db": True, "config": True}
 
@@ -426,11 +422,11 @@ def test_dml_init_allows_local_only_bootstrap(tmp_path):
         patch.dict("os.environ", {}, clear=True),
         patch("daggerml._internal.dml.Dml.fetch") as mock_fetch,
     ):
-        result = Dml.init(str(repo_dir), no_hooks=True)
+        result = Dml.init(str(repo_dir))
 
     project_cfg = DmlProjectConfig.load(repo_dir)
     assert project_cfg.remote_project is None
-    assert project_cfg.remote_uri == ""
+    assert project_cfg.remote_root == ""
     mock_fetch.assert_not_called()
     assert result["created"] == {"db": True, "config": True}
 
@@ -440,13 +436,13 @@ def test_dml_init_allows_remote_root_without_remote_project(tmp_path):
     repo_dir.mkdir()
 
     with patch("daggerml._internal.dml.Dml.fetch") as mock_fetch:
-        result = Dml.init(str(repo_dir), remote_uri="s3://bucket/prefix", no_hooks=True)
+        result = Dml.init(str(repo_dir), remote_root="s3://bucket/prefix")
 
     project_cfg = DmlProjectConfig.load(repo_dir)
     assert project_cfg.remote_project is None
-    assert project_cfg.remote_uri == "s3://bucket/prefix"
+    assert project_cfg.remote_root == "s3://bucket/prefix"
     mock_fetch.assert_not_called()
-    assert result["remote_uri"] == "s3://bucket/prefix"
+    assert result["remote_root"] == "s3://bucket/prefix"
 
 
 def test_dml_init_rejects_remote_project_without_remote_root(tmp_path):
@@ -464,36 +460,36 @@ def test_dml_init_resolves_remote_root_from_env_for_remote_project(tmp_path, mon
     monkeypatch.setenv("DML_REMOTE_ROOT", "s3://bucket/prefix")
 
     with patch("daggerml._internal.dml.Dml.fetch", return_value=Ref("commit:9")) as mock_fetch:
-        result = Dml.init(str(repo_dir), remote_project="dml://alice/demo", no_hooks=True)
+        result = Dml.init(str(repo_dir), remote_project="dml://alice/demo")
 
     project_cfg = DmlProjectConfig.load(repo_dir)
     assert project_cfg.remote_project == "dml://alice/demo"
-    assert project_cfg.remote_uri == "s3://bucket/prefix"
-    assert result["remote_uri"] == "s3://bucket/prefix"
+    assert project_cfg.remote_root == "s3://bucket/prefix"
+    assert result["remote_root"] == "s3://bucket/prefix"
     mock_fetch.assert_called_once_with("origin", None)
 
 
-def test_dml_init_requires_remote_uri_for_recovery_pull(tmp_path):
+def test_dml_init_requires_remote_root_for_recovery_pull(tmp_path):
     repo_dir = tmp_path / "repo"
     dml_dir = repo_dir / ".dml"
     dml_dir.mkdir(parents=True)
     (dml_dir / "config.toml").write_text('[remote]\nproject = "dml://alice/demo"\n')
 
     with pytest.raises(DmlRepoError, match="remote.root is required"):
-        Dml.init(str(repo_dir), remote_uri="")
+        Dml.init(str(repo_dir), remote_root="")
 
 
 def test_dml_init_requires_existing_project_directory(tmp_path):
     missing = tmp_path / "missing"
     with pytest.raises(FileNotFoundError, match="does not exist"):
-        Dml.init(str(missing), remote_project="dml://alice/demo", remote_uri="s3://bucket/prefix")
+        Dml.init(str(missing), remote_project="dml://alice/demo", remote_root="s3://bucket/prefix")
 
 
 def test_project_sync_requires_remote_project(tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
-    Dml.init(str(repo_dir), remote_uri="s3://bucket/prefix", no_hooks=True)
-    dml = Dml(project_home=str(repo_dir), remote_uri="s3://bucket/prefix")
+    Dml.init(str(repo_dir), remote_root="s3://bucket/prefix")
+    dml = Dml(project_home=str(repo_dir), remote_root="s3://bucket/prefix")
 
     with pytest.raises(DmlRepoError, match="remote.project is required for project sync"):
         dml.fetch("origin", None)
@@ -508,8 +504,8 @@ def test_project_sync_requires_remote_project(tmp_path):
 def test_remote_root_only_repo_can_create_indexes(tmp_path):
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
-    Dml.init(str(repo_dir), remote_uri="s3://bucket/prefix", no_hooks=True)
-    dml = Dml(project_home=str(repo_dir), remote_uri="s3://bucket/prefix")
+    Dml.init(str(repo_dir), remote_root="s3://bucket/prefix")
+    dml = Dml(project_home=str(repo_dir), remote_root="s3://bucket/prefix")
 
     with patch("daggerml._internal.exec_state.ExecutionState.update_execution_record", return_value={}):
         index_id = dml.runtime.create()
