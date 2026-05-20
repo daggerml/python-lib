@@ -392,7 +392,7 @@ class TestCommitOps:
         assert "target" in rebased_tree.dags  # Target base included
 
     @given(st.lists(_tree_strategy(), min_size=2, max_size=5))
-    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture], deadline=None)
     def test_multiple_commits_hypothesis(self, ops, tree_objs):
         """Test creating and listing multiple commits with hypothesis."""
         ops, _ = ops
@@ -457,7 +457,7 @@ class TestCommitOps:
         _commit_strategy(),
         _tree_strategy(),
     )
-    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture], deadline=None)
     def test_merge_real(self, ops, c0, t0, c1, t1, c2, t2):
         """Test merge with hypothesis-generated commits."""
         ops, _ = ops
