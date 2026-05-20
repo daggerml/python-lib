@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Note: you might have to run this script in `uv`
 
 set -euo pipefail
 
@@ -13,8 +14,17 @@ moto_pid=""
 export DML_CONFIG_HOME="${scratch_dir}/dml_config"
 
 log() {
-    echo
-    echo "*** $* ***"
+  echo >&2
+  echo "*** $* ***" >&2
+}
+
+pretty_dml() {
+  log "Calling: dml $*"
+  dml "$@" | jq .
+}
+
+json_scalar() {
+  jq -r .
 }
 
 s3_ls_recursive() {
@@ -173,15 +183,71 @@ mkdir "${scratch_dir}/${project0}"
 cd "${scratch_dir}/${project0}"
 dml init --remote-project "dml://${dml_user}/${project0}"
 
-log "DML repo initialized. Current status:"
-dml status | jq .
+log "Configuring and inspecting CLI-visible settings"
+pretty_dml config set --scope local remote.fetch_workers 2
+pretty_dml config get remote.root
+pretty_dml config get remote.fetch_workers
+pretty_dml config show
+pretty_dml config show --contrib
+
+log "DML repo initialized. Current status"
+pretty_dml status
 
 log "Running example: 00-hello_world.py"
 python "${examples_dir}/00-hello_world.py"
 
+log "Inspecting committed history and DAG state after 00-hello_world.py"
+pretty_dml branch
+pretty_dml log --revision HEAD --limit 10
+pretty_dml show --revision HEAD
+pretty_dml diff --left HEAD~1 --right HEAD
+pretty_dml dag list
+pretty_dml dag describe examples/00-hello-world
+pretty_dml dag get examples/00-hello-world
+pretty_dml dag describe-node greeting --dag examples/00-hello-world
+pretty_dml dag get-node greeting --dag examples/00-hello-world
+pretty_dml dag unroll-node greeting --dag examples/00-hello-world
+
+hello_dag_ref="$(dml dag describe examples/00-hello-world | jq -r '.dag.ref')"
+hello_fn_ref="$(dml dag describe-node hello_fn --dag examples/00-hello-world | jq -r '.node.ref')"
+greeting_ref="$(dml dag describe-node greeting --dag examples/00-hello-world | jq -r '.node.ref')"
+
+log "Exercising low-level runtime and admin CLI commands"
+runtime_idx="$(dml runtime create | json_scalar)"
+scratch_idx="$(dml runtime create | json_scalar)"
+cancel_idx="$(dml runtime create | json_scalar)"
+pretty_dml runtime list
+pretty_dml runtime describe "${runtime_idx}"
+pretty_dml admin index list
+pretty_dml admin index get "${runtime_idx}"
+
+seed_ref="$(dml runtime put-literal "${runtime_idx}" cli-seed --name seed | json_scalar)"
+imported_greeting_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${greeting_ref}" --name imported-greeting | json_scalar)"
+hello_runtime_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${hello_fn_ref}" --name hello-fn | json_scalar)"
+pretty_dml runtime get-node "${runtime_idx}" seed
+pretty_dml runtime get-node "${runtime_idx}" imported-greeting
+
+pretty_dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported_greeting_ref}"
+pretty_dml runtime get-node "${runtime_idx}" cli-greeting-alias
+pretty_dml runtime describe "${runtime_idx}"
+pretty_dml runtime cancel "${cancel_idx}"
+pretty_dml admin index delete "${scratch_idx}"
+pretty_dml admin gc --dry-run
+pretty_dml admin gc
+
+log "Exercising top-level checkout workflows"
+pretty_dml checkout HEAD~1
+pretty_dml status
+pretty_dml checkout main
+pretty_dml show --revision HEAD
+
 log "Listing DML refs after running all examples:"
 s3_ls_recursive "${DML_REMOTE_ROOT}/dml/refs/projects/"
-dml push --create
+pretty_dml admin remote list --owner "${dml_user}"
+pretty_dml push --create
+pretty_dml push --tag cli-demo-tag
+pretty_dml admin remote list
+pretty_dml admin remote gc --min-age-seconds 0 --malformed warn
 s3_ls_recursive "${DML_REMOTE_ROOT}/dml/refs/projects/"
 
 log "Cleaning up first project to test fresh init with existing remote"
@@ -193,10 +259,26 @@ log "Initializing DML repo in ${project1}"
 mkdir "${scratch_dir}/${project1}"
 cd "${scratch_dir}/${project1}"
 dml init --remote-project "dml://${dml_user}/${project1}"
-dml fetch "dml://${dml_user}/${project0}"
-dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world"
+pretty_dml fetch "dml://${dml_user}/${project0}"
+pretty_dml branch --remote
+pretty_dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world" --target-name examples/00-hello-world-copy
+pretty_dml status
+pretty_dml revert HEAD "${dml_user}"
+pretty_dml merge "dml://${dml_user}/${project0}#main" "${dml_user}"
+pretty_dml pull "dml://${dml_user}/${project0}" "${dml_user}"
+pretty_dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world"
+pretty_dml status
 
 log "Running example: 01b-load_fn.py"
 python "${examples_dir}/01b-load_fn.py"
+
+log "Inspecting fetched and pulled history from the second project"
+pretty_dml branch
+pretty_dml branch --remote
+pretty_dml log --revision HEAD --limit 10
+pretty_dml show --revision HEAD
+pretty_dml dag list
+pretty_dml dag describe examples/01b-load-fn --revision HEAD
+pretty_dml dag get-node old_result --dag examples/01b-load-fn --revision HEAD
 
 log "All examples completed successfully."

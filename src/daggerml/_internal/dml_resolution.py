@@ -19,15 +19,15 @@ class ResolvedRevision:
 @dataclass(frozen=True)
 class ResolvedDag:
     ref: Ref
-    selector: str
+    value: str
     revision: ResolvedRevision | None = None
 
 
 @dataclass(frozen=True)
 class ResolvedNode:
     ref: Ref
-    selector: str
-    dag_selector: str | None = None
+    value: str
+    dag: str | None = None
     revision: ResolvedRevision | None = None
 
 
@@ -63,18 +63,15 @@ def _resolve_project_tag_ref(value: str, *, head_ops, project_dir: str):
     return _resolve_local_tag_ref(f"{project.remote_project}@{value}", head_ops)
 
 
-def _coerce_ref(value: str | Ref, expected_root_ns: str) -> Ref | None:
-    candidate = value if isinstance(value, Ref) else None
-    if candidate is None and isinstance(value, str) and ":" in value:
-        try:
-            candidate = Ref(value)
-        except Exception:
-            candidate = None
-    if candidate is None:
-        return None
-    if candidate.nss()[0] != expected_root_ns:
-        raise DmlRepoError(f"Expected {expected_root_ns} ref, got: {candidate}")
-    return candidate
+def _reject_ref_like_selector(value: str, expected_root_ns: str) -> None:
+    if ":" not in value:
+        return
+    try:
+        candidate = Ref(value)
+    except Exception:
+        return
+    if candidate.nss()[0] == expected_root_ns:
+        raise DmlRepoError(f"Expected {expected_root_ns} Ref, got ref-like selector string: {value}")
 
 
 def _list_commit_dags(*, commit: Ref, commit_ops) -> dict[str, Ref]:
@@ -152,21 +149,16 @@ def resolve_revision_ref(*, value: str, commit_ops, head_ops, project_dir: str) 
 
 def resolve_dag_ref(
     *,
-    value: str | Ref,
+    value: str,
     revision: str | None = None,
     commit_ops,
     head_ops,
     project_dir: str,
     operation: str,
 ) -> ResolvedDag:
-    dag_ref = _coerce_ref(value, "dag")
-    if dag_ref is not None:
-        if revision is not None:
-            raise DmlRepoError(f"dml dag {operation} rejects --revision with explicit dag refs")
-        return ResolvedDag(ref=dag_ref, selector=dag_ref.to)
-
     if not isinstance(value, str) or not value:
-        raise DmlRepoError("DAG selector is required")
+        raise DmlRepoError("DAG name is required")
+    _reject_ref_like_selector(value, "dag")
 
     resolved = resolve_revision(
         value=revision or "HEAD",
@@ -177,13 +169,13 @@ def resolve_dag_ref(
     resolved_dag_ref = commit_ops.get_dag(resolved.commit, value)
     if resolved_dag_ref is None:
         raise DmlRepoError(f"DAG '{value}' not found")
-    return ResolvedDag(ref=resolved_dag_ref, selector=value, revision=resolved)
+    return ResolvedDag(ref=resolved_dag_ref, value=value, revision=resolved)
 
 
 def resolve_node_ref(
     *,
-    value: str | Ref,
-    dag_selector: str | Ref | None = None,
+    value: str,
+    dag: str | None = None,
     revision: str | None = None,
     commit_ops,
     dag_ops,
@@ -191,16 +183,13 @@ def resolve_node_ref(
     project_dir: str,
     operation: str,
 ) -> ResolvedNode:
-    node_ref = _coerce_ref(value, "node")
-    if node_ref is not None:
-        return ResolvedNode(ref=node_ref, selector=node_ref.to)
-
     if not isinstance(value, str) or not value:
-        raise DmlRepoError("Node selector is required")
+        raise DmlRepoError("Node name is required")
+    _reject_ref_like_selector(value, "node")
 
-    if dag_selector is not None:
+    if dag is not None:
         resolved_dag = resolve_dag_ref(
-            value=dag_selector,
+            value=dag,
             revision=revision,
             commit_ops=commit_ops,
             head_ops=head_ops,
@@ -209,8 +198,8 @@ def resolve_node_ref(
         )
         return ResolvedNode(
             ref=dag_ops.get_node(resolved_dag.ref, value),
-            selector=value,
-            dag_selector=resolved_dag.selector,
+            value=value,
+            dag=resolved_dag.value,
             revision=resolved_dag.revision,
         )
 
@@ -233,13 +222,13 @@ def resolve_node_ref(
     if len(matches) > 1:
         dag_names = ", ".join(name for name, _dag_ref in matches)
         raise DmlRepoError(
-            f"dml dag {operation} requires dag_selector for ambiguous node lookup '{value}' (matches: {dag_names})"
+            f"dml dag {operation} requires dag for ambiguous node lookup '{value}' (matches: {dag_names})"
         )
 
     matched_name, matched_dag_ref = matches[0]
     return ResolvedNode(
         ref=dag_ops.get_node(matched_dag_ref, value),
-        selector=value,
-        dag_selector=matched_name,
+        value=value,
+        dag=matched_name,
         revision=resolved_revision,
     )

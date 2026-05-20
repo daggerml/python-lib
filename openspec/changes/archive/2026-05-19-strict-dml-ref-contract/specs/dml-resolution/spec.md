@@ -1,15 +1,4 @@
-## ADDED Requirements
-
-### Requirement: Revision resolution returns canonical commit refs
-The DML resolution layer SHALL accept supported revision selectors, including direct commit refs, commit ids, `HEAD` ancestry selectors, branch names, and supported `dml://` revision URIs, and SHALL resolve them to a canonical commit `Ref`.
-
-#### Scenario: Resolve a symbolic revision selector
-- **WHEN** a caller resolves a supported symbolic revision selector such as `HEAD`, `HEAD~1`, a branch name, or a supported `dml://` URI
-- **THEN** the resolution layer returns the corresponding commit `Ref`
-
-#### Scenario: Reject an invalid revision selector
-- **WHEN** a caller resolves a revision selector that is empty, malformed, or points to an unsupported object namespace
-- **THEN** the resolution layer raises `DmlRepoError`
+## MODIFIED Requirements
 
 ### Requirement: DAG resolution returns canonical dag refs
 The DML resolution layer SHALL accept DAG lookup inputs only as a DAG name combined with a revision selector, and it SHALL resolve the result to a canonical dag `Ref`.

@@ -89,9 +89,9 @@ Generated from `Dml.dag`:
 - `dml dag list [--revision REV]`
 - `dml dag describe VALUE [--revision REV]`
 - `dml dag get VALUE [--revision REV]`
-- `dml dag describe-node NODE_SELECTOR [--dag-selector DAG] [--revision REV]`
-- `dml dag get-node NODE_SELECTOR [--dag-selector DAG] [--revision REV]`
-- `dml dag unroll-node NODE_SELECTOR [--dag-selector DAG] [--revision REV]`
+- `dml dag describe-node NODE [--dag DAG] [--revision REV]`
+- `dml dag get-node NODE [--dag DAG] [--revision REV]`
+- `dml dag unroll-node NODE [--dag DAG] [--revision REV]`
 - `dml dag checkout REVISION DAG_NAME [--branch BRANCH] [--target-name NAME] [--replace] [--user USER]`
 - `dml dag delete NAME [--branch BRANCH] [--user USER]`
 

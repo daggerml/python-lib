@@ -333,11 +333,10 @@ class IndexOps(BaseOps):
         commit_ref = HeadOps(_db=self._db).get_index_commit(index_id)
         with self._tx(readonly=True) as txn:
             ctx = txn.get_commit_ctx(commit_ref)
-            dag_ref = ctx.commit.dag
             return {
                 "id": index_id,
                 "commit": commit_ref,
-                "dag": dag_ref,
+                "dag": ctx.commit.dag,
                 "nodes": list(ctx.dag.nodes) if ctx.dag is not None else [],
                 "names": dict(ctx.dag.names) if ctx.dag is not None else {},
                 "result": (ctx.dag.result if ctx.dag is not None else None),

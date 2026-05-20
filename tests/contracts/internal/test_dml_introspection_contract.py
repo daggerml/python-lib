@@ -111,9 +111,9 @@ def test_public_dml_annotations_include_help_metadata():
     _assert_annotated_help(_DagNamespace.list, ["revision"])
     _assert_annotated_help(_DagNamespace.describe, ["value", "revision"])
     _assert_annotated_help(_DagNamespace.get, ["value", "revision"])
-    _assert_annotated_help(_DagNamespace.describe_node, ["node_selector", "dag_selector", "revision"])
-    _assert_annotated_help(_DagNamespace.get_node, ["node_selector", "dag_selector", "revision"])
-    _assert_annotated_help(_DagNamespace.unroll_node, ["node_selector", "dag_selector", "revision"])
+    _assert_annotated_help(_DagNamespace.describe_node, ["node", "dag", "revision"])
+    _assert_annotated_help(_DagNamespace.get_node, ["node", "dag", "revision"])
+    _assert_annotated_help(_DagNamespace.unroll_node, ["node", "dag", "revision"])
     _assert_annotated_help(_DagNamespace.checkout, ["revision", "dag_name", "branch", "target_name", "replace", "user"])
     _assert_annotated_help(_DagNamespace.delete, ["name", "branch", "user"])
 

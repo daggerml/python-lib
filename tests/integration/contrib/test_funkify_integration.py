@@ -10,6 +10,7 @@ import pytest
 from daggerml import clear_default_dml, load, new, set_default_dml
 from daggerml._internal.dml import make_index_ops, with_db
 from daggerml._internal.types import DmlRepoError, Runnable, Uri
+from daggerml.codecs import CodecError
 from daggerml.contrib import adapter_registry as areg
 from daggerml.contrib import api
 from daggerml.contrib import executor_registry as ereg
@@ -192,9 +193,7 @@ def test_funkify_plugin_adapter_sugar_resolves_to_concrete_runtime_adapter(resol
             return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter=self.executable)
 
         @staticmethod
-        def send(
-            *, runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by
-        ):
+        def send(runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by):
             return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
@@ -266,10 +265,12 @@ def test_funkify_script_lifecycle_stage_matrix_FKY_LFC_001_to_FKY_LFC_004(contra
     nonce = {"kickoff": 1, "resume": 2, "terminal": 3}[stage]
 
     if use_prepop:
+
         @decorate
         def fn(dag):
             return dag.seed.value() * 2
     else:
+
         @decorate
         def fn(dag, x, y=2, *, z=3, nonce=nonce):
             return x.value() + y.value() + z.value()  # pyright: ignore[reportAttributeAccessIssue]
@@ -396,9 +397,7 @@ def test_funkify_resolve_runnable_requires_runnable_return():
             return (uri, kwargs, sub)
 
         @staticmethod
-        def send(
-            *, runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by
-        ):
+        def send(runnable, argv_ptr, cache_key, execution_id, remote, state, execution_status, cancel_requested_by):
             return {"status": "running", "error": None, "state": {"token": execution_id}}
 
         @staticmethod
@@ -410,5 +409,5 @@ def test_funkify_resolve_runnable_requires_runnable_return():
     with temporary_dml() as dml:
         dag = new(dml=dml, name="d0", message="d0")
         delayed = api.funkify(lambda dag: None, uri="script", adapter="bad")
-        with pytest.raises(DmlRepoError, match="resolve_runnable must return Runnable"):
+        with pytest.raises(CodecError, match="resolve_runnable must return Runnable"):
             dag.put(cast(Any, delayed))

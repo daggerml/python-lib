@@ -1309,190 +1309,19 @@ class TestIndexOps:
         finally:
             ops.delete(index_ref)
 
-    def test_literal_codecs_apply_highest_priority_match(self, temp_bo):
-        calls: list[str] = []
-
-        class LowCodec:
-            def can_encode(self, value):
-                calls.append("low:can")
-                return isinstance(value, str)
-
-            def encode(self, value, ctx):
-                calls.append("low:encode")
-                return "low"
-
-        class HighCodec:
-            def can_encode(self, value):
-                calls.append("high:can")
-                return isinstance(value, str)
-
-            def encode(self, value, ctx):
-                calls.append("high:encode")
-                return "high"
-
-        old_codecs = literal_codec._literal_codecs.copy()
-        old_seq = literal_codec._literal_codec_seq
-        old_plugins_loaded = literal_codec._plugins_loaded
-        try:
-            literal_codec._literal_codecs = []
-            literal_codec._literal_codec_seq = 0
-            literal_codec._plugins_loaded = True
-            literal_codec.register_codec(LowCodec(), priority=1)
-            literal_codec.register_codec(HighCodec(), priority=10)
-            with temporary_dml() as dml:
-                dag = new(dml=dml, name="codec-priority", message="codec-priority")
-                assert dag.put("input").value() == "high"
-            assert calls == ["high:can", "high:encode", "high:can", "high:encode"]
-        finally:
-            literal_codec._literal_codecs = old_codecs
-            literal_codec._literal_codec_seq = old_seq
-            literal_codec._plugins_loaded = old_plugins_loaded
-
-    def test_literal_codecs_short_circuit_first_match(self, temp_bo):
-        calls: list[str] = []
-
-        class FirstCodec:
-            def can_encode(self, value):
-                calls.append("first:can")
-                return isinstance(value, str)
-
-            def encode(self, value, ctx):
-                calls.append("first:encode")
-                return "first"
-
-        class SecondCodec:
-            def can_encode(self, value):
-                calls.append("second:can")
-                return isinstance(value, str)
-
-            def encode(self, value, ctx):
-                calls.append("second:encode")
-                return "second"
-
-        old_codecs = literal_codec._literal_codecs.copy()
-        old_seq = literal_codec._literal_codec_seq
-        old_plugins_loaded = literal_codec._plugins_loaded
-        try:
-            literal_codec._literal_codecs = []
-            literal_codec._literal_codec_seq = 0
-            literal_codec._plugins_loaded = True
-            literal_codec.register_codec(FirstCodec(), priority=0)
-            literal_codec.register_codec(SecondCodec(), priority=0)
-            with temporary_dml() as dml:
-                dag = new(dml=dml, name="codec-short-circuit", message="codec-short-circuit")
-                assert dag.put("input").value() == "first"
-            assert calls == ["first:can", "first:encode", "first:can", "first:encode"]
-        finally:
-            literal_codec._literal_codecs = old_codecs
-            literal_codec._literal_codec_seq = old_seq
-            literal_codec._plugins_loaded = old_plugins_loaded
-
-    def test_literal_codecs_reencode_with_new_match(self, temp_bo):
-        calls: list[str] = []
-
-        class IntCodec:
-            def can_encode(self, value):
-                calls.append("int:can")
-                return isinstance(value, int)
-
-            def encode(self, value, ctx):
-                calls.append("int:encode")
-                return {"wrapped": f"v{value}"}
-
-        class DictCodec:
-            def can_encode(self, value):
-                calls.append("dict:can")
-                return isinstance(value, dict) and "wrapped" in value
-
-            def encode(self, value, ctx):
-                calls.append("dict:encode")
-                return f"wrapped={value['wrapped']}"
-
-        old_codecs = literal_codec._literal_codecs.copy()
-        old_seq = literal_codec._literal_codec_seq
-        old_plugins_loaded = literal_codec._plugins_loaded
-        try:
-            literal_codec._literal_codecs = []
-            literal_codec._literal_codec_seq = 0
-            literal_codec._plugins_loaded = True
-            literal_codec.register_codec(IntCodec(), priority=10)
-            literal_codec.register_codec(DictCodec(), priority=0)
-            with temporary_dml() as dml:
-                dag = new(dml=dml, name="codec-reencode", message="codec-reencode")
-                assert dag.put(7).value() == "wrapped=v7"
-            assert calls.count("int:encode") == 1
-            assert calls.count("dict:encode") == 1
-        finally:
-            literal_codec._literal_codecs = old_codecs
-            literal_codec._literal_codec_seq = old_seq
-            literal_codec._plugins_loaded = old_plugins_loaded
-
-    def test_literal_codecs_non_convergent_recursion_fails(self, temp_bo):
-        class FlappingCodec:
-            def can_encode(self, value):
-                return isinstance(value, str) and value in {"left", "right"}
-
-            def encode(self, value, ctx):
-                return "right" if value == "left" else "left"
-
-        old_codecs = literal_codec._literal_codecs.copy()
-        old_seq = literal_codec._literal_codec_seq
-        old_plugins_loaded = literal_codec._plugins_loaded
-        old_max_reencodes = literal_codec._literal_codec_max_reencodes
-        try:
-            literal_codec._literal_codecs = []
-            literal_codec._literal_codec_seq = 0
-            literal_codec._plugins_loaded = True
-            literal_codec._literal_codec_max_reencodes = 4
-            literal_codec.register_codec(FlappingCodec(), priority=0)
-            with temporary_dml() as dml:
-                dag = new(dml=dml, name="codec-recursion", message="codec-recursion")
-                with pytest.raises(DmlRepoError, match=r"Literal codec recursion failed to converge"):
-                    dag.put("left")
-        finally:
-            literal_codec._literal_codecs = old_codecs
-            literal_codec._literal_codec_seq = old_seq
-            literal_codec._plugins_loaded = old_plugins_loaded
-            literal_codec._literal_codec_max_reencodes = old_max_reencodes
-
-    def test_literal_codec_failure_is_wrapped(self, temp_bo):
-        class FailingCodec:
-            def can_encode(self, value):
-                return isinstance(value, str)
-
-            def encode(self, value, ctx):
-                raise ValueError("boom")
-
-        old_codecs = literal_codec._literal_codecs.copy()
-        old_seq = literal_codec._literal_codec_seq
-        old_plugins_loaded = literal_codec._plugins_loaded
-        try:
-            literal_codec._literal_codecs = []
-            literal_codec._literal_codec_seq = 0
-            literal_codec._plugins_loaded = True
-            literal_codec.register_codec(FailingCodec(), priority=0)
-            with temporary_dml() as dml:
-                dag = new(dml=dml, name="codec-failure", message="codec-failure")
-                with pytest.raises(DmlRepoError, match=r"Literal codec FailingCodec failed: boom"):
-                    dag.put("input")
-        finally:
-            literal_codec._literal_codecs = old_codecs
-            literal_codec._literal_codec_seq = old_seq
-            literal_codec._plugins_loaded = old_plugins_loaded
-
     def test_literal_codecs_traverse_codec_returned_collection(self, temp_bo):
         class SeedCodec:
             def can_encode(self, value):
                 return value == "seed"
 
-            def encode(self, value, ctx):
+            def encode(self, value, dag):
                 return [1, 2]
 
         class IntCodec:
             def can_encode(self, value):
                 return isinstance(value, int) and value < 10
 
-            def encode(self, value, ctx):
+            def encode(self, value, dag):
                 return value + 10
 
         old_codecs = literal_codec._literal_codecs.copy()
@@ -1517,14 +1346,14 @@ class TestIndexOps:
             def can_encode(self, value):
                 return value == "seed"
 
-            def encode(self, value, ctx):
+            def encode(self, value, dag):
                 return Runnable(target=Uri("daggerml:list"), adapter="", kwargs={"x": 1}, sub=None)
 
         class IntCodec:
             def can_encode(self, value):
                 return isinstance(value, int) and value == 1
 
-            def encode(self, value, ctx):
+            def encode(self, value, dag):
                 return value + 1
 
         old_codecs = literal_codec._literal_codecs.copy()

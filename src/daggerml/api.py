@@ -14,7 +14,7 @@ from daggerml._internal import (
     Runnable,
     Uri,
 )
-from daggerml.codecs import CodecError, stage_value
+from daggerml.codecs import apply_codecs
 from daggerml.util import BackoffWithJitter, current_time_millis
 
 log = logging.getLogger(__name__)
@@ -179,23 +179,18 @@ class Dag:
         return self.dml.runtime.put_literal(index_id, value, name=name)
 
     def _stage_value(self, value: Any, *, name: Optional[str] = None) -> Ref:
-        try:
-            return stage_value(self, value, name=name)
-        except CodecError as e:
-            raise DmlRepoError(str(e)) from e
+        return self._put_literal(apply_codecs(value, dag=self), name=name)
 
     def _start_fn(
         self, argv: list[Ref], *, kwargv: Optional[dict[str, Ref]] = None, name: Optional[str] = None
     ) -> Optional[Ref]:
         return self.dml.runtime.start_fn(self._require_index_ref(), argv, kwargv=kwargv, name=name)
 
-    def _call_builtin(self, uri: str, *args: Any, name: Optional[str] = None, default: Any = None) -> Ref:
+    def _call_builtin(self, uri: str, *args: Any, name: Optional[str] = None) -> Ref:
         fn_ref = self._put_literal(Runnable(target=Uri(uri), kwargs={}, adapter=""))
         argv: list[Ref] = [fn_ref]
         for arg in args:
             argv.append(arg if isinstance(arg, Ref) else self._stage_value(arg))
-        if default is not None:
-            argv.append(default if isinstance(default, Ref) else self._stage_value(default))
         result = self._start_fn(argv, name=name)
         if result is None:
             raise DmlRepoError("Function execution failed")
@@ -215,7 +210,7 @@ class Dag:
         if self.ref is None:
             node_ref = self.dml.runtime.get_node(self._require_index_ref(), name)
             return _make_node(self, node_ref)
-        node_ref = self.dml.dag.describe_node(name, dag_selector=cast(Ref, self.ref))["node"]["ref"]
+        node_ref = self.dml.dag.describe_node(name, dag=cast(Ref, self.ref))["node"]["ref"]
         return _make_node(self, node_ref)
 
     def _set_named_node(self, name: str, value: Any) -> None:
@@ -322,6 +317,48 @@ class Dag:
         {'a': 1, 'b': [42, '23']}
         """
         return _make_node(self, self._stage_value(value, name=name))
+
+    def load(self, dag_name: str, node_name: str | None = None, *, name: str | None = None) -> "Node":
+        """
+        Load a node from a different (committed) DAG into the current DAG.
+
+        Parameters
+        ----------
+        dag_name : str
+            Name of the DAG to load from
+        node_name : str, optional
+            Name of the node to load. If None, loads the result node of the DAG.
+
+        Returns
+        -------
+        Node
+            The loaded node or DAG
+
+        Examples
+        --------
+        >>> import daggerml as _dml
+        >>> dml = _dml.temporary()
+        >>> dag = new(dml=dml, name="test", message="test")
+        >>> n1 = dag.put(42, name="answer")
+        >>> n2 = dag.put({"a": 1, "b": [n1, "23"]}, name="data")
+        >>> dag.commit(n2)
+        >>> dag2 = new(dml=dml, name="test2", message="test2")
+        >>> loaded_n2 = dag2.load("test", "data", name="loaded_data")
+        >>> loaded_n2.value()
+        {'a': 1, 'b': [42, '23']}
+        """
+        if self.ref is None:
+            raise DmlRepoError("Cannot load from an uncommitted DAG")
+        index = self.dml.admin.index.get(self._require_index_ref())["index"]
+        dags = self.dml.dag.list(revision=index["commit"]["ref"].to)["dags"]
+        dag_info = dags.get(dag_name)
+        if dag_info is None:
+            raise DmlRepoError(f"DAG not found: {dag_name}")
+        dag_info = self.dml.dag.describe(dag_info)["dag"]
+        node_ref = dag_info["names"].get(node_name) if node_name else dag_info.get("result")
+        if node_ref is None:
+            raise DmlRepoError(f"Node '{node_name}' not found in DAG '{dag_name}'")
+        return _make_node(self, node_ref)
 
     def call(
         self,
@@ -445,13 +482,13 @@ class Node:  # noqa: F811
         return self.ref == other.ref
 
     @property
-    def argv(self) -> "Node":
+    def argv(self) -> list["Node"]:
         "Access the node's argv list"
         node_info = self.dag.dml.dag.describe_node(self.ref)["node"]
         argv = node_info.get("argv")
         if argv is None:
             raise Error("Node has no argv", origin="dml", type="TypeError")
-        return _make_node(self.dag, argv)
+        return [_make_node(self.dag, ref) for ref in argv]
 
     def backtrack(self, *keys: Union[str, int]) -> "Node":
         """
@@ -729,7 +766,7 @@ class DictNode(CollectionNode):  # noqa: F811
 
         If default is not given, it defaults to None, so that this method never raises a KeyError.
         """
-        return _make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key, name=name, default=default))
+        return _make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key, default, name=name))
 
     def items(self) -> Iterator[tuple[str, "Node"]]:
         """

@@ -50,7 +50,6 @@ class LiteralCodec(Protocol):
 _literal_codecs: list[tuple[int, int, LiteralCodec]] = []
 _literal_codec_seq = 0
 _plugins_loaded = False
-_literal_codec_max_reencodes = 64
 _lock = RLock()
 
 
@@ -119,67 +118,30 @@ def iter_literal_codecs() -> Iterator[LiteralCodec]:
     yield from codecs
 
 
-def _values_equal(a: Any, b: Any) -> bool:
-    if a is b:
-        return True
-    try:
-        return bool(a == b)
-    except Exception:
-        return False
-
-
-def _is_repo_error(value: Exception) -> bool:
-    return type(value).__name__ == "DmlRepoError"
-
-
 def apply_codec(value: Any, *, dag: "Dag") -> Any:
-    current = value
-    reencode_count = 0
-
-    while True:
-        matched = False
-        for codec in iter_literal_codecs():
-            try:
-                if not codec.can_encode(current):
-                    continue
-                matched = True
-                encoded = codec.encode(current, dag)
-            except CodecError:
+    for codec in iter_literal_codecs():
+        try:
+            if codec.can_encode(value):
+                return codec.encode(value, dag)
+        except Exception as e:
+            if isinstance(e, DmlRepoError):
                 raise
-            except Exception as e:
-                if _is_repo_error(e):
-                    raise
-                raise CodecError(f"Literal codec {codec.__class__.__name__} failed: {e}") from e
-
-            if _values_equal(encoded, current):
-                return encoded
-
-            current = encoded
-            reencode_count += 1
-            if reencode_count > _literal_codec_max_reencodes:
-                raise CodecError("Literal codec recursion failed to converge")
-            break
-        if not matched:
-            return current
-
-
-def normalize_codec_value(value: Any, *, dag: "Dag") -> Any:
-    value = apply_codec(value, dag=dag)
-    if isinstance(value, (list, tuple)):
-        return [normalize_codec_value(v, dag=dag) for v in value]
-    if isinstance(value, dict):
-        return {k: normalize_codec_value(v, dag=dag) for k, v in value.items()}
-    if isinstance(value, Runnable):
-        target = normalize_codec_value(value.target, dag=dag)
-        sub = normalize_codec_value(value.sub, dag=dag) if value.sub is not None else None
-        kwargs = {k: normalize_codec_value(v, dag=dag) for k, v in value.kwargs.items()}
-        return Runnable(target=target, adapter=value.adapter, kwargs=kwargs, sub=sub)
+            raise CodecError(f"Literal codec {codec.__class__.__name__} failed: {e}") from e
     return value
 
 
-def stage_value(dag: "Dag", value: Any, *, name: str | None = None) -> Ref:
-    normalized = normalize_codec_value(value, dag=dag)
-    return dag._put_literal(normalized, name=name)
+def apply_codecs(value: Any, *, dag: "Dag") -> Any:
+    value = apply_codec(value, dag=dag)
+    if isinstance(value, (list, tuple)):
+        return [apply_codecs(v, dag=dag) for v in value]
+    if isinstance(value, dict):
+        return {k: apply_codecs(v, dag=dag) for k, v in value.items()}
+    if isinstance(value, Runnable):
+        target = apply_codecs(value.target, dag=dag)
+        sub = apply_codecs(value.sub, dag=dag)
+        kwargs = {k: apply_codecs(v, dag=dag) for k, v in value.kwargs.items()}
+        return Runnable(target=target, adapter=value.adapter, kwargs=kwargs, sub=sub)
+    return value
 
 
 class NodeCodec:
@@ -206,18 +168,19 @@ class DelayedActionCodec:
 
     def encode(self, value: DelayedRef | DelayedLoad | DelayedRunnable, dag: "Dag"):
         if isinstance(value, DelayedRef):
-            return dag[value.name].ref
+            return apply_codecs(dag[value.name], dag=dag)
         if isinstance(value, DelayedRunnable):
             from daggerml.contrib.adapter_registry import get_adapter
 
             adapter_spec = get_adapter(value.adapter)
-            sub = value.sub
-            if isinstance(sub, DelayedRunnable):
-                sub = normalize_codec_value(sub, dag=dag)
-            resolved = adapter_spec.resolve_runnable(value.uri, value.kwargs, sub)
+            uri = apply_codecs(value.uri, dag=dag)
+            kwargs = apply_codecs(value.kwargs, dag=dag)
+            sub = apply_codecs(value.sub, dag=dag)
+            resolved = adapter_spec.resolve_runnable(uri, kwargs, sub)
             if not isinstance(resolved, Runnable):
                 raise CodecError("Adapter resolve_runnable must return Runnable")
             return resolved
+        assert isinstance(value, DelayedLoad)
         index = dag.dml.admin.index.get(dag._require_index_ref())["index"]
         commit_ref = index["commit"]["ref"]
         resolved = dag.dml.dag.get(value.dagname, revision=commit_ref.to)["dag"]

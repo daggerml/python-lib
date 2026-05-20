@@ -280,19 +280,17 @@ def test_dag_describe_node_resolves_named_node_with_revision_context():
     with (
         patch(
             "daggerml._internal.dml.resolve_node_ref",
-            return_value=SimpleNamespace(ref=Ref("node:4"), dag_selector="train", revision=revision),
+            return_value=SimpleNamespace(ref=Ref("node:4"), dag="train", revision=revision),
         ),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
         patch.object(dml_module, "make_node_ops", return_value=node_ops),
     ):
-        result = ops.dag.describe_node("result", dag_selector="train", revision="HEAD")
+        result = ops.dag.describe_node("result", dag="train", revision="HEAD")
 
     node_ops.describe.assert_called_once_with(Ref("node:4"))
     assert result == {
-        "selector": "result",
-        "dag_selector": "train",
         "revision": {"input": "HEAD", "kind": "branch", "commit": Ref("commit:2"), "branch": "main", "tag": None},
-        "node": {"id": "4", "ref": Ref("node:4"), "type": "LiteralNode"},
+        "node": {"ref": Ref("node:4"), "type": "LiteralNode"},
     }
 
 
@@ -303,19 +301,15 @@ def test_dag_get_node_resolves_named_node_with_explicit_dag_ref():
     with (
         patch(
             "daggerml._internal.dml.resolve_node_ref",
-            return_value=SimpleNamespace(ref=Ref("node:4"), dag_selector="dag:3", revision=None),
+            return_value=SimpleNamespace(ref=Ref("node:4"), dag="train", revision=None),
         ),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
         patch.object(dml_module, "make_node_ops", return_value=node_ops),
     ):
-        result = ops.dag.get_node("result", dag_selector="dag:3")
+        result = ops.dag.get_node("result", dag="train")
 
     node_ops.get.assert_called_once_with(Ref("node:4"))
-    assert result == {
-        "selector": "result",
-        "dag_selector": "dag:3",
-        "node": {"answer": Ref("datum:5")},
-    }
+    assert result == {"node": {"answer": Ref("datum:5")}}
 
 
 def test_dag_describe_node_accepts_explicit_node_ref_without_dag_context():
@@ -330,11 +324,7 @@ def test_dag_describe_node_accepts_explicit_node_ref_without_dag_context():
         result = ops.dag.describe_node(node_ref)
 
     node_ops.describe.assert_called_once_with(node_ref)
-    assert result == {
-        "selector": "node-literal:4",
-        "dag_selector": None,
-        "node": {"id": "4", "ref": node_ref, "type": "LiteralNode"},
-    }
+    assert result == {"node": {"ref": node_ref, "type": "LiteralNode"}}
 
 
 def test_dag_get_node_accepts_explicit_node_ref_without_dag_context():
@@ -346,14 +336,35 @@ def test_dag_get_node_accepts_explicit_node_ref_without_dag_context():
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
         patch.object(dml_module, "make_node_ops", return_value=node_ops),
     ):
-        result = ops.dag.get_node(node_ref.to, dag_selector="train", revision="HEAD")
+        result = ops.dag.get_node(node_ref)
 
     node_ops.get.assert_called_once_with(node_ref)
-    assert result == {
-        "selector": "node-fn:4",
-        "dag_selector": None,
-        "node": {"answer": Ref("datum:5")},
-    }
+    assert result == {"node": {"answer": Ref("datum:5")}}
+
+
+def test_dag_get_node_rejects_ref_like_node_string_with_dag_context():
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
+
+    with pytest.raises(DmlRepoError, match="Expected node Ref"):
+        with patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()):
+            ops.dag.get_node("node-fn:4", dag="train", revision="HEAD")
+
+
+def test_dag_describe_node_uses_explicit_dag_ref_context_for_named_lookup():
+    ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
+    dag_ref = Ref("dag:3")
+    node_ops = Mock(describe=Mock(return_value={"id": "4", "ref": Ref("node:4"), "type": "LiteralNode"}))
+    dag_ops = Mock(get_node=Mock(return_value=Ref("node:4")))
+
+    with (
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_node_ops", return_value=node_ops),
+        patch.object(dml_module, "make_dag_ops", return_value=dag_ops),
+    ):
+        result = ops.dag.describe_node("result", dag=dag_ref)
+
+    dag_ops.get_node.assert_called_once_with(dag_ref, "result")
+    assert result == {"node": {"ref": Ref("node:4"), "type": "LiteralNode"}}
 
 
 def test_dml_init_recovers_when_config_exists_and_db_missing(tmp_path):
@@ -384,7 +395,7 @@ def test_dml_boundary_keeps_only_allowed_private_helpers():
 
     for namespace in (dml.config, dml.runtime, dml.dag, dml.admin):
         assert hasattr(namespace, "_dml")
-        assert not hasattr(namespace, "_stringify_node_selector")
+        assert not hasattr(namespace, "_selector_payload")
 
 
 def test_dml_init_uses_init_project_layout_for_bootstrap(tmp_path):
