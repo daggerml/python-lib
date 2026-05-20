@@ -84,7 +84,7 @@ def load(name: str, dml=None) -> "Dag":
     dag_info = dml.dag.get(name)
     if dag_info is None:
         raise DmlRepoError(f"DAG not found: {name}")
-    return Dag(dml=dml, ref=dag_info["dag"]["ref"], name=name)
+    return Dag(dml=dml, ref=dag_info["ref"], name=name)
 
 
 @contextmanager
@@ -124,7 +124,7 @@ def _make_node(dag: "Dag", ref: Ref) -> "Node":
     Node
         A Node instance representing the reference in the DAG.
     """
-    node_value = dag.dml.dag.get_node(ref)["node"]
+    node_value = dag.dml.dag.get_node(ref)
     info: dict[str, Any] = {"data_type": type(node_value).__name__.lower()}
     # Determine node type based on value and populate info
     if isinstance(node_value, list):
@@ -200,17 +200,18 @@ class Dag:
         if self.ref is None:
             info = self.dml.runtime.describe(self._require_index_ref())
             return len(info["names"])
-        names_dict = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["names"]
+        names_dict = self.dml.dag.get(self.ref)["names"]
         return len(names_dict)
 
     def __iter__(self):
         yield from self.keys()
 
     def _get_named_node(self, name: str) -> "Node":
+        # FIXME: Should require active index, and should actually set the node name
         if self.ref is None:
             node_ref = self.dml.runtime.get_node(self._require_index_ref(), name)
             return _make_node(self, node_ref)
-        node_ref = self.dml.dag.describe_node(name, dag=cast(Ref, self.ref))["node"]["ref"]
+        node_ref = self.dml.dag.describe_node(name, dag=self.ref)["ref"]
         return _make_node(self, node_ref)
 
     def _set_named_node(self, name: str, value: Any) -> None:
@@ -248,7 +249,7 @@ class Dag:
         if self.ref is None:
             info = self.dml.runtime.describe(self._require_index_ref())
             return list(info["names"].keys())
-        names_dict = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["names"]
+        names_dict = self.dml.dag.get(self.ref)["names"]
         return list(names_dict.keys())
 
     def values(self) -> list["Node"]:
@@ -256,7 +257,7 @@ class Dag:
         if self.ref is None:
             info = self.dml.runtime.describe(self._require_index_ref())
             return [_make_node(self, ref) for ref in info["names"].values()]
-        names_dict = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["names"]
+        names_dict = self.dml.dag.get(cast(Ref, self.ref))["names"]
         return [_make_node(self, ref) for ref in names_dict.values()]
 
     @property
@@ -265,14 +266,16 @@ class Dag:
         if self.ref is None:
             argv_ref = self.dml.runtime.get_argv(self._require_index_ref())
             return cast(ListNode, _make_node(self, argv_ref))
-        argv_ref = self.dml.dag.describe(cast(Ref, self.ref))["dag"]["argv"]
+        argv_ref = self.dml.dag.get(cast(Ref, self.ref))["argv"]
         assert isinstance(argv_ref, Ref), f"'{self.__class__.__name__}' dag has no argv"
         return cast(ListNode, _make_node(self, argv_ref))
 
     @property
     def result(self) -> "Node":
         """Get the result node of the dag"""
-        ref = self.dml.dag.describe(cast(Ref, self.ref))["dag"].get("result")
+        if self.ref is None:
+            raise DmlRepoError("Cannot access result of an uncommitted DAG")
+        ref = self.dml.dag.get(cast(Ref, self.ref)).get("result")
         assert isinstance(ref, Ref), f"'{self.__class__.__name__}' dag has not been committed yet"
         return _make_node(self, ref)
 
@@ -285,7 +288,7 @@ class Dag:
     @overload
     def put(self, value: Union[Scalar, "ScalarNode"], *, name=None) -> "ScalarNode": ...
     @overload
-    def put(self, value: "Node", *, name=None) -> "Node": ...
+    def put(self, value: Any, *, name=None) -> "Node": ...
     def put(self, value: Any, *, name=None) -> "Node":
         """
         Add a value to the DAG.
@@ -318,16 +321,16 @@ class Dag:
         """
         return _make_node(self, self._stage_value(value, name=name))
 
-    def load(self, dag_name: str, node_name: str | None = None, *, name: str | None = None) -> "Node":
+    def require(self, dag_name: str, node_name: str | None = None, *, name: str | None = None) -> "Node":
         """
-        Load a node from a different (committed) DAG into the current DAG.
+        Import a node from a different (committed) DAG into the current DAG.
 
         Parameters
         ----------
         dag_name : str
-            Name of the DAG to load from
+            Name of the DAG to import from
         node_name : str, optional
-            Name of the node to load. If None, loads the result node of the DAG.
+            Name of the node to import. If None, imports the result node of the DAG.
 
         Returns
         -------
@@ -343,18 +346,18 @@ class Dag:
         >>> n2 = dag.put({"a": 1, "b": [n1, "23"]}, name="data")
         >>> dag.commit(n2)
         >>> dag2 = new(dml=dml, name="test2", message="test2")
-        >>> loaded_n2 = dag2.load("test", "data", name="loaded_data")
-        >>> loaded_n2.value()
+        >>> imported_n2 = dag2.require("test", "data", name="imported_data")
+        >>> imported_n2.value()
         {'a': 1, 'b': [42, '23']}
         """
-        if self.ref is None:
-            raise DmlRepoError("Cannot load from an uncommitted DAG")
-        index = self.dml.admin.index.get(self._require_index_ref())["index"]
-        dags = self.dml.dag.list(revision=index["commit"]["ref"].to)["dags"]
+        if self.ref is not None:
+            raise DmlRepoError("Cannot import into a committed DAG.")
+        index = self.dml.runtime.describe(self._require_index_ref())
+        dags = self.dml.show(revision=index["commit"].to)["commit"]["dags"]
         dag_info = dags.get(dag_name)
         if dag_info is None:
             raise DmlRepoError(f"DAG not found: {dag_name}")
-        dag_info = self.dml.dag.describe(dag_info)["dag"]
+        dag_info = self.dml.dag.get(dag_info)
         node_ref = dag_info["names"].get(node_name) if node_name else dag_info.get("result")
         if node_ref is None:
             raise DmlRepoError(f"Node '{node_name}' not found in DAG '{dag_name}'")
@@ -449,7 +452,7 @@ class Dag:
             )
 
         # Extract the dag ref from the commit
-        self.ref = self.dml.dag.list(revision=commit_ref.to)["dags"][self.name]
+        self.ref = self.dml.show(revision=commit_ref.to)["commit"]["dags"][self.name]
 
 
 @dataclass(frozen=True)
@@ -480,15 +483,6 @@ class Node:  # noqa: F811
         if not isinstance(other, Node):
             return NotImplemented
         return self.ref == other.ref
-
-    @property
-    def argv(self) -> list["Node"]:
-        "Access the node's argv list"
-        node_info = self.dag.dml.dag.describe_node(self.ref)["node"]
-        argv = node_info.get("argv")
-        if argv is None:
-            raise Error("Node has no argv", origin="dml", type="TypeError")
-        return [_make_node(self.dag, ref) for ref in argv]
 
     def backtrack(self, *keys: Union[str, int]) -> "Node":
         """
@@ -528,7 +522,7 @@ class Node:  # noqa: F811
         Dag
             This node's execution dag.
         """
-        node_info = self.dag.dml.dag.describe_node(self.ref)["node"]
+        node_info = self.dag.dml.dag.describe_node(self.ref)
         dag_ref = node_info.get("dag")
         if isinstance(dag_ref, Ref):
             return Dag(dml=self.dag.dml, ref=dag_ref)
@@ -558,7 +552,7 @@ class Node:  # noqa: F811
         Any
             The actual value represented by this node
         """
-        return self.dag.dml.dag.unroll_node(self.ref)["node"]
+        return self.dag.dml.dag.get_node(self.ref, recursive=True)
 
     def __call__(self, *args, name=None, sleep=None, timeout=-1, **kw) -> "Node":
         raise TypeError(f"Node of type '{self.type}' is not callable")

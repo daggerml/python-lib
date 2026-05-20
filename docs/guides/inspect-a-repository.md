@@ -33,6 +33,7 @@ dml --project-home ./demo-repo diff --left HEAD~1 --right HEAD
 Notes for the generated CLI:
 
 - `log` takes `--limit` because `limit` is an optional method parameter.
+- `log` and `show` include the visible DAG map under `commit["dags"]`.
 - `diff` uses `--left` and `--right` for the same reason.
 
 Python equivalent:
@@ -50,11 +51,10 @@ print(dml.diff("HEAD~1", "HEAD"))
 ## Inspect DAGs at a revision
 
 ```bash
-dml --project-home ./demo-repo dag list
 dml --project-home ./demo-repo dag get numbers
 ```
 
-Use `dag list` to discover names, then `dag get` when you want the DAG payload with named nodes.
+Use `show` to discover visible DAG names, then `dag get` when you want one DAG summary.
 
 Python equivalent:
 
@@ -63,7 +63,7 @@ from daggerml import Dml
 
 dml = Dml(project_home="./demo-repo")
 
-print(dml.dag.list())
+print(dml.show())
 print(dml.dag.get("numbers"))
 ```
 
@@ -72,7 +72,7 @@ print(dml.dag.get("numbers"))
 Most repo and DAG inspection surfaces take revision selectors such as `HEAD`, `HEAD~1`, `main`, or `origin/main`.
 
 ```bash
-dml --project-home ./demo-repo dag list --revision HEAD~1
+dml --project-home ./demo-repo show --revision HEAD~1
 dml --project-home ./demo-repo log --limit 1
 ```
 

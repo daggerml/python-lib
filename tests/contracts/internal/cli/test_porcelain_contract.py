@@ -14,10 +14,11 @@ def test_show_log_and_diff_return_spec_shapes():
         logged = dml.log()
         diffed = dml.diff("HEAD~1", "HEAD")
 
-    assert set(shown.keys()) == {"revision", "commit", "dags", "change"}
+    assert set(shown.keys()) == {"revision", "commit", "change"}
     assert set(logged.keys()) == {"revision", "commits"}
     assert set(diffed.keys()) == {"left", "right", "added", "removed", "updated"}
-    assert "baseline" in shown["dags"]
+    assert "baseline" in shown["commit"]["dags"]
+    assert "dags" in logged["commits"][0]
 
 
 def test_branch_lists_local_and_remote_tracking_views(tmp_path):
@@ -32,6 +33,8 @@ def test_branch_lists_local_and_remote_tracking_views(tmp_path):
             remote = target.branch(remote=True)
 
     assert local["remote"] is False
+    assert local["head"] == "main"
     assert "main" in local["branches"]
     assert remote["remote"] is True
+    assert remote["head"] is None
     assert any(branch.startswith("dml://") for branch in remote["branches"])

@@ -275,7 +275,7 @@ def test_runtime_cancel_retries_candidate_errors_with_backoff():
 def test_dag_describe_node_resolves_named_node_with_revision_context():
     ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     revision = SimpleNamespace(commit=Ref("commit:2"), kind="branch", branch="main", tag=None)
-    node_ops = Mock(describe=Mock(return_value={"id": "4", "ref": Ref("node:4"), "type": "LiteralNode"}))
+    node_ops = Mock(describe=Mock(return_value={"ref": Ref("node:4"), "type": "LiteralNode"}))
 
     with (
         patch(
@@ -288,10 +288,7 @@ def test_dag_describe_node_resolves_named_node_with_revision_context():
         result = ops.dag.describe_node("result", dag="train", revision="HEAD")
 
     node_ops.describe.assert_called_once_with(Ref("node:4"))
-    assert result == {
-        "revision": {"input": "HEAD", "kind": "branch", "commit": Ref("commit:2"), "branch": "main", "tag": None},
-        "node": {"ref": Ref("node:4"), "type": "LiteralNode"},
-    }
+    assert result == {"ref": Ref("node:4"), "type": "LiteralNode"}
 
 
 def test_dag_get_node_resolves_named_node_with_explicit_dag_ref():
@@ -309,13 +306,13 @@ def test_dag_get_node_resolves_named_node_with_explicit_dag_ref():
         result = ops.dag.get_node("result", dag="train")
 
     node_ops.get.assert_called_once_with(Ref("node:4"))
-    assert result == {"node": {"answer": Ref("datum:5")}}
+    assert result == {"answer": Ref("datum:5")}
 
 
 def test_dag_describe_node_accepts_explicit_node_ref_without_dag_context():
     ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     node_ref = Ref("node-literal:4")
-    node_ops = Mock(describe=Mock(return_value={"id": "4", "ref": node_ref, "type": "LiteralNode"}))
+    node_ops = Mock(describe=Mock(return_value={"ref": node_ref, "type": "LiteralNode"}))
 
     with (
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
@@ -324,7 +321,7 @@ def test_dag_describe_node_accepts_explicit_node_ref_without_dag_context():
         result = ops.dag.describe_node(node_ref)
 
     node_ops.describe.assert_called_once_with(node_ref)
-    assert result == {"node": {"ref": node_ref, "type": "LiteralNode"}}
+    assert result == {"ref": node_ref, "type": "LiteralNode"}
 
 
 def test_dag_get_node_accepts_explicit_node_ref_without_dag_context():
@@ -339,7 +336,7 @@ def test_dag_get_node_accepts_explicit_node_ref_without_dag_context():
         result = ops.dag.get_node(node_ref)
 
     node_ops.get.assert_called_once_with(node_ref)
-    assert result == {"node": {"answer": Ref("datum:5")}}
+    assert result == {"answer": Ref("datum:5")}
 
 
 def test_dag_get_node_rejects_ref_like_node_string_with_dag_context():
@@ -353,7 +350,7 @@ def test_dag_get_node_rejects_ref_like_node_string_with_dag_context():
 def test_dag_describe_node_uses_explicit_dag_ref_context_for_named_lookup():
     ops = Dml(project_home="/repo", remote_root="s3://bucket/prefix")
     dag_ref = Ref("dag:3")
-    node_ops = Mock(describe=Mock(return_value={"id": "4", "ref": Ref("node:4"), "type": "LiteralNode"}))
+    node_ops = Mock(describe=Mock(return_value={"ref": Ref("node:4"), "type": "LiteralNode"}))
     dag_ops = Mock(get_node=Mock(return_value=Ref("node:4")))
 
     with (
@@ -364,7 +361,7 @@ def test_dag_describe_node_uses_explicit_dag_ref_context_for_named_lookup():
         result = ops.dag.describe_node("result", dag=dag_ref)
 
     dag_ops.get_node.assert_called_once_with(dag_ref, "result")
-    assert result == {"node": {"ref": Ref("node:4"), "type": "LiteralNode"}}
+    assert result == {"ref": Ref("node:4"), "type": "LiteralNode"}
 
 
 def test_dml_init_recovers_when_config_exists_and_db_missing(tmp_path):

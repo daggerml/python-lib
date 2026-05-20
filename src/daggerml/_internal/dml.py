@@ -54,7 +54,6 @@ _DB_MAP_SIZE = 1024**3
 
 class ProjectConfigPayload(TypedDict):
     home: str | None
-    uri: str | None
 
 
 class DbConfigPayload(TypedDict):
@@ -62,6 +61,7 @@ class DbConfigPayload(TypedDict):
 
 
 class RemoteConfigPayload(TypedDict):
+    project: str | None
     root: str
     fetch_workers: int
 
@@ -82,7 +82,7 @@ class ConfigShowContribPayload(ConfigShowPayload):
 class CommitPayload(TypedDict):
     ref: Ref
     parents: list[Ref]
-    tree: Ref
+    dags: dict[str, Ref]
     author: str | None
     message: str | None
     dag: Ref | None
@@ -110,68 +110,13 @@ class DagSummaryPayload(TypedDict):
 class NodeDescriptionPayload(TypedDict):
     ref: Ref
     type: str
-    value_ref: Ref
     dag: NotRequired[Ref]
     argv: NotRequired[list[Ref]]
     node: NotRequired[Ref]
 
 
-class DagPayload(TypedDict):
-    nodes: list[NodeDescriptionPayload]
-    names: dict[str, Ref]
-    result: Ref | None
-    argv: Ref | None
-    kwargv: Ref | None
-    ref: Ref
-
-
 NodeValue = None | int | float | str | bool | Uri | Runnable | list[Ref] | dict[str, Ref]
 NodeUnrolledValue = None | int | float | str | bool | Uri | Runnable | list[Any] | dict[str, Any]
-
-
-class NodeDescribePayload(TypedDict):
-    node: NodeDescriptionPayload
-
-
-class NodeDescribeWithRevisionPayload(NodeDescribePayload):
-    revision: RevisionPayload
-
-
-class NodeGetPayload(TypedDict):
-    node: NodeValue
-
-
-class NodeGetWithRevisionPayload(NodeGetPayload):
-    revision: RevisionPayload
-
-
-class NodeUnrollPayload(TypedDict):
-    node: NodeUnrolledValue
-
-
-class NodeUnrollWithRevisionPayload(NodeUnrollPayload):
-    revision: RevisionPayload
-
-
-class DagListPayload(TypedDict):
-    revision: RevisionPayload
-    dags: dict[str, Ref]
-
-
-class DagDescribePayload(TypedDict):
-    dag: DagSummaryPayload
-
-
-class DagDescribeWithRevisionPayload(DagDescribePayload):
-    revision: RevisionPayload
-
-
-class DagGetPayload(TypedDict):
-    dag: DagPayload
-
-
-class DagGetWithRevisionPayload(DagGetPayload):
-    revision: RevisionPayload
 
 
 class DagMapDiffPayload(TypedDict):
@@ -192,7 +137,6 @@ class LogPayload(TypedDict):
 class ShowPayload(TypedDict):
     revision: RevisionPayload
     commit: CommitPayload
-    dags: dict[str, Ref]
     change: ShowChangePayload
 
 
@@ -214,15 +158,10 @@ class StatusPayload(TypedDict):
     indexes: list[str]
 
 
-class BranchLocalPayload(TypedDict):
+class BranchPayload(TypedDict):
     branches: list[str]
     head: str | None
-    remote: Literal[False]
-
-
-class BranchRemotePayload(TypedDict):
-    branches: list[str]
-    remote: Literal[True]
+    remote: bool
 
 
 class CheckoutAttachedPayload(TypedDict):
@@ -257,31 +196,7 @@ class RuntimeCancelPayload(TypedDict):
     lock_retry_count: int
 
 
-class IndexCommitPayload(TypedDict):
-    ref: Ref
-    summary: CommitPayload
-
-
-class AdminIndexItemPayload(TypedDict):
-    id: str
-    commit: IndexCommitPayload
-    dag: Ref | None
-    nodes: list[Ref]
-    names: dict[str, Ref]
-    result: Ref | None
-    argv: Ref | None
-    kwargv: Ref | None
-
-
-class AdminIndexListPayload(TypedDict):
-    indexes: list[AdminIndexItemPayload]
-
-
-class AdminIndexGetPayload(TypedDict):
-    index: AdminIndexItemPayload
-
-
-class AdminIndexDeletePayload(TypedDict):
+class RuntimeDeletePayload(TypedDict):
     index: str
     deleted: Literal[True]
 
@@ -468,8 +383,9 @@ def revision_payload(value: str, resolved) -> RevisionPayload:
     }
 
 
-def commit_payload(commit_ref: Ref, summary: dict[str, Any]) -> CommitPayload:
+def commit_payload(dml: "Dml", commit_ref: Ref, summary: dict[str, Any]) -> CommitPayload:
     summary = dict(summary)
+    summary["dags"] = tree_dags(dml, summary.pop("tree"))
     summary.pop("id", None)
     summary["ref"] = commit_ref
     return cast(CommitPayload, summary)
@@ -477,7 +393,7 @@ def commit_payload(commit_ref: Ref, summary: dict[str, Any]) -> CommitPayload:
 
 def node_description_payload(node_info: dict[str, Any]) -> NodeDescriptionPayload:
     payload = dict(node_info)
-    payload.pop("id", None)
+    # payload.pop("id", None)
     return cast(NodeDescriptionPayload, payload)
 
 
@@ -499,22 +415,6 @@ def remote_tracking_branches(dml: "Dml") -> list[str]:
         branch_name = "/".join(parts[3:])
         branches.append(f"dml://{owner}/{project}#{branch_name}")
     return branches
-
-
-def dag_payload(dml: "Dml", dag_ref: Ref) -> DagPayload:
-    summary = dag_summary_payload(dml, dag_ref)
-    node_refs = list(summary["nodes"])
-    with with_db(dml) as db:
-        node_ops = make_node_ops(db)
-        nodes = [node_description_payload(node_ops.describe(node_ref)) for node_ref in node_refs]
-    return {
-        "nodes": nodes,
-        "names": summary["names"],
-        "result": summary["result"],
-        "argv": summary["argv"],
-        "kwargv": summary["kwargv"],
-        "ref": summary["ref"],
-    }
 
 
 def resolve_dml_revision(dml: "Dml", value: str):
@@ -695,6 +595,12 @@ class _RuntimeNamespace:
         with with_db(self._dml) as db:
             return cast(IndexDescribePayload, make_index_ops(db, self._dml).describe(index_id))
 
+    def delete(self, index_id: Annotated[str, "Runtime workspace to delete."]) -> RuntimeDeletePayload:
+        """Delete a runtime workspace immediately."""
+        with with_db(self._dml) as db:
+            make_index_ops(db, self._dml).delete(index_id)
+        return {"index": index_id, "deleted": True}
+
     def cancel(
         self,
         index_id: Annotated[str, "Runtime workspace whose active executions should be cancelled."],
@@ -794,103 +700,29 @@ class _DagNamespace:
 
     _dml: "Dml"
 
-    def list(
-        self,
-        revision: Annotated[str, "Revision selector such as HEAD, HEAD~1, main, or origin/main."] = "HEAD",
-    ) -> DagListPayload:
-        """List named DAGs visible from the selected revision."""
-        resolved = resolve_dml_revision(self._dml, revision)
-        return {
-            "revision": revision_payload(revision, resolved),
-            "dags": dag_map_for_commit(self._dml, resolved.commit),
-        }
-
-    @overload
-    def describe(self, value: str | Ref, *, revision: None = None) -> DagDescribePayload: ...
-    @overload
-    def describe(self, value: str | Ref, *, revision: str) -> DagDescribeWithRevisionPayload: ...
-    def describe(
-        self,
-        value: Annotated[str | Ref, "DAG by name or exact Ref."],
-        *,
-        revision: Annotated[str | None, "Optional revision when the DAG value is name-based."] = None,
-    ) -> DagDescribePayload:
-        """Return DAG metadata without materializing full node values."""
-        with with_db(self._dml) as db:
-            if isinstance(value, Ref):
-                if revision is not None:
-                    raise DmlRepoError("dml dag describe rejects --revision with explicit dag refs")
-                resolved = None
-                dag_ref = require_exact_ref(value, "dag")
-            else:
-                resolved = resolve_dag_ref(
-                    value=value,
-                    revision=revision,
-                    commit_ops=make_commit_ops(db),
-                    head_ops=make_head_ops(db),
-                    project_dir=require_project_home(self._dml._context.project_home),
-                    operation="describe",
-                )
-                dag_ref = resolved.ref
-        payload: DagDescribePayload = {"dag": dag_summary_payload(self._dml, dag_ref)}
-        if resolved is not None and resolved.revision is not None:
-            return cast(
-                DagDescribeWithRevisionPayload,
-                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
-            )
-        return payload
-
-    @overload
-    def get(self, value: str | Ref, *, revision: None = None) -> DagGetPayload: ...
-    @overload
-    def get(self, value: str | Ref, *, revision: str) -> DagGetWithRevisionPayload: ...
     def get(
         self,
         value: Annotated[str | Ref, "DAG by name or exact Ref."],
         *,
         revision: Annotated[str | None, "Optional revision when the DAG value is name-based."] = None,
-    ) -> DagGetPayload:
-        """Return a DAG payload including described nodes from the selected revision."""
+    ) -> DagSummaryPayload:
+        """Return one DAG summary from the selected revision."""
         with with_db(self._dml) as db:
             if isinstance(value, Ref):
                 if revision is not None:
                     raise DmlRepoError("dml dag get rejects --revision with explicit dag refs")
-                resolved = None
                 dag_ref = require_exact_ref(value, "dag")
             else:
-                resolved = resolve_dag_ref(
+                dag_ref = resolve_dag_ref(
                     value=value,
                     revision=revision,
                     commit_ops=make_commit_ops(db),
                     head_ops=make_head_ops(db),
                     project_dir=require_project_home(self._dml._context.project_home),
                     operation="get",
-                )
-                dag_ref = resolved.ref
-        payload: DagGetPayload = {"dag": dag_payload(self._dml, dag_ref)}
-        if resolved is not None and resolved.revision is not None:
-            return cast(
-                DagGetWithRevisionPayload,
-                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
-            )
-        return payload
+                ).ref
+        return dag_summary_payload(self._dml, dag_ref)
 
-    @overload
-    def describe_node(
-        self,
-        node: str | Ref,
-        *,
-        dag: str | Ref | None = None,
-        revision: None = None,
-    ) -> NodeDescribePayload: ...
-    @overload
-    def describe_node(
-        self,
-        node: str | Ref,
-        *,
-        dag: str | Ref | None = None,
-        revision: str,
-    ) -> NodeDescribeWithRevisionPayload: ...
     def describe_node(
         self,
         node: Annotated[
@@ -903,21 +735,19 @@ class _DagNamespace:
             "Optional DAG by name or exact Ref when node is name-based; examples: train, Ref('dag:1').",
         ] = None,
         revision: Annotated[str | None, "Optional revision selector such as HEAD or main."] = None,
-    ) -> NodeDescribePayload:
+    ) -> NodeDescriptionPayload:
         """Describe a committed node without loading its full value."""
         with with_db(self._dml) as db:
             if isinstance(node, Ref):
                 if dag is not None or revision is not None:
                     raise DmlRepoError("dml dag describe-node rejects dag and revision with explicit node refs")
-                resolved = None
                 node_ref = require_exact_ref(node, "node")
             elif isinstance(dag, Ref):
                 if revision is not None:
                     raise DmlRepoError("dml dag describe-node rejects --revision with explicit dag refs")
-                resolved = None
                 node_ref = make_dag_ops(db).get_node(require_exact_ref(dag, "dag"), node)
             else:
-                resolved = resolve_node_ref(
+                node_ref = resolve_node_ref(
                     value=node,
                     dag=dag,
                     revision=revision,
@@ -926,16 +756,8 @@ class _DagNamespace:
                     head_ops=make_head_ops(db),
                     project_dir=require_project_home(self._dml._context.project_home),
                     operation="describe-node",
-                )
-                node_ref = resolved.ref
-            described_node = node_description_payload(make_node_ops(db).describe(node_ref))
-        payload: NodeDescribePayload = {"node": described_node}
-        if resolved is not None and resolved.revision is not None:
-            return cast(
-                NodeDescribeWithRevisionPayload,
-                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
-            )
-        return payload
+                ).ref
+            return node_description_payload(make_node_ops(db).describe(node_ref))
 
     @overload
     def get_node(
@@ -943,16 +765,18 @@ class _DagNamespace:
         node: str | Ref,
         *,
         dag: str | Ref | None = None,
-        revision: None = None,
-    ) -> NodeGetPayload: ...
+        revision: str | None = None,
+        recursive: Literal[False] = False,
+    ) -> NodeValue: ...
     @overload
     def get_node(
         self,
         node: str | Ref,
         *,
         dag: str | Ref | None = None,
-        revision: str,
-    ) -> NodeGetWithRevisionPayload: ...
+        revision: str | None = None,
+        recursive: Literal[True] = True,
+    ) -> NodeUnrolledValue: ...
     def get_node(
         self,
         node: Annotated[
@@ -965,21 +789,20 @@ class _DagNamespace:
             "Optional DAG by name or exact Ref when node is name-based; examples: train, Ref('dag:1').",
         ] = None,
         revision: Annotated[str | None, "Optional revision selector such as HEAD or main."] = None,
-    ) -> NodeGetPayload:
+        recursive: Annotated[bool, "Whether to recursively unroll the node value."] = False,
+    ) -> NodeValue:
         """Return the value for a committed node."""
         with with_db(self._dml) as db:
             if isinstance(node, Ref):
                 if dag is not None or revision is not None:
                     raise DmlRepoError("dml dag get-node rejects dag and revision with explicit node refs")
-                resolved = None
                 node_ref = require_exact_ref(node, "node")
             elif isinstance(dag, Ref):
                 if revision is not None:
                     raise DmlRepoError("dml dag get-node rejects --revision with explicit dag refs")
-                resolved = None
                 node_ref = make_dag_ops(db).get_node(require_exact_ref(dag, "dag"), node)
             else:
-                resolved = resolve_node_ref(
+                node_ref = resolve_node_ref(
                     value=node,
                     dag=dag,
                     revision=revision,
@@ -988,78 +811,10 @@ class _DagNamespace:
                     head_ops=make_head_ops(db),
                     project_dir=require_project_home(self._dml._context.project_home),
                     operation="get-node",
-                )
-                node_ref = resolved.ref
-            node_value = make_node_ops(db).get(node_ref)
-        payload: NodeGetPayload = {"node": cast(NodeValue, node_value)}
-        if resolved is not None and resolved.revision is not None:
-            return cast(
-                NodeGetWithRevisionPayload,
-                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
-            )
-        return payload
-
-    @overload
-    def unroll_node(
-        self,
-        node: str | Ref,
-        *,
-        dag: str | Ref | None = None,
-        revision: None = None,
-    ) -> NodeUnrollPayload: ...
-    @overload
-    def unroll_node(
-        self,
-        node: str | Ref,
-        *,
-        dag: str | Ref | None = None,
-        revision: str,
-    ) -> NodeUnrollWithRevisionPayload: ...
-    def unroll_node(
-        self,
-        node: Annotated[
-            str | Ref,
-            "Node by name or exact Ref; examples: result, answer, Ref('node-literal:1').",
-        ],
-        *,
-        dag: Annotated[
-            str | Ref | None,
-            "Optional DAG by name or exact Ref when node is name-based; examples: train, Ref('dag:1').",
-        ] = None,
-        revision: Annotated[str | None, "Optional revision selector such as HEAD or main."] = None,
-    ) -> NodeUnrollPayload:
-        """Return the recursively unrolled value for a committed node."""
-        with with_db(self._dml) as db:
-            if isinstance(node, Ref):
-                if dag is not None or revision is not None:
-                    raise DmlRepoError("dml dag unroll-node rejects dag and revision with explicit node refs")
-                resolved = None
-                node_ref = require_exact_ref(node, "node")
-            elif isinstance(dag, Ref):
-                if revision is not None:
-                    raise DmlRepoError("dml dag unroll-node rejects --revision with explicit dag refs")
-                resolved = None
-                node_ref = make_dag_ops(db).get_node(require_exact_ref(dag, "dag"), node)
-            else:
-                resolved = resolve_node_ref(
-                    value=node,
-                    dag=dag,
-                    revision=revision,
-                    commit_ops=make_commit_ops(db),
-                    dag_ops=make_dag_ops(db),
-                    head_ops=make_head_ops(db),
-                    project_dir=require_project_home(self._dml._context.project_home),
-                    operation="unroll-node",
-                )
-                node_ref = resolved.ref
-            unrolled_node = make_node_ops(db).unroll(node_ref)
-        payload: NodeUnrollPayload = {"node": cast(NodeUnrolledValue, unrolled_node)}
-        if resolved is not None and resolved.revision is not None:
-            return cast(
-                NodeUnrollWithRevisionPayload,
-                {**payload, "revision": revision_payload(revision or "HEAD", resolved.revision)},
-            )
-        return payload
+                ).ref
+            if recursive:
+                return cast(NodeUnrolledValue, make_node_ops(db).unroll(node_ref))
+            return cast(NodeValue, make_node_ops(db).get(node_ref))
 
     def checkout(
         self,
@@ -1096,36 +851,6 @@ class _DagNamespace:
         author = require_user(user or self._dml._context.user, message="user is required for dag delete")
         with with_db(self._dml) as db:
             return make_commit_ops(db).delete_dag(name, branch, author)
-
-
-@dataclass(frozen=True)
-class _AdminIndexNamespace:
-    """Inspect and manage runtime workspaces directly for administrative workflows."""
-
-    _dml: "Dml"
-
-    def list(self) -> AdminIndexListPayload:
-        """List runtime workspaces with their commit summaries."""
-        with with_db(self._dml) as db:
-            indexes = [self.get(index_id)["index"] for index_id in make_head_ops(db).list_indexes()]
-        return {"indexes": indexes}
-
-    def get(self, index_id: Annotated[str, "Runtime workspace to inspect."]) -> AdminIndexGetPayload:
-        """Return a runtime workspace payload with embedded commit summary data."""
-        with with_db(self._dml) as db:
-            index = dict(make_index_ops(db, self._dml).describe(index_id))
-            commit_ref = index["commit"]
-            index["commit"] = {
-                "ref": commit_ref,
-                "summary": commit_payload(commit_ref, make_commit_ops(db).describe(commit_ref)),
-            }
-        return {"index": cast(AdminIndexItemPayload, index)}
-
-    def delete(self, index_id: Annotated[str, "Runtime workspace to delete."]) -> AdminIndexDeletePayload:
-        """Delete a runtime workspace immediately."""
-        with with_db(self._dml) as db:
-            make_index_ops(db, self._dml).delete(index_id)
-        return {"index": index_id, "deleted": True}
 
 
 @dataclass(frozen=True)
@@ -1225,13 +950,9 @@ class _AdminRemoteNamespace:
 
 @dataclass(frozen=True)
 class _AdminNamespace:
-    """Administrative maintenance surface for indexes, cache state, remotes, and GC."""
+    """Administrative maintenance surface for cache state, remotes, and GC."""
 
     _dml: "Dml"
-
-    @property
-    def index(self) -> _AdminIndexNamespace:
-        return _AdminIndexNamespace(self._dml)
 
     @property
     def cache(self) -> _AdminCacheNamespace:
@@ -1320,18 +1041,14 @@ class Dml:
                 "indexes": current_head_ops.list_indexes(),
             }
 
-    @overload
-    def branch(self, *, remote: Literal[False] = False) -> BranchLocalPayload: ...
-    @overload
-    def branch(self, *, remote: Literal[True]) -> BranchRemotePayload: ...
     def branch(
         self,
         *,
         remote: Annotated[bool, "List remote-tracking branches instead of local branches."] = False,
-    ) -> BranchLocalPayload | BranchRemotePayload:
+    ) -> BranchPayload:
         """List local branches or discovered remote-tracking branches."""
         if remote:
-            return {"branches": remote_tracking_branches(self), "remote": True}
+            return {"branches": remote_tracking_branches(self), "head": None, "remote": True}
         with with_db(self) as db:
             current_head_ops = make_head_ops(db)
             return {
@@ -1351,7 +1068,8 @@ class Dml:
         with with_db(self) as db:
             commit_ops = make_commit_ops(db)
             refs = list(commit_ops.list(resolved.commit, limit=limit))
-            commits = [commit_payload(ref, commit_ops.describe(ref)) for ref in refs]
+            summaries = {ref: commit_ops.describe(ref) for ref in refs}
+        commits = [commit_payload(self, ref, summaries[ref]) for ref in refs]
         return {
             "revision": revision_payload(revision, resolved),
             "commits": commits,
@@ -1364,14 +1082,14 @@ class Dml:
         """Return one commit summary together with the DAG map and DAG-level diff to its first parent."""
         resolved = resolve_dml_revision(self, revision)
         with with_db(self) as db:
-            commit = commit_payload(resolved.commit, make_commit_ops(db).describe(resolved.commit))
-        dags = dag_map_for_commit(self, resolved.commit)
+            commit_summary = make_commit_ops(db).describe(resolved.commit)
+        commit = commit_payload(self, resolved.commit, commit_summary)
+        dags = commit["dags"]
         base_commit = commit["parents"][0] if commit["parents"] else None
         base_dags = dag_map_for_commit(self, base_commit) if base_commit is not None else {}
         return {
             "revision": revision_payload(revision, resolved),
             "commit": commit,
-            "dags": dags,
             "change": {"base": base_commit, **dag_map_diff(base_dags, dags)},
         }
 

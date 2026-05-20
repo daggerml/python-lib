@@ -31,7 +31,7 @@ You will hit this when `load("name")` or `dml dag get name` points at a DAG that
 Start by checking what exists:
 
 ```bash
-dml --project-home ./demo-repo dag list
+dml --project-home ./demo-repo show
 ```
 
 If the DAG exists on another revision, pass that revision explicitly.

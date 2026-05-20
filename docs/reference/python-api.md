@@ -28,8 +28,8 @@ Top-level methods:
 - `Dml.init(...)`: initialize a repository under `project_home`.
 - `status()`: current HEAD, branches, DAGs, and open runtime indexes.
 - `branch(remote=False)`: list local branches or discovered remote-tracking branches.
-- `log(revision="HEAD", limit=None)`
-- `show(revision="HEAD")`
+- `log(revision="HEAD", limit=None)`: commit summaries, including each commit's visible `dags` map.
+- `show(revision="HEAD")`: one commit summary plus DAG-level change information.
 - `diff(left="HEAD~1", right="HEAD")`
 - `checkout(revision)`
 - `fetch(remote_or_uri, branch=None)`
@@ -41,9 +41,9 @@ Top-level methods:
 Namespaces exposed as properties:
 
 - `dml.config`: `get`, `set`, `show`
-- `dml.runtime`: create, inspect, mutate, commit, list, and cancel runtime indexes
-- `dml.dag`: list, describe, get, inspect nodes, copy a DAG from history, and delete a DAG
-- `dml.admin`: index, cache, remote, and GC operations
+- `dml.runtime`: create, inspect, mutate, commit, list, delete, and cancel runtime indexes
+- `dml.dag`: get, inspect nodes, copy a DAG from history, and delete a DAG
+- `dml.admin`: cache, remote, and GC operations
 
 ### Default-runtime helpers
 

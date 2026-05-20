@@ -4,7 +4,6 @@ from typing import Annotated, get_args, get_origin, get_type_hints
 from daggerml._internal.dml import (
     Dml,
     _AdminCacheNamespace,
-    _AdminIndexNamespace,
     _AdminNamespace,
     _AdminRemoteNamespace,
     _ConfigNamespace,
@@ -63,15 +62,15 @@ def test_public_dml_classes_and_methods_have_docstrings():
             "commit",
             "list",
             "describe",
+            "delete",
             "cancel",
         ],
     )
     _assert_docstrings(
         _DagNamespace,
-        ["list", "describe", "get", "describe_node", "get_node", "unroll_node", "checkout", "delete"],
+        ["get", "describe_node", "get_node", "checkout", "delete"],
     )
     _assert_docstrings(_AdminNamespace, ["gc"])
-    _assert_docstrings(_AdminIndexNamespace, ["list", "get", "delete"])
     _assert_docstrings(_AdminCacheNamespace, ["invalidate"])
     _assert_docstrings(_AdminRemoteNamespace, ["list", "gc"])
 
@@ -106,20 +105,16 @@ def test_public_dml_annotations_include_help_metadata():
     _assert_annotated_help(_RuntimeNamespace.start_fn, ["index_id", "argv", "kwargv", "name"])
     _assert_annotated_help(_RuntimeNamespace.commit, ["index_id", "value", "head", "message", "dag_name"])
     _assert_annotated_help(_RuntimeNamespace.describe, ["index_id"])
+    _assert_annotated_help(_RuntimeNamespace.delete, ["index_id"])
     _assert_annotated_help(_RuntimeNamespace.cancel, ["index_id"])
 
-    _assert_annotated_help(_DagNamespace.list, ["revision"])
-    _assert_annotated_help(_DagNamespace.describe, ["value", "revision"])
     _assert_annotated_help(_DagNamespace.get, ["value", "revision"])
     _assert_annotated_help(_DagNamespace.describe_node, ["node", "dag", "revision"])
     _assert_annotated_help(_DagNamespace.get_node, ["node", "dag", "revision"])
-    _assert_annotated_help(_DagNamespace.unroll_node, ["node", "dag", "revision"])
     _assert_annotated_help(_DagNamespace.checkout, ["revision", "dag_name", "branch", "target_name", "replace", "user"])
     _assert_annotated_help(_DagNamespace.delete, ["name", "branch", "user"])
 
     _assert_annotated_help(_AdminNamespace.gc, ["dry_run"])
-    _assert_annotated_help(_AdminIndexNamespace.get, ["index_id"])
-    _assert_annotated_help(_AdminIndexNamespace.delete, ["index_id"])
     _assert_annotated_help(_AdminCacheNamespace.invalidate, ["cache_keys"])
     _assert_annotated_help(_AdminRemoteNamespace.list, ["project", "owner"])
     _assert_annotated_help(_AdminRemoteNamespace.gc, ["min_age_seconds", "malformed"])

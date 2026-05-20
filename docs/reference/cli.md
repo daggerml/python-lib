@@ -86,8 +86,6 @@ dml config show
 
 Generated from `Dml.dag`:
 
-- `dml dag list [--revision REV]`
-- `dml dag describe VALUE [--revision REV]`
 - `dml dag get VALUE [--revision REV]`
 - `dml dag describe-node NODE [--dag DAG] [--revision REV]`
 - `dml dag get-node NODE [--dag DAG] [--revision REV]`
@@ -111,6 +109,7 @@ Generated from `Dml.runtime`:
 - `commit`
 - `list`
 - `describe`
+- `delete`
 - `cancel`
 
 This is the low-level mutable staging surface behind `daggerml.api.new()` and `Dag`.
@@ -119,7 +118,6 @@ This is the low-level mutable staging surface behind `daggerml.api.new()` and `D
 
 Generated from `Dml.admin` and nested namespaces:
 
-- `dml admin index list|get|delete`
 - `dml admin cache invalidate`
 - `dml admin remote list|gc`
 - `dml admin gc [--dry-run]`
@@ -127,7 +125,7 @@ Generated from `Dml.admin` and nested namespaces:
 Examples:
 
 ```bash
-dml admin index list
+dml runtime list
 dml admin cache invalidate '["cache-key-1","cache-key-2"]'
 dml admin remote list
 dml admin gc --dry-run

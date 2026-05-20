@@ -181,9 +181,9 @@ class DelayedActionCodec:
                 raise CodecError("Adapter resolve_runnable must return Runnable")
             return resolved
         assert isinstance(value, DelayedLoad)
-        index = dag.dml.admin.index.get(dag._require_index_ref())["index"]
-        commit_ref = index["commit"]["ref"]
-        resolved = dag.dml.dag.get(value.dagname, revision=commit_ref.to)["dag"]
+        index = dag.dml.runtime.describe(dag._require_index_ref())
+        commit_ref = index["commit"]
+        resolved = dag.dml.dag.get(value.dagname, revision=commit_ref.to)
         dag_ref = resolved["ref"]
         if value.nodename is None:
             node_ref = resolved["result"]

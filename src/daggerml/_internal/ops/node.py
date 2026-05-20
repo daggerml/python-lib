@@ -119,10 +119,8 @@ class NodeOps(BaseOps):
             with self._tx(readonly=True) as txn:
                 node: Node = txn.get(node_ref)
                 payload: dict[str, Any] = {
-                    "id": node_ref.id(),
                     "ref": node_ref,
                     "type": type(node).__name__,
-                    "value_ref": node.datum_ref(txn),
                 }
                 if isinstance(node, FnNode):
                     payload["dag"] = node.dag

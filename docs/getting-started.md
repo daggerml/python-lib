@@ -42,7 +42,6 @@ This creates a committed DAG named `hello` on the local `main` branch.
 
 ```bash
 dml status
-dml dag list
 dml dag get hello
 dml show
 ```
@@ -50,8 +49,7 @@ dml show
 Use these commands to answer the first questions you usually have:
 
 - `status`: current HEAD, branches, visible DAGs, and open indexes
-- `dag list`: DAG names at the selected revision
-- `dag get hello`: the stored DAG payload, including named nodes
+- `dag get hello`: the stored DAG summary, including names and result refs
 - `show`: the current commit plus DAG-level changes from its parent
 
 ## Next Steps

@@ -33,7 +33,6 @@ Two practical details from the current API:
 
 ```bash
 dml --project-home ./demo-repo status
-dml --project-home ./demo-repo dag list
 dml --project-home ./demo-repo dag get numbers
 dml --project-home ./demo-repo show
 ```
@@ -41,8 +40,7 @@ dml --project-home ./demo-repo show
 Typical uses:
 
 - `status` shows the attached branch, current commit, visible DAGs, and open indexes.
-- `dag list` shows which DAG names exist at the selected revision.
-- `dag get numbers` shows the committed DAG payload, including named nodes.
+- `dag get numbers` shows the committed DAG summary, including names and result refs.
 - `show` summarizes the current commit and the DAG-level change from its first parent.
 
 ## 4. Run a callable node when you need execution

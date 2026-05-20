@@ -193,7 +193,7 @@ class TestSetAttrs:
         with pytest.raises(Error, match=r".*unsupported operand type.*"):
             with new(dml=dml, name="d0", message="d0") as dag:
                 dag.call(self._mk_runnable(dml, ASYNC_URI, FN_ADAPTER), 1, 2, "asdf")
-        assert dml.dag.list()["dags"]["d0"] is not None
+        assert dml.show()["commit"]["dags"]["d0"] is not None
 
     def test_async_fn_timeout(self, dml):
         with pytest.raises(TimeoutError):
@@ -266,6 +266,6 @@ class TestBasic(TestCase):
             d0 = new(dml=dml, name="d0", message="d0")
             n0 = d0.put([42], name="n0")
             d0.commit(n0)
-            self.assertEqual(dml.dag.get("d0")["dag"]["result"], n0.ref)
+            self.assertEqual(dml.dag.get("d0")["result"], n0.ref)
             dml.dag.delete("d0", user=dml._context.user or "dml")
             dml.admin.gc()

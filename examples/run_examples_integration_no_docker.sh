@@ -179,6 +179,7 @@ cd "${scratch_dir}"
 
 project0="project-0"
 log "Initializing DML repo in ${project0}"
+rm -rf "${scratch_dir}/${project0}" || true
 mkdir "${scratch_dir}/${project0}"
 cd "${scratch_dir}/${project0}"
 dml init --remote-project "dml://${dml_user}/${project0}"
@@ -201,16 +202,15 @@ pretty_dml branch
 pretty_dml log --revision HEAD --limit 10
 pretty_dml show --revision HEAD
 pretty_dml diff --left HEAD~1 --right HEAD
-pretty_dml dag list
-pretty_dml dag describe examples/00-hello-world
+pretty_dml show --revision HEAD
 pretty_dml dag get examples/00-hello-world
 pretty_dml dag describe-node greeting --dag examples/00-hello-world
 pretty_dml dag get-node greeting --dag examples/00-hello-world
-pretty_dml dag unroll-node greeting --dag examples/00-hello-world
+pretty_dml dag get-node greeting --dag examples/00-hello-world --recursive
 
-hello_dag_ref="$(dml dag describe examples/00-hello-world | jq -r '.dag.ref')"
-hello_fn_ref="$(dml dag describe-node hello_fn --dag examples/00-hello-world | jq -r '.node.ref')"
-greeting_ref="$(dml dag describe-node greeting --dag examples/00-hello-world | jq -r '.node.ref')"
+hello_dag_ref="$(dml dag get examples/00-hello-world | jq -r '.ref')"
+hello_fn_ref="$(dml dag describe-node hello_fn --dag examples/00-hello-world | jq -r '.ref')"
+greeting_ref="$(dml dag describe-node greeting --dag examples/00-hello-world | jq -r '.ref')"
 
 log "Exercising low-level runtime and admin CLI commands"
 runtime_idx="$(dml runtime create | json_scalar)"
@@ -218,8 +218,6 @@ scratch_idx="$(dml runtime create | json_scalar)"
 cancel_idx="$(dml runtime create | json_scalar)"
 pretty_dml runtime list
 pretty_dml runtime describe "${runtime_idx}"
-pretty_dml admin index list
-pretty_dml admin index get "${runtime_idx}"
 
 seed_ref="$(dml runtime put-literal "${runtime_idx}" cli-seed --name seed | json_scalar)"
 imported_greeting_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${greeting_ref}" --name imported-greeting | json_scalar)"
@@ -231,7 +229,7 @@ pretty_dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported
 pretty_dml runtime get-node "${runtime_idx}" cli-greeting-alias
 pretty_dml runtime describe "${runtime_idx}"
 pretty_dml runtime cancel "${cancel_idx}"
-pretty_dml admin index delete "${scratch_idx}"
+pretty_dml runtime delete "${scratch_idx}"
 pretty_dml admin gc --dry-run
 pretty_dml admin gc
 
@@ -256,6 +254,7 @@ cd .. && rm -rf "${project0}"
 ## Second "project"
 project1="project-1"
 log "Initializing DML repo in ${project1}"
+rm -rf "${scratch_dir}/${project1}" || true
 mkdir "${scratch_dir}/${project1}"
 cd "${scratch_dir}/${project1}"
 dml init --remote-project "dml://${dml_user}/${project1}"
@@ -277,8 +276,7 @@ pretty_dml branch
 pretty_dml branch --remote
 pretty_dml log --revision HEAD --limit 10
 pretty_dml show --revision HEAD
-pretty_dml dag list
-pretty_dml dag describe examples/01b-load-fn --revision HEAD
+pretty_dml dag get examples/01b-load-fn --revision HEAD
 pretty_dml dag get-node old_result --dag examples/01b-load-fn --revision HEAD
 
 log "All examples completed successfully."
