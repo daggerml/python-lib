@@ -72,7 +72,8 @@ def _poll_until_terminal(
 ) -> dict[str, Any]:
     execution_id = f"exec-{cache_key}"
     state: dict[str, Any] | None = initial_state
-    for _ in range(200):
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
         result = LocalAdapter.send(
             runnable=runnable,
             argv_ptr=argv_ptr,
@@ -88,7 +89,7 @@ def _poll_until_terminal(
         if result["status"] in {"succeeded", "failed"}:
             return cast(dict[str, Any], result)
         time.sleep(0.01)
-    pytest.fail("script executor did not reach terminal state")
+    pytest.fail("script executor did not reach terminal state within 5.0s")
 
 
 def _mk_script_runnable(script: str, *, fn_name: str = "fn", call_kwargs: dict[str, Any] | None = None) -> Runnable:

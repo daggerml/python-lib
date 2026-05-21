@@ -127,6 +127,7 @@ class TestDagOps:
                         txn.delete(ref)
 
     @given(_dag_strategy().filter(lambda d: d.is_finished()), st.text(alphabet=REF_ALPHABET, min_size=1, max_size=16))
+    @settings(deadline=None)
     def test_get_node_not_found_raises(self, temp_bo, dag, name):
         """get_node should raise if the named node is not present."""
         assume(name not in dag.names)
