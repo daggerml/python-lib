@@ -66,6 +66,15 @@ Use this file to identify which project docs to read before editing a code path,
   - `docs/architecture/type-system.md`
   - `docs/reference/errors.md`
 
+### Internal JSON/string serde helpers
+
+- Match: `src/daggerml/_internal/serde.py`
+- Read:
+  - `docs/concepts/refs-and-namespaces.md`
+  - `docs/concepts/codecs-and-values.md`
+  - `docs/architecture/type-system.md`
+  - `docs/reference/errors.md`
+
 ### Internal storage / DB integration
 
 - Match: `src/daggerml/_internal/_db.pyx`, `src/daggerml/_internal/util.py`
