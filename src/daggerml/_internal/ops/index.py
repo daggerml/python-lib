@@ -98,12 +98,12 @@ class IndexOps(BaseOps):
             argv_ref = self._prepare_fn(index_id, argv, kwargv, txn)
             dag_ref = self._run_builtin(argv_ref, txn)
             if dag_ref is not None:
-                resolved_dag_ref = dag_ref
+                return self._finish_fn_result(dag_ref, argv, name, None, index_id)
             else:
                 cops = CacheOps(_db=self._db, remote_root=self.remote_root)
                 dag_ref = cops._get(argv_ref, txn)
                 if dag_ref is not None:
-                    resolved_dag_ref = dag_ref
+                    return self._finish_fn_result(dag_ref, argv, name, None, index_id)
                 else:
                     prepared = self._prepare_adapter_call(
                         index_id,
@@ -111,18 +111,13 @@ class IndexOps(BaseOps):
                         txn,
                         caller_execution_id=caller_execution_id,
                     )
-
-        if "resolved_dag_ref" in locals():
-            return self._finish_fn_result(resolved_dag_ref, argv, name, None, index_id)
         argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
         es = ExecutionState(prepared.cache_key, remote_root=self.remote_root)
-
         # Step 1: try to acquire the mutex
         if not es.lock():
             # Another process is driving this cycle
             return None
         locked = True
-
         try:
             # Step 2: post-lock cache check
             with self._tx(readonly=False) as txn:
@@ -131,10 +126,7 @@ class IndexOps(BaseOps):
                 if dag_ref is not None:
                     es.unlock()
                     locked = False
-                    post_lock_dag_ref = dag_ref
-            if "post_lock_dag_ref" in locals():
-                return self._finish_fn_result(post_lock_dag_ref, argv, name, None, index_id)
-
+                    return self._finish_fn_result(dag_ref, argv, name, None, index_id)
             execution_id = es.read_active_execution_id()
             execution_record = None
             launch_state = None
@@ -146,6 +138,7 @@ class IndexOps(BaseOps):
                     or launch_state is None
                     or execution_record["lifecycle"] in {"succeeded", "failed", "cancel-detached"}
                 ):
+                    # Malformed or (erroneous?) completed execution... clean up and start fresh
                     es.delete_active_execution()
                     execution_id = None
                     execution_record = None
@@ -840,9 +833,6 @@ class IndexOps(BaseOps):
             cancelled_path.parent.mkdir(parents=True, exist_ok=True)
             os.replace(live_path, cancelled_path)
             return cancelled_path
-
-    def _freeze_index_for_cancellation(self, index_id: str):
-        return self._resolve_index_for_cancellation(index_id)
 
     @staticmethod
     def _cancelled_index_path(head_ops: HeadOps, index_id: str):

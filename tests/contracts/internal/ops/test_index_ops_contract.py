@@ -1104,30 +1104,6 @@ class TestIndexOps:
         assert result["outcome"] == 1
         assert result["cancel_requested"] is False
 
-    def test_freeze_index_for_cancellation_lists_cancelled_index(self, temp_bo):
-        ops = _mk_remote_index_ops(temp_bo)
-        _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-
-        cancelled_path = ops._freeze_index_for_cancellation(index_ref)
-
-        try:
-            assert cancelled_path.parent.name == ".cancelled"
-            assert f".cancelled/{index_ref}" in HeadOps(_db=temp_bo._db).list_indexes()
-        finally:
-            ops.delete(f".cancelled/{index_ref}")
-
-    def test_delete_removes_cancelled_index_marker(self, temp_bo):
-        ops = _mk_remote_index_ops(temp_bo)
-        _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-
-        cancelled_path = ops._freeze_index_for_cancellation(index_ref)
-
-        assert cancelled_path.exists()
-
-        ops.delete(f".cancelled/{index_ref}")
-
-        assert not cancelled_path.exists()
-
     def test_start_fn_discards_stale_active_pointer_before_relaunch(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
