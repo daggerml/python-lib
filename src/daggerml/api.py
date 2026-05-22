@@ -91,9 +91,10 @@ def load(name: str, dml=None) -> "Dag":
 def temporary(**kw):
     """Create a temporary Dml runtime with an initial commit."""
     kw.pop("name", None)
+    execution_id = kw.pop("execution_id", None)
     with TemporaryDirectory() as tmpdir:
         resp = Dml.init(project_home=tmpdir, **kw)
-        yield Dml(resp["project_home"], remote_root=resp["remote_root"])
+        yield Dml(resp["project_home"], remote_root=resp["remote_root"], execution_id=execution_id)
 
 
 def status() -> dict[str, object]:

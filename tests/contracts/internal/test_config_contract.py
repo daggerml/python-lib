@@ -1,9 +1,12 @@
 import os
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 
 import pytest
 
+import daggerml._internal.dml as dml_module
 from daggerml import Dml
+from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlConfig
 
 
@@ -44,6 +47,110 @@ def test_dml_uses_config_resolution_from_env(monkeypatch):
     dml = Dml()
     assert dml._context.project_home == "/tmp/from-env"
     assert dml._context.remote_root == dml._context.config.remote.root
+
+
+def test_execution_id_resolves_explicit_over_env():
+    cfg = DmlConfig.resolve(
+        env={"DML_EXECUTION_ID": "exec-env"},
+        explicit={"execution.id": "exec-explicit"},
+    )
+    assert cfg.execution.id == "exec-explicit"
+
+
+def test_execution_id_defaults_to_none_without_explicit_or_env():
+    cfg = DmlConfig.resolve(env={})
+    assert cfg.execution.id is None
+
+
+def test_dml_uses_execution_id_from_env(monkeypatch):
+    monkeypatch.setenv("DML_EXECUTION_ID", "exec-from-env")
+    dml = Dml(project_home="/tmp/repo")
+    assert dml._context.execution_id == "exec-from-env"
+
+
+def test_dml_explicit_execution_id_overrides_env(monkeypatch):
+    monkeypatch.setenv("DML_EXECUTION_ID", "exec-from-env")
+    dml = Dml(project_home="/tmp/repo", execution_id="exec-explicit")
+    assert dml._context.execution_id == "exec-explicit"
+
+
+def test_runtime_start_fn_passes_explicit_caller_execution_id():
+    dml = Dml(project_home="/tmp/repo", execution_id="exec-worker")
+    fake_ops = Mock()
+    fake_ops.start_fn.return_value = "result-node"
+
+    with (
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_index_ops", return_value=fake_ops),
+    ):
+        result = dml.runtime.start_fn("idx-1", [Ref("node:abc")])
+
+    assert result == "result-node"
+    fake_ops.start_fn.assert_called_once_with(
+        "idx-1",
+        [Ref("node:abc")],
+        kwargv=None,
+        name=None,
+        caller_execution_id="exec-worker",
+    )
+
+
+def test_runtime_start_fn_falls_back_to_index_id_for_caller_execution_id():
+    dml = Dml(project_home="/tmp/repo")
+    fake_ops = Mock()
+    fake_ops.start_fn.return_value = None
+
+    with (
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_index_ops", return_value=fake_ops),
+    ):
+        dml.runtime.start_fn("idx-root", [Ref("node:def")])
+
+    fake_ops.start_fn.assert_called_once_with(
+        "idx-root",
+        [Ref("node:def")],
+        kwargv=None,
+        name=None,
+        caller_execution_id="idx-root",
+    )
+
+
+def test_runtime_commit_passes_execution_id_or_index_root():
+    worker_dml = Dml(project_home="/tmp/repo", execution_id="exec-worker")
+    root_dml = Dml(project_home="/tmp/repo")
+    worker_ops = Mock()
+    root_ops = Mock()
+    worker_ops.commit.return_value = Ref("commit:" + "a" * 64)
+    root_ops.commit.return_value = Ref("commit:" + "b" * 64)
+
+    with (
+        patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
+        patch.object(dml_module, "make_index_ops", side_effect=[worker_ops, root_ops]),
+    ):
+        worker_dml.runtime.commit("idx-1", Ref("node:aaa"))
+        root_dml.runtime.commit("idx-2", Ref("node:bbb"))
+
+    worker_ops.commit.assert_called_once_with(
+        "idx-1",
+        Ref("node:aaa"),
+        head=None,
+        message=None,
+        dag_name=None,
+        execution_id="exec-worker",
+    )
+    root_ops.commit.assert_called_once_with(
+        "idx-2",
+        Ref("node:bbb"),
+        head=None,
+        message=None,
+        dag_name=None,
+        execution_id="idx-2",
+    )
+
+
+@contextmanager
+def _opened_db():
+    yield Mock()
 
 
 def test_remote_config_from_canonical_env():

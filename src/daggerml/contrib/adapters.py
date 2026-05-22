@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import boto3
 
-from daggerml._internal import DmlRepoError, ExecutionState, Runnable, Uri, execution_context
+from daggerml._internal import DmlRepoError, ExecutionState, Runnable, Uri
 from daggerml.contrib.executor_registry import get_executor
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 from daggerml.util import get_client
@@ -254,38 +254,37 @@ class AdapterBase:
             execution_status,
             cancel_requested_by,
         ) = cls._parse_payload(payload)
-        with execution_context(execution_id, cache_key):
+        result = cls.send(
+            runnable=runnable,
+            argv_ptr=argv_ptr,
+            cache_key=cache_key,
+            execution_id=execution_id,
+            remote=remote,
+            state=state,
+            execution_status=execution_status,
+            cancel_requested_by=cancel_requested_by,
+        )
+        persisted_state = state
+        current_status = execution_status
+        current_cancel_requested_by = cancel_requested_by
+        while args.poll and result.get("status") not in {"succeeded", "failed", "cancel-detached"}:
+            persisted_state, current_status, current_cancel_requested_by = cls._refresh_execution_payload(
+                cache_key=cache_key,
+                execution_id=execution_id,
+                remote=remote,
+                fallback_state=persisted_state if persisted_state is not None else result.get("state"),
+            )
+            time.sleep(0.05)
             result = cls.send(
                 runnable=runnable,
                 argv_ptr=argv_ptr,
                 cache_key=cache_key,
                 execution_id=execution_id,
                 remote=remote,
-                state=state,
-                execution_status=execution_status,
-                cancel_requested_by=cancel_requested_by,
+                state=persisted_state,
+                execution_status=current_status,
+                cancel_requested_by=current_cancel_requested_by,
             )
-            persisted_state = state
-            current_status = execution_status
-            current_cancel_requested_by = cancel_requested_by
-            while args.poll and result.get("status") not in {"succeeded", "failed", "cancel-detached"}:
-                persisted_state, current_status, current_cancel_requested_by = cls._refresh_execution_payload(
-                    cache_key=cache_key,
-                    execution_id=execution_id,
-                    remote=remote,
-                    fallback_state=persisted_state if persisted_state is not None else result.get("state"),
-                )
-                time.sleep(0.05)
-                result = cls.send(
-                    runnable=runnable,
-                    argv_ptr=argv_ptr,
-                    cache_key=cache_key,
-                    execution_id=execution_id,
-                    remote=remote,
-                    state=persisted_state,
-                    execution_status=current_status,
-                    cancel_requested_by=current_cancel_requested_by,
-                )
         cls._write_output(args.output, json.dumps(result))
         return 0
 

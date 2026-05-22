@@ -26,11 +26,16 @@ The shared `Dml` class SHALL remain the sole caller-facing boundary for fuzzy se
 - **THEN** `Dml` obtains that config-derived context through the config submodule before invoking lower-level ops
 
 ### Requirement: Shared `Dml` constructor uses root runtime override inputs
-The shared `Dml` constructor SHALL accept the root runtime override inputs already threaded through callers for project-home, remote-uri, user, and config-home context.
+The shared `Dml` constructor SHALL accept the root runtime override inputs already threaded through callers for project-home, remote-uri, user, config-home, and execution identity context.
 
 #### Scenario: CLI globals map directly to constructor
 - **WHEN** a caller provides explicit project-home, remote-uri, user, or config-home runtime overrides
 - **THEN** those values can be passed directly to the shared `Dml` constructor without a separate caller-specific context adapter
+
+#### Scenario: Execution-aware worker maps execution identity directly to constructor
+- **WHEN** an execution-aware worker or adapter entrypoint has an `execution_id`
+- **THEN** it can pass that value directly to the shared `Dml` constructor as a runtime override
+- **AND** it does not need a separate ambient execution-context setup step
 
 ### Requirement: Shared `Dml` exact DB object contracts use `Ref`
 The shared `Dml` surface SHALL require `Ref` objects for caller inputs that represent exact DB-backed objects, and it SHALL return `Ref` objects as the canonical identity for DB-backed objects in its payloads.
@@ -174,6 +179,16 @@ The shared `Dml` class SHALL orchestrate workflows by delegating repository acti
 #### Scenario: Runtime workflow delegates to IndexOps
 - **WHEN** a caller invokes `dml.runtime.create`, `dml.runtime.put_literal`, `dml.runtime.start_fn`, or `dml.runtime.commit`
 - **THEN** `Dml` delegates the relevant repository operations to `IndexOps` after preparing resolved inputs
+
+#### Scenario: Runtime workflow passes explicit execution identity to IndexOps
+- **WHEN** a shared `Dml` runtime workflow needs execution-aware behavior such as runnable DAG publication or nested execution lineage
+- **THEN** the `Dml` runtime layer passes explicit execution identity into `IndexOps`
+- **AND** `IndexOps` does not read that identity from a process-local ambient execution context
+
+#### Scenario: Runtime start_fn falls back to root index identity
+- **WHEN** `dml.runtime.start_fn(index_id, ...)` runs without resolved `config.execution.id`
+- **THEN** the runtime layer passes `caller_execution_id = index_id`
+- **AND** `IndexOps.start_fn` treats that root execution record as the caller identity
 
 #### Scenario: Admin workflow delegates to the owning subsystem
 - **WHEN** a caller invokes an admin cache, remote, or gc workflow

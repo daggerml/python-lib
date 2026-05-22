@@ -34,6 +34,10 @@ The runtime SHALL persist one mutable lifecycle object per execution id as `exec
 
 The same `execution_record` schema SHALL also be used for each live index id. For index-root records, the object path SHALL be `exec/state/<index_id>.json`, `execution_id` SHALL equal the `index_id`, `cache_key` SHALL equal the `index_id`, and `spawned_execution_ids` SHALL track the deduped set of execution ids started from that index.
 
+`IndexOps.commit` SHALL always finalize the committing execution or root record as `lifecycle = "succeeded"`. A committed DAG `Error` value SHALL mean the execution successfully produced a DAG whose terminal result is an error. Runtime `failed` SHALL be reserved for execution-path failures that prevent successful DAG completion.
+
+`IndexOps.commit` SHALL always update the committing execution or root record, and it SHALL publish a cache entry only when the committed DAG is runnable (`argv is not null`). Non-runnable DAG commits SHALL still finalize the execution/root record but SHALL NOT publish cache.
+
 The `execution_record` schema SHALL be:
 
 - `execution_id: str`
@@ -67,6 +71,33 @@ The `execution_record` schema SHALL be:
 - **WHEN** index `idx1` starts execution `e1`
 - **THEN** the runtime SHALL update `exec/state/idx1.json` so that `spawned_execution_ids` contains `e1`
 
+#### Scenario: Commit of DAG error still records execution success
+- **WHEN** an execution successfully commits a DAG whose terminal result is an `Error` value
+- **THEN** the runtime SHALL record the committing execution record as `lifecycle = "succeeded"`
+- **AND** it SHALL NOT treat that outcome as runtime `failed`
+
+#### Scenario: Runtime failed is reserved for execution-path failure
+- **WHEN** an adapter or execution path fails before a DAG result is successfully committed
+- **THEN** the runtime MAY record the execution as `lifecycle = "failed"`
+- **AND** that lifecycle SHALL describe execution failure rather than a committed DAG error result
+
+#### Scenario: Non-runnable commit finalizes execution without cache publication
+- **WHEN** `IndexOps.commit` finalizes an execution or root whose committed DAG has no `argv`
+- **THEN** the runtime SHALL still update the committing execution or root record to `lifecycle = "succeeded"`
+- **AND** it SHALL NOT publish a cache entry for that commit
+
+#### Scenario: Caller record accumulates spawned execution ids by caller execution id
+- **WHEN** caller execution `e0` starts callee execution `e1`
+- **THEN** the runtime SHALL read and compare-and-swap update `exec/state/e0.json`
+- **AND** the updated `spawned_execution_ids` SHALL contain `e1`
+- **AND** that update SHALL not require the caller cache key to be threaded separately
+
+#### Scenario: Root caller uses index execution record
+- **WHEN** top-level runtime root `idx1` starts callee execution `e1`
+- **THEN** the runtime SHALL treat `idx1` as `caller_execution_id`
+- **AND** it SHALL read and compare-and-swap update `exec/state/idx1.json`
+- **AND** the updated `spawned_execution_ids` SHALL contain `e1`
+
 ### Requirement: Cache refs SHALL remain proper refs and record execution ids
 The runtime SHALL publish `refs/cache/<cache_key>.json` as a normal cache ref to the current manifest for that cache key, and that ref SHALL also record `execution_id` for the current execution. Readers that materialize cached results SHALL continue resolving the cached manifest through the ref target, and graph planners SHALL read `execution_id` from the same cache ref.
 
@@ -74,6 +105,11 @@ The runtime SHALL publish `refs/cache/<cache_key>.json` as a normal cache ref to
 - **WHEN** execution `e7` becomes the terminal cached result for cache key `ck1`
 - **THEN** the runtime SHALL write `refs/cache/ck1.json` with `execution_id = "e7"`
 - **AND** that object SHALL remain a valid cache ref with its manifest `target`
+
+#### Scenario: Runnable DAG publication uses explicit execution identity
+- **WHEN** an execution-aware worker commits a runnable DAG result
+- **THEN** the runtime publishes the cache entry using the explicit `execution_id` provided through the runtime execution-aware call path
+- **AND** it does not discover that identity through a process-local execution context object
 
 #### Scenario: Re-run requires prior invalidation
 - **WHEN** a later execution `e8` attempts to publish a terminal cached result for cache key `ck1`
@@ -121,6 +157,14 @@ If an adapter returns `failed`, the runtime SHALL complete the DAG with the erro
 #### Scenario: Failed execution clears active pointer
 - **WHEN** an active execution returns `failed`
 - **THEN** the runtime SHALL delete `active/<cache_key>` before surfacing the failure
+
+### Requirement: Commit lifecycle distinction SHALL be documented in code and spec
+The runtime SHALL document at the `IndexOps.commit` lifecycle update site that committing an `Error` value is still a successful execution, and that runtime `failed` is reserved for execution-path failures that prevent successful DAG completion.
+
+#### Scenario: Commit lifecycle distinction is documented at implementation site
+- **WHEN** maintainers inspect the execution-record lifecycle update in `IndexOps.commit`
+- **THEN** the code includes a comment explaining why committed `Error` values still map to `lifecycle = "succeeded"`
+- **AND** the comment distinguishes DAG error results from runtime execution failures
 
 ### Requirement: Runtime SHALL separate caller-owned launch state from runtime-owned lifecycle state
 The runtime SHALL treat `launch_state` as caller-owned state for launch and resume, and `execution_record` as execution-runtime-owned state for lifecycle, spawned execution summaries, and cancellation metadata. The caller runtime MAY transition a callee `execution_record` only to `cancel-pending` or `cancel-detached` during orphan-triggered cancellation, and SHALL NOT otherwise mutate lifecycle state owned by the callee execution runtime.

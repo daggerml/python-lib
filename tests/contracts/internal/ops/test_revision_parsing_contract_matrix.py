@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,10 @@ from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.ops.remote import RemoteOps
 from daggerml._internal.types import Commit, DmlRepoError, Tree
+
+
+def _remote_root_from_env() -> str:
+    return os.environ["DML_REMOTE_ROOT"]
 
 
 @pytest.mark.parametrize(
@@ -71,7 +76,7 @@ def _seed_named_dags(temp_bo_fn, tmp_path: Path, dag_nodes: dict[str, str]):
     head_ops = HeadOps(_db=temp_bo_fn._db)
     commit_ops = CommitOps(_db=temp_bo_fn._db)
     dag_ops = DagOps(_db=temp_bo_fn._db)
-    index_ops = IndexOps(_db=temp_bo_fn._db, remote_root="")
+    index_ops = IndexOps(_db=temp_bo_fn._db, remote_root=_remote_root_from_env())
 
     main_head = head_ops.create_branch("main")
     head_ops.write_attached_head("main")
@@ -80,7 +85,14 @@ def _seed_named_dags(temp_bo_fn, tmp_path: Path, dag_nodes: dict[str, str]):
     for dag_name, node_name in dag_nodes.items():
         index_id = index_ops.create(head=main_head)
         node_ref = index_ops.put_literal(index_id, dag_name, name=node_name)
-        index_ops.commit(index_id, node_ref, head=main_head, message=f"add {dag_name}", dag_name=dag_name)
+        index_ops.commit(
+            index_id,
+            node_ref,
+            head=main_head,
+            message=f"add {dag_name}",
+            dag_name=dag_name,
+            execution_id=index_id,
+        )
         node_refs[dag_name] = node_ref
 
     latest_commit = head_ops.get_branch_commit(main_head)

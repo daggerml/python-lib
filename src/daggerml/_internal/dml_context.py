@@ -26,6 +26,10 @@ class DmlRuntimeContext:
         return self.config.user
 
     @property
+    def execution_id(self) -> str | None:
+        return self.config.execution.id
+
+    @property
     def default_branch(self) -> str:
         return self.config.default_branch
 
@@ -36,6 +40,7 @@ def resolve_runtime_context(
     remote_root: str | None = None,
     user: str | None = None,
     config_home: str | None = None,
+    execution_id: str | None = None,
 ) -> DmlRuntimeContext:
     config = DmlConfig.resolve(
         explicit={
@@ -43,6 +48,7 @@ def resolve_runtime_context(
             "remote.root": remote_root,
             "user": user,
             "config_home": config_home,
+            "execution.id": execution_id,
         }
     )
     return DmlRuntimeContext(config)

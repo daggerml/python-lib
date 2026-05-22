@@ -548,6 +548,14 @@ class TestIndexOps:
         hit_dag_ref = Ref(f"dag:{'a' * 64}")
         sentinel = object()
         _FakeExecutionState.reset()
+        _FakeExecutionState.records[index_ref] = {
+            "execution_id": index_ref,
+            "cache_key": index_ref,
+            "lifecycle": "running",
+            "updated_at": 1,
+            "spawned_execution_ids": [],
+            "cancellation_requested_by": None,
+        }
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: hit_dag_ref)
         monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, txn, index_ref: sentinel)
@@ -573,7 +581,9 @@ class TestIndexOps:
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -617,7 +627,9 @@ class TestIndexOps:
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: next(cache_hits))
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -664,7 +676,9 @@ class TestIndexOps:
         seen: list[dict[str, Any] | None] = []
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -693,12 +707,21 @@ class TestIndexOps:
             cache_key="cache-key-lineage",
             runnable={"target": "noop://lineage", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
             caller_execution_id=index_ref,
-            caller_cache_key=index_ref,
         )
         _FakeExecutionState.reset()
+        _FakeExecutionState.records[index_ref] = {
+            "execution_id": index_ref,
+            "cache_key": index_ref,
+            "lifecycle": "running",
+            "updated_at": 1,
+            "spawned_execution_ids": [],
+            "cancellation_requested_by": None,
+        }
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -956,7 +979,9 @@ class TestIndexOps:
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -1117,7 +1142,9 @@ class TestIndexOps:
         _FakeExecutionState.active[prepared.cache_key] = "stale-execution"
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -1143,7 +1170,6 @@ class TestIndexOps:
             cache_key="cache-key-lineage-fn",
             runnable={"target": "noop://lineage-fn", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
             caller_execution_id="caller-exec-1",
-            caller_cache_key="caller-cache",
         )
         _FakeExecutionState.reset()
         _FakeExecutionState.records["caller-exec-1"] = {
@@ -1156,7 +1182,9 @@ class TestIndexOps:
         }
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -1195,7 +1223,9 @@ class TestIndexOps:
             if (cache_reads.__setitem__("count", cache_reads["count"] + 1) or cache_reads["count"]) <= 2
             else Ref(f"dag:{'f' * 64}"),
         )
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -1246,7 +1276,9 @@ class TestIndexOps:
         monkeypatch.setattr(_FakeExecutionState, "lock", lock_returns_false)
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
-        monkeypatch.setattr(IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn: prepared)
+        monkeypatch.setattr(
+            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+        )
         monkeypatch.setattr(
             IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
         )
@@ -1664,7 +1696,7 @@ class TestIndexOps:
 
         try:
             node_ref = ops.put_literal(index_ref, 42, name="answer")
-            commit_ref = ops.commit(index_ref, node_ref, head=head_ref, message="done")
+            commit_ref = ops.commit(index_ref, node_ref, head=head_ref, message="done", execution_id=index_ref)
             assert calls["count"] >= 2
             assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) == commit_ref
         finally:
@@ -1809,6 +1841,54 @@ class TestIndexOps:
             ops.delete(index_ref)
             HeadOps(_db=temp_bo._db).delete_branch(head_ref)
 
+    def test_commit_finalizes_non_runnable_root_without_cache_publication(self, temp_bo, monkeypatch):
+        ops, head_ref, index_ref = _mk_repo_state(temp_bo)
+        node_ref = ops.put_literal(index_ref, 42, name="result")
+        cache_puts: list[tuple[Ref, str]] = []
+        _FakeExecutionState.reset()
+        monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
+        monkeypatch.setattr(
+            "daggerml._internal.ops.cache.CacheOps.put",
+            lambda self, dag_ref, *, execution_id: cache_puts.append((dag_ref, execution_id)),
+        )
+
+        commit_ref = ops.commit(
+            index_ref,
+            node_ref,
+            message="done",
+            dag_name="demo",
+            head=head_ref,
+            execution_id=index_ref,
+        )
+
+        assert commit_ref.ns() == "commit"
+        assert cache_puts == []
+        assert _FakeExecutionState.records[index_ref]["lifecycle"] == "succeeded"
+
+    def test_commit_of_error_runnable_records_success_and_publishes_cache(self, temp_bo, monkeypatch):
+        ops, head_ref, index_ref = _mk_repo_state(temp_bo, with_argv=True)
+        cache_puts: list[tuple[Ref, str]] = []
+        _FakeExecutionState.reset()
+        monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
+        monkeypatch.setattr(
+            "daggerml._internal.ops.cache.CacheOps.put",
+            lambda self, dag_ref, *, execution_id: cache_puts.append((dag_ref, execution_id)),
+        )
+
+        commit_ref = ops.commit(
+            index_ref,
+            Error.from_ex(ValueError("boom")),
+            message="done",
+            dag_name="demo",
+            head=head_ref,
+            execution_id="exec-worker",
+        )
+
+        assert commit_ref.ns() == "commit"
+        assert len(cache_puts) == 1
+        assert cache_puts[0][1] == "exec-worker"
+        assert _FakeExecutionState.records["exec-worker"]["lifecycle"] == "succeeded"
+
     @given(value=scalar_strategy(), dag_name=_NAME_STRAT)
     @settings(max_examples=10)
     def test_commit_deletes_index_and_updates_head(self, temp_bo, value, dag_name):
@@ -1816,7 +1896,14 @@ class TestIndexOps:
         with ops._tx(readonly=True) as txn:
             before = HeadOps(_db=temp_bo._db).get_branch_commit(head_ref)
         node_ref = ops.put_literal(index_ref, value, name="result")
-        commit_ref = ops.commit(index_ref, node_ref, message="done", dag_name=dag_name, head=head_ref)
+        commit_ref = ops.commit(
+            index_ref,
+            node_ref,
+            message="done",
+            dag_name=dag_name,
+            head=head_ref,
+            execution_id=index_ref,
+        )
 
         with ops._tx(readonly=True) as txn:
             assert index_ref not in HeadOps(_db=temp_bo._db).list_indexes()

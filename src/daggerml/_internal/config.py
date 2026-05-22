@@ -28,6 +28,7 @@ _ENV_KEYS: dict[str, str] = {
     "user": "DML_USER",
     "default_branch": "DML_DEFAULT_BRANCH",
     "config_home": "DML_CONFIG_HOME",
+    "execution.id": "DML_EXECUTION_ID",
 }
 
 
@@ -249,10 +250,16 @@ class DmlRemoteSettings:
 
 
 @dataclass(frozen=True)
+class DmlExecutionSettings:
+    id: str | None = None
+
+
+@dataclass(frozen=True)
 class DmlConfig:
     project: DmlProjectSettings = field(default_factory=DmlProjectSettings)
     db: DmlDbSettings = field(default_factory=DmlDbSettings)
     remote: DmlRemoteSettings = field(default_factory=DmlRemoteSettings)
+    execution: DmlExecutionSettings = field(default_factory=DmlExecutionSettings)
     user: str | None = None
     default_branch: str = "main"
     config_home: str = ""
@@ -328,10 +335,13 @@ class DmlConfig:
             remote_fetch_workers = 16
         user_value = merged.get("user")
         user = str(user_value) if user_value else default_user(env_map)
+        execution_id_value = merged.get("execution.id")
+        execution_id = str(execution_id_value) if execution_id_value else None
         return cls(
             project=DmlProjectSettings(home=project_home),
             db=DmlDbSettings(path=db_path),
             remote=DmlRemoteSettings(project=remote_project, root=remote_root_s, fetch_workers=remote_fetch_workers),
+            execution=DmlExecutionSettings(id=execution_id),
             user=user,
             default_branch=default_branch,
             config_home=config_home,
@@ -347,6 +357,7 @@ class DmlConfig:
             "DML_REMOTE_FETCH_WORKERS": str(self.remote.fetch_workers),
             "DML_REMOTE_PROJECT": self.remote.project,
             "DML_PROJECT_HOME": self.project.home,
+            "DML_EXECUTION_ID": self.execution.id,
         }
         return env
 

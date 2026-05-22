@@ -18,7 +18,7 @@ from textwrap import dedent
 from typing import TYPE_CHECKING, Any, cast
 
 import daggerml as dml
-from daggerml._internal import DmlRepoError, Runnable, Uri, execution_context
+from daggerml._internal import DmlRepoError, Runnable, Uri
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store
 
@@ -279,21 +279,20 @@ def run_payload(argv_ptr: str, *, execution_id: str, cache_key: str, remote_root
             raise DmlRepoError("Script worker succeeded without committed DAG")
         return {"status": "succeeded", "error": None, "dag_id": dag.ref.id()}
 
-    with execution_context(execution_id, cache_key):
-        with dml.temporary(remote_root=remote_root) as dml_instance:
+    with dml.temporary(remote_root=remote_root, execution_id=execution_id) as dml_instance:
+        try:
+            dag = dml.new(dml=dml_instance, argv_ptr=argv_ptr)
+        except Exception as e:
+            return {"status": "failed", "error": str(e)}
+        with TemporaryDirectory(prefix="dml-script-worker-") as tmpd, chdir(tmpd):
             try:
-                dag = dml.new(dml=dml_instance, argv_ptr=argv_ptr)
+                with dag:
+                    runit(dag)
+                return succeeded_result(dag)
             except Exception as e:
-                return {"status": "failed", "error": str(e)}
-            with TemporaryDirectory(prefix="dml-script-worker-") as tmpd, chdir(tmpd):
-                try:
-                    with dag:
-                        runit(dag)
+                if dag.ref is not None:
                     return succeeded_result(dag)
-                except Exception as e:
-                    if dag.ref is not None:
-                        return succeeded_result(dag)
-                    return {"status": "failed", "error": str(e)}
+                return {"status": "failed", "error": str(e)}
 
 
 def main(argv: list[str] | None = None) -> int:

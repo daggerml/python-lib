@@ -14,13 +14,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import run
-from typing import Any, Mapping, Optional, cast
+from typing import Any, Literal, Mapping, Optional, cast
 from urllib.parse import urlparse
 
 from daggerml._internal._db import Ref
 from daggerml._internal.builtins import BUILTIN_FNS
 from daggerml._internal.exec_state import ExecutionRecord, ExecutionState, LaunchState
-from daggerml._internal.execution_context import get_current_execution_context
 from daggerml._internal.ops.base_ops import BaseOps, with_retry
 from daggerml._internal.ops.cache import CacheOps
 from daggerml._internal.ops.dag import DagOps
@@ -59,7 +58,6 @@ class _PreparedAdapterCall:
     cache_key: str
     runnable: dict[str, Any]
     caller_execution_id: str | None = None
-    caller_cache_key: str | None = None
 
 
 @dataclass
@@ -88,6 +86,8 @@ class IndexOps(BaseOps):
         argv: list[Ref],
         kwargv: Optional[dict[str, Ref]] = None,
         name: Optional[str] = None,
+        *,
+        caller_execution_id: str | None = None,
     ) -> Optional[Ref]:
         kwargv = kwargv or {}
         # Important: if the called function produced a DaggerML Error, we still
@@ -105,7 +105,12 @@ class IndexOps(BaseOps):
                 if dag_ref is not None:
                     resolved_dag_ref = dag_ref
                 else:
-                    prepared = self._prepare_adapter_call(index_id, argv_ref, txn)
+                    prepared = self._prepare_adapter_call(
+                        index_id,
+                        argv_ref,
+                        txn,
+                        caller_execution_id=caller_execution_id,
+                    )
 
         if "resolved_dag_ref" in locals():
             return self._finish_fn_result(resolved_dag_ref, argv, name, None, index_id)
@@ -401,6 +406,8 @@ class IndexOps(BaseOps):
         head: Optional[str] = None,
         message: Optional[str] = None,
         dag_name: Optional[str] = None,
+        *,
+        execution_id: str | None = None,
     ) -> Ref:
         """Commit the current index state with the given value as the result node.
 
@@ -448,13 +455,25 @@ class IndexOps(BaseOps):
             except DmlPointerConflictError as err:
                 branch_commit = err.current_commit
         head_ops.delete_index(index_id)
+        if execution_id is None:
+            raise DmlRepoError("Execution id required for execution record finalization")
+        execution_state = ExecutionState(execution_id, remote_root=self.remote_root)
+        # A committed Error value still means the execution successfully produced
+        # and finalized a DAG result. Runtime failed is reserved for execution
+        # path failures that prevent a DAG from being committed at all.
+        execution_state.update_execution_record(
+            {
+                "execution_id": execution_id,
+                "cache_key": execution_id,
+                "lifecycle": "succeeded",
+                "updated_at": int(time.time()),
+                "spawned_execution_ids": [],
+                "cancellation_requested_by": None,
+            }
+        )
         if ctx.dag.argv is not None:
-            # automatically cache the DAG if it has an argv (i.e. is runnable)
-            execution_id, _cache_key = get_current_execution_context()
-            if execution_id is None:
-                raise DmlRepoError("Execution id required for runnable DAG cache publication")
             cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-            cops.put(ctx.commit.dag, execution_id=execution_id)
+            cops.put(ctx.commit.dag, execution_id=cast(str, execution_id))
         return commit_ref
 
     def current_dag_ref(self, index_id: str) -> Ref:
@@ -710,15 +729,6 @@ class IndexOps(BaseOps):
                 raise DmlRepoError("Adapter output schema invalid: running requires state")
         return payload
 
-    def _caller_identity(self, index_id: str, txn) -> tuple[str | None, str | None]:
-        caller_execution_id, caller_cache_key = get_current_execution_context()
-        if caller_execution_id:
-            return caller_execution_id, caller_cache_key
-        ctx = txn.get_commit_ctx(HeadOps(_db=self._db).get_index_commit(index_id))
-        if ctx.dag is None:
-            raise DmlRepoError("Index commit has no DAG.")
-        return index_id, index_id
-
     def _prepare_adapter_call(
         self,
         index_id: str,
@@ -726,7 +736,6 @@ class IndexOps(BaseOps):
         txn,
         *,
         caller_execution_id: str | None = None,
-        caller_cache_key: str | None = None,
     ) -> _PreparedAdapterCall:
         argv_datum: ListDatum = txn.get(txn.get(argv_ref).datum_ref(txn))
         if len(argv_datum.data) == 0:
@@ -739,15 +748,12 @@ class IndexOps(BaseOps):
         if not adapter_path:
             raise DmlRepoError(f"No such adapter: {fn_runnable.adapter}")
         node_ops = NodeOps(_db=self._db)
-        if caller_execution_id is None and caller_cache_key is None:
-            caller_execution_id, caller_cache_key = self._caller_identity(index_id=index_id, txn=txn)
         return _PreparedAdapterCall(
             argv_ref=argv_ref,
             adapter_path=adapter_path,
             cache_key=argv_ref.id(),
             runnable=self._runnable_envelope(fn_runnable_ref, txn, node_ops),
             caller_execution_id=caller_execution_id,
-            caller_cache_key=caller_cache_key,
         )
 
     def _load_remote_dag(self, dag_id: str) -> Ref:
@@ -779,17 +785,22 @@ class IndexOps(BaseOps):
             caller_execution_id=prepared.caller_execution_id,
             callee_execution_id=execution_id,
         )
-        if prepared.caller_cache_key:
-            state.update_execution_record(
-                {
-                    "execution_id": prepared.caller_execution_id,
-                    "cache_key": prepared.caller_cache_key,
-                    "lifecycle": "running",
-                    "updated_at": int(time.time()),
-                    "spawned_execution_ids": [execution_id],
-                    "cancellation_requested_by": None,
-                }
-            )
+        caller_record = state.read_execution_record(prepared.caller_execution_id)
+        if caller_record is None:
+            raise DmlRepoError(f"Missing caller execution record: {prepared.caller_execution_id}")
+        state.update_execution_record(
+            {
+                "execution_id": prepared.caller_execution_id,
+                "cache_key": cast(str, caller_record["cache_key"]),
+                "lifecycle": cast(
+                    Literal["running", "cancel-pending", "cancel-detached", "succeeded", "failed"],
+                    caller_record["lifecycle"],
+                ),
+                "updated_at": int(time.time()),
+                "spawned_execution_ids": [execution_id],
+                "cancellation_requested_by": cast(str | None, caller_record.get("cancellation_requested_by")),
+            }
+        )
 
     def _ensure_index_execution_root(self, index_id: str) -> ExecutionRecord:
         timestamp = int(time.time())
@@ -1006,7 +1017,6 @@ class IndexOps(BaseOps):
                 argv_ref,
                 txn,
                 caller_execution_id=execution_id,
-                caller_cache_key=cast(str, record["cache_key"]),
             )
             argv_ptr = self._remote_ops().put_ref_manifest(prepared.argv_ref)
             launch_state = ExecutionState(

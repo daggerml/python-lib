@@ -569,7 +569,13 @@ class _RuntimeNamespace:
     ) -> Ref | None:
         """Stage a function call in the runtime workspace and return the result node."""
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).start_fn(index_id, argv, kwargv=kwargv, name=name)
+            return make_index_ops(db, self._dml).start_fn(
+                index_id,
+                argv,
+                kwargv=kwargv,
+                name=name,
+                caller_execution_id=self._dml._context.execution_id or index_id,
+            )
 
     def commit(
         self,
@@ -582,7 +588,14 @@ class _RuntimeNamespace:
     ) -> Ref:
         """Commit a runtime workspace into repository history."""
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).commit(index_id, value, head=head, message=message, dag_name=dag_name)
+            return make_index_ops(db, self._dml).commit(
+                index_id,
+                value,
+                head=head,
+                message=message,
+                dag_name=dag_name,
+                execution_id=self._dml._context.execution_id or index_id,
+            )
 
     ######## Meta runtime operations ########
     def list(self) -> list[str]:
@@ -990,6 +1003,7 @@ class Dml:
         remote_root: Annotated[str | None, "Remote root URI such as s3://bucket/prefix."] = None,
         user: Annotated[str | None, "User identity recorded for mutating operations."] = None,
         config_home: Annotated[str | None, "Override directory for global DaggerML config files."] = None,
+        execution_id: Annotated[str | None, "Execution identity override for execution-aware runtimes."] = None,
     ):
         """Resolve runtime context for a project-scoped DaggerML session."""
         self._context = resolve_runtime_context(
@@ -997,6 +1011,7 @@ class Dml:
             remote_root=remote_root,
             user=user,
             config_home=config_home,
+            execution_id=execution_id,
         )
         self._s3_client = create_s3_client() if self._context.remote_root else None
 
