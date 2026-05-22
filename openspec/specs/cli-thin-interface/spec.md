@@ -5,6 +5,11 @@ The CLI command layer SHALL be limited to discovering command shape from the pub
 - **WHEN** a user invokes any CLI command
 - **THEN** the handler parses flags and arguments, calls a domain entrypoint, and formats the returned result without domain branching in the CLI layer
 
+#### Scenario: Exact Any transport uses shared serde helpers only
+- **WHEN** a generated CLI command includes an exact `Any` parameter or return annotation
+- **THEN** the CLI limits itself to file/stdin text IO plus `daggerml._internal.dml_loads` and `daggerml._internal.dml_dumps`
+- **AND** it still delegates all domain behavior to the underlying `Dml` method
+
 #### Scenario: Generated command discovery remains transport-only
 - **WHEN** the CLI inspects `Dml` signatures, annotations, and docstrings to build commands
 - **THEN** that inspection is used only to derive transport behavior and not to re-implement domain workflow rules in the CLI layer

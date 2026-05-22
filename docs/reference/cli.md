@@ -21,6 +21,7 @@ Global flags:
 Success output:
 
 - Commands print their return values as formatted JSON to `stdout`.
+- Commands whose return annotation is exactly `Any` instead write DML-serialized text to `stdout` via `daggerml._internal.dml_dumps`.
 
 Failure output:
 
@@ -35,6 +36,7 @@ Input parsing rules:
 - Boolean options become `--flag` or `--no-flag`.
 - `Ref` and `Uri` arguments are parsed from strings.
 - `list[...]` and `dict[...]` arguments are parsed from JSON text.
+- Parameters annotated as exactly `Any` are read from a file path argument, or from `stdin` when the path is omitted.
 
 That last rule matters for commands such as `dml admin cache invalidate`, which currently expects one JSON list argument rather than repeated positional cache keys.
 

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 from io import StringIO
+from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 from daggerml._cli import MethodCLI
+from daggerml._internal import dml_dumps, dml_loads
 
 
 class _NamespaceExampleNamespace:
@@ -86,3 +89,97 @@ def test_method_cli_main_reports_exceptions_to_stderr():
         assert cli.main(["explode"]) == 1
 
     assert "error: boom" in stderr.getvalue()
+
+
+def test_method_cli_reads_exact_any_parameter_from_stdin_by_default():
+    class Example:
+        def __init__(self):
+            pass
+
+        def render(self, payload: Any):
+            return {"payload": payload}
+
+    cli = MethodCLI(Example, prog="example")
+
+    with patch("sys.stdin", StringIO(dml_dumps({"alpha": [1, 2]}))), patch(
+        "sys.stdout", new_callable=StringIO
+    ) as stdout:
+        assert cli.run(["render"]) == 0
+
+    assert json.loads(stdout.getvalue()) == {"payload": {"alpha": [1, 2]}}
+
+
+def test_method_cli_reads_exact_any_parameter_from_file_and_writes_exact_any_output(tmp_path: Path):
+    class Example:
+        def __init__(self):
+            pass
+
+        def render(self, payload: Any) -> Any:
+            return {"wrapped": payload}
+
+    cli = MethodCLI(Example, prog="example")
+    payload_path = tmp_path / "payload.dml"
+    payload_path.write_text(dml_dumps({"alpha": [1, 2]}), encoding="utf-8")
+
+    with patch("sys.stdout", new_callable=StringIO) as stdout:
+        assert cli.run(["render", str(payload_path)]) == 0
+
+    assert dml_loads(stdout.getvalue()) == {"wrapped": {"alpha": [1, 2]}}
+
+
+def test_method_cli_reads_defaulted_exact_any_parameter_from_stdin_when_option_is_omitted():
+    class Example:
+        def __init__(self):
+            pass
+
+        def render(self, payload: Any = None):
+            return {"payload": payload}
+
+    cli = MethodCLI(Example, prog="example")
+
+    with patch("sys.stdin", StringIO(dml_dumps({"beta": [3, 4]}))), patch(
+        "sys.stdout", new_callable=StringIO
+    ) as stdout:
+        assert cli.run(["render"]) == 0
+
+    assert json.loads(stdout.getvalue()) == {"payload": {"beta": [3, 4]}}
+
+
+def test_method_cli_treats_semantically_invalid_exact_any_input_as_parse_failure(tmp_path: Path):
+    class Example:
+        def __init__(self):
+            pass
+
+        def render(self, payload: Any):
+            return {"payload": payload}
+
+    cli = MethodCLI(Example, prog="example")
+    payload_path = tmp_path / "payload.dml"
+    payload_path.write_text('{"__dml__":{"t":"Unknown"}}', encoding="utf-8")
+
+    with patch("sys.stderr", new_callable=StringIO) as stderr, pytest.raises(SystemExit) as exc_info:
+        cli.main(["render", str(payload_path)])
+
+    assert exc_info.value.code == 2
+    assert (
+        "error: argument payload: expected DML-serialized input: unknown dml tag type: 'Unknown'"
+        in stderr.getvalue()
+    )
+
+
+def test_method_cli_does_not_treat_optional_any_as_exact_any_transport(tmp_path: Path):
+    class Example:
+        def __init__(self):
+            pass
+
+        def render(self, payload: Any | None = None):
+            return {"payload": payload}
+
+    cli = MethodCLI(Example, prog="example")
+    payload_path = tmp_path / "payload.dml"
+    payload_path.write_text(dml_dumps({"alpha": [1, 2]}), encoding="utf-8")
+
+    with patch("sys.stdout", new_callable=StringIO) as stdout:
+        assert cli.run(["render", "--payload", str(payload_path)]) == 0
+
+    assert json.loads(stdout.getvalue()) == {"payload": str(payload_path)}

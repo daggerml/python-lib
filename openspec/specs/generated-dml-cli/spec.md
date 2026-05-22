@@ -13,8 +13,15 @@ The system SHALL generate the `dml` command tree from the public `Dml` class and
 The CLI SHALL omit any public `Dml` or namespace method whose parameter annotations cannot be generated from command-line input.
 
 #### Scenario: Unsupported parameter type omits method
-- **WHEN** a public method includes a parameter annotated with an unsupported type such as `Any`
+- **WHEN** a public method includes a parameter annotated with an unsupported type other than exactly `Any`
 - **THEN** the CLI does not expose that method
+
+#### Scenario: Exact Any parameter remains exposed through file-backed transport
+- **WHEN** a public method includes a parameter annotated as exactly `Any`
+- **THEN** the CLI exposes that method
+- **AND** the generated argument accepts a file path
+- **AND** omitting that path causes the CLI to read the serialized value from `stdin`
+- **AND** the CLI deserializes the text with `daggerml._internal.dml_loads` before invoking the method
 
 #### Scenario: Supported typed method remains exposed
 - **WHEN** a public method uses only supported parameter families such as `Ref`, `int`, `float`, `str`, `Literal`, optionals of those types, or JSON-backed container types
@@ -63,8 +70,13 @@ The CLI SHALL generate commands from one runtime-visible signature even when ove
 The generated CLI SHALL emit JSON for successful results and normalized failures.
 
 #### Scenario: Successful command emits JSON
-- **WHEN** a generated CLI command returns a value
+- **WHEN** a generated CLI command returns a value and the return annotation is not exactly `Any`
 - **THEN** the CLI serializes that value as JSON using the standard typed-leaf encoder
+
+#### Scenario: Exact Any return emits DML serialization
+- **WHEN** a generated CLI command return annotation is exactly `Any`
+- **THEN** the CLI serializes that value with `daggerml._internal.dml_dumps`
+- **AND** writes the serialized text to `stdout`
 
 #### Scenario: Failed command emits structured JSON error
 - **WHEN** generated command execution raises an exception

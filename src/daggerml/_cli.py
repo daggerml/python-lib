@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union, cast, get_args, get_origin
 
-from daggerml._internal import Dml, Ref, Runnable, Uri
+from daggerml._internal import Dml, Ref, Runnable, Uri, dml_dumps, dml_loads
 
 
 class PrettyArgumentParser(argparse.ArgumentParser):
@@ -103,7 +103,10 @@ class MethodCLI:
         root = self.cls if target.kind == "classmethod" else self.cls(**init_kwargs)
         method = self._resolve_method(root, target)
         result = method(**method_kwargs)
-        print(json.dumps(result, indent=2, sort_keys=True, default=self._json_default))
+        if self._returns_exact_any(method):
+            print(dml_dumps(result))
+        else:
+            print(json.dumps(result, indent=2, sort_keys=True, default=self._json_default))
         return 0
 
     def _configure_logging(self, verbosity: int) -> None:
@@ -218,7 +221,30 @@ class MethodCLI:
                 self._add_bool_flag(parser_or_group, name, dest, default, help_text)
                 continue
             converter, extra = self._parser_for(typ)
-            if has_default:
+            if self._is_exact_any(typ):
+                if has_default:
+                    kwargs: dict[str, Any] = {
+                        "dest": dest,
+                        "nargs": "?",
+                        "const": "-",
+                        "default": "-",
+                        "help": help_text,
+                        **extra,
+                    }
+                    if converter is not None:
+                        kwargs["type"] = converter
+                    parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
+                elif required_as_options:
+                    kwargs = {"dest": dest, "default": "-", "help": help_text, **extra}
+                    if converter is not None:
+                        kwargs["type"] = converter
+                    parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
+                else:
+                    kwargs = {"nargs": "?", "default": "-", "help": help_text, **extra}
+                    if converter is not None:
+                        kwargs["type"] = converter
+                    parser_or_group.add_argument(name, **kwargs)
+            elif has_default:
                 kwargs: dict[str, Any] = {"dest": dest, "default": default, "help": help_text, **extra}
                 if converter is not None:
                     kwargs["type"] = converter
@@ -257,9 +283,11 @@ class MethodCLI:
         return getattr(obj, target.method_name)
 
     def _parser_for(self, typ: Any) -> tuple[Callable[[str], Any] | None, dict[str, Any]]:
-        typ, _ = self._unwrap_optional(typ)
         if typ in self.parsers:
             return self.parsers[typ], {}
+        if self._is_exact_any(typ):
+            return self._dml_file_parser(), {}
+        typ, _ = self._unwrap_optional(typ)
         origin = get_origin(typ)
         args = get_args(typ)
         if origin is Literal:
@@ -280,6 +308,20 @@ class MethodCLI:
                 return json.loads(value)
             except json.JSONDecodeError as exc:
                 raise argparse.ArgumentTypeError(f"expected JSON for {self._type_display(typ)}: {exc.msg}") from exc
+
+        return parse
+
+    def _dml_file_parser(self) -> Callable[[str], Any]:
+        def parse(value: str) -> Any:
+            try:
+                text = sys.stdin.read() if value == "-" else Path(value).read_text(encoding="utf-8")
+                return dml_loads(text)
+            except json.JSONDecodeError as exc:
+                raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc.msg}") from exc
+            except (TypeError, ValueError) as exc:
+                raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc}") from exc
+            except OSError as exc:
+                raise argparse.ArgumentTypeError(str(exc)) from exc
 
         return parse
 
@@ -304,6 +346,14 @@ class MethodCLI:
     def _is_bool_type(self, typ: Any) -> bool:
         typ, _ = self._unwrap_optional(typ)
         return typ is bool
+
+    def _is_exact_any(self, typ: Any) -> bool:
+        return typ is Any
+
+    def _returns_exact_any(self, fn: Callable[..., Any]) -> bool:
+        hints = typing.get_type_hints(fn, include_extras=True)
+        typ, _ = self._split_annotated(hints.get("return", inspect.signature(fn).return_annotation))
+        return self._is_exact_any(typ)
 
     def _is_public_method_descriptor(self, name: str, member: Any) -> bool:
         if name.startswith("_"):
