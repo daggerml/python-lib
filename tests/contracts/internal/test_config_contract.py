@@ -23,7 +23,7 @@ def test_repo_env_resolution():
     cfg = DmlConfig.resolve(
         env={"DML_PROJECT_HOME": "/repo/new"},
     )
-    assert cfg.repo == "/repo/new"
+    assert cfg.project.home == "/repo/new"
 
 
 def test_default_user_uses_env_user_and_hostname_shape():
@@ -38,7 +38,7 @@ def test_path_values_expand_user():
     cfg = DmlConfig.resolve(
         explicit={"project.home": "~/repo"},
     )
-    assert cfg.repo == f"{home}/repo"
+    assert cfg.project.home == f"{home}/repo"
 
 
 def test_dml_uses_config_resolution_from_env(monkeypatch):

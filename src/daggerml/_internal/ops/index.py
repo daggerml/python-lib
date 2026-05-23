@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import run
-from typing import Any, Literal, Mapping, Optional, cast
+from typing import Any, Literal, Optional, cast
 from urllib.parse import urlparse
 
 from daggerml._internal._db import Ref
@@ -89,21 +89,34 @@ class IndexOps(BaseOps):
         *,
         caller_execution_id: str | None = None,
     ) -> Optional[Ref]:
+        dag_ref = self._start_fn(index_id, argv, kwargv=kwargv, name=name, caller_execution_id=caller_execution_id)
+        if dag_ref is not None:
+            return self._finish_fn_result(dag_ref, argv, name, index_id)
+
+    def _start_fn(
+        self,
+        index_id: str,
+        argv: list[Ref],
+        kwargv: Optional[dict[str, Ref]] = None,
+        name: Optional[str] = None,
+        *,
+        caller_execution_id: str | None = None,
+    ) -> Optional[Ref]:
         kwargv = kwargv or {}
         # Important: if the called function produced a DaggerML Error, we still
         # want any DB + pointer updates performed while finishing the call to be
         # committed. We therefore capture the error inside the transaction and
         # raise it only after the txn scope exits successfully.
+        cops = CacheOps(_db=self._db, remote_root=self.remote_root)
         with self._tx(readonly=False) as txn:
             argv_ref = self._prepare_fn(index_id, argv, kwargv, txn)
             dag_ref = self._run_builtin(argv_ref, txn)
             if dag_ref is not None:
-                return self._finish_fn_result(dag_ref, argv, name, None, index_id)
+                return dag_ref
             else:
-                cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-                dag_ref = cops._get(argv_ref, txn)
+                dag_ref = cops.get(argv_ref, txn)
                 if dag_ref is not None:
-                    return self._finish_fn_result(dag_ref, argv, name, None, index_id)
+                    return dag_ref
                 else:
                     prepared = self._prepare_adapter_call(
                         index_id,
@@ -121,12 +134,10 @@ class IndexOps(BaseOps):
         try:
             # Step 2: post-lock cache check
             with self._tx(readonly=False) as txn:
-                cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-                dag_ref = cops._get(prepared.argv_ref, txn)
+                dag_ref = cops.get(prepared.argv_ref, txn)
                 if dag_ref is not None:
                     es.unlock()
-                    locked = False
-                    return self._finish_fn_result(dag_ref, argv, name, None, index_id)
+                    return dag_ref
             execution_id = es.read_active_execution_id()
             execution_record = None
             launch_state = None
@@ -190,25 +201,22 @@ class IndexOps(BaseOps):
                 es.unlock()
                 locked = False
                 with self._tx(readonly=False) as txn:
-                    cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-                    dag_ref = cops._get(prepared.argv_ref, txn)
+                    dag_ref = cops.get(prepared.argv_ref, txn)
                     if dag_ref is not None:
-                        terminal_dag_ref = dag_ref
-                if "terminal_dag_ref" in locals():
-                    return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
+                        return dag_ref
                 raise DmlRepoError("Adapter reported success but no cached DAG was published")
             elif status == "failed":
-                self._publish_terminal_state(prepared.argv_ref, result, execution_id=execution_id)
+                error = Error.from_ex(DmlRepoError(result.get("error") or "Adapter failure"))
+                with self._tx(readonly=False) as txn:
+                    dag_ref = self._build_scratch_dag_in_txn(prepared.argv_ref, txn, error=error)
+                cops.put(dag_ref, execution_id=execution_id)
                 es.delete_active_execution()
                 es.unlock()
                 locked = False
                 with self._tx(readonly=False) as txn:
-                    cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-                    dag_ref = cops._get(prepared.argv_ref, txn)
+                    dag_ref = cops.get(prepared.argv_ref, txn)
                     if dag_ref is not None:
-                        terminal_dag_ref = dag_ref
-                if "terminal_dag_ref" in locals():
-                    return self._finish_fn_result(terminal_dag_ref, argv, name, None, index_id)
+                        return dag_ref
                 raise DmlRepoError("Adapter reported failure but no cached failed DAG was published")
             elif status == "cancel-detached":
                 es.delete_active_execution()
@@ -469,54 +477,11 @@ class IndexOps(BaseOps):
             cops.put(ctx.commit.dag, execution_id=cast(str, execution_id))
         return commit_ref
 
-    def current_dag_ref(self, index_id: str) -> Ref:
-        commit_ref = HeadOps(_db=self._db).get_index_commit(index_id)
-        with self._tx(readonly=True) as txn:
-            return cast(Ref, txn.get_commit_ctx(commit_ref).commit.dag)
-
-    def resolve_dag_node(self, index_id: str, dag_name: str, node_name: Optional[str] = None) -> tuple[Ref, Ref]:
-        commit_ref = HeadOps(_db=self._db).get_index_commit(index_id)
-        with self._tx(readonly=True) as txn:
-            ctx = txn.get_commit_ctx(commit_ref)
-            tree: Tree = txn.get(ctx.commit.tree)
-            dag_ref = tree.dags.get(dag_name)
-            if dag_ref is None:
-                raise DmlRepoError(f"DAG '{dag_name}' not found")
-            dag: Dag = txn.get(dag_ref)
-            if node_name is None:
-                if dag.result is None:
-                    raise DmlRepoError(f"DAG '{dag_name}' has no result node")
-                return dag_ref, dag.result
-            node_ref = dag.names.get(node_name)
-            if node_ref is None:
-                raise DmlRepoError(f"Node '{node_name}' not found in DAG '{dag_name}'")
-            return dag_ref, node_ref
-
     def _resolve_node_value_ref(self, node_ref: Ref, txn) -> Ref:
         # Validate node ref using NodeOps then return its underlying datum ref
         node_ref = NodeOps(_db=self._db)._require_node_ref(node_ref)
         node = txn.get(node_ref)
         return node.datum_ref(txn)
-
-    def _put_node(self, node: Node, txn, index_id: str, name: Optional[str] = None) -> Ref:
-        if txn is not None:
-            old_commit = HeadOps(_db=self._db).get_index_commit(index_id)
-            ctx = txn.get_commit_ctx(old_commit)
-            if ctx.dag is None:
-                raise DmlRepoError("Index commit has no DAG.")
-            node_ref = self._put_node_in_ctx(ctx, txn, node, name=name)
-            ctx.commit.modified = now()
-            txn.put(ctx.commit, to=old_commit)
-            return node_ref
-        return self._retry_index_publication(
-            index_id,
-            lambda old_commit, retry_txn: self._put_node_retry(
-                node,
-                name,
-                old_commit,
-                retry_txn,
-            ),
-        )
 
     def _create(
         self,
@@ -545,7 +510,9 @@ class IndexOps(BaseOps):
         dag_ref = txn.put(Dag(nodes=nodes, names={}, result=None, argv=argv))
         return txn.put(Commit(message="", dag=dag_ref, **kw))
 
-    # ~~~~~~~~~~~ START_FN ~~~~~~~~~~~
+    ##################################################
+    #################### START_FN ####################
+    ##################################################
     def _runnable_chain(self, runnable_ref: Ref, txn) -> list[tuple[Ref, RunnableDatum]]:
         chain: list[tuple[Ref, RunnableDatum]] = []
         seen: set[Ref] = set()
@@ -748,27 +715,6 @@ class IndexOps(BaseOps):
             runnable=self._runnable_envelope(fn_runnable_ref, txn, node_ops),
             caller_execution_id=caller_execution_id,
         )
-
-    def _load_remote_dag(self, dag_id: str) -> Ref:
-        remote_ops = self._remote_ops()
-        dag_ref = remote_ops._decode_ref(remote_ops._remote_get_dag_ref(dag_id))
-        return remote_ops.load_ptr(dag_ref["target"], expected_root_ns="dag")
-
-    def _build_failed_execution_dag(self, argv_ref: Ref, error_message: str) -> Ref:
-        return self._build_scratch_dag(argv_ref, error=Error.from_ex(DmlRepoError(error_message)))
-
-    def _publish_terminal_state(self, argv_ref: Ref, state: Mapping[str, Any], *, execution_id: str) -> None:
-        cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-        if state["status"] == "succeeded":
-            dag_id = state.get("dag_id")
-            if not isinstance(dag_id, str) or not dag_id:
-                raise DmlRepoError("Execution state succeeded but dag_id is missing")
-            dag_ref = self._load_remote_dag(dag_id)
-        elif state["status"] == "failed":
-            dag_ref = self._build_failed_execution_dag(argv_ref, state.get("error") or "Adapter reported failure")
-        else:
-            raise DmlRepoError(f"Cannot publish non-terminal execution state: {state['status']}")
-        cops.put(dag_ref, execution_id=execution_id)
 
     @staticmethod
     def _record_call_edges(prepared: _PreparedAdapterCall, state: ExecutionState, *, execution_id: str) -> None:
@@ -995,10 +941,6 @@ class IndexOps(BaseOps):
         except FileNotFoundError:
             pass
 
-    @staticmethod
-    def _is_synthetic_index_root(record: ExecutionRecord) -> bool:
-        return record["execution_id"] == record["cache_key"]
-
     def _invoke_cancel_update(self, execution_id: str, record: ExecutionRecord) -> dict[str, Any]:
         argv_ref = Ref(f"node-argv:{cast(str, record['cache_key'])}")
         with self._tx(readonly=True) as txn:
@@ -1060,34 +1002,17 @@ class IndexOps(BaseOps):
             raise DmlRepoError("Adapter output must be JSON") from e
         return self._validate_adapter_output(stdout)
 
-    def _finish_fn_result_in_txn(
-        self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_id: str
-    ) -> tuple[Ref, Error | None]:
-        del txn
-        out = self._finish_fn_result(dag_ref, argv, name, None, index_id)
-        with self._tx(readonly=True) as read_txn:
-            dag_obj: Dag = read_txn.get(dag_ref)
-            if dag_obj.result is None and dag_obj.error is None:
-                raise DmlRepoError("Function DAG has no result node.")
-            if dag_obj.error is not None:
-                err = read_txn.get(dag_obj.error)
-                if not isinstance(err, Error):
-                    raise DmlRepoError(f"Expected Error object, got: {type(err).__name__}")
-                return out, err
-        return out, None
-
-    def _finish_fn_result(self, dag_ref: Ref, argv: list[Ref], name: Optional[str], txn, index_id: str) -> Ref:
-        del txn
+    def _finish_fn_result(self, dag_ref: Ref, argv: list[Ref], name: Optional[str], index_id: str) -> Ref:
         out = self._retry_index_publication(
             index_id,
             lambda old_commit, retry_txn: self._put_node_retry(FnNode(argv, dag_ref), name, old_commit, retry_txn),
         )
-        with self._tx(readonly=True) as read_txn:
-            dag_obj: Dag = read_txn.get(dag_ref)
+        with self._tx(readonly=True) as txn:
+            dag_obj: Dag = txn.get(dag_ref)
             if dag_obj.result is None and dag_obj.error is None:
                 raise DmlRepoError("Function DAG has no result node.")
             if dag_obj.error is not None:
-                err = read_txn.get(dag_obj.error)
+                err = txn.get(dag_obj.error)
                 if not isinstance(err, Error):
                     raise DmlRepoError(f"Expected Error object, got: {type(err).__name__}")
                 raise err
@@ -1279,10 +1204,6 @@ class IndexOps(BaseOps):
         if isinstance(value, dict):
             return txn.put(DictDatum(data={k: self._store_scratch_value(v, txn) for k, v in value.items()}))
         return txn.put(ScalarDatum(value))
-
-    def _build_scratch_dag(self, argv_ref: Ref, *, result: Any = None, error: Error | None = None) -> Ref:
-        with self._tx(readonly=False) as txn:
-            return self._build_scratch_dag_in_txn(argv_ref, txn, result=result, error=error)
 
     def _build_scratch_dag_in_txn(self, argv_ref: Ref, txn, *, result: Any = None, error: Error | None = None) -> Ref:
         nodes = [argv_ref, self._kwargv_from_argv(argv_ref, txn)]

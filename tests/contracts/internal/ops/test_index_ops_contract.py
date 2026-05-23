@@ -290,7 +290,8 @@ class TestIndexOps:
                 argv_ref = ops._prepare_fn(index_ref, [fn_node, arg_node], {}, txn)
 
             before_indexes = set(HeadOps(_db=temp_bo._db).list_indexes())
-            dag_ref = ops._build_failed_execution_dag(argv_ref, "boom")
+            with ops._tx(readonly=False) as txn:
+                dag_ref = ops._build_scratch_dag_in_txn(argv_ref, txn, error=Error.from_ex(DmlRepoError("boom")))
 
             with ops._tx(readonly=True) as txn:
                 dag = txn.get(dag_ref)
@@ -502,23 +503,6 @@ class TestIndexOps:
         finally:
             ops.delete(index_ref)
 
-    def test_start_fn_runnable_sub_cycle_raises(self, temp_bo):
-        ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-        try:
-            with ops._tx(readonly=False) as txn:
-                uri_ref = txn.put(Uri("noop://fn"), to=_gen_ref("datum-uri"))
-                kwargs_ref = txn.put(DictDatum(data={}), to=_gen_ref("datum-dict"))
-                runnable_ref = _gen_ref("datum-runnable")
-                txn.put(
-                    RunnableDatum(target=uri_ref, sub=runnable_ref, kwargs=kwargs_ref, adapter="nonempty"),
-                    to=runnable_ref,
-                )
-                fn_node_ref = ops._put_node(LiteralNode(value=runnable_ref), txn=txn, index_id=index_ref)
-            with pytest.raises(DmlRepoError, match="Runnable sub cycle detected"):
-                ops.start_fn(index_ref, [fn_node_ref], name="result")
-        finally:
-            ops.delete(index_ref)
-
     def test_start_fn_caching(self, temp_bo, s3):
         # ensure clean DB for this test to prevent map growth from prior tests
         temp_bo._db.clear_all()
@@ -557,8 +541,8 @@ class TestIndexOps:
             "cancellation_requested_by": None,
         }
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: hit_dag_ref)
-        monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, txn, index_ref: sentinel)
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: hit_dag_ref)
+        monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, index_ref: sentinel)
         monkeypatch.setattr(IndexOps, "_call_adapter", lambda *args, **kwargs: pytest.fail("adapter should not run"))
 
         try:
@@ -580,7 +564,7 @@ class TestIndexOps:
         calls: list[tuple[_PreparedAdapterCall, str]] = []
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
         )
@@ -593,10 +577,6 @@ class TestIndexOps:
             lambda self, prepared_arg, argv_ptr, **kwargs: calls.append((prepared_arg, argv_ptr))
             or {"status": "running", "error": None, "state": {"token": kwargs["execution_id"]}},
         )
-        monkeypatch.setattr(
-            IndexOps, "_publish_terminal_state", lambda *args, **kwargs: pytest.fail("publish should not run")
-        )
-
         try:
             assert ops.start_fn(index_ref, [fn_node]) is None
             assert calls == [(prepared, "argv-ptr")]
@@ -626,7 +606,7 @@ class TestIndexOps:
         cache_hits = iter([None, None, hit_dag_ref])
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: next(cache_hits))
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: next(cache_hits))
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
         )
@@ -639,7 +619,7 @@ class TestIndexOps:
             lambda self, prepared_arg, argv_ptr, **kwargs: adapter_calls.append((prepared_arg, argv_ptr))
             or {"status": "succeeded", "error": None, "dag_id": "e" * 64},
         )
-        monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, txn, index_ref: sentinel)
+        monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, index_ref: sentinel)
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is sentinel
@@ -675,7 +655,7 @@ class TestIndexOps:
         }
         seen: list[dict[str, Any] | None] = []
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
         )
@@ -718,7 +698,7 @@ class TestIndexOps:
             "cancellation_requested_by": None,
         }
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
         )
@@ -978,7 +958,7 @@ class TestIndexOps:
         )
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
         )
@@ -1117,7 +1097,7 @@ class TestIndexOps:
         _FakeExecutionState.reset()
         _FakeExecutionState.active[prepared.cache_key] = "stale-execution"
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
         )
@@ -1157,7 +1137,7 @@ class TestIndexOps:
             "cancellation_requested_by": None,
         }
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
         )
@@ -1194,7 +1174,7 @@ class TestIndexOps:
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr(
-            "daggerml._internal.ops.cache.CacheOps._get",
+            "daggerml._internal.ops.cache.CacheOps.get",
             lambda self, argv_ref, txn: None
             if (cache_reads.__setitem__("count", cache_reads["count"] + 1) or cache_reads["count"]) <= 2
             else Ref(f"dag:{'f' * 64}"),
@@ -1213,20 +1193,22 @@ class TestIndexOps:
         )
         monkeypatch.setattr(
             IndexOps,
-            "_publish_terminal_state",
-            lambda self, argv_ref, state, execution_id: published.append((argv_ref, state["status"], execution_id)),
+            "_build_scratch_dag_in_txn",
+            lambda self, argv_ref, txn, *, result=None, error=None: Ref(f"dag:{'1' * 64}"),
         )
         monkeypatch.setattr(
-            IndexOps,
-            "_finish_fn_result",
-            lambda self, dag_ref, argv, name, txn, index_ref: (_ for _ in ()).throw(DmlRepoError("boom")),
+            "daggerml._internal.ops.cache.CacheOps.put",
+            lambda self, dag_ref, execution_id: published.append((dag_ref, execution_id)),
         )
+        monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, index_ref: dag_ref)
 
         try:
-            with pytest.raises(DmlRepoError, match="boom"):
-                ops.start_fn(index_ref, [fn_node])
+            result = ops.start_fn(index_ref, [fn_node])
+            assert result == Ref(f"dag:{'f' * 64}")
             assert len(adapter_calls) == 1
-            assert published == [(prepared.argv_ref, "failed", next(iter(_FakeExecutionState.records)))]
+            assert published[0][0] == Ref(f"dag:{'1' * 64}")
+            assert len(published) == 1
+            assert published[0][1] == next(iter(_FakeExecutionState.records))
         finally:
             ops.delete(index_ref)
 
@@ -1251,7 +1233,7 @@ class TestIndexOps:
 
         monkeypatch.setattr(_FakeExecutionState, "lock", lock_returns_false)
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps._get", lambda self, argv_ref, txn: None)
+        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: None)
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
         )

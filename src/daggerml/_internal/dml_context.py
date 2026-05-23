@@ -54,23 +54,6 @@ def resolve_runtime_context(
     return DmlRuntimeContext(config)
 
 
-def resolve_global_context(
-    *,
-    project_home: str | None = None,
-    user: str | None = None,
-    config_home: str | None = None,
-) -> DmlRuntimeContext:
-    config = DmlConfig.resolve(
-        scope="global",
-        explicit={
-            "project.home": project_home,
-            "user": user,
-            "config_home": config_home,
-        },
-    )
-    return DmlRuntimeContext(config)
-
-
 def current_head_branch(head_ops) -> str | None:
     return head_ops.get_attached_head_branch()
 

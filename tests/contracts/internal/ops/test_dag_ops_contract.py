@@ -67,13 +67,8 @@ class TestDagOps:
         HeadOps(_db=temp_bo._db).create_branch("main", commit_ref)
         refs = dag_ref, tree_ref, commit_ref
         ops = DagOps(temp_bo._db)
-        # List DAGs in this commit
-        dags = ops.list()
-        assert isinstance(dags, list)
-        assert any(d["id"] == dag_ref.id() for d in dags)
         # Describe the DAG
         desc = ops.describe(dag_ref)
-        assert desc["id"] == dag_ref.id()
         assert desc["nodes"] == dag.nodes
         assert desc["names"] == dag.names
         assert desc["result"] == dag.result
@@ -83,11 +78,6 @@ class TestDagOps:
             for ref in set(refs):
                 if ref:
                     txn.delete(ref)
-
-    def test_list_empty(self, temp_bo):
-        ops = DagOps(temp_bo._db)
-        # No heads/commits
-        assert ops.list() == []
 
     @pytest.mark.parametrize(
         "arg,msg",

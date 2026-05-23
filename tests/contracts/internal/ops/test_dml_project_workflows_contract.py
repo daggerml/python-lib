@@ -28,8 +28,8 @@ def test_fetch_pull_push_workflows_delegate_to_remote_ops():
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_head_ops", return_value=head_ops),
-        patch.object(dml_module, "make_remote_ops", return_value=remote_ops),
+        patch.object(dml_module, "HeadOps", return_value=head_ops),
+        patch.object(dml_module, "RemoteOps", return_value=remote_ops),
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
         remote_ops.pull_uri_into_branch.return_value = Ref("commit:2")
@@ -61,8 +61,8 @@ def test_project_workflows_use_dml_owned_s3_client():
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_head_ops", return_value=head_ops),
-        patch.object(dml_module, "make_remote_ops", return_value=remote_ops),
+        patch.object(dml_module, "HeadOps", return_value=head_ops),
+        patch.object(dml_module, "RemoteOps", return_value=remote_ops),
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
         remote_ops.pull_uri_into_branch.return_value = Ref("commit:2")
@@ -89,8 +89,8 @@ def test_fetch_project_origin_falls_back_to_default_branch_without_attached_head
     with (
         patch("daggerml._internal.dml_context.DmlProjectConfig.load", return_value=project_cfg),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_head_ops", return_value=detached_head_ops),
-        patch.object(dml_module, "make_remote_ops", return_value=remote_ops),
+        patch.object(dml_module, "HeadOps", return_value=detached_head_ops),
+        patch.object(dml_module, "RemoteOps", return_value=remote_ops),
     ):
         remote_ops.fetch_uri.return_value = Ref("commit:1")
         fetched = ops.fetch("origin", None)
@@ -107,7 +107,7 @@ def test_push_project_requires_attached_head_or_explicit_branch():
     with (
         patch("daggerml._internal.dml.load_project_config", return_value=project_cfg),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_head_ops", return_value=detached_head_ops),
+        patch.object(dml_module, "HeadOps", return_value=detached_head_ops),
     ):
         with pytest.raises(DmlRepoError, match="Current checkout is detached"):
             ops.push(None, branch=None, create=False, force=False)
@@ -123,8 +123,8 @@ def test_checkout_merge_revert_workflows_delegate_to_commit_ops():
 
     with (
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_commit_ops", return_value=commit_ops),
-        patch.object(dml_module, "make_head_ops", return_value=head_ops),
+        patch.object(dml_module, "CommitOps", return_value=commit_ops),
+        patch.object(dml_module, "HeadOps", return_value=head_ops),
         patch.object(
             dml_module,
             "resolve_dml_revision",
@@ -153,8 +153,8 @@ def test_dag_checkout_delegates_to_commit_ops_with_resolved_defaults():
 
     with (
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_commit_ops", return_value=commit_ops),
-        patch.object(dml_module, "make_head_ops", return_value=head_ops),
+        patch.object(dml_module, "CommitOps", return_value=commit_ops),
+        patch.object(dml_module, "HeadOps", return_value=head_ops),
         patch.object(dml_module, "resolve_dml_revision_ref", return_value=Ref("commit:2")),
     ):
         result = ops.dag.checkout("origin/main", "train")
@@ -175,9 +175,7 @@ def test_dag_checkout_requires_user_if_not_resolved():
     with (
         patch.object(type(ops._context), "user", new_callable=PropertyMock, return_value=None),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(
-            dml_module, "make_head_ops", return_value=Mock(require_attached_head_branch=Mock(return_value="main"))
-        ),
+        patch.object(dml_module, "HeadOps", return_value=Mock(require_attached_head_branch=Mock(return_value="main"))),
         patch.object(dml_module, "resolve_dml_revision_ref", return_value=Ref("commit:2")),
     ):
         with pytest.raises(DmlRepoError, match="user is required for dag checkout"):
@@ -283,7 +281,7 @@ def test_dag_describe_node_resolves_named_node_with_revision_context():
             return_value=SimpleNamespace(ref=Ref("node:4"), dag="train", revision=revision),
         ),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_node_ops", return_value=node_ops),
+        patch.object(dml_module, "NodeOps", return_value=node_ops),
     ):
         result = ops.dag.describe_node("result", dag="train", revision="HEAD")
 
@@ -301,7 +299,7 @@ def test_dag_get_node_resolves_named_node_with_explicit_dag_ref():
             return_value=SimpleNamespace(ref=Ref("node:4"), dag="train", revision=None),
         ),
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_node_ops", return_value=node_ops),
+        patch.object(dml_module, "NodeOps", return_value=node_ops),
     ):
         result = ops.dag.get_node("result", dag="train")
 
@@ -316,7 +314,7 @@ def test_dag_describe_node_accepts_explicit_node_ref_without_dag_context():
 
     with (
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_node_ops", return_value=node_ops),
+        patch.object(dml_module, "NodeOps", return_value=node_ops),
     ):
         result = ops.dag.describe_node(node_ref)
 
@@ -331,7 +329,7 @@ def test_dag_get_node_accepts_explicit_node_ref_without_dag_context():
 
     with (
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_node_ops", return_value=node_ops),
+        patch.object(dml_module, "NodeOps", return_value=node_ops),
     ):
         result = ops.dag.get_node(node_ref)
 
@@ -355,8 +353,8 @@ def test_dag_describe_node_uses_explicit_dag_ref_context_for_named_lookup():
 
     with (
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
-        patch.object(dml_module, "make_node_ops", return_value=node_ops),
-        patch.object(dml_module, "make_dag_ops", return_value=dag_ops),
+        patch.object(dml_module, "NodeOps", return_value=node_ops),
+        patch.object(dml_module, "DagOps", return_value=dag_ops),
     ):
         result = ops.dag.describe_node("result", dag=dag_ref)
 

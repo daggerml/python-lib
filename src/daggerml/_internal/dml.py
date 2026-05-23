@@ -34,7 +34,6 @@ from daggerml._internal.dml_resolution import (
 from daggerml._internal.dml_resolution import (
     resolve_revision_ref as resolve_revision_ref_value,
 )
-from daggerml._internal.ops.cache import CacheOps
 from daggerml._internal.ops.commit import CommitOps
 from daggerml._internal.ops.config import ConfigOps
 from daggerml._internal.ops.dag import DagOps
@@ -99,12 +98,13 @@ class RevisionPayload(TypedDict):
 
 
 class DagSummaryPayload(TypedDict):
+    ref: Ref
     nodes: list[Ref]
     names: dict[str, Ref]
     result: Ref | None
     argv: Ref | None
     kwargv: Ref | None
-    ref: Ref
+    cache_key: str | None
 
 
 class NodeDescriptionPayload(TypedDict):
@@ -280,32 +280,8 @@ def create_db(project_home: str, *, branch: str | None = None) -> None:
         db.close()
 
 
-def make_commit_ops(db: DmlDbEnv) -> CommitOps:
-    return CommitOps(_db=db)
-
-
-def make_head_ops(db: DmlDbEnv) -> HeadOps:
-    return HeadOps(_db=db)
-
-
 def make_index_ops(db: DmlDbEnv, dml: "Dml") -> IndexOps:
     return IndexOps(_db=db, remote_root=dml._context.remote_root)
-
-
-def make_dag_ops(db: DmlDbEnv) -> DagOps:
-    return DagOps(_db=db)
-
-
-def make_node_ops(db: DmlDbEnv) -> NodeOps:
-    return NodeOps(_db=db)
-
-
-def make_cache_ops(db: DmlDbEnv, dml: "Dml") -> CacheOps:
-    return CacheOps(_db=db, remote_root=dml._context.remote_root)
-
-
-def make_gc_ops(db: DmlDbEnv) -> GcOps:
-    return GcOps(_db=db)
 
 
 def split_remote_root(remote_root: str) -> tuple[str, str]:
@@ -338,21 +314,20 @@ def config_ops(dml: "Dml"):
 
 def tree_dags(dml: "Dml", tree_ref: Ref) -> dict[str, Ref]:
     with with_db(dml) as db:
-        with make_commit_ops(db)._tx(readonly=True) as txn:
+        with CommitOps(db)._tx(readonly=True) as txn:
             tree = txn.get(tree_ref)
             return dict(tree.dags)
 
 
 def dag_map_for_commit(dml: "Dml", commit_ref: Ref) -> dict[str, Ref]:
     with with_db(dml) as db:
-        tree_ref = make_commit_ops(db).describe(commit_ref)["tree"]
+        tree_ref = CommitOps(db).describe(commit_ref)["tree"]
     return tree_dags(dml, tree_ref)
 
 
 def dag_summary_payload(dml: "Dml", dag_ref: Ref) -> DagSummaryPayload:
     with with_db(dml) as db:
-        dag = dict(make_dag_ops(db).describe(dag_ref))
-    dag.pop("id", None)
+        dag = dict(DagOps(db).describe(dag_ref))
     dag["ref"] = dag_ref
     return cast(DagSummaryPayload, dag)
 
@@ -421,8 +396,8 @@ def resolve_dml_revision(dml: "Dml", value: str):
     with with_db(dml) as db:
         return resolve_revision_value(
             value=value,
-            commit_ops=make_commit_ops(db),
-            head_ops=make_head_ops(db),
+            commit_ops=CommitOps(db),
+            head_ops=HeadOps(db),
             project_dir=require_project_home(dml._context.project_home),
         )
 
@@ -431,8 +406,8 @@ def resolve_dml_revision_ref(dml: "Dml", value: str) -> Ref:
     with with_db(dml) as db:
         return resolve_revision_ref_value(
             value=value,
-            commit_ops=make_commit_ops(db),
-            head_ops=make_head_ops(db),
+            commit_ops=CommitOps(db),
+            head_ops=HeadOps(db),
             project_dir=require_project_home(dml._context.project_home),
         )
 
@@ -507,7 +482,7 @@ class _RuntimeNamespace:
         """Create a runtime workspace from HEAD, a branch, a commit, or an argv pointer."""
         with with_db(self._dml) as db:
             if head is None and commit is None and argv_ptr is None:
-                head_state = make_head_ops(db).get_head_state()
+                head_state = HeadOps(db).get_head_state()
                 head = head_state.branch
                 commit = head_state.commit if head is None else None
             return make_index_ops(db, self._dml).create(head=head, commit=commit, argv_ptr=argv_ptr, index_id=index_id)
@@ -601,7 +576,7 @@ class _RuntimeNamespace:
     def list(self) -> list[str]:
         """List runtime workspaces currently tracked in the repository."""
         with with_db(self._dml) as db:
-            return make_head_ops(db).list_indexes()
+            return HeadOps(db).list_indexes()
 
     def describe(self, index_id: Annotated[str, "Runtime workspace to inspect."]) -> IndexDescribePayload:
         """Return structural metadata for a runtime workspace."""
@@ -729,8 +704,8 @@ class _DagNamespace:
                 dag_ref = resolve_dag_ref(
                     value=value,
                     revision=revision,
-                    commit_ops=make_commit_ops(db),
-                    head_ops=make_head_ops(db),
+                    commit_ops=CommitOps(db),
+                    head_ops=HeadOps(db),
                     project_dir=require_project_home(self._dml._context.project_home),
                     operation="get",
                 ).ref
@@ -758,19 +733,19 @@ class _DagNamespace:
             elif isinstance(dag, Ref):
                 if revision is not None:
                     raise DmlRepoError("dml dag describe-node rejects --revision with explicit dag refs")
-                node_ref = make_dag_ops(db).get_node(require_exact_ref(dag, "dag"), node)
+                node_ref = DagOps(db).get_node(require_exact_ref(dag, "dag"), node)
             else:
                 node_ref = resolve_node_ref(
                     value=node,
                     dag=dag,
                     revision=revision,
-                    commit_ops=make_commit_ops(db),
-                    dag_ops=make_dag_ops(db),
-                    head_ops=make_head_ops(db),
+                    commit_ops=CommitOps(db),
+                    dag_ops=DagOps(db),
+                    head_ops=HeadOps(db),
                     project_dir=require_project_home(self._dml._context.project_home),
                     operation="describe-node",
                 ).ref
-            return node_description_payload(make_node_ops(db).describe(node_ref))
+            return node_description_payload(NodeOps(db).describe(node_ref))
 
     @overload
     def get_node(
@@ -813,21 +788,21 @@ class _DagNamespace:
             elif isinstance(dag, Ref):
                 if revision is not None:
                     raise DmlRepoError("dml dag get-node rejects --revision with explicit dag refs")
-                node_ref = make_dag_ops(db).get_node(require_exact_ref(dag, "dag"), node)
+                node_ref = DagOps(db).get_node(require_exact_ref(dag, "dag"), node)
             else:
                 node_ref = resolve_node_ref(
                     value=node,
                     dag=dag,
                     revision=revision,
-                    commit_ops=make_commit_ops(db),
-                    dag_ops=make_dag_ops(db),
-                    head_ops=make_head_ops(db),
+                    commit_ops=CommitOps(db),
+                    dag_ops=DagOps(db),
+                    head_ops=HeadOps(db),
                     project_dir=require_project_home(self._dml._context.project_home),
                     operation="get-node",
                 ).ref
             if recursive:
-                return cast(NodeUnrolledValue, make_node_ops(db).unroll(node_ref))
-            return cast(NodeValue, make_node_ops(db).get(node_ref))
+                return cast(NodeUnrolledValue, NodeOps(db).unroll(node_ref))
+            return cast(NodeValue, NodeOps(db).get(node_ref))
 
     def checkout(
         self,
@@ -843,8 +818,8 @@ class _DagNamespace:
         author = require_user(user or self._dml._context.user, message="user is required for dag checkout")
         resolved_revision = resolve_dml_revision_ref(self._dml, revision)
         with with_db(self._dml) as db:
-            target_branch = mutable_branch(branch=branch, head_ops=make_head_ops(db))
-            return make_commit_ops(db).checkout_dag(
+            target_branch = mutable_branch(branch=branch, head_ops=HeadOps(db))
+            return CommitOps(db).checkout_dag(
                 target_branch,
                 resolved_revision,
                 dag_name,
@@ -863,7 +838,7 @@ class _DagNamespace:
         """Delete a named DAG from a mutable branch."""
         author = require_user(user or self._dml._context.user, message="user is required for dag delete")
         with with_db(self._dml) as db:
-            return make_commit_ops(db).delete_dag(name, branch, author)
+            return CommitOps(db).delete_dag(name, branch, author)
 
 
 @dataclass(frozen=True)
@@ -986,7 +961,7 @@ class _AdminNamespace:
     ) -> AdminGcDryRunPayload | AdminGcRunPayload:
         """Run local repository garbage collection or report what would be deleted."""
         with with_db(self._dml) as db:
-            gc_ops = make_gc_ops(db)
+            gc_ops = GcOps(_db=db)
             if dry_run:
                 orphans = gc_ops.list_orphans()
                 return {"dry_run": True, "would_delete": len(orphans), "orphans": orphans}
@@ -1043,7 +1018,7 @@ class Dml:
                 "indexes": [],
             }
         with with_db(self) as db:
-            current_head_ops = make_head_ops(db)
+            current_head_ops = HeadOps(db)
             head_state = current_head_state(current_head_ops)
             return {
                 "head": {
@@ -1065,7 +1040,7 @@ class Dml:
         if remote:
             return {"branches": remote_tracking_branches(self), "head": None, "remote": True}
         with with_db(self) as db:
-            current_head_ops = make_head_ops(db)
+            current_head_ops = HeadOps(db)
             return {
                 "branches": current_head_ops.list_branches(),
                 "head": current_head_branch(current_head_ops),
@@ -1081,7 +1056,7 @@ class Dml:
         """Return commit summaries reachable from the selected revision."""
         resolved = resolve_dml_revision(self, revision)
         with with_db(self) as db:
-            commit_ops = make_commit_ops(db)
+            commit_ops = CommitOps(db)
             refs = list(commit_ops.list(resolved.commit, limit=limit))
             summaries = {ref: commit_ops.describe(ref) for ref in refs}
         commits = [commit_payload(self, ref, summaries[ref]) for ref in refs]
@@ -1097,7 +1072,7 @@ class Dml:
         """Return one commit summary together with the DAG map and DAG-level diff to its first parent."""
         resolved = resolve_dml_revision(self, revision)
         with with_db(self) as db:
-            commit_summary = make_commit_ops(db).describe(resolved.commit)
+            commit_summary = CommitOps(db).describe(resolved.commit)
         commit = commit_payload(self, resolved.commit, commit_summary)
         dags = commit["dags"]
         base_commit = commit["parents"][0] if commit["parents"] else None
@@ -1131,7 +1106,7 @@ class Dml:
         """Move HEAD to a branch or detached commit without changing repository contents."""
         resolved = resolve_dml_revision(self, revision)
         with with_db(self) as db:
-            current_head_ops = make_head_ops(db)
+            current_head_ops = HeadOps(db)
             if resolved.kind == "branch" and resolved.branch is not None:
                 current_head_ops.write_attached_head(resolved.branch)
                 return {"mode": "attached", "branch": resolved.branch}
@@ -1173,7 +1148,7 @@ class Dml:
         """Fetch a remote branch and merge it into a local branch in one operation."""
         project_home = require_project_home(self._context.project_home)
         with with_db(self) as db:
-            target_branch = mutable_branch(branch=branch, head_ops=make_head_ops(db))
+            target_branch = mutable_branch(branch=branch, head_ops=HeadOps(db))
         uri = project_remote_root(
             project_home=project_home,
             remote_or_uri=remote_or_uri,
@@ -1196,7 +1171,7 @@ class Dml:
         if not project.uri:
             raise DmlRepoError("remote.project is required for project sync")
         with with_db(self) as db:
-            source_branch = branch or make_head_ops(db).require_attached_head_branch()
+            source_branch = branch or HeadOps(db).require_attached_head_branch()
         with with_db(self) as db:
             remote = make_remote_ops(db, self)
             if tag:
@@ -1215,8 +1190,8 @@ class Dml:
         """Merge one revision into a mutable branch."""
         revision_ref = resolve_dml_revision_ref(self, revision)
         with with_db(self) as db:
-            target_branch = mutable_branch(branch=branch, head_ops=make_head_ops(db))
-            return make_commit_ops(db).merge_into_head(target_branch, revision_ref, user)
+            target_branch = mutable_branch(branch=branch, head_ops=HeadOps(db))
+            return CommitOps(db).merge_into_head(target_branch, revision_ref, user)
 
     def revert(
         self,
@@ -1228,8 +1203,8 @@ class Dml:
         """Create a revert commit for one revision on a mutable branch."""
         revision_ref = resolve_dml_revision_ref(self, revision)
         with with_db(self) as db:
-            target_branch = mutable_branch(branch=branch, head_ops=make_head_ops(db))
-            return make_commit_ops(db).revert(target_branch, revision_ref, user)
+            target_branch = mutable_branch(branch=branch, head_ops=HeadOps(db))
+            return CommitOps(db).revert(target_branch, revision_ref, user)
 
     @classmethod
     def init(
@@ -1285,7 +1260,7 @@ class Dml:
                     raise
             else:
                 with with_db(runtime) as db:
-                    make_head_ops(db).write_detached_head(fetched)
+                    HeadOps(db).write_detached_head(fetched)
         return {
             "project_home": project_home,
             "remote_root": runtime._context.remote_root,

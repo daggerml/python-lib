@@ -39,14 +39,6 @@ class ParsedProjectUri:
     branch: str | None = None
     tag: str | None = None
 
-    def canonical(self) -> str:
-        uri = f"dml://{self.owner}/{self.project}"
-        if self.branch is not None:
-            return f"{uri}#{self.branch}"
-        if self.tag is not None:
-            return f"{uri}@{self.tag}"
-        return uri
-
 
 def _validate_ref_name(label: str, value: str) -> str:
     return validate_ref_name(label, value)
@@ -264,18 +256,6 @@ class DmlConfig:
     default_branch: str = "main"
     config_home: str = ""
 
-    @property
-    def repo(self) -> str | None:
-        return self.project.home
-
-    @property
-    def branch(self) -> str:
-        return self.default_branch
-
-    @property
-    def db_path(self) -> str | None:
-        return self.db.path
-
     @classmethod
     def resolve(
         cls,
@@ -347,20 +327,6 @@ class DmlConfig:
             config_home=config_home,
         )
 
-    def envvars(self) -> dict[str, object]:
-        env: dict[str, object] = {
-            "DML_USER": self.user,
-            "DML_DEFAULT_BRANCH": self.default_branch,
-            "DML_CONFIG_HOME": self.config_home,
-            "DML_DB_PATH": self.db.path,
-            "DML_REMOTE_ROOT": self.remote.root,
-            "DML_REMOTE_FETCH_WORKERS": str(self.remote.fetch_workers),
-            "DML_REMOTE_PROJECT": self.remote.project,
-            "DML_PROJECT_HOME": self.project.home,
-            "DML_EXECUTION_ID": self.execution.id,
-        }
-        return env
-
     def to_dict(self) -> dict[str, object]:
         return {
             "project": {
@@ -389,24 +355,6 @@ def validate_dml_project_uri(uri: str) -> str:
     if parsed.branch is not None or parsed.tag is not None:
         raise ValueError(f"Project URI must not include a branch or tag: {uri!r}")
     return f"dml://{parsed.owner}/{parsed.project}"
-
-
-@dataclass(frozen=True)
-class DmlGlobalConfig:
-    user: str | None = None
-    default_branch: str = "main"
-
-    @classmethod
-    def load(cls, config_home: Path | str | None = None, *, env: Mapping[str, str] | None = None) -> "DmlGlobalConfig":
-        resolved = DmlConfig.resolve(
-            scope="global",
-            explicit={"config_home": str(config_home)} if config_home is not None else None,
-            env=env,
-        )
-        return cls(
-            user=resolved.user,
-            default_branch=resolved.default_branch,
-        )
 
 
 @dataclass(frozen=True)

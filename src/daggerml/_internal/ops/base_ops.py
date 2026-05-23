@@ -11,12 +11,7 @@ Public API:
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator, List, Optional, cast
-
-try:
-    from typing import Self
-except ImportError:
-    from typing_extensions import Self
+from typing import Any, Iterator, Optional, cast
 
 from daggerml._internal._db import (
     DmlDbEnv,
@@ -246,68 +241,6 @@ class TxnContext:
             self.logger.exception(f"iter: namespace={namespace}")
             raise DmlRepoError(f"Failed to iterate over namespace '{namespace}': {e}") from e
 
-    def load_dict(self, manifest: dict) -> Ref:
-        """Load an object from a commit-manifest JSON payload.
-
-        Parses the commit-manifest JSON structure and restores the object graph.
-
-        Parameters
-        ----------
-        manifest : dict
-            Dictionary representing the commit-manifest structure.
-
-        Returns
-        -------
-        Ref
-            Reference to the loaded object.
-
-        Raises
-        ------
-        DmlRepoError
-            If the load operation fails.
-        """
-        try:
-            # Validate manifest structure
-            if manifest.get("schema") != 0:
-                raise DmlRepoError(f"Unsupported schema version: {manifest.get('schema')}")
-            if manifest.get("kind") != "local-manifest":
-                raise DmlRepoError(f"Invalid manifest kind: {manifest.get('kind')}")
-            ns = manifest.get("root-ns")
-            if ns is None:
-                raise DmlRepoError("Manifest missing namespace")
-            id_ = manifest.get("root-id")
-            if id_ is None:
-                raise DmlRepoError(f"Manifest missing {ns} ID")
-            if id_ not in manifest.get("closure", {}).get(ns, {}):
-                raise DmlRepoError(f"Manifest closure missing {ns} ID {id_}")
-            retval = Ref(f"{ns}:{id_}")
-            dump_list = []
-            closure = manifest.get("closure", {})
-            for ns, objects in closure.items():
-                for obj_id, dump in objects.items():
-                    dump_list.append({"id": obj_id, "ns": ns, "dump": dump})
-            self._load_from_list(dump_list)
-            return retval
-        except Exception as e:
-            raise DmlRepoError(f"Failed to load object: {e}") from e
-
-    def _load_from_list(self, dump_list: List[dict]) -> Ref:
-        """Internal method to load objects from list of dicts."""
-        root_ref = None
-        for item in dump_list:
-            expected_id = item["id"]
-            # Insert without specifying id, let database generate it
-            inserted_ref = self.txn.put(item["dump"], ns=item["ns"], raw=True)
-            # Confirm the id matches
-            if inserted_ref.id() != expected_id:
-                raise DmlRepoError(f"ID mismatch during load: expected {expected_id}, got {inserted_ref.id()}")
-            # Keep track of the first (root) ref
-            if root_ref is None:
-                root_ref = inserted_ref
-        if root_ref is None:
-            raise DmlRepoError("Empty dump list")
-        return root_ref
-
     def _cleanup_opposite_entry(self, ref: Ref, *, opposite_ns: str, noun: str) -> None:
         """Remove a stale opposite entry for the given reference.
 
@@ -335,19 +268,6 @@ class TxnContext:
         except Exception as e:
             self.logger.exception(f"cleanup_opposite_entry: ref={ref}")
             raise DmlRepoError(f"Failed to cleanup opposite entry: {e}") from e
-
-    def _log_operation(self, operation: str, **kwargs) -> None:
-        """Log operation with context.
-
-        Parameters
-        ----------
-        operation : str
-            Name of the operation being logged.
-        **kwargs
-            Additional context to include in log message.
-        """
-        context = ", ".join(f"{k}={v}" for k, v in kwargs.items())
-        self.logger.exception(f"{operation}: {context}")
 
     def get_commit_ctx(self, commit_ref: Ref) -> CommitCtx:
         """Create context helper from a commit reference."""
@@ -419,20 +339,3 @@ class BaseOps:
         except Exception as e:
             self._logger.exception(f"Transaction failed: readonly={readonly}")
             raise DmlRepoError(f"Transaction failed: {e}") from e
-
-    def _with_ops(self, **changes) -> Self:
-        """Create a copy of this BaseOps with modified attributes.
-
-        Parameters
-        ----------
-        **changes
-            Attributes to modify in the new instance.
-
-        Returns
-        -------
-        BaseOps
-            New BaseOps instance with modified attributes.
-        """
-        for k, v in changes.items():
-            setattr(self, k, v)
-        return self
