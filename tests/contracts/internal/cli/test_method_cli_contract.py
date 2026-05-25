@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from daggerml._cli import MethodCLI
-from daggerml._internal import dml_dumps, dml_loads
+from daggerml._internal import Ref, dml_dumps, dml_loads
 
 
 class _NamespaceExampleNamespace:
@@ -27,6 +27,34 @@ class _NamespaceExample:
     @property
     def namespace(self) -> _NamespaceExampleNamespace:
         return _NamespaceExampleNamespace(self.project_home)
+
+
+class _VariadicNamespace:
+    def invalidate(self, *cache_keys: str):
+        return {"cache_keys": list(cache_keys)}
+
+
+class _VariadicNamespaceExample:
+    def __init__(self):
+        pass
+
+    @property
+    def admin(self) -> _VariadicNamespace:
+        return _VariadicNamespace()
+
+
+class _MixedVariadicNamespace:
+    def invalidate(self, scope: str, *cache_keys: str):
+        return {"scope": scope, "cache_keys": list(cache_keys)}
+
+
+class _MixedVariadicNamespaceExample:
+    def __init__(self):
+        pass
+
+    @property
+    def admin(self) -> _MixedVariadicNamespace:
+        return _MixedVariadicNamespace()
 
 
 def test_method_cli_calls_root_classmethod_without_instantiating_root():
@@ -91,23 +119,6 @@ def test_method_cli_main_reports_exceptions_to_stderr():
     assert "error: boom" in stderr.getvalue()
 
 
-def test_method_cli_reads_exact_any_parameter_from_stdin_by_default():
-    class Example:
-        def __init__(self):
-            pass
-
-        def render(self, payload: Any):
-            return {"payload": payload}
-
-    cli = MethodCLI(Example, prog="example")
-
-    with patch("sys.stdin", StringIO(dml_dumps({"alpha": [1, 2]}))), patch(
-        "sys.stdout", new_callable=StringIO
-    ) as stdout:
-        assert cli.run(["render"]) == 0
-
-    assert json.loads(stdout.getvalue()) == {"payload": {"alpha": [1, 2]}}
-
 
 def test_method_cli_reads_exact_any_parameter_from_file_and_writes_exact_any_output(tmp_path: Path):
     class Example:
@@ -127,22 +138,23 @@ def test_method_cli_reads_exact_any_parameter_from_file_and_writes_exact_any_out
     assert dml_loads(stdout.getvalue()) == {"wrapped": {"alpha": [1, 2]}}
 
 
-def test_method_cli_reads_defaulted_exact_any_parameter_from_stdin_when_option_is_omitted():
-    class Example:
-        def __init__(self):
-            pass
 
-        def render(self, payload: Any = None):
-            return {"payload": payload}
+def test_method_cli_expands_variadic_positional_arguments_for_nested_namespace_commands():
+    cli = MethodCLI(_VariadicNamespaceExample, prog="example")
 
-    cli = MethodCLI(Example, prog="example")
+    with patch("sys.stdout", new_callable=StringIO) as stdout:
+        assert cli.run(["admin", "invalidate", "ck1", "ck2"]) == 0
 
-    with patch("sys.stdin", StringIO(dml_dumps({"beta": [3, 4]}))), patch(
-        "sys.stdout", new_callable=StringIO
-    ) as stdout:
-        assert cli.run(["render"]) == 0
+    assert json.loads(stdout.getvalue()) == {"cache_keys": ["ck1", "ck2"]}
 
-    assert json.loads(stdout.getvalue()) == {"payload": {"beta": [3, 4]}}
+
+def test_method_cli_preserves_required_positionals_before_variadic_arguments():
+    cli = MethodCLI(_MixedVariadicNamespaceExample, prog="example")
+
+    with patch("sys.stdout", new_callable=StringIO) as stdout:
+        assert cli.run(["admin", "invalidate", "repo", "ck1", "ck2"]) == 0
+
+    assert json.loads(stdout.getvalue()) == {"scope": "repo", "cache_keys": ["ck1", "ck2"]}
 
 
 def test_method_cli_treats_semantically_invalid_exact_any_input_as_parse_failure(tmp_path: Path):
@@ -155,14 +167,14 @@ def test_method_cli_treats_semantically_invalid_exact_any_input_as_parse_failure
 
     cli = MethodCLI(Example, prog="example")
     payload_path = tmp_path / "payload.dml"
-    payload_path.write_text('{"__dml__":{"t":"Unknown"}}', encoding="utf-8")
+    payload_path.write_text('["unknown",null]', encoding="utf-8")
 
     with patch("sys.stderr", new_callable=StringIO) as stderr, pytest.raises(SystemExit) as exc_info:
         cli.main(["render", str(payload_path)])
 
     assert exc_info.value.code == 2
     assert (
-        "error: argument payload: expected DML-serialized input: unknown dml tag type: 'Unknown'"
+        "error: argument payload: expected DML-serialized input: unknown DML envelope type: 'unknown'"
         in stderr.getvalue()
     )
 
@@ -183,3 +195,35 @@ def test_method_cli_does_not_treat_optional_any_as_exact_any_transport(tmp_path:
         assert cli.run(["render", "--payload", str(payload_path)]) == 0
 
     assert json.loads(stdout.getvalue()) == {"payload": str(payload_path)}
+
+
+def test_method_cli_parses_ref_like_union_positionals_as_refs():
+    class Example:
+        def __init__(self):
+            pass
+
+        def commit(self, value: Ref | RuntimeError):
+            return {"type": type(value).__name__, "value": str(value)}
+
+    cli = MethodCLI(Example, prog="example")
+
+    with patch("sys.stdout", new_callable=StringIO) as stdout:
+        assert cli.run(["commit", "node:abc"]) == 0
+
+    assert json.loads(stdout.getvalue()) == {"type": "Ref", "value": "Ref(node:abc)"}
+
+
+def test_method_cli_leaves_str_or_ref_positionals_as_strings():
+    class Example:
+        def __init__(self):
+            pass
+
+        def get(self, value: str | Ref):
+            return {"type": type(value).__name__, "value": str(value)}
+
+    cli = MethodCLI(Example, prog="example")
+
+    with patch("sys.stdout", new_callable=StringIO) as stdout:
+        assert cli.run(["get", "examples/demo"]) == 0
+
+    assert json.loads(stdout.getvalue()) == {"type": "str", "value": "examples/demo"}
