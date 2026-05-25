@@ -183,6 +183,67 @@ def test_funkify_with_ref_and_load_normalizes_via_codec():
         assert rv.kwargs["y"] == 9
 
 
+def test_funkify_resolve_runnable_receives_python_values_for_delayed_refs_and_loads():
+    seen: dict[str, Any] = {}
+
+    class CaptureExecutor:
+        name = "capture"
+        adapter = "local"
+
+        @staticmethod
+        def resolve_runnable(uri, kwargs, sub):
+            seen["uri"] = uri
+            seen["kwargs"] = dict(kwargs)
+            seen["sub"] = sub
+            return Runnable(target=Uri(uri), kwargs=dict(kwargs), sub=sub, adapter="dml-local-adapter")
+
+        @classmethod
+        def handle(
+            cls,
+            *,
+            cache_key,
+            execution_id,
+            state,
+            execution_status,
+            cancel_requested_by,
+            runnable,
+            argv_ptr,
+            remote,
+        ):
+            del cls, cache_key, execution_id, state, execution_status, cancel_requested_by, runnable, argv_ptr, remote
+            return {"status": "running", "error": None, "state": {"token": "capture"}}
+
+    ereg.register_executor(CaptureExecutor)
+
+    with temporary_dml() as dml:
+        src = new(dml=dml, name="src", message="src")
+        src.answer = 9
+        src.commit(11)
+
+        dag = new(dml=dml, name="dst", message="dst")
+        dag.host = "worker.example"
+        dag.flags = ["-p", "2222"]
+        inner = api.DelayedRunnable(uri="inner", adapter="local", sub=None, kwargs={})
+        delayed = api.funkify(
+            inner,
+            uri="capture",
+            adapter="local",
+            host=api.ref("host"),
+            flags=api.ref("flags"),
+            answer=api.load("src", "answer"),
+        )
+
+        rv = dag.put(cast(Any, delayed)).value()
+
+    assert isinstance(rv, Runnable)
+    assert seen["uri"] == "capture"
+    assert seen["kwargs"] == {
+        "host": "worker.example",
+        "flags": ["-p", "2222"],
+        "answer": 9,
+    }
+
+
 @pytest.mark.parametrize("resolved_adapter", ["podman-adapter", "/opt/acme/bin/acme-adapter"])
 def test_funkify_plugin_adapter_sugar_resolves_to_concrete_runtime_adapter(resolved_adapter):
     @dataclass

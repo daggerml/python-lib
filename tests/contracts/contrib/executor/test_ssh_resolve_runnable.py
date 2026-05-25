@@ -44,8 +44,6 @@ def test_local_adapter_resolve_runnable_SSH_RES_001_returns_expected_ssh_runnabl
         "flags": ["-p", "2222"],
         "env_files": ["/etc/dml.env"],
     }
-
-
 @pytest.mark.parametrize(
     "kwargs,sub,expected_error",
     [

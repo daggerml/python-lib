@@ -166,21 +166,7 @@ class DelayedActionCodec:
     def can_encode(self, value: Any) -> bool:
         return isinstance(value, (DelayedRef, DelayedLoad, DelayedRunnable))
 
-    def encode(self, value: DelayedRef | DelayedLoad | DelayedRunnable, dag: "Dag"):
-        if isinstance(value, DelayedRef):
-            return apply_codecs(dag[value.name], dag=dag)
-        if isinstance(value, DelayedRunnable):
-            from daggerml.contrib.adapter_registry import get_adapter
-
-            adapter_spec = get_adapter(value.adapter)
-            uri = apply_codecs(value.uri, dag=dag)
-            kwargs = apply_codecs(value.kwargs, dag=dag)
-            sub = apply_codecs(value.sub, dag=dag)
-            resolved = adapter_spec.resolve_runnable(uri, kwargs, sub)
-            if not isinstance(resolved, Runnable):
-                raise CodecError("Adapter resolve_runnable must return Runnable")
-            return resolved
-        assert isinstance(value, DelayedLoad)
+    def _resolve_load_ref(self, value: DelayedLoad, dag: "Dag") -> Ref:
         index = dag.dml.runtime.describe(dag._require_index_ref())
         commit_ref = index["commit"]
         resolved = dag.dml.dag.get(value.dagname, revision=commit_ref.to)
@@ -192,6 +178,38 @@ class DelayedActionCodec:
         if node_ref is None:
             raise DmlRepoError(f"Node '{value.nodename}' not found in DAG '{value.dagname}'")
         return dag.dml.runtime.put_import(dag._require_index_ref(), dag_ref, node=node_ref, name=None)
+
+    def _resolve_runnable_value(self, value: Any, dag: "Dag") -> Any:
+        if isinstance(value, DelayedRef):
+            return dag[value.name].value()
+        if isinstance(value, DelayedLoad):
+            return dag.dml.dag.get_node(self._resolve_load_ref(value, dag), recursive=True)
+        if isinstance(value, DelayedRunnable):
+            return apply_codecs(value, dag=dag)
+        if isinstance(value, list):
+            return [self._resolve_runnable_value(item, dag) for item in value]
+        if isinstance(value, tuple):
+            return [self._resolve_runnable_value(item, dag) for item in value]
+        if isinstance(value, dict):
+            return {key: self._resolve_runnable_value(item, dag) for key, item in value.items()}
+        return apply_codecs(value, dag=dag)
+
+    def encode(self, value: DelayedRef | DelayedLoad | DelayedRunnable, dag: "Dag"):
+        if isinstance(value, DelayedRef):
+            return apply_codecs(dag[value.name], dag=dag)
+        if isinstance(value, DelayedRunnable):
+            from daggerml.contrib.adapter_registry import get_adapter
+
+            adapter_spec = get_adapter(value.adapter)
+            uri = self._resolve_runnable_value(value.uri, dag)
+            kwargs = self._resolve_runnable_value(value.kwargs, dag)
+            sub = apply_codecs(value.sub, dag=dag)
+            resolved = adapter_spec.resolve_runnable(uri, kwargs, sub)
+            if not isinstance(resolved, Runnable):
+                raise CodecError("Adapter resolve_runnable must return Runnable")
+            return resolved
+        assert isinstance(value, DelayedLoad)
+        return self._resolve_load_ref(value, dag)
 
 
 def codecs() -> list[Any]:

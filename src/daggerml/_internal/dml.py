@@ -1191,7 +1191,10 @@ class Dml:
                     raise
             else:
                 with with_db(runtime) as db:
-                    HeadOps(db).write_detached_head(fetched)
+                    head_ops = HeadOps(db)
+                    local_branch = head_ops.get_branch_commit(resolved_branch)
+                    head_ops.update_branch_commit(resolved_branch, local_branch, fetched)
+                    head_ops.write_attached_head(resolved_branch)
         return {
             "project_home": project_home,
             "remote_root": runtime._context.remote_root,

@@ -10,6 +10,8 @@ from daggerml._internal._db import Ref
 from daggerml._internal.config import DmlProjectConfig
 from daggerml._internal.dml import Dml
 from daggerml._internal.types import DmlRepoError
+from daggerml.api import new
+from tests import temporary_dml
 
 
 @contextmanager
@@ -440,6 +442,29 @@ def test_dml_init_resolves_remote_root_from_env_for_remote_project(tmp_path, mon
     assert project_cfg.remote_root == "s3://bucket/prefix"
     assert result["remote_root"] == "s3://bucket/prefix"
     mock_fetch.assert_called_once_with("origin", None)
+
+
+def test_dml_init_attaches_local_head_to_fetched_remote_main(tmp_path):
+    with temporary_dml(repo="source") as source:
+        remote_root = source._context.remote_root
+        source_uri = source.config.get("remote.project")
+        with new(dml=source, name="baseline", message="baseline") as dag:
+            result = dag.put(1, name="result")
+            dag.commit(result)
+        source.push(None, branch="main", create=True, force=False)
+        source_status = source.status()
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        Dml.init(str(repo_dir), remote_project=source_uri, remote_root=remote_root)
+
+        seeded = Dml(project_home=str(repo_dir), remote_root=remote_root)
+        seeded_status = seeded.status()
+
+    assert seeded_status["head"]["mode"] == "attached"
+    assert seeded_status["head"]["branch"] == "main"
+    assert seeded_status["head"]["commit"] == source_status["head"]["commit"]
+    assert seeded_status["dags"] == source_status["dags"]
 
 
 def test_dml_init_requires_remote_root_for_recovery_pull(tmp_path):
