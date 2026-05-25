@@ -102,11 +102,22 @@ class MethodCLI:
         target = cast(_Target, target)
         root = self.cls if target.kind == "classmethod" else self.cls(**init_kwargs)
         method = self._resolve_method(root, target)
-        result = method(**method_kwargs)
+        method_args: list[Any] = []
+        sig = inspect.signature(method)
+        for name, param in sig.parameters.items():
+            if (
+                param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+                and param.default is inspect._empty
+                and name in method_kwargs
+            ):
+                method_args.append(method_kwargs.pop(name))
+            if param.kind is param.VAR_POSITIONAL and name in method_kwargs:
+                method_args.extend(method_kwargs.pop(name))
+        result = method(*method_args, **method_kwargs)
         if self._returns_exact_any(method):
             print(dml_dumps(result))
         else:
-            print(json.dumps(result, indent=2, sort_keys=True, default=self._json_default))
+            print(json.dumps(result, separators=(",", ":"), sort_keys=True, default=self._json_default))
         return 0
 
     def _configure_logging(self, verbosity: int) -> None:
@@ -208,13 +219,20 @@ class MethodCLI:
         for name, param in sig.parameters.items():
             if skip_self and name == "self":
                 continue
-            if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
-                raise TypeError(f"{fn.__qualname__}: *args and **kwargs are not supported")
+            if param.kind is param.VAR_KEYWORD:
+                raise TypeError(f"{fn.__qualname__}: **kwargs are not supported")
             typ, annotated_help = self._split_annotated(hints.get(name, param.annotation))
             help_text = annotated_help or doc_help.get(name) or self._type_display(typ)
             has_default = param.default is not inspect._empty
             default = None if not has_default else param.default
             dest = f"{dest_prefix}{name}"
+            if param.kind is param.VAR_POSITIONAL:
+                converter, extra = self._parser_for(typ)
+                kwargs = {"nargs": "*", "help": help_text, **extra}
+                if converter is not None:
+                    kwargs["type"] = converter
+                parser_or_group.add_argument(name, **kwargs)
+                continue
             if self._is_bool_type(typ):
                 if not has_default:
                     raise TypeError(f"{fn.__qualname__}.{name}: bool parameters must have defaults")
@@ -222,25 +240,17 @@ class MethodCLI:
                 continue
             converter, extra = self._parser_for(typ)
             if self._is_exact_any(typ):
+                # Exact Any is supported only when it is required (no default).
+                # It must be provided either positionally or via the --kebab-case option.
                 if has_default:
-                    kwargs: dict[str, Any] = {
-                        "dest": dest,
-                        "nargs": "?",
-                        "const": "-",
-                        "default": "-",
-                        "help": help_text,
-                        **extra,
-                    }
-                    if converter is not None:
-                        kwargs["type"] = converter
-                    parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
-                elif required_as_options:
-                    kwargs = {"dest": dest, "default": "-", "help": help_text, **extra}
+                    raise TypeError(f"{fn.__qualname__}.{name}: exact Any parameters must not have defaults")
+                if required_as_options:
+                    kwargs = {"dest": dest, "required": True, "help": help_text, **extra}
                     if converter is not None:
                         kwargs["type"] = converter
                     parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
                 else:
-                    kwargs = {"nargs": "?", "default": "-", "help": help_text, **extra}
+                    kwargs = {"help": help_text, **extra}
                     if converter is not None:
                         kwargs["type"] = converter
                     parser_or_group.add_argument(name, **kwargs)
@@ -290,6 +300,8 @@ class MethodCLI:
         typ, _ = self._unwrap_optional(typ)
         origin = get_origin(typ)
         args = get_args(typ)
+        if origin in (Union, types.UnionType) and Ref in args and str not in args:
+            return Ref, {}
         if origin is Literal:
             choices = list(args)
             parser = type(choices[0]) if choices else str

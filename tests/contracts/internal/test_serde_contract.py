@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -10,8 +12,6 @@ from daggerml._internal import Ref
 from daggerml._internal.serde import dml_dumps, dml_loads
 from daggerml._internal.types import Error, Runnable, Uri
 from tests.contracts.internal.support.test_db_support import REF_ALPHABET, STR_ALPHABET, _refs
-
-_RESERVED_KEY = "__dml__"
 
 
 def _scalar_strategy():
@@ -67,7 +67,7 @@ def _error_strategy():
 
 def _dict_strategy(children):
     return st.dictionaries(
-        st.text(alphabet=STR_ALPHABET, min_size=1, max_size=12).filter(lambda k: k != _RESERVED_KEY),
+        st.text(alphabet=STR_ALPHABET, min_size=1, max_size=12),
         children,
         max_size=4,
     )
@@ -107,9 +107,21 @@ def test_dml_json_exports_string_form():
     assert dml_loads(encoded) == payload
 
 
-def test_dml_json_rejects_reserved_dict_key():
-    with pytest.raises(TypeError, match="reserved key"):
-        dml_dumps({_RESERVED_KEY: "user-data"})
+def test_dml_json_uses_universal_array_envelope():
+    payload = {"foo": Ref("bar:baz")}
+    assert dml_dumps(payload) == (
+        '["dict",{"foo":["ref","bar:baz"]}]'
+    )
+
+
+def test_dml_json_allows_plain_user_dict_keys_that_used_to_be_reserved():
+    payload = {
+        "type": "user-data",
+        "value": "still-user-data",
+        "dml": {"t": "Ref", "to": "foo:bar"},
+        "__dml__": 7,
+    }
+    assert dml_loads(dml_dumps(payload)) == payload
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
@@ -121,3 +133,8 @@ def test_dml_json_rejects_nonfinite_float(value):
 def test_dml_json_rejects_unsupported_type():
     with pytest.raises(TypeError, match="unsupported type"):
         dml_dumps((1, 2, 3))
+
+
+def test_dml_json_rejects_non_envelope_input_on_load():
+    with pytest.raises(ValueError, match="array of length 2"):
+        dml_loads(json.dumps(["foo"]))

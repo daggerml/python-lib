@@ -36,9 +36,10 @@ Input parsing rules:
 - Boolean options become `--flag` or `--no-flag`.
 - `Ref` and `Uri` arguments are parsed from strings.
 - `list[...]` and `dict[...]` arguments are parsed from JSON text.
+- Variadic `*args: T` parameters become repeated positional arguments parsed as `T`, using `nargs="*"`.
 - Parameters annotated as exactly `Any` are read from a file path argument, or from `stdin` when the path is omitted.
 
-That last rule matters for commands such as `dml admin cache invalidate`, which currently expects one JSON list argument rather than repeated positional cache keys.
+That matters for commands such as `dml admin cache invalidate`, which accepts repeated positional cache keys rather than one JSON list argument.
 
 ## Top-level commands
 
@@ -128,7 +129,7 @@ Examples:
 
 ```bash
 dml runtime list
-dml admin cache invalidate '["cache-key-1","cache-key-2"]'
+dml admin cache invalidate cache-key-1 cache-key-2
 dml admin remote list
 dml admin gc --dry-run
 ```

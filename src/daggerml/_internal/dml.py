@@ -757,7 +757,7 @@ class _AdminCacheNamespace:
 
     def invalidate(
         self,
-        cache_keys: Annotated[list[str], "Exact cache entries to invalidate; wildcards and prefixes are not accepted."],
+        *cache_keys: Annotated[str, "Exact cache entries to invalidate; wildcards and prefixes are not accepted."],
     ) -> AdminCacheInvalidatePayload:
         """Invalidate exact remote cache keys and return the backend response."""
         if not cache_keys:
@@ -767,8 +767,8 @@ class _AdminCacheNamespace:
                 raise DmlRepoError("Admin cache invalidation accepts exact cache keys only")
         requested_by = self._dml._context.user or "cli"
         with with_db(self._dml) as db:
-            invalidated = make_remote_ops(db, self._dml).invalidate_cache(cache_keys, requested_by=requested_by)
-        return {"cache_keys": cache_keys, "invalidated": invalidated}
+            invalidated = make_remote_ops(db, self._dml).invalidate_cache(list(cache_keys), requested_by=requested_by)
+        return {"cache_keys": list(cache_keys), "invalidated": invalidated}
 
 
 @dataclass(frozen=True)
