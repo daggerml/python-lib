@@ -86,7 +86,7 @@ class TestHeadOps:
         with temp_bo._tx(readonly=False) as txn:
             txn.delete(missing_commit)
 
-        index_id = ops.create_index(missing_commit)
+        index_id = ops.create_index(missing_commit, "exec-stale")
         updated_commit = type(missing_commit)(f"commit:{'f' * 64}")
 
         assert ops.get_index_commit(index_id) == missing_commit

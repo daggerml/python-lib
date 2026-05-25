@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,11 +41,10 @@ from daggerml._internal.ops.index import IndexOps
 from daggerml._internal.ops.node import NodeOps
 from daggerml._internal.ops.remote import RemoteOps
 from daggerml._internal.types import DEFAULT_HEAD, NAMESPACES, DmlRepoError, Error, Runnable, Uri
+from daggerml._internal.util import uuid7
 
 logger = logging.getLogger(__name__)
 
-_RUNTIME_CANCEL_MAX_ATTEMPTS = 3
-_RUNTIME_CANCEL_BACKOFF_SECONDS = 0.05
 _DB_MAP_SIZE = 1024**3
 
 
@@ -186,14 +183,9 @@ class IndexDescribePayload(TypedDict):
 
 
 class RuntimeCancelPayload(TypedDict):
-    index_id: str
-    iterations: int
-    graph_edges: int
-    candidate_count: int
-    own_execution_count: int
-    cancelled_count: int
-    dropped_count: int
-    lock_retry_count: int
+    execution_id: str
+    cancelled: list[str]
+    skipped: list[str]
 
 
 class RuntimeDeletePayload(TypedDict):
@@ -477,44 +469,50 @@ class _RuntimeNamespace:
             str | None,
             "Remote argv pointer to import when resuming external execution state.",
         ] = None,
-        index_id: Annotated[str | None, "Explicit runtime identifier to reuse or create."] = None,
+        execution_id: Annotated[str | None, "Explicit runtime identifier to reuse or create."] = None,
     ) -> str:
         """Create a runtime workspace from HEAD, a branch, a commit, or an argv pointer."""
+        execution_id = execution_id or self._dml._context.execution_id or uuid7().hex
         with with_db(self._dml) as db:
             if head is None and commit is None and argv_ptr is None:
                 head_state = HeadOps(db).get_head_state()
                 head = head_state.branch
                 commit = head_state.commit if head is None else None
-            return make_index_ops(db, self._dml).create(head=head, commit=commit, argv_ptr=argv_ptr, index_id=index_id)
+            return make_index_ops(db, self._dml).create(
+                execution_id=execution_id,
+                head=head,
+                commit=commit,
+                argv_ptr=argv_ptr,
+            )
 
     def get_node(
         self,
-        index_id: Annotated[str, "Runtime workspace to read from."],
+        execution_id: Annotated[str, "Runtime workspace to read from."],
         name: Annotated[str, "Named node to resolve inside the runtime workspace."],
     ) -> Ref:
         """Return the stored identifier for a named node in a runtime workspace."""
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).get_node(index_id, name)
+            return make_index_ops(db, self._dml).get_node(execution_id, name)
 
-    def get_argv(self, index_id: Annotated[str, "Runtime workspace to read from."]) -> Ref:
+    def get_argv(self, execution_id: Annotated[str, "Runtime workspace to read from."]) -> Ref:
         """Return the argv node for a runtime workspace."""
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).get_argv(index_id)
+            return make_index_ops(db, self._dml).get_argv(execution_id)
 
     def put_literal(
         self,
-        index_id: Annotated[str, "Runtime workspace to mutate."],
+        execution_id: Annotated[str, "Runtime workspace to mutate."],
         value: Annotated[Any, "Literal value to stage into the workspace."],
         *,
         name: Annotated[str | None, "Optional name to assign to the staged value."] = None,
     ) -> Ref:
         """Stage a literal value in the runtime workspace and optionally name it."""
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).put_literal(index_id, value, name=name)
+            return make_index_ops(db, self._dml).put_literal(execution_id, value, name=name)
 
     def put_import(
         self,
-        index_id: Annotated[str, "Runtime workspace to mutate."],
+        execution_id: Annotated[str, "Runtime workspace to mutate."],
         dag: Annotated[Ref, "Committed DAG to import from."],
         *,
         node: Annotated[Ref | None, "Specific node to import from that DAG."] = None,
@@ -522,21 +520,21 @@ class _RuntimeNamespace:
     ) -> Ref:
         """Import a committed DAG node into the runtime workspace."""
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).put_import(index_id, dag, node=node, name=name)
+            return make_index_ops(db, self._dml).put_import(execution_id, dag, node=node, name=name)
 
     def set_node_name(
         self,
-        index_id: Annotated[str, "Runtime workspace to mutate."],
+        execution_id: Annotated[str, "Runtime workspace to mutate."],
         name: Annotated[str, "Name to bind inside the runtime index."],
         node: Annotated[Ref, "Existing node to bind to that name."],
     ) -> Ref:
         """Bind an existing node to a name in the runtime workspace."""
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).set_node_name(index_id, name, node)
+            return make_index_ops(db, self._dml).set_node_name(execution_id, name, node)
 
     def start_fn(
         self,
-        index_id: Annotated[str, "Runtime workspace to execute in."],
+        execution_id: Annotated[str, "Runtime workspace to execute in."],
         argv: Annotated[list[Ref], "Ordered arguments with the callable in the first position."],
         *,
         kwargv: Annotated[dict[str, Ref] | None, "Optional keyword arguments keyed by parameter name."] = None,
@@ -544,17 +542,11 @@ class _RuntimeNamespace:
     ) -> Ref | None:
         """Stage a function call in the runtime workspace and return the result node."""
         with with_db(self._dml) as db:
-            return make_index_ops(db, self._dml).start_fn(
-                index_id,
-                argv,
-                kwargv=kwargv,
-                name=name,
-                caller_execution_id=self._dml._context.execution_id or index_id,
-            )
+            return make_index_ops(db, self._dml).start_fn(execution_id, argv, kwargv=kwargv, name=name)
 
     def commit(
         self,
-        index_id: Annotated[str, "Runtime workspace to commit."],
+        execution_id: Annotated[str, "Runtime workspace to commit."],
         value: Annotated[Ref | Error, "Final DAG result as an existing node or an Error value."],
         *,
         head: Annotated[str | None, "Branch to update; defaults to the mutable current branch."] = None,
@@ -564,12 +556,11 @@ class _RuntimeNamespace:
         """Commit a runtime workspace into repository history."""
         with with_db(self._dml) as db:
             return make_index_ops(db, self._dml).commit(
-                index_id,
+                execution_id,
                 value,
                 head=head,
                 message=message,
                 dag_name=dag_name,
-                execution_id=self._dml._context.execution_id or index_id,
             )
 
     ######## Meta runtime operations ########
@@ -578,108 +569,25 @@ class _RuntimeNamespace:
         with with_db(self._dml) as db:
             return HeadOps(db).list_indexes()
 
-    def describe(self, index_id: Annotated[str, "Runtime workspace to inspect."]) -> IndexDescribePayload:
+    def describe(self, execution_id: Annotated[str, "Runtime workspace to inspect."]) -> IndexDescribePayload:
         """Return structural metadata for a runtime workspace."""
         with with_db(self._dml) as db:
-            return cast(IndexDescribePayload, make_index_ops(db, self._dml).describe(index_id))
+            return cast(IndexDescribePayload, make_index_ops(db, self._dml).describe(execution_id))
 
-    def delete(self, index_id: Annotated[str, "Runtime workspace to delete."]) -> RuntimeDeletePayload:
+    def delete(self, execution_id: Annotated[str, "Runtime workspace to delete."]) -> RuntimeDeletePayload:
         """Delete a runtime workspace immediately."""
         with with_db(self._dml) as db:
-            make_index_ops(db, self._dml).delete(index_id)
-        return {"index": index_id, "deleted": True}
+            make_index_ops(db, self._dml).delete(execution_id)
+        return {"index": execution_id, "deleted": True}
 
-    def cancel(
-        self,
-        index_id: Annotated[str, "Runtime workspace whose active executions should be cancelled."],
-    ) -> RuntimeCancelPayload:
+    def cancel(self, execution_id: Annotated[str, "Runtime to cancel."]) -> RuntimeCancelPayload:
         """Cancel tracked executions for a runtime workspace and report cancellation statistics."""
         requested_by = require_user(self._dml._context.user, message="user is required for runtime cancel")
         with with_db(self._dml) as db:
-            index = make_index_ops(db, self._dml)
-            plan = index.cancel(index_id, requested_by=requested_by)
-            candidate_set = set(cast(set[str], plan["candidate_set"]))
-            own_executions = set(cast(set[str], plan["own_executions"]))
-            retry_counts = {candidate_id: 0 for candidate_id in candidate_set}
-            adapter_retry_candidates: set[str] = set()
-            stats: RuntimeCancelPayload = {
-                "index_id": index_id,
-                "iterations": 0,
-                "graph_edges": len(cast(set[tuple[str, str]], plan["graph"])),
-                "candidate_count": len(candidate_set),
-                "own_execution_count": 0,
-                "cancelled_count": 0,
-                "dropped_count": 0,
-                "lock_retry_count": 0,
-            }
-            while candidate_set:
-                stats["iterations"] += 1
-                batch = sorted(candidate_set)
-                normal_retry_pending = False
-                logger.info(
-                    "runtime.cancel iteration=%s index_id=%s candidates=%s owned=%s",
-                    stats["iterations"],
-                    index_id,
-                    len(batch),
-                    len(own_executions),
-                )
-                with ThreadPoolExecutor() as executor:
-                    futures = {
-                        executor.submit(
-                            index._cancel_execution_candidate,
-                            candidate_id,
-                            requested_by=requested_by,
-                            own_executions=set(own_executions),
-                        ): candidate_id
-                        for candidate_id in batch
-                    }
-                    for future in as_completed(futures):
-                        candidate_id = futures[future]
-                        try:
-                            result = future.result()
-                        except Exception as exc:
-                            retry_counts[candidate_id] += 1
-                            if retry_counts[candidate_id] >= _RUNTIME_CANCEL_MAX_ATTEMPTS:
-                                raise DmlRepoError(
-                                    f"runtime.cancel exceeded retry limit for execution {candidate_id}: {exc}"
-                                ) from exc
-                            adapter_retry_candidates.add(candidate_id)
-                            continue
-                        if cast(bool, result["lock_retry"]):
-                            stats["lock_retry_count"] += 1
-                            normal_retry_pending = True
-                        outcome = cast(int | None, result["outcome"])
-                        if outcome == 1:
-                            candidate_set.discard(candidate_id)
-                            stats["cancelled_count"] += 1
-                        elif outcome == -1:
-                            candidate_set.discard(candidate_id)
-                            if candidate_id in own_executions:
-                                own_executions.discard(candidate_id)
-                                stats["dropped_count"] += 1
-                        elif outcome is None:
-                            normal_retry_pending = True
-                if adapter_retry_candidates or normal_retry_pending:
-                    delay = _RUNTIME_CANCEL_BACKOFF_SECONDS
-                    if adapter_retry_candidates:
-                        delay *= 2 ** (max(retry_counts[candidate_id] for candidate_id in adapter_retry_candidates) - 1)
-                    time.sleep(delay)
-                    adapter_retry_candidates.clear()
-            index._complete_index_cancellation(
-                index_id,
-                cancelled_path=cast(Path, plan["cancelled_path"]),
-                own_executions=own_executions,
+            resp = make_index_ops(db, self._dml).cancel(
+                execution_id, requested_by=requested_by, max_workers=self._dml._context.config.remote.fetch_workers
             )
-            stats["own_execution_count"] = len(own_executions)
-            logger.info(
-                "runtime.cancel complete index_id=%s iterations=%s cancelled=%s dropped=%s lock_retries=%s",
-                index_id,
-                stats["iterations"],
-                stats["cancelled_count"],
-                stats["dropped_count"],
-                stats["lock_retry_count"],
-            )
-            return stats
+        return cast(RuntimeCancelPayload, {"execution_id": execution_id, **resp})
 
 
 @dataclass(frozen=True)

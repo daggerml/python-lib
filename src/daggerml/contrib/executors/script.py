@@ -238,7 +238,7 @@ class ScriptExecutor(ExecutorBase):
             except PermissionError:
                 pass
         _cleanup_workdir(state)
-        return {"status": "cancel-detached", "error": None}
+        return {"status": "cancelled", "error": None}
 
 
 def _cleanup_workdir(launch_state: dict[str, Any]) -> None:

@@ -83,16 +83,9 @@ def _seed_named_dags(temp_bo_fn, tmp_path: Path, dag_nodes: dict[str, str]):
 
     node_refs: dict[str, Ref] = {}
     for dag_name, node_name in dag_nodes.items():
-        index_id = index_ops.create(head=main_head)
+        index_id = index_ops.create(f"exec-{dag_name}", head=main_head)
         node_ref = index_ops.put_literal(index_id, dag_name, name=node_name)
-        index_ops.commit(
-            index_id,
-            node_ref,
-            head=main_head,
-            message=f"add {dag_name}",
-            dag_name=dag_name,
-            execution_id=index_id,
-        )
+        index_ops.commit(index_id, node_ref, head=main_head, message=f"add {dag_name}", dag_name=dag_name)
         node_refs[dag_name] = node_ref
 
     latest_commit = head_ops.get_branch_commit(main_head)

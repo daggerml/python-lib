@@ -67,9 +67,9 @@ class SshExecutor(ExecutorBase):
             execution_id,
             state is not None,
         )
-        proc = subprocess.run(cmd, input=payload, capture_output=True, check=False)
-        stdout = proc.stdout.decode("utf-8", errors="replace").strip()
-        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+        proc = subprocess.run(cmd, input=payload, capture_output=True, check=False, text=True)
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
         logger.debug(
             "ssh executor command returncode=%s execution_id=%s stdout=%r stderr=%r",
             proc.returncode,
@@ -99,7 +99,7 @@ class SshExecutor(ExecutorBase):
             "succeeded",
             "failed",
             "running",
-            "cancel-detached",
+            "cancelled",
         }:
             logger.debug("ssh executor unexpected result execution_id=%s result=%r", execution_id, result)
             return {"status": "failed", "error": f"SSH nested adapter returned unexpected result: {result}"}

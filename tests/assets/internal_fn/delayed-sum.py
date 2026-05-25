@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -25,6 +26,7 @@ if __name__ == "__main__":
     remote = envelope["remote"]
     argv_ptr = envelope["argv_ptr"]
     execution_id = envelope["execution_id"]
+    cache_key = envelope["cache_key"]
     remote_root = remote["root"]
     tmp_dir = os.environ.get("DML_TMP_DIR")
     if not tmp_dir:
@@ -47,7 +49,7 @@ if __name__ == "__main__":
         try:
             _init_repo(db)
             ops = IndexOps(db, remote_root=remote_root)
-            index_ref = ops.create(argv_ptr=argv_ptr)
+            index_ref = ops.create(execution_id, argv_ptr=argv_ptr)
             node_ops = NodeOps(db)
 
             argv = cast(list, node_ops.unroll(ops.get_argv(index_ref)))
@@ -61,7 +63,7 @@ if __name__ == "__main__":
             except Exception as e:
                 result = Error.from_ex(e)
 
-            commit_ref = ops.commit(index_ref, result, message="delayed sum function result", execution_id=execution_id)
+            commit_ref = ops.commit(index_ref, result, message="delayed sum function result")
             with ops._tx(readonly=True) as txn:
                 commit_obj = txn.get(commit_ref)
             dag_id = commit_obj.dag.id()

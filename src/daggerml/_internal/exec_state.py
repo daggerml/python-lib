@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Literal, TypedDict, cast
+from typing import Any, Literal, Optional, TypedDict, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -45,8 +45,8 @@ class LaunchState(TypedDict):
 
 class ExecutionRecord(TypedDict):
     execution_id: str
-    cache_key: str
-    lifecycle: Literal["running", "cancel-pending", "cancel-detached", "succeeded", "failed"]
+    cache_key: str | None
+    lifecycle: Literal["running", "cancel-pending", "cancelled", "succeeded", "failed"]
     updated_at: int
     spawned_execution_ids: list[str]
     cancellation_requested_by: str | None
@@ -91,16 +91,96 @@ class AdapterIO:
         """S3 URI for the sub-adapter output result (no S3 call made)."""
         return f"s3://{self._state._bucket}/{self._output_key}"
 
-    def write_input(self, data: bytes) -> str:
+    def write_input(self, data, *, raw: bool = True) -> str:
         """Write ``data`` to the input S3 key and return ``input_uri``."""
-        self._state._put_object(self._input_key, data)
+        self._state._cas_item(self._input_key).write(data, force=True, raw=raw)
         return self.input_uri
 
-    def read_output(self) -> bytes | None:
+    def read_output(self, raw: bool = True):
         """Read the output S3 key.  Returns ``None`` if not yet written."""
-        result = self._state._get_object_bytes(self._output_key)
-        return result[0] if result is not None else None
+        return self._state._cas_item(self._output_key).read(raw=raw)
 
+
+class CasItem:
+    """S3-backed content-addressable storage item for function execution.
+
+    Parameters
+    ----------
+    bucket: str
+    key: str
+    """
+
+    def __init__(self, bucket: str, key: str, client=None) -> None:
+        self.bucket = bucket
+        self.key = key
+        self.etag = None
+        self.body = None
+        self._client = client or boto3.client("s3")
+
+    @property
+    def uri(self) -> str:
+        """S3 URI for this CAS item."""
+        return f"s3://{self.bucket}/{self.key}"
+
+    def read(self, raw: bool = False) -> str | None:
+        """Factory method to create a CasItem by fetching the object from S3.
+
+        Returns None if the object does not exist.
+        """
+        try:
+            resp = self._client.get_object(Bucket=self.bucket, Key=self.key)
+            self.etag = resp["ETag"].strip('"')
+            body = resp["Body"].read().decode().strip()
+            self.body = body if raw else json.loads(body)
+            return self.body
+        except Exception as e:
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404"):
+                return None
+            raise
+
+    def _write(self, data, new: bool, raw: bool, force: bool = False) -> bool:
+        """Overwrite the body with new data and update the ETag."""
+        kw = {}
+        if force:
+            pass
+        elif new:
+            kw["IfNoneMatch"] = "*"
+        else:
+            kw["IfMatch"] = self.etag
+        if not raw:
+            data = json.dumps(data, separators=(",", ":"), sort_keys=True)
+        try:
+            self._client.put_object(Bucket=self.bucket, Key=self.key, Body=data.encode(), **kw)
+            return True
+        except Exception as e:
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            if code in ("PreconditionFailed", "412"):
+                return False
+            raise
+        finally:
+            self.read(raw=raw)
+
+    def write(self, data, raw: bool = False, force: bool = False) -> bool:
+        """Overwrite the body with new data and update the ETag."""
+        return self._write(data, new=True, raw=raw, force=force)
+
+    def update(self, data, raw: bool = False) -> None:
+        """Update the body with new data, using ETag for optimistic concurrency."""
+        if self.etag is None:
+            raise DmlRepoError(f"CAS item must be read before update: {self.uri}")
+        if not self._write(data, new=False, raw=raw):
+            raise DmlRepoError(f"CAS item update failed due to ETag mismatch: {self.uri}")
+
+    def delete(self) -> None:
+        """DELETE the lock file; no-op if already absent."""
+        try:
+            self._client.delete_object(Bucket=self.bucket, Key=self.key)
+        except Exception as e:
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404"):
+                return
+            raise
 
 
 class ExecutionState:
@@ -127,23 +207,30 @@ class ExecutionState:
         if absent or malformed.
     """
 
-    def __init__(self, cache_key: str, *, remote_root: str) -> None:
-        if not isinstance(cache_key, str) or not cache_key:
-            raise DmlRepoError("ExecutionState cache_key must be a non-empty string")
+    def __init__(self, cache_key: Optional[str] = None, *, remote_root: str) -> None:
         parsed = urlparse(remote_root)
         if parsed.scheme != "s3" or not parsed.netloc:
-            raise DmlRepoError(
-                f"ExecutionState remote_root must be a valid s3:// URI, got: {remote_root!r}"
-            )
+            raise DmlRepoError(f"ExecutionState remote_root must be a valid s3:// URI, got: {remote_root!r}")
         bucket = parsed.netloc
         prefix = parsed.path.strip("/")
         exec_prefix = f"{prefix}/dml" if prefix else "dml"
         self.cache_key = cache_key
         self._bucket = bucket
         self._exec_prefix = exec_prefix
-        self._lock_key = f"{exec_prefix}/locks/{cache_key}.json"
-        self._active_key = f"{exec_prefix}/active/{cache_key}"
-        self._lock_token: str | None = None
+        self._cas: dict[str, CasItem] = {}
+        if cache_key is not None:
+            self._lock_key = f"{exec_prefix}/locks/{cache_key}.json"
+            self._active_key = f"{exec_prefix}/active/{cache_key}"
+            self._lock_token: str | None = None
+
+    @classmethod
+    def from_execution_id(cls, execution_id: str, *, remote_root: str) -> ExecutionState:
+        """Instantiate from an active execution ID by reading the launch state."""
+        temp_state = cls(remote_root=remote_root)
+        record = temp_state.read_execution_record(execution_id)
+        if record is None:
+            raise DmlRepoError(f"No execution record found for execution_id: {execution_id}")
+        return cls(cache_key=record["cache_key"], remote_root=remote_root)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -153,108 +240,29 @@ class ExecutionState:
     def _s3():
         return boto3.client("s3", config=Config(max_pool_connections=S3_MAX_POOL_CONNECTIONS))
 
+    def _cas_item(self, key: str) -> CasItem:
+        if key not in self._cas:
+            self._cas[key] = CasItem(self._bucket, key, client=self._s3())
+        return self._cas[key]
+
     def _key_for_launch_state(self, execution_id: str) -> str:
         return f"{self._exec_prefix}/exec/launch/{execution_id}.json"
 
     def _key_for_execution(self, execution_id: str) -> str:
         return f"{self._exec_prefix}/exec/state/{execution_id}.json"
 
-    def _key_for_edge(self, callee_execution_id: str, caller_execution_id: str) -> str:
-        return f"{self._exec_prefix}/exec/edges/{callee_execution_id}/{caller_execution_id}.json"
-
     def _key_for_edge_prefix(self, callee_execution_id: str) -> str:
         return f"{self._exec_prefix}/exec/edges/{callee_execution_id}/"
 
-    def _key_for_invalidation(self, execution_id: str) -> str:
-        return f"{self._exec_prefix}/exec/invalidate/{execution_id}.json"
-
-    def _key_for_cancellation_tombstone(self, execution_id: str) -> str:
-        return f"{self._exec_prefix}/exec/cancelled/{execution_id}.json"
-
-    def _get_object_bytes(self, key: str) -> tuple[bytes, str] | None:
-        """Return object bytes and ETag, or None if the file does not exist."""
-        try:
-            resp = self._s3().get_object(Bucket=self._bucket, Key=key)
-            return resp["Body"].read(), resp["ETag"].strip('"')
-        except Exception as e:
-            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
-            if code in ("NoSuchKey", "404"):
-                return None
-            raise
-
-    def _get_object(self) -> LockRecord | None:
-        payload = self._get_object_bytes(self._lock_key)
-        return None if payload is None else json.loads(payload[0])
-
-    def _put_object(self, key: str, body: bytes, *, if_match: str | None = None, if_none_match: bool = False) -> bool:
-        """Conditional PUT. Returns False on precondition failure."""
-        try:
-            kwargs: dict[str, Any] = {
-                "Bucket": self._bucket,
-                "Key": key,
-                "Body": body,
-            }
-            if key.endswith(".json"):
-                kwargs["ContentType"] = "application/json"
-            if if_match is not None:
-                kwargs["IfMatch"] = if_match
-            if if_none_match:
-                kwargs["IfNoneMatch"] = "*"
-            self._s3().put_object(**kwargs)
-            return True
-        except Exception as e:
-            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
-            if code in ("PreconditionFailed", "412"):
-                return False
-            raise
-
-    def _put_object_if_absent(self, record: LockRecord) -> bool:
-        """PUT with ``If-None-Match: *``.  Returns True on success, False on 412."""
-        return self._put_object(
-            self._lock_key,
-            json.dumps(record, separators=(",", ":"), sort_keys=True).encode(),
-            if_none_match=True,
-        )
-
-    def _delete_object(self, key: str) -> None:
-        """DELETE the lock file; no-op if already absent."""
-        try:
-            self._s3().delete_object(Bucket=self._bucket, Key=key)
-        except Exception as e:
-            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
-            if code in ("NoSuchKey", "404"):
-                return
-            raise
-
-    def _read_json(self, key: str) -> tuple[Any, str] | tuple[None, None]:
-        payload = self._get_object_bytes(key)
-        if payload is None:
-            return None, None
-        return json.loads(payload[0]), payload[1]
-
-    def _write_json_if_absent(self, key: str, value: Any) -> bool:
-        return self._put_object(
-            key,
-            json.dumps(value, separators=(",", ":"), sort_keys=True).encode(),
-            if_none_match=True,
-        )
-
-    def _write_json_if_match(self, key: str, value: Any, etag: str) -> bool:
-        return self._put_object(
-            key,
-            json.dumps(value, separators=(",", ":"), sort_keys=True).encode(),
-            if_match=etag,
-        )
-
-    def _write_json(self, key: str, value: Any) -> None:
-        self._put_object(key, json.dumps(value, separators=(",", ":"), sort_keys=True).encode())
+    def _key_for_edge(self, callee_execution_id: str, caller_execution_id: str) -> str:
+        return f"{self._key_for_edge_prefix(callee_execution_id)}{caller_execution_id}.json"
 
     @staticmethod
     def _lifecycle_rank(lifecycle: str) -> int:
         ranks = {
             "running": 0,
             "cancel-pending": 1,
-            "cancel-detached": 2,
+            "cancelled": 2,
             "succeeded": 3,
             "failed": 3,
         }
@@ -269,7 +277,11 @@ class ExecutionState:
         spawned_execution_ids = sorted(
             {*current.get("spawned_execution_ids", []), *incoming.get("spawned_execution_ids", [])}
         )
-        cancellation_requested_by = current["cancellation_requested_by"] or incoming["cancellation_requested_by"]
+        cancellation_requested_by = (
+            incoming["cancellation_requested_by"]
+            if incoming["cancellation_requested_by"] is not None
+            else current["cancellation_requested_by"]
+        )
         merged: ExecutionRecord = {
             "execution_id": current["execution_id"],
             "cache_key": current["cache_key"],
@@ -310,25 +322,18 @@ class ExecutionState:
         Returns True on success, False if the lock is currently held.
         """
         now = time.time()
-        existing = self._get_object()
-
+        existing = cast(LockRecord, self._cas_item(self._lock_key).read())
         if existing is not None:
             if existing["lock_expires_ts"] > now:
                 # Lock is currently held by someone else
                 return False
             # Lock is expired — steal it
-            self._delete_object(self._lock_key)
-
-        token = str(uuid4())
-        record: LockRecord = {
-            "lock_token": token,
-            "lock_expires_ts": now + ttl,
-        }
-        if not self._put_object_if_absent(record):
+            self._cas_item(self._lock_key).delete()
+        record = cast(LockRecord, {"lock_token": str(uuid4()), "lock_expires_ts": now + ttl})
+        if not self._cas_item(self._lock_key).write(record):
             # 412 — concurrent writer grabbed it first
             return False
-
-        self._lock_token = token
+        self._lock_token = record["lock_token"]
         return True
 
     def unlock(self) -> None:
@@ -338,129 +343,50 @@ class ExecutionState:
         expired and stolen), the call is a no-op.
         """
         self._lock_token = None
-        self._delete_object(self._lock_key)
+        self._cas_item(self._lock_key).delete()
 
     def read_active_execution_id(self) -> str | None:
-        payload = self._get_object_bytes(self._active_key)
-        if payload is None:
-            return None
-        raw = payload[0].decode().strip()
-        if not raw:
-            return None
-        return raw
+        return self._cas_item(self._active_key).read(raw=True)
 
     def create_active_execution(self, execution_id: str) -> bool:
-        return self._put_object(self._active_key, execution_id.encode(), if_none_match=True)
+        return self._cas_item(self._active_key).write(execution_id, raw=True)
 
     def delete_active_execution(self) -> None:
-        self._delete_object(self._active_key)
+        self._cas_item(self._active_key).delete()
 
-    def read_launch_state(self, execution_id: str) -> LaunchState | None:
-        payload = self._get_object_bytes(self._key_for_launch_state(execution_id))
-        if payload is None:
-            return None
-        return json.loads(payload[0])
+    def read_launch_state(self, execution_id: str) -> LaunchState:
+        return cast(LaunchState, self._cas_item(self._key_for_launch_state(execution_id)).read())
 
     def create_launch_state(self, launch_state: LaunchState) -> bool:
-        return self._write_json_if_absent(self._key_for_launch_state(launch_state["execution_id"]), launch_state)
+        return self._cas_item(self._key_for_launch_state(launch_state["execution_id"])).write(launch_state)
 
-    def update_launch_state(self, launch_state: LaunchState) -> LaunchState:
-        self._write_json(self._key_for_launch_state(launch_state["execution_id"]), launch_state)
-        return launch_state
+    def update_launch_state(self, launch_state: LaunchState) -> None:
+        self._cas_item(self._key_for_launch_state(launch_state["execution_id"])).update(launch_state)
 
-    def read_execution_record(self, execution_id: str) -> ExecutionRecord | None:
-        payload = self._get_object_bytes(self._key_for_execution(execution_id))
-        if payload is None:
-            return None
-        return json.loads(payload[0])
+    def read_execution_record(self, execution_id: str) -> ExecutionRecord:
+        resp = self._cas_item(self._key_for_execution(execution_id)).read()
+        if resp is None:
+            raise DmlRepoError(f"No execution record found for execution_id: {execution_id}")
+        return cast(ExecutionRecord, resp)
 
     def create_execution_record(self, record: ExecutionRecord) -> bool:
-        return self._write_json_if_absent(self._key_for_execution(record["execution_id"]), record)
+        return self._cas_item(self._key_for_execution(record["execution_id"])).write(record)
 
-    def update_execution_record(self, record: ExecutionRecord, *, retries: int = 8) -> ExecutionRecord:
-        key = self._key_for_execution(record["execution_id"])
-        for _ in range(retries):
-            current, etag = self._read_json(key)
-            if current is None:
-                if self._write_json_if_absent(key, record):
-                    return record
-            else:
-                current_record = cast(ExecutionRecord, current)
-                if current_record["lifecycle"].startswith("cancel-") and not record["lifecycle"].startswith("cancel-"):
-                    raise CancelledExecutionError(f"Execution cancelled: {record['execution_id']}")
-                merged = self._merge_execution_record(current_record, record)
-                if self._write_json_if_match(key, merged, cast(str, etag)):
-                    return merged
-        raise DmlRepoError(f"Failed to update execution state object: {key}")
+    def update_execution_record(self, record: ExecutionRecord) -> None:
+        self._cas_item(self._key_for_execution(record["execution_id"])).update(record)
 
-    def record_execution_dependency(
-        self,
-        *,
-        caller_execution_id: str,
-        callee_execution_id: str,
-        retries: int = 8,
-    ) -> None:
-        edge = {
-            "caller_execution_id": caller_execution_id,
-            "callee_execution_id": callee_execution_id,
-        }
+    def record_execution_dependency(self, caller_execution_id: str, callee_execution_id: str) -> None:
+        edge = {"caller_execution_id": caller_execution_id, "callee_execution_id": callee_execution_id}
         key = self._key_for_edge(callee_execution_id, caller_execution_id)
-        for _ in range(retries):
-            if self._write_json_if_absent(key, edge):
-                return
-            existing, _etag = self._read_json(key)
-            if existing == edge:
-                return
-        raise DmlRepoError(f"Failed to write execution edge object: {key}")
+        self._cas_item(key).write(edge, force=True)
 
     def delete_execution_dependency(self, *, caller_execution_id: str, callee_execution_id: str) -> None:
-        self._delete_object(self._key_for_edge(callee_execution_id, caller_execution_id))
-
-    def create_invalidation_record(
-        self,
-        *,
-        execution_id: str,
-        cache_key: str,
-        requested_by: str,
-        requested_at: int,
-    ) -> bool:
-        return self._write_json_if_absent(
-            self._key_for_invalidation(execution_id),
-            {
-                "execution_id": execution_id,
-                "cache_key": cache_key,
-                "requested_by": requested_by,
-                "requested_at": requested_at,
-            },
-        )
-
-    def create_cancellation_tombstone(
-        self, *, execution_id: str, cache_key: str, requested_by: str, requested_at: int
-    ) -> bool:
-        return self._write_json_if_absent(
-            self._key_for_cancellation_tombstone(execution_id),
-            {
-                "execution_id": execution_id,
-                "cache_key": cache_key,
-                "requested_by": requested_by,
-                "requested_at": requested_at,
-            },
-        )
+        return self._cas_item(self._key_for_edge(callee_execution_id, caller_execution_id)).delete()
 
     def list_execution_callers(self, callee_execution_id: str) -> list[str]:
         prefix = self._key_for_edge_prefix(callee_execution_id)
         paginator = self._s3().get_paginator("list_objects_v2")
         callers: list[str] = []
         for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                if not key.endswith(".json"):
-                    continue
-                payload = self._get_object_bytes(key)
-                if payload is None:
-                    continue
-                edge = json.loads(payload[0])
-                caller = edge.get("caller_execution_id")
-                if isinstance(caller, str) and caller:
-                    callers.append(caller)
+            callers.extend([x["Key"].split("/")[-1].removesuffix(".json") for x in page.get("Contents", [])])
         return callers

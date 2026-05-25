@@ -100,7 +100,7 @@ class BatchExecutor(LambdaExecutorBase):
             remote=remote,
             state=None,
         )
-        io.write_input(payload)
+        io.write_input(payload, raw=True)
         client = self._client()
         reqs, job_queue = self._resource_requirements(runnable.kwargs)
         image = self._image_uri(runnable.kwargs.get("image"))
@@ -196,4 +196,4 @@ class BatchExecutor(LambdaExecutorBase):
                 client.deregister_job_definition(jobDefinition=job_definition)
             except Exception:
                 pass
-        return {"status": "cancel-detached", "error": None}
+        return {"status": "cancelled", "error": None}

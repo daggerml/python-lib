@@ -219,7 +219,7 @@ cancel_idx="$(dml runtime create | json_scalar)"
 pretty_dml runtime list
 pretty_dml runtime describe "${runtime_idx}"
 
-seed_ref="$(dml runtime put-literal "${runtime_idx}" cli-seed --name seed | json_scalar)"
+seed_ref="$(echo '"cli-seed"' | dml runtime put-literal "${runtime_idx}" - --name seed | json_scalar)"
 imported_greeting_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${greeting_ref}" --name imported-greeting | json_scalar)"
 hello_runtime_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${hello_fn_ref}" --name hello-fn | json_scalar)"
 pretty_dml runtime get-node "${runtime_idx}" seed

@@ -23,7 +23,7 @@ Canonical adapter results are:
 - `{"status": "running", "error": null, "state": {...}}`
 - `{"status": "succeeded", "error": null, "dag_id": "<hex>"}`
 - `{"status": "failed", "error": "..."}`
-- `{"status": "cancel-detached", "error": null}`
+- `{"status": "cancelled", "error": null}`
 
 ## Built-in executors
 

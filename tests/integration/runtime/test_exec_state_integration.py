@@ -116,7 +116,7 @@ class TestLockAbsent:
     def test_lock_file_exists_after_lock(self):
         es = _es("lock-absent-2")
         assert es.lock() is True
-        record = es._get_object()
+        record = es._cas_item(es._lock_key).read()
         assert record is not None
         assert "lock_token" in record
         assert "lock_expires_ts" in record
@@ -159,11 +159,11 @@ class TestLockExpired:
     def test_stolen_lock_has_new_token(self):
         es1 = _es("lock-exp-2")
         assert es1.lock(ttl=0.01) is True
-        old_record = es1._get_object()
+        old_record = es1._cas_item(es1._lock_key).read()
         time.sleep(0.05)
         es2 = _es("lock-exp-2")
         assert es2.lock() is True
-        new_record = es2._get_object()
+        new_record = es2._cas_item(es2._lock_key).read()
         assert old_record is not None and new_record is not None
         assert new_record["lock_token"] != old_record["lock_token"]
 
@@ -177,14 +177,19 @@ class TestLockExpired:
 class TestLock412:
     def test_lock_returns_false_on_412(self, monkeypatch):
         """Simulate a 412 PreconditionFailed from S3."""
-        import botocore.exceptions
+        class _ConflictItem:
+            def read(self):
+                return None
 
-        def _fake_put(*args, **kwargs):
-            error_response = {"Error": {"Code": "PreconditionFailed", "Message": "precondition failed"}}
-            raise botocore.exceptions.ClientError(error_response, "PutObject")
+            def delete(self):
+                return None
+
+            def write(self, record):
+                del record
+                return False
 
         es = _es("lock-412-1")
-        monkeypatch.setattr(es, "_put_object_if_absent", lambda _: False)
+        monkeypatch.setattr(es, "_cas_item", lambda key: _ConflictItem())
         assert es.lock() is False
 
 
@@ -198,7 +203,7 @@ class TestUnlock:
         es = _es("unlock-1")
         assert es.lock() is True
         es.unlock()
-        assert es._get_object() is None
+        assert es._cas_item(es._lock_key).read() is None
 
     def test_unlock_clears_token(self):
         es = _es("unlock-2")
@@ -270,7 +275,7 @@ def test_execution_record_updates_merge_monotonically():
         "cancellation_requested_by": None,
     }
     assert es.create_execution_record(created)
-    merged = es.update_execution_record(
+    es.update_execution_record(
         {
             "execution_id": "exec-0",
             "cache_key": "record-2",
@@ -280,6 +285,7 @@ def test_execution_record_updates_merge_monotonically():
             "cancellation_requested_by": "user@example.com",
         }
     )
+    merged = es.read_execution_record("exec-0")
     assert merged["spawned_execution_ids"] == ["exec-2"]
     assert merged["lifecycle"] == "cancel-pending"
     assert merged["cancellation_requested_by"] == "user@example.com"
@@ -301,24 +307,8 @@ def test_call_edge_records_are_canonical_and_idempotent():
     es = _es("callee")
     es.record_execution_dependency(caller_execution_id="caller-a", callee_execution_id="callee")
     es.record_execution_dependency(caller_execution_id="caller-a", callee_execution_id="callee")
-    edge, _ = es._read_json(es._key_for_edge("callee", "caller-a"))
+    edge = es._cas_item(es._key_for_edge("callee", "caller-a")).read()
     assert edge == {"caller_execution_id": "caller-a", "callee_execution_id": "callee"}
-
-
-def test_invalidation_record_is_create_only():
-    es = _es("invalidate")
-    assert es.create_invalidation_record(
-        execution_id="exec-9",
-        cache_key="invalidate",
-        requested_by="user@example.com",
-        requested_at=123,
-    )
-    assert not es.create_invalidation_record(
-        execution_id="exec-9",
-        cache_key="invalidate",
-        requested_by="user@example.com",
-        requested_at=123,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -340,8 +330,7 @@ class TestAdapterIO:
     def test_uri_properties_make_no_s3_call(self, monkeypatch):
         calls = []
         es = _es("io-no-s3")
-        monkeypatch.setattr(es, "_put_object", lambda *a, **kw: calls.append(("put", a, kw)))
-        monkeypatch.setattr(es, "_get_object_bytes", lambda *a, **kw: calls.append(("get", a, kw)) or None)
+        monkeypatch.setattr(es, "_cas_item", lambda *a, **kw: calls.append((a, kw)))
         io = es.adapter_io("exec-uuid", "local:docker")
         _ = io.input_uri
         _ = io.output_uri
@@ -350,12 +339,9 @@ class TestAdapterIO:
     def test_write_input_stores_data_and_returns_input_uri(self):
         es = _es("io-write")
         io = es.adapter_io("exec-id-write", "lambda:batch")
-        uri = io.write_input(b'{"payload": 1}')
+        uri = io.write_input('{"payload": 1}')
         assert uri == io.input_uri
-        # Read back via raw S3 to confirm
-        result = es._get_object_bytes(io._input_key)
-        assert result is not None
-        assert result[0] == b'{"payload": 1}'
+        assert es._cas_item(io._input_key).read(raw=True) == '{"payload": 1}'
 
     def test_read_output_returns_none_when_absent(self):
         es = _es("io-read-absent")
@@ -365,8 +351,8 @@ class TestAdapterIO:
     def test_read_output_returns_bytes_when_present(self):
         es = _es("io-read-present")
         io = es.adapter_io("exec-id-present", "lambda:batch")
-        es._put_object(io._output_key, b'{"status":"succeeded"}')
-        assert io.read_output() == b'{"status":"succeeded"}'
+        es._cas_item(io._output_key).write('{"status":"succeeded"}', raw=True, force=True)
+        assert io.read_output() == '{"status":"succeeded"}'
 
     def test_adapter_io_factory_returns_adapter_io_instance(self):
         es = _es("io-factory")

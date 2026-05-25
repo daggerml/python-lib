@@ -1,5 +1,6 @@
 import json
 import os
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ import daggerml._internal.dml as dml_module
 import daggerml.codecs as literal_codec
 from daggerml import Dml, new
 from daggerml._internal._db import Ref
-from daggerml._internal.exec_state import CancelledExecutionError
+from daggerml._internal.exec_state import CancelledExecutionError, ExecutionState
 from daggerml._internal.ops.head import HeadOps
 from daggerml._internal.ops.index import IndexOps, _PreparedAdapterCall
 from daggerml._internal.ops.node import NodeOps
@@ -105,6 +106,16 @@ def _mk_repo_state(temp_bo, *, with_argv: bool = False) -> tuple[IndexOps, str, 
         pass
     head_ops.create_branch(branch_name, base_commit_ref)
     head_ops._create_pointer(head_ops._index_path(index_id), index_commit_ref)
+    ExecutionState(index_id, remote_root=_remote_root_from_env()).create_execution_record(
+        {
+            "execution_id": index_id,
+            "cache_key": index_id,
+            "lifecycle": "running",
+            "updated_at": 1,
+            "spawned_execution_ids": [],
+            "cancellation_requested_by": None,
+        }
+    )
     return IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env()), branch_name, index_id
 
 
@@ -147,6 +158,12 @@ class _FakeExecutionState:
         self.cache_key = cache_key
 
     @classmethod
+    def from_execution_id(cls, execution_id: str, *, remote_root: str = ""):
+        record = cls.records.get(execution_id)
+        cache_key = record["cache_key"] if record is not None else execution_id
+        return cls(cache_key, remote_root=remote_root)
+
+    @classmethod
     def reset(cls) -> None:
         cls.lock_calls = []
         cls.unlock_calls = []
@@ -176,7 +193,10 @@ class _FakeExecutionState:
         type(self).active.pop(self.cache_key, None)
 
     def read_execution_record(self, execution_id: str):
-        return type(self).records.get(execution_id)
+        resp = type(self).records.get(execution_id)
+        if resp is None:
+            raise DmlRepoError(f"No execution record for execution_id {execution_id}")
+        return resp
 
     def read_launch_state(self, execution_id: str):
         return type(self).launch_states.get(execution_id)
@@ -197,7 +217,7 @@ class _FakeExecutionState:
         if current is None:
             type(self).records[record["execution_id"]] = record
             return record
-        rank = {"running": 0, "cancel-pending": 1, "cancel-detached": 2, "succeeded": 3, "failed": 3}
+        rank = {"running": 0, "cancel-pending": 1, "cancelled": 2, "succeeded": 3, "failed": 3}
         merged = dict(current)
         merged["lifecycle"] = (
             record["lifecycle"] if rank[record["lifecycle"]] > rank[current["lifecycle"]] else current["lifecycle"]
@@ -206,11 +226,19 @@ class _FakeExecutionState:
             {*current.get("spawned_execution_ids", []), *record.get("spawned_execution_ids", [])}
         )
         merged["updated_at"] = max(current.get("updated_at", 0), record.get("updated_at", 0))
-        merged["cancellation_requested_by"] = current.get("cancellation_requested_by") or record.get(
-            "cancellation_requested_by"
+        merged["cancellation_requested_by"] = (
+            record.get("cancellation_requested_by")
+            if record.get("cancellation_requested_by") is not None
+            else current.get("cancellation_requested_by")
         )
         type(self).records[record["execution_id"]] = merged
         return merged
+
+    def create_execution_record(self, record: dict[str, Any]):
+        if record["execution_id"] in type(self).records:
+            return False
+        type(self).records[record["execution_id"]] = record
+        return True
 
     def record_execution_dependency(self, *, caller_execution_id: str, callee_execution_id: str, retries: int = 8):
         del retries
@@ -243,7 +271,7 @@ class TestIndexOps:
         head_ops = HeadOps(_db=temp_bo._db)
         with temp_bo._tx(readonly=False) as txn:
             commit_ref = txn.put(commit_obj)
-        ref_id = head_ops.create_index(commit_ref)
+        ref_id = head_ops.create_index(commit_ref, "exec-list")
         try:
             assert ref_id in head_ops.list_indexes()
         finally:
@@ -432,7 +460,7 @@ class TestIndexOps:
         ops = _mk_remote_index_ops(temp_bo)
         failing_adapter = tmp_path / "adapter-fail.py"
         failing_adapter.write_text(
-            ("import sys\nsys.stderr.write('boom from adapter\\n')\nraise SystemExit(1)\n"),
+            ("#!/usr/bin/env python3\nimport sys\nsys.stderr.write('boom from adapter\\n')\nraise SystemExit(1)\n"),
             encoding="utf-8",
         )
         os.chmod(failing_adapter, 0o755)
@@ -449,7 +477,7 @@ class TestIndexOps:
         ops = _mk_remote_index_ops(temp_bo)
         bad_json_adapter = tmp_path / "adapter-bad-json.py"
         bad_json_adapter.write_text(
-            ("print('not-json')\nraise SystemExit(0)\n"),
+            ("#!/usr/bin/env python3\nprint('not-json')\nraise SystemExit(0)\n"),
             encoding="utf-8",
         )
         os.chmod(bad_json_adapter, 0o755)
@@ -529,7 +557,8 @@ class TestIndexOps:
         ops = _mk_remote_index_ops(temp_bo)
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         fn_node = _put_runnable_literal(ops, index_ref, uri="noop://cached", adapter="dummy-adapter")
-        hit_dag_ref = Ref(f"dag:{'a' * 64}")
+        hit_dag_ref = _gen_ref("dag")
+        hit_node_ref = _gen_ref("node", "literal")
         sentinel = object()
         _FakeExecutionState.reset()
         _FakeExecutionState.records[index_ref] = {
@@ -541,8 +570,10 @@ class TestIndexOps:
             "cancellation_requested_by": None,
         }
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
+        with ops._tx(readonly=False) as txn:
+            txn.put(Dag(nodes=[hit_node_ref], names={}, result=hit_node_ref, argv=None), to=hit_dag_ref)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: hit_dag_ref)
-        monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, index_ref: sentinel)
+        monkeypatch.setattr(IndexOps, "_retry_index_publication", lambda self, execution_id, build: sentinel)
         monkeypatch.setattr(IndexOps, "_call_adapter", lambda *args, **kwargs: pytest.fail("adapter should not run"))
 
         try:
@@ -581,12 +612,11 @@ class TestIndexOps:
             assert ops.start_fn(index_ref, [fn_node]) is None
             assert calls == [(prepared, "argv-ptr")]
             assert len(_FakeExecutionState.lock_calls) == 1
-            record = next(iter(_FakeExecutionState.records.values()))
-            assert _FakeExecutionState.active[prepared.cache_key] == record["execution_id"]
-            assert _FakeExecutionState.launch_states[record["execution_id"]]["resume_state"] == {
-                "token": record["execution_id"]
+            callee_execution_id = _FakeExecutionState.active[prepared.cache_key]
+            assert _FakeExecutionState.launch_states[callee_execution_id]["resume_state"] == {
+                "token": callee_execution_id
             }
-            assert record["spawned_execution_ids"] == []
+            assert callee_execution_id not in _FakeExecutionState.records
         finally:
             ops.delete(index_ref)
 
@@ -600,12 +630,15 @@ class TestIndexOps:
             cache_key="cache-key-success",
             runnable={"target": "noop://success", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
         )
-        hit_dag_ref = Ref(f"dag:{'d' * 64}")
+        hit_dag_ref = _gen_ref("dag")
+        hit_node_ref = _gen_ref("node", "literal")
         sentinel = object()
         adapter_calls: list[tuple[_PreparedAdapterCall, str]] = []
         cache_hits = iter([None, None, hit_dag_ref])
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
+        with ops._tx(readonly=False) as txn:
+            txn.put(Dag(nodes=[hit_node_ref], names={}, result=hit_node_ref, argv=None), to=hit_dag_ref)
         monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: next(cache_hits))
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
@@ -619,7 +652,7 @@ class TestIndexOps:
             lambda self, prepared_arg, argv_ptr, **kwargs: adapter_calls.append((prepared_arg, argv_ptr))
             or {"status": "succeeded", "error": None, "dag_id": "e" * 64},
         )
-        monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, index_ref: sentinel)
+        monkeypatch.setattr(IndexOps, "_retry_index_publication", lambda self, execution_id, build: sentinel)
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is sentinel
@@ -713,13 +746,13 @@ class TestIndexOps:
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is None
-            created = next(value for key, value in _FakeExecutionState.records.items() if key != index_ref)
-            assert _FakeExecutionState.execution_edges == [(index_ref, created["execution_id"])]
-            assert _FakeExecutionState.records[index_ref]["spawned_execution_ids"] == [created["execution_id"]]
+            callee_execution_id = _FakeExecutionState.active[prepared.cache_key]
+            assert _FakeExecutionState.execution_edges == [(index_ref, callee_execution_id)]
+            assert _FakeExecutionState.records[index_ref]["spawned_execution_ids"] == [callee_execution_id]
         finally:
             ops.delete(index_ref)
 
-    def test_cancel_marks_root_cancel_requested_and_discovers_full_graph(self, temp_bo, monkeypatch):
+    def test_cancel_completes_synchronous_root_and_child_cancellation(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         _FakeExecutionState.reset()
@@ -749,24 +782,37 @@ class TestIndexOps:
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr(
             IndexOps,
-            "_invoke_cancel_update",
-            lambda self, execution_id, record: {"status": "cancel-detached", "error": None},
+            "_prepare_adapter_call",
+            lambda self, index_ref_arg, argv_ref, txn, **kwargs: _PreparedAdapterCall(
+                argv_ref=argv_ref,
+                adapter_path="dummy-adapter",
+                cache_key=argv_ref.id(),
+                runnable={"target": "noop://cancel", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
+            ),
+        )
+        monkeypatch.setattr(
+            IndexOps,
+            "_remote_ops",
+            lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr"),
+        )
+        monkeypatch.setattr(
+            IndexOps,
+            "_call_adapter",
+            lambda self, prepared, argv_ptr, **kwargs: {"status": "cancelled", "error": None},
         )
 
         cancelled_dir = Path(temp_bo._db.path).resolve().parent / "refs" / "local" / "indexes" / ".cancelled"
 
-        result = ops.cancel(index_ref, requested_by="alice@example.com")
+        result = ops.cancel(index_ref, requested_by="alice@example.com", max_workers=1)
 
-        assert result["index_id"] == index_ref
-        assert result["requested_by"] == "alice@example.com"
-        assert result["cancelled_path"] == cancelled_dir / index_ref
-        assert result["graph"] == {(index_ref, "exec-live")}
-        assert result["candidate_set"] == {"exec-live"}
-        assert result["own_executions"] == {"exec-live"}
-        assert _FakeExecutionState.records[index_ref]["lifecycle"] == "cancel-pending"
-        with pytest.raises(DmlRepoError, match="Pointer does not exist"):
-            HeadOps(_db=temp_bo._db).get_index_commit(index_ref)
-        assert (cancelled_dir / index_ref).exists()
+        assert result == {"cancelled": ["exec-live"], "skipped": []}
+        assert _FakeExecutionState.records[index_ref]["lifecycle"] == "cancelled"
+        assert _FakeExecutionState.records[index_ref]["cancellation_requested_by"] == "alice@example.com"
+        assert _FakeExecutionState.records["exec-live"]["lifecycle"] == "running"
+        assert _FakeExecutionState.records["exec-live"]["cancellation_requested_by"] is None
+        assert _FakeExecutionState.execution_edges == []
+        assert not (cancelled_dir / index_ref).exists()
+        assert index_ref not in HeadOps(_db=temp_bo._db).list_indexes()
 
     def test_runtime_cancel_leaves_cancelled_index_pointer_when_cancellation_fails(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
@@ -799,23 +845,35 @@ class TestIndexOps:
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr(
             IndexOps,
-            "_invoke_cancel_update",
-            lambda self, execution_id, record: (_ for _ in ()).throw(DmlRepoError("boom")),
+            "_prepare_adapter_call",
+            lambda self, index_ref_arg, argv_ref, txn, **kwargs: _PreparedAdapterCall(
+                argv_ref=argv_ref,
+                adapter_path="dummy-adapter",
+                cache_key=argv_ref.id(),
+                runnable={"target": "noop://cancel", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
+            ),
+        )
+        monkeypatch.setattr(
+            IndexOps,
+            "_remote_ops",
+            lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr"),
+        )
+        monkeypatch.setattr(
+            IndexOps,
+            "_call_adapter",
+            lambda self, prepared, argv_ptr, **kwargs: (_ for _ in ()).throw(DmlRepoError("boom")),
         )
         cancelled_dir = Path(temp_bo._db.path).resolve().parent / "refs" / "local" / "indexes" / ".cancelled"
 
         with (
             patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
             patch.object(dml_module, "make_index_ops", return_value=ops),
-            pytest.raises(DmlRepoError, match=r"exceeded retry limit for execution exec-live: boom"),
         ):
-            dml.runtime.cancel(index_ref)
+            result = dml.runtime.cancel(index_ref)
 
-        assert (cancelled_dir / index_ref).exists()
-        assert f".cancelled/{index_ref}" in HeadOps(_db=temp_bo._db).list_indexes()
-        assert _FakeExecutionState.records[index_ref]["lifecycle"] == "cancel-pending"
-        with pytest.raises(DmlRepoError, match="Pointer does not exist"):
-            HeadOps(_db=temp_bo._db).get_index_commit(index_ref)
+        assert result == {"execution_id": index_ref, "cancelled": [], "skipped": []}
+        assert not (cancelled_dir / index_ref).exists()
+        assert _FakeExecutionState.records[index_ref]["lifecycle"] == "cancelled"
 
     def test_cancel_retries_existing_cancelled_index(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
@@ -840,25 +898,49 @@ class TestIndexOps:
         _FakeExecutionState.execution_edges = [(index_ref, "exec-live")]
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         cancelled_dir = Path(temp_bo._db.path).resolve().parent / "refs" / "local" / "indexes" / ".cancelled"
+        monkeypatch.setattr(
+            IndexOps,
+            "_prepare_adapter_call",
+            lambda self, index_ref_arg, argv_ref, txn, **kwargs: _PreparedAdapterCall(
+                argv_ref=argv_ref,
+                adapter_path="dummy-adapter",
+                cache_key=argv_ref.id(),
+                runnable={"target": "noop://cancel", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
+            ),
+        )
+        monkeypatch.setattr(
+            IndexOps,
+            "_remote_ops",
+            lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr"),
+        )
 
-        first = ops.cancel(index_ref, requested_by="alice@example.com")
+        monkeypatch.setattr(
+            IndexOps,
+            "_call_adapter",
+            lambda self, prepared, argv_ptr, **kwargs: (_ for _ in ()).throw(DmlRepoError("boom")),
+        )
+
+        result = ops.cancel(index_ref, requested_by="alice@example.com", max_workers=1)
 
         cancelled_path = cancelled_dir / index_ref
         assert cancelled_path == cancelled_dir / index_ref
-        assert cancelled_path.exists()
-        assert f".cancelled/{index_ref}" in HeadOps(_db=temp_bo._db).list_indexes()
+        assert not cancelled_path.exists()
+        assert result == {"cancelled": [], "skipped": []}
 
-        result = ops.cancel(index_ref, requested_by="alice@example.com")
+        monkeypatch.setattr(
+            IndexOps,
+            "_call_adapter",
+            lambda self, prepared, argv_ptr, **kwargs: {"status": "cancelled", "error": None},
+        )
 
-        assert first["cancelled_path"] == cancelled_path
-        assert result["cancelled_path"] == cancelled_path
-        assert result["candidate_set"] == {"exec-live"}
-        assert _FakeExecutionState.records[index_ref]["lifecycle"] == "cancel-pending"
-        assert cancelled_path.exists()
+        result = ops.cancel(index_ref, requested_by="alice@example.com", max_workers=1)
 
-    def test_cancel_candidate_uses_cache_key_lock_and_reports_retry(self, temp_bo, monkeypatch):
+        assert result == {"cancelled": ["exec-live"], "skipped": []}
+        assert _FakeExecutionState.records[index_ref]["lifecycle"] == "cancelled"
+        assert not cancelled_path.exists()
+
+    def test_set_cancelled_retries_cache_key_lock(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
-        _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         _FakeExecutionState.reset()
         _FakeExecutionState.records["exec-live"] = {
             "execution_id": "exec-live",
@@ -868,39 +950,29 @@ class TestIndexOps:
             "spawned_execution_ids": [],
             "cancellation_requested_by": None,
         }
-        _FakeExecutionState.records[index_ref] = {
-            "execution_id": index_ref,
-            "cache_key": index_ref,
-            "lifecycle": "running",
-            "updated_at": 1,
-            "spawned_execution_ids": ["exec-live"],
-            "cancellation_requested_by": None,
-        }
-        _FakeExecutionState.execution_edges = [(index_ref, "exec-live")]
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr(
-            _FakeExecutionState,
-            "lock",
-            lambda self: type(self).lock_calls.append(self.cache_key) or False,
-        )
+        attempts = {"count": 0}
 
-        result = ops._cancel_execution_candidate(
-            "exec-live",
-            requested_by="alice@example.com",
-            own_executions={"exec-live"},
-        )
+        def _lock_once(self):
+            type(self).lock_calls.append(self.cache_key)
+            attempts["count"] += 1
+            return attempts["count"] > 1
 
-        assert result == {
-            "execution_id": "exec-live",
-            "outcome": None,
-            "lock_retry": True,
-            "cancel_requested": False,
-        }
-        assert _FakeExecutionState.lock_calls == ["cache-live"]
+        monkeypatch.setattr(_FakeExecutionState, "lock", _lock_once)
+        monkeypatch.setattr("daggerml._internal.ops.index.time.sleep", lambda delay: None)
 
-    def test_cancel_candidate_invokes_cancel_update_after_unlock(self, temp_bo, monkeypatch):
+        state = _FakeExecutionState.from_execution_id("exec-live", remote_root=ops.remote_root)
+        execution_ids, pending_record = ops._set_cancelled(state, "exec-live", requested_by="alice@example.com")
+
+        assert execution_ids == set()
+        assert pending_record["lifecycle"] == "running"
+        assert pending_record["cancellation_requested_by"] is None
+        assert _FakeExecutionState.records["exec-live"]["lifecycle"] == "cancel-pending"
+        assert _FakeExecutionState.records["exec-live"]["cancellation_requested_by"] == "alice@example.com"
+        assert _FakeExecutionState.lock_calls == ["cache-live", "cache-live"]
+
+    def test_run_cancel_tasks_invokes_adapter_when_orphaned(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
-        _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         _FakeExecutionState.reset()
         _FakeExecutionState.records["exec-live"] = {
             "execution_id": "exec-live",
@@ -916,35 +988,38 @@ class TestIndexOps:
             "resume_state": {"token": "live"},
             "created_at": 1,
         }
-        _FakeExecutionState.records[index_ref] = {
-            "execution_id": index_ref,
-            "cache_key": index_ref,
-            "lifecycle": "cancel-pending",
-            "updated_at": 1,
-            "spawned_execution_ids": ["exec-live"],
-            "cancellation_requested_by": None,
-        }
-        _FakeExecutionState.execution_edges = [(index_ref, "exec-live")]
+        _FakeExecutionState.execution_edges = [("caller-exec", "exec-live")]
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
+        monkeypatch.setattr(
+            IndexOps,
+            "_prepare_adapter_call",
+            lambda self, index_ref_arg, argv_ref, txn, **kwargs: _PreparedAdapterCall(
+                argv_ref=argv_ref,
+                adapter_path="dummy-adapter",
+                cache_key=argv_ref.id(),
+                runnable={"target": "noop://cancel", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
+            ),
+        )
+        monkeypatch.setattr(
+            IndexOps,
+            "_remote_ops",
+            lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr"),
+        )
 
         seen = {}
 
-        def _invoke_after_unlock(self, execution_id, record):
-            del self, record
-            seen["execution_id"] = execution_id
-            assert _FakeExecutionState.unlock_calls[-1] == "cache-live"
-            return {"status": "cancel-detached", "error": None}
+        def _call_after_edge_drop(self, prepared, argv_ptr, **kwargs):
+            del self, prepared, argv_ptr
+            seen["execution_id"] = kwargs["execution_id"]
+            assert _FakeExecutionState.execution_edges == []
+            return {"status": "cancelled", "error": None}
 
-        monkeypatch.setattr(IndexOps, "_invoke_cancel_update", _invoke_after_unlock)
+        monkeypatch.setattr(IndexOps, "_call_adapter", _call_after_edge_drop)
 
-        result = ops._cancel_execution_candidate(
-            "exec-live",
-            requested_by="alice@example.com",
-            own_executions={"exec-live"},
-        )
+        result = ops._run_cancel_tasks("exec-live", requested_by="caller-exec")
 
         assert seen["execution_id"] == "exec-live"
-        assert result["outcome"] == 1
+        assert result == {"cancelled": ["exec-live"], "skipped": []}
 
     def test_start_fn_unlocks_when_cancellation_interrupts_after_adapter(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
@@ -971,26 +1046,22 @@ class TestIndexOps:
             lambda self, prepared_arg, argv_ptr, **kwargs: {"status": "running", "error": None, "state": {}},
         )
 
-        original_update = _FakeExecutionState.update_execution_record
+        def _interrupt_create_launch_state(self, launch_state):
+            raise CancelledExecutionError("cancelled")
 
-        def _interrupt_update(self, record, *, retries=8):
-            if record["execution_id"] != index_ref:
-                raise CancelledExecutionError("cancelled")
-            return original_update(self, record, retries=retries)
-
-        monkeypatch.setattr(_FakeExecutionState, "update_execution_record", _interrupt_update)
+        monkeypatch.setattr(_FakeExecutionState, "create_launch_state", _interrupt_create_launch_state)
 
         with pytest.raises(CancelledExecutionError, match="cancelled"):
             ops.start_fn(index_ref, [fn_node])
         assert _FakeExecutionState.unlock_calls == [prepared.cache_key]
 
-    def test_cancel_candidate_uses_global_callers_for_ownership(self, temp_bo, monkeypatch):
+    def test_cancel_updates_requester_to_immediate_parent(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         _FakeExecutionState.reset()
-        _FakeExecutionState.records["exec-shared"] = {
-            "execution_id": "exec-shared",
-            "cache_key": "cache-shared",
+        _FakeExecutionState.records["exec-child"] = {
+            "execution_id": "exec-child",
+            "cache_key": "cache-child",
             "lifecycle": "running",
             "updated_at": 1,
             "spawned_execution_ids": [],
@@ -999,33 +1070,43 @@ class TestIndexOps:
         _FakeExecutionState.records[index_ref] = {
             "execution_id": index_ref,
             "cache_key": index_ref,
-            "lifecycle": "cancel-pending",
-            "updated_at": 1,
-            "spawned_execution_ids": ["exec-shared"],
-            "cancellation_requested_by": "alice@example.com",
-        }
-        _FakeExecutionState.records["other-root"] = {
-            "execution_id": "other-root",
-            "cache_key": "other-root",
             "lifecycle": "running",
             "updated_at": 1,
-            "spawned_execution_ids": ["exec-shared"],
-            "cancellation_requested_by": None,
+            "spawned_execution_ids": ["exec-child"],
+            "cancellation_requested_by": "alice@example.com",
         }
-        _FakeExecutionState.execution_edges = [(index_ref, "exec-shared"), ("other-root", "exec-shared")]
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-
-        result = ops._cancel_execution_candidate(
-            "exec-shared",
-            requested_by="alice@example.com",
-            own_executions={"exec-shared"},
+        monkeypatch.setattr(
+            IndexOps,
+            "_prepare_adapter_call",
+            lambda self, index_ref_arg, argv_ref, txn, **kwargs: _PreparedAdapterCall(
+                argv_ref=argv_ref,
+                adapter_path="dummy-adapter",
+                cache_key=argv_ref.id(),
+                runnable={"target": "noop://cancel", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
+            ),
         )
+        monkeypatch.setattr(
+            IndexOps,
+            "_remote_ops",
+            lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr"),
+        )
+        seen = {}
 
-        assert result["outcome"] == -1
-        assert result["cancel_requested"] is False
-        assert _FakeExecutionState.records["exec-shared"]["lifecycle"] == "running"
+        def _capture_cancel_requester(self, prepared, argv_ptr, **kwargs):
+            del self, prepared, argv_ptr
+            seen["cancel_requested_by"] = kwargs["cancel_requested_by"]
+            return {"status": "cancelled", "error": None}
 
-    def test_cancelled_execution_still_contributes_descendants_but_skips_adapter_work(self, temp_bo, monkeypatch):
+        monkeypatch.setattr(IndexOps, "_call_adapter", _capture_cancel_requester)
+
+        result = ops.cancel(index_ref, requested_by="alice@example.com", max_workers=1)
+
+        assert result == {"cancelled": ["exec-child"], "skipped": []}
+        assert _FakeExecutionState.records["exec-child"]["lifecycle"] == "running"
+        assert seen["cancel_requested_by"] == index_ref
+
+    def test_cancelled_execution_is_treated_as_dropped(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         _FakeExecutionState.reset()
@@ -1040,7 +1121,7 @@ class TestIndexOps:
         _FakeExecutionState.records["exec-parent"] = {
             "execution_id": "exec-parent",
             "cache_key": "cache-parent",
-            "lifecycle": "cancel-detached",
+            "lifecycle": "cancelled",
             "updated_at": 1,
             "spawned_execution_ids": ["exec-child"],
             "cancellation_requested_by": "alice@example.com",
@@ -1069,52 +1150,140 @@ class TestIndexOps:
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr(
             IndexOps,
-            "_invoke_cancel_update",
-            lambda self, execution_id, record: (_ for _ in ()).throw(AssertionError("adapter should not run")),
-        )
-
-        plan = ops.cancel(index_ref, requested_by="alice@example.com")
-        result = ops._cancel_execution_candidate(
-            "exec-parent",
-            requested_by="alice@example.com",
-            own_executions=set(cast(set[str], plan["own_executions"])),
-        )
-
-        assert plan["graph"] == {(index_ref, "exec-parent"), ("exec-parent", "exec-child")}
-        assert result["outcome"] == 1
-        assert result["cancel_requested"] is False
-
-    def test_start_fn_discards_stale_active_pointer_before_relaunch(self, temp_bo, monkeypatch):
-        ops = _mk_remote_index_ops(temp_bo)
-        _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-        fn_node = _put_runnable_literal(ops, index_ref, uri="noop://stale-active", adapter="dummy-adapter")
-        prepared = _PreparedAdapterCall(
-            argv_ref=Ref(f"node-argv:{'6' * 64}"),
-            adapter_path="dummy-adapter",
-            cache_key="cache-key-stale-active",
-            runnable={"target": "noop://stale-active", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
-        )
-        _FakeExecutionState.reset()
-        _FakeExecutionState.active[prepared.cache_key] = "stale-execution"
-        monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: None)
-        monkeypatch.setattr(
-            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
+            "_prepare_adapter_call",
+            lambda self, index_ref_arg, argv_ref, txn, **kwargs: _PreparedAdapterCall(
+                argv_ref=argv_ref,
+                adapter_path="dummy-adapter",
+                cache_key=argv_ref.id(),
+                runnable={"target": "noop://cancel", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
+            ),
         )
         monkeypatch.setattr(
-            IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
+            IndexOps,
+            "_remote_ops",
+            lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr"),
         )
         monkeypatch.setattr(
             IndexOps,
             "_call_adapter",
-            lambda self, prepared_arg, argv_ptr, **kwargs: {"status": "running", "error": None, "state": {}},
+            lambda self, prepared, argv_ptr, **kwargs: (_ for _ in ()).throw(AssertionError("adapter should not run")),
         )
 
-        try:
-            assert ops.start_fn(index_ref, [fn_node]) is None
-            assert _FakeExecutionState.active[prepared.cache_key] != "stale-execution"
-        finally:
-            ops.delete(index_ref)
+        result = ops.cancel(index_ref, requested_by="alice@example.com", max_workers=1)
+
+        assert result == {"cancelled": [], "skipped": ["exec-parent"]}
+
+    def test_cancel_preserves_shared_live_subgraph_until_last_root_is_cancelled(self, temp_bo, monkeypatch, s3):
+        ops = _mk_remote_index_ops(temp_bo)
+        del s3
+        _ops0, _head_ref0, idx0 = _mk_repo_state(temp_bo)
+        _ops1, _head_ref1, idx1 = _mk_repo_state(temp_bo)
+        remote_root = _remote_root_from_env()
+
+        def _write_record(execution_id: str, cache_key: str, lifecycle: str, spawned_execution_ids: list[str]):
+            state = ExecutionState(cache_key, remote_root=remote_root)
+            record = {
+                "execution_id": execution_id,
+                "cache_key": cache_key,
+                "lifecycle": lifecycle,
+                "updated_at": 1,
+                "spawned_execution_ids": spawned_execution_ids,
+                "cancellation_requested_by": None,
+            }
+            try:
+                current = state.read_execution_record(execution_id)
+            except DmlRepoError:
+                state.create_execution_record(record)
+            else:
+                state.update_execution_record({**current, **record})
+
+        _write_record(idx0, idx0, "running", ["ex0", "ex1", "ex2"])
+        _write_record(idx1, idx1, "running", ["ex1", "ex4"])
+        _write_record("ex0", "cache-ex0", "running", ["ex3"])
+        _write_record("ex1", "cache-ex1", "running", [])
+        _write_record("ex2", "cache-ex2", "running", [])
+        _write_record("ex3", "cache-ex3", "running", [])
+        _write_record("ex4", "cache-ex4", "running", ["ex3"])
+
+        for caller_execution_id, callee_execution_id in [
+            (idx0, "ex0"),
+            (idx0, "ex1"),
+            (idx0, "ex2"),
+            ("ex0", "ex3"),
+            (idx1, "ex1"),
+            (idx1, "ex4"),
+            ("ex4", "ex3"),
+        ]:
+            ExecutionState(callee_execution_id, remote_root=remote_root).record_execution_dependency(
+                caller_execution_id=caller_execution_id,
+                callee_execution_id=callee_execution_id,
+            )
+
+        phase = {"name": "idx0"}
+        adapter_calls: dict[str, list[str]] = {"idx0": [], "idx1": []}
+
+        monkeypatch.setattr(
+            IndexOps,
+            "_prepare_adapter_call",
+            lambda self, index_ref_arg, argv_ref, txn, **kwargs: _PreparedAdapterCall(
+                argv_ref=argv_ref,
+                adapter_path="dummy-adapter",
+                cache_key=argv_ref.id(),
+                runnable={"target": "noop://cancel", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
+            ),
+        )
+        monkeypatch.setattr(
+            IndexOps,
+            "_remote_ops",
+            lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr"),
+        )
+
+        original_cancel = ops.cancel
+        delegated: set[str] = set()
+        deferred_cancels: list[tuple[str, str, str]] = []
+
+        def _record_cancel_adapter(self, prepared, argv_ptr, **kwargs):
+            del self, prepared, argv_ptr
+            adapter_calls[phase["name"]].append(kwargs["execution_id"])
+            execution_id = kwargs["execution_id"]
+            if execution_id not in delegated:
+                delegated.add(execution_id)
+                deferred_cancels.append((phase["name"], execution_id, cast(str, kwargs["cancel_requested_by"])))
+            return {"status": "cancelled", "error": None}
+
+        monkeypatch.setattr(IndexOps, "_call_adapter", _record_cancel_adapter)
+
+        ops.cancel(idx0, requested_by="alice@example.com", max_workers=1)
+        while deferred_cancels:
+            cancel_phase, execution_id, requested_by = deferred_cancels.pop(0)
+            if cancel_phase != "idx0":
+                deferred_cancels.insert(0, (cancel_phase, execution_id, requested_by))
+                break
+            original_cancel(execution_id, requested_by=requested_by, max_workers=1)
+
+        assert Counter(adapter_calls["idx0"]) == Counter(["ex0", "ex2"])
+        assert ExecutionState(idx0, remote_root=remote_root).read_execution_record(idx0)["lifecycle"] == "cancelled"
+        assert ExecutionState("ex0", remote_root=remote_root).read_execution_record("ex0")["lifecycle"] == "cancelled"
+        assert ExecutionState("ex2", remote_root=remote_root).read_execution_record("ex2")["lifecycle"] == "cancelled"
+        assert ExecutionState(idx1, remote_root=remote_root).read_execution_record(idx1)["lifecycle"] == "running"
+        assert ExecutionState("ex1", remote_root=remote_root).read_execution_record("ex1")["lifecycle"] == "running"
+        assert ExecutionState("ex3", remote_root=remote_root).read_execution_record("ex3")["lifecycle"] == "running"
+        assert ExecutionState("ex4", remote_root=remote_root).read_execution_record("ex4")["lifecycle"] == "running"
+
+        phase["name"] = "idx1"
+        ops.cancel(idx1, requested_by="alice@example.com", max_workers=1)
+        while deferred_cancels:
+            cancel_phase, execution_id, requested_by = deferred_cancels.pop(0)
+            if cancel_phase != "idx1":
+                continue
+            original_cancel(execution_id, requested_by=requested_by, max_workers=1)
+
+        assert Counter(adapter_calls["idx1"]) == Counter(["ex1", "ex4", "ex3"])
+        for execution_id in [idx1, "ex1", "ex3", "ex4"]:
+            assert (
+                ExecutionState(execution_id, remote_root=remote_root).read_execution_record(execution_id)["lifecycle"]
+                == "cancelled"
+            )
 
     def test_start_fn_records_fn_dag_call_edge_on_new_execution(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
@@ -1152,9 +1321,9 @@ class TestIndexOps:
 
         try:
             assert ops.start_fn(index_ref, [fn_node]) is None
-            created = next(value for key, value in _FakeExecutionState.records.items() if key != "caller-exec-1")
-            assert _FakeExecutionState.execution_edges == [("caller-exec-1", created["execution_id"])]
-            assert _FakeExecutionState.records["caller-exec-1"]["spawned_execution_ids"] == [created["execution_id"]]
+            callee_execution_id = _FakeExecutionState.active[prepared.cache_key]
+            assert _FakeExecutionState.execution_edges == [("caller-exec-1", callee_execution_id)]
+            assert _FakeExecutionState.records["caller-exec-1"]["spawned_execution_ids"] == [callee_execution_id]
         finally:
             ops.delete(index_ref)
 
@@ -1168,16 +1337,21 @@ class TestIndexOps:
             cache_key="cache-key-failed",
             runnable={"target": "noop://failed", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
         )
+        failed_dag_ref = _gen_ref("dag")
+        failed_node_ref = _gen_ref("node", "literal")
         adapter_calls: list[tuple[_PreparedAdapterCall, str]] = []
         published: list[tuple[Ref, str]] = []
         cache_reads = {"count": 0}
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
+        with ops._tx(readonly=False) as txn:
+            error_ref = txn.put(Error.from_ex(DmlRepoError("boom")))
+            txn.put(Dag(nodes=[failed_node_ref], names={}, error=error_ref, result=None, argv=None), to=failed_dag_ref)
         monkeypatch.setattr(
             "daggerml._internal.ops.cache.CacheOps.get",
             lambda self, argv_ref, txn: None
             if (cache_reads.__setitem__("count", cache_reads["count"] + 1) or cache_reads["count"]) <= 2
-            else Ref(f"dag:{'f' * 64}"),
+            else failed_dag_ref,
         )
         monkeypatch.setattr(
             IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
@@ -1200,11 +1374,13 @@ class TestIndexOps:
             "daggerml._internal.ops.cache.CacheOps.put",
             lambda self, dag_ref, execution_id: published.append((dag_ref, execution_id)),
         )
-        monkeypatch.setattr(IndexOps, "_finish_fn_result", lambda self, dag_ref, argv, name, index_ref: dag_ref)
+        monkeypatch.setattr(
+            IndexOps, "_retry_index_publication", lambda self, execution_id, build: Ref(f"node-fn:{'2' * 64}")
+        )
 
         try:
-            result = ops.start_fn(index_ref, [fn_node])
-            assert result == Ref(f"dag:{'f' * 64}")
+            with pytest.raises(Error, match="boom"):
+                ops.start_fn(index_ref, [fn_node])
             assert len(adapter_calls) == 1
             assert published[0][0] == Ref(f"dag:{'1' * 64}")
             assert len(published) == 1
@@ -1456,7 +1632,9 @@ class TestIndexOps:
         )
         outer_adapter.write_text(
             (
+                "#!/usr/bin/env python3\n"
                 "import json\n"
+                "from daggerml._internal.exec_state import ExecutionState\n"
                 "import shutil\n"
                 "import subprocess\n"
                 "import sys\n"
@@ -1598,11 +1776,11 @@ class TestIndexOps:
     def test_describe_returns_current_index_state(self, temp_bo):
         ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
         try:
-            node_ref = ops.put_literal(index_ref, 42, name="answer")
+            ops.put_literal(index_ref, 42, name="answer")
             info = ops.describe(index_ref)
+            assert info["id"] == index_ref
             assert info["dag"].ns() == "dag"
-            assert node_ref in info["nodes"]
-            assert info["names"]["answer"] == node_ref
+            assert info["dags"] == {}
         finally:
             ops.delete(index_ref)
 
@@ -1641,6 +1819,16 @@ class TestIndexOps:
         ops, head_ref, index_ref = _mk_repo_state(temp_bo)
         original = HeadOps.update_branch_commit
         calls = {"count": 0}
+        _FakeExecutionState.reset()
+        monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
+        _FakeExecutionState.records[index_ref] = {
+            "execution_id": index_ref,
+            "cache_key": index_ref,
+            "lifecycle": "running",
+            "updated_at": 1,
+            "spawned_execution_ids": [],
+            "cancellation_requested_by": None,
+        }
 
         def _conflict_once(self, branch_name, old_commit, new_commit, txn=None):
             del txn
@@ -1654,7 +1842,7 @@ class TestIndexOps:
 
         try:
             node_ref = ops.put_literal(index_ref, 42, name="answer")
-            commit_ref = ops.commit(index_ref, node_ref, head=head_ref, message="done", execution_id=index_ref)
+            commit_ref = ops.commit(index_ref, node_ref, head=head_ref, message="done")
             assert calls["count"] >= 2
             assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) == commit_ref
         finally:
@@ -1707,7 +1895,7 @@ class TestIndexOps:
             with ops._tx(readonly=True) as txn:
                 ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(index_ref))
                 with pytest.raises(DmlRepoError, match="Cannot import from a DAG with no result node"):
-                    ops.put_import(index_ref, cast(Ref, ctx.commit.dag))
+                    ops.put_import(index_ref, cast(Ref, ctx.commit.dag), None)
         finally:
             ops.delete(index_ref)
 
@@ -1722,7 +1910,7 @@ class TestIndexOps:
                 txn.put(LiteralNode(value=other_datum_ref), to=other_node_ref)
                 txn.put(Dag(nodes=[other_node_ref], names={}, result=other_node_ref, argv=None), to=other_dag_ref)
 
-            imported_ref = ops.put_import(index_ref, other_dag_ref, name="imported")
+            imported_ref = ops.put_import(index_ref, other_dag_ref, None, name="imported")
             with ops._tx(readonly=True) as txn:
                 node = txn.get(imported_ref)
                 assert isinstance(node, ImportNode)
@@ -1751,7 +1939,7 @@ class TestIndexOps:
             remote_ops = RemoteOps(_db=temp_bo._db, client=s3, bucket=bucket, prefix=prefix)
             bad_ptr = remote_ops.put_ref_manifest(literal_node)
             with pytest.raises(DmlRepoError, match="Manifest root namespace mismatch"):
-                remote_index_ops.create(argv_ptr=bad_ptr)
+                remote_index_ops.create("exec-bad-ptr", argv_ptr=bad_ptr)
         finally:
             ops.delete(index_ref)
             HeadOps(_db=temp_bo._db).delete_branch(head_ref)
@@ -1760,42 +1948,10 @@ class TestIndexOps:
         ops, head_ref, index_ref = _mk_repo_state(temp_bo)
         try:
             with pytest.raises(DmlRepoError, match="Provide exactly one of branch, commit, or argv_ptr."):
-                ops.create()
+                ops.create("exec-no-mode")
             with pytest.raises(DmlRepoError, match="Provide exactly one of branch, commit, or argv_ptr."):
-                ops.create(head=head_ref, argv_ptr="a" * 64)
+                ops.create("exec-bad-mode", head=head_ref, argv_ptr="a" * 64)
         finally:
-            ops.delete(index_ref)
-            HeadOps(_db=temp_bo._db).delete_branch(head_ref)
-
-    def test_create_argv_ptr_loads_remote_argv(self, temp_bo, s3):
-        from daggerml._internal.ops.remote import RemoteOps
-
-        ops, head_ref, index_ref = _mk_repo_state(temp_bo)
-        created_index = None
-        try:
-            fn_node = _put_runnable_literal(ops, index_ref, uri="daggerml:list", adapter="")
-            arg_node = ops.put_literal(index_ref, 42)
-            with ops._tx(readonly=False) as txn:
-                argv_ref = ops._prepare_fn(index_ref, [fn_node, arg_node], {}, txn)
-
-            bucket, _prefix = remote_bucket_and_prefix_from_env()
-            prefix = _remote_protocol_prefix_from_env()
-            remote_ops = RemoteOps(_db=temp_bo._db, client=s3, bucket=bucket, prefix=prefix)
-            argv_ptr = remote_ops.put_ref_manifest(argv_ref)
-
-            remote_index_ops = IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env())
-            created_index = remote_index_ops.create(argv_ptr=argv_ptr)
-
-            with remote_index_ops._tx(readonly=True) as txn:
-                ctx = txn.get_commit_ctx(HeadOps(_db=temp_bo._db).get_index_commit(created_index))
-                assert ctx.dag is not None
-                assert ctx.dag.argv == argv_ref
-                kwargv_ref = remote_index_ops._kwargv_ref_from_nodes(ctx.dag, txn)
-                assert kwargv_ref is not None
-                assert kwargv_ref.ns() == "node-kwargv"
-        finally:
-            if created_index is not None:
-                ops.delete(created_index)
             ops.delete(index_ref)
             HeadOps(_db=temp_bo._db).delete_branch(head_ref)
 
@@ -1809,6 +1965,14 @@ class TestIndexOps:
             "daggerml._internal.ops.cache.CacheOps.put",
             lambda self, dag_ref, *, execution_id: cache_puts.append((dag_ref, execution_id)),
         )
+        _FakeExecutionState.records[index_ref] = {
+            "execution_id": index_ref,
+            "cache_key": index_ref,
+            "lifecycle": "running",
+            "updated_at": 1,
+            "spawned_execution_ids": [],
+            "cancellation_requested_by": None,
+        }
 
         commit_ref = ops.commit(
             index_ref,
@@ -1816,7 +1980,6 @@ class TestIndexOps:
             message="done",
             dag_name="demo",
             head=head_ref,
-            execution_id=index_ref,
         )
 
         assert commit_ref.ns() == "commit"
@@ -1832,45 +1995,51 @@ class TestIndexOps:
             "daggerml._internal.ops.cache.CacheOps.put",
             lambda self, dag_ref, *, execution_id: cache_puts.append((dag_ref, execution_id)),
         )
+        _FakeExecutionState.records[index_ref] = {
+            "execution_id": index_ref,
+            "cache_key": index_ref,
+            "lifecycle": "running",
+            "updated_at": 1,
+            "spawned_execution_ids": [],
+            "cancellation_requested_by": None,
+        }
 
         commit_ref = ops.commit(
-            index_ref,
-            Error.from_ex(ValueError("boom")),
-            message="done",
-            dag_name="demo",
-            head=head_ref,
-            execution_id="exec-worker",
+            index_ref, Error.from_ex(ValueError("boom")), message="done", dag_name="demo", head=head_ref
         )
 
         assert commit_ref.ns() == "commit"
         assert len(cache_puts) == 1
-        assert cache_puts[0][1] == "exec-worker"
-        assert _FakeExecutionState.records["exec-worker"]["lifecycle"] == "succeeded"
+        assert cache_puts[0][1] == index_ref
+        assert _FakeExecutionState.records[index_ref]["lifecycle"] == "succeeded"
 
     @given(value=scalar_strategy(), dag_name=_NAME_STRAT)
     @settings(max_examples=10)
     def test_commit_deletes_index_and_updates_head(self, temp_bo, value, dag_name):
         ops, head_ref, index_ref = _mk_repo_state(temp_bo)
-        with ops._tx(readonly=True) as txn:
-            before = HeadOps(_db=temp_bo._db).get_branch_commit(head_ref)
-        node_ref = ops.put_literal(index_ref, value, name="result")
-        commit_ref = ops.commit(
-            index_ref,
-            node_ref,
-            message="done",
-            dag_name=dag_name,
-            head=head_ref,
-            execution_id=index_ref,
-        )
+        _FakeExecutionState.reset()
+        _FakeExecutionState.records[index_ref] = {
+            "execution_id": index_ref,
+            "cache_key": index_ref,
+            "lifecycle": "running",
+            "updated_at": 1,
+            "spawned_execution_ids": [],
+            "cancellation_requested_by": None,
+        }
+        with patch("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState):
+            with ops._tx(readonly=True) as txn:
+                before = HeadOps(_db=temp_bo._db).get_branch_commit(head_ref)
+            node_ref = ops.put_literal(index_ref, value, name="result")
+            commit_ref = ops.commit(index_ref, node_ref, message="done", dag_name=dag_name, head=head_ref)
 
-        with ops._tx(readonly=True) as txn:
-            assert index_ref not in HeadOps(_db=temp_bo._db).list_indexes()
-            assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) == commit_ref
-            assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) != before
+            with ops._tx(readonly=True) as txn:
+                assert index_ref not in HeadOps(_db=temp_bo._db).list_indexes()
+                assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) == commit_ref
+                assert HeadOps(_db=temp_bo._db).get_branch_commit(head_ref) != before
 
-            commit_obj = txn.get(commit_ref)
-            assert isinstance(commit_obj, Commit)
-            assert commit_obj.message == "done"
-            tree_obj = txn.get(commit_obj.tree)
-            assert isinstance(tree_obj, Tree)
-            assert dag_name in tree_obj.dags
+                commit_obj = txn.get(commit_ref)
+                assert isinstance(commit_obj, Commit)
+                assert commit_obj.message == "done"
+                tree_obj = txn.get(commit_obj.tree)
+                assert isinstance(tree_obj, Tree)
+                assert dag_name in tree_obj.dags

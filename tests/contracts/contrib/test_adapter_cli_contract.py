@@ -53,7 +53,7 @@ def test_adapter_cli_poll_preserves_launch_state_over_execution_record_state(mon
             execution_id="exec-ck",
             remote={"root": "s3://bucket/root"},
             state=None,
-        ).decode("utf-8"),
+        ),
     )
 
     exit_code = DummyAdapter.cli(["--poll"])

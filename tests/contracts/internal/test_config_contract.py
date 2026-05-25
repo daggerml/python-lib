@@ -74,7 +74,7 @@ def test_dml_explicit_execution_id_overrides_env(monkeypatch):
     assert dml._context.execution_id == "exec-explicit"
 
 
-def test_runtime_start_fn_passes_explicit_caller_execution_id():
+def test_runtime_start_fn_uses_created_execution_id_for_updates():
     dml = Dml(project_home="/tmp/repo", execution_id="exec-worker")
     fake_ops = Mock()
     fake_ops.start_fn.return_value = "result-node"
@@ -91,11 +91,10 @@ def test_runtime_start_fn_passes_explicit_caller_execution_id():
         [Ref("node:abc")],
         kwargv=None,
         name=None,
-        caller_execution_id="exec-worker",
     )
 
 
-def test_runtime_start_fn_falls_back_to_index_id_for_caller_execution_id():
+def test_runtime_start_fn_uses_positional_execution_id_only():
     dml = Dml(project_home="/tmp/repo")
     fake_ops = Mock()
     fake_ops.start_fn.return_value = None
@@ -111,11 +110,10 @@ def test_runtime_start_fn_falls_back_to_index_id_for_caller_execution_id():
         [Ref("node:def")],
         kwargv=None,
         name=None,
-        caller_execution_id="idx-root",
     )
 
 
-def test_runtime_commit_passes_execution_id_or_index_root():
+def test_runtime_commit_uses_created_execution_id_positionally():
     worker_dml = Dml(project_home="/tmp/repo", execution_id="exec-worker")
     root_dml = Dml(project_home="/tmp/repo")
     worker_ops = Mock()
@@ -136,7 +134,6 @@ def test_runtime_commit_passes_execution_id_or_index_root():
         head=None,
         message=None,
         dag_name=None,
-        execution_id="exec-worker",
     )
     root_ops.commit.assert_called_once_with(
         "idx-2",
@@ -144,7 +141,6 @@ def test_runtime_commit_passes_execution_id_or_index_root():
         head=None,
         message=None,
         dag_name=None,
-        execution_id="idx-2",
     )
 
 

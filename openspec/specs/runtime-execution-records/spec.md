@@ -30,7 +30,7 @@ The runtime SHALL persist the currently active execution for a `cache_key` at `a
 - **AND** it SHALL treat the cache key as having no active execution
 
 ### Requirement: Runtime SHALL maintain one mutable execution record per execution id
-The runtime SHALL persist one mutable lifecycle object per execution id as `execution_record`, separate from caller-owned `launch_state`. `execution_record` SHALL include `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `spawned_execution_ids`, and `cancellation_requested_by`, where `cancellation_requested_by` is `str | null`. `lifecycle` SHALL be one of `running`, `cancel-pending`, `cancel-detached`, `succeeded`, or `failed`. `spawned_execution_ids` SHALL be the deduped set of child execution ids started by that execution for cancellation traversal. `execution_record` updates SHALL use compare-and-swap with the latest known ETag. If a compare-and-swap update observes ETag drift, the runtime SHALL reread the record and SHALL raise cancellation interruption only when the reread lifecycle is already a `cancel-*` value; otherwise it SHALL continue from the latest valid reread state.
+The runtime SHALL persist one mutable lifecycle object per execution id as `execution_record`, separate from caller-owned `launch_state`. `execution_record` SHALL include `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `spawned_execution_ids`, and `cancellation_requested_by`, where `cancellation_requested_by` is `str | null`. `lifecycle` SHALL be one of `running`, `cancel-pending`, `cancelled`, `succeeded`, or `failed`. `spawned_execution_ids` SHALL be the deduped set of child execution ids started by that execution for cancellation traversal. `execution_record` updates SHALL use compare-and-swap with the latest known ETag. If a compare-and-swap update observes ETag drift, the runtime SHALL reread the record and SHALL raise cancellation interruption only when the reread lifecycle is already a `cancel-*` value; otherwise it SHALL continue from the latest valid reread state.
 
 The same `execution_record` schema SHALL also be used for each live index id. For index-root records, the object path SHALL be `exec/state/<index_id>.json`, `execution_id` SHALL equal the `index_id`, `cache_key` SHALL equal the `index_id`, and `spawned_execution_ids` SHALL track the deduped set of execution ids started from that index.
 
@@ -42,7 +42,7 @@ The `execution_record` schema SHALL be:
 
 - `execution_id: str`
 - `cache_key: str`
-- `lifecycle: "running" | "cancel-pending" | "cancel-detached" | "succeeded" | "failed"`
+- `lifecycle: "running" | "cancel-pending" | "cancelled" | "succeeded" | "failed"`
 - `updated_at: int`
 - `spawned_execution_ids: list[str]`
 - `cancellation_requested_by: str | null`
@@ -64,8 +64,20 @@ The `execution_record` schema SHALL be:
 
 #### Scenario: CAS reread raises on cancellation lifecycle drift
 - **WHEN** a compare-and-swap update for `execution_record` observes an ETag conflict
-- **AND** the reread lifecycle is `cancel-pending` or `cancel-detached`
+- **AND** the reread lifecycle is `cancel-pending` or `cancelled`
 - **THEN** the runtime SHALL surface cancellation interruption rather than continuing normal execution updates
+
+#### Scenario: Top-level cancellation stores user provenance
+- **WHEN** a user cancels index `idx1`
+- **THEN** `exec/state/idx1.json` SHALL store `cancellation_requested_by` as that user identity
+
+#### Scenario: Nested cancellation stores execution provenance
+- **WHEN** execution `e1` triggers `cancel(e2)` during nested cancellation
+- **THEN** `exec/state/e2.json` SHALL store `cancellation_requested_by = "e1"`
+
+#### Scenario: Cancellation terminal state is cancelled
+- **WHEN** runtime cancellation completes for execution `e1`
+- **THEN** `exec/state/e1.json` SHALL store `lifecycle = "cancelled"`
 
 #### Scenario: Root record accumulates spawned execution ids
 - **WHEN** index `idx1` starts execution `e1`
@@ -118,20 +130,32 @@ The runtime SHALL publish `refs/cache/<cache_key>.json` as a normal cache ref to
 - **AND** the earlier cache ref MUST be invalidated or deleted before `e8` can publish `refs/cache/ck1.json`
 
 ### Requirement: Adapter envelope and result schema SHALL follow the runtime-owned execution contract
-The adapter envelope SHALL include `argv_ptr`, `cache_key`, `execution_id`, `remote`, `runnable`, `state`, `execution_status`, and `cancel_requested_by`. The adapter result SHALL use only `running`, `succeeded`, `failed`, or `cancel-detached` statuses. `running` MUST include durable `state`. `succeeded` MUST include `dag_id`. `failed` MUST include `error`. `cancel-detached` MUST identify a successful cancellation update that detached runtime ownership and MAY omit durable execution output.
+The adapter envelope SHALL include `argv_ptr`, `cache_key`, `execution_id`, `remote`, `runnable`, `state`, `execution_status`, and `cancel_requested_by`. For cancellation, the runtime SHALL send `execution_status = "cancel-pending"` only to adapter chains responsible for direct child executions.
+
+Cancel-path adapter returns SHALL NOT control runtime lifecycle persistence. The runtime SHALL ignore those cancel return values when deciding whether to write `cancelled`.
 
 #### Scenario: First adapter call uses null state
 - **WHEN** the runtime invokes an adapter for a new execution
 - **THEN** the adapter envelope SHALL include `state = null`
 
-#### Scenario: Cancel update includes renamed cancellation lifecycle
+#### Scenario: Cancel update includes pending lifecycle and requester provenance
 - **WHEN** the runtime invokes an adapter for a cancel update
 - **THEN** the adapter envelope SHALL include `execution_status = "cancel-pending"`
 - **AND** it SHALL include `cancel_requested_by`
 
-#### Scenario: Cancel update may return detached status
-- **WHEN** an executor completes a cancel update successfully
-- **THEN** the adapter result MAY use `status = "cancel-detached"`
+#### Scenario: Runtime ignores cancel return for terminal lifecycle write
+- **WHEN** an adapter returns from a cancel update
+- **THEN** the runtime SHALL NOT require a `cancelled` adapter result before writing `lifecycle = "cancelled"`
+
+#### Scenario: Parent cancellation targets child adapter chains only
+- **WHEN** `cancel(e1)` fans out over direct children
+- **THEN** the runtime SHALL send cancel updates only to adapter chains responsible for those child executions
+- **AND** it SHALL NOT separately send a cancel update for `e1` itself as part of that parent cancel flow
+
+#### Scenario: Immediate parent is recorded for nested cancellation
+- **WHEN** root cancellation of `idx1` leads to nested `cancel(e2)` through `e1`
+- **THEN** `exec/state/e2.json` SHALL record `cancellation_requested_by = "e1"`
+- **AND** it SHALL NOT replace that field with `idx1` solely because `idx1` started the overall cancellation tree
 
 #### Scenario: Pending is rejected
 - **WHEN** an adapter returns `pending`
@@ -167,7 +191,7 @@ The runtime SHALL document at the `IndexOps.commit` lifecycle update site that c
 - **AND** the comment distinguishes DAG error results from runtime execution failures
 
 ### Requirement: Runtime SHALL separate caller-owned launch state from runtime-owned lifecycle state
-The runtime SHALL treat `launch_state` as caller-owned state for launch and resume, and `execution_record` as execution-runtime-owned state for lifecycle, spawned execution summaries, and cancellation metadata. The caller runtime MAY transition a callee `execution_record` only to `cancel-pending` or `cancel-detached` during orphan-triggered cancellation, and SHALL NOT otherwise mutate lifecycle state owned by the callee execution runtime.
+The runtime SHALL treat `launch_state` as caller-owned state for launch and resume, and `execution_record` as execution-runtime-owned state for lifecycle, spawned execution summaries, and cancellation metadata. The caller runtime MAY transition a callee `execution_record` only to `cancel-pending` or `cancelled` during orphan-triggered cancellation, and SHALL NOT otherwise mutate lifecycle state owned by the callee execution runtime.
 
 #### Scenario: Caller runtime owns launch state updates
 - **WHEN** `start_fn` launches or resumes execution `e1`
@@ -177,17 +201,6 @@ The runtime SHALL treat `launch_state` as caller-owned state for launch and resu
 - **WHEN** execution `e1` reaches `succeeded` or `failed`
 - **THEN** the execution runtime for `e1` SHALL publish that terminal lifecycle in `execution_record`
 - **AND** caller runtimes SHALL NOT publish those terminal lifecycle values for `e1`
-
-### Requirement: Cancellation-detached lifecycle SHALL describe runtime detachment, not backend completion
-`cancel-detached` SHALL mean that the runtime completed its cancellation responsibilities for that execution, removed current-execution ownership by clearing `active/<cache_key>`, and delegated any remaining backend shutdown handling to the adapter or executor contract. `cancel-detached` SHALL NOT mean that external cleanup has fully completed or that the rooted execution graph is fully cancelled.
-
-#### Scenario: Detached lifecycle permits fresh relaunch
-- **WHEN** execution `e1` is marked `cancel-detached`
-- **THEN** the runtime SHALL allow a future caller for the same `cache_key` to create a new execution attempt
-
-#### Scenario: Detached lifecycle does not prove backend exit
-- **WHEN** execution `e1` is marked `cancel-detached`
-- **THEN** callers SHALL NOT infer that all external resources for `e1` have already terminated
 
 ### Requirement: Best-effort cancellation traversal MAY stop at terminal intermediates
 The runtime SHALL perform cancellation traversal from `spawned_execution_ids` on a best-effort basis. If a descendant execution is reachable only through an already-terminal intermediate runtime that is not reconstructed, the runtime MAY leave that descendant running.

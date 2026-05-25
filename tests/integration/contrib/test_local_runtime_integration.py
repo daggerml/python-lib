@@ -562,7 +562,7 @@ def test_adapter_base_cli_reads_stdin_and_writes_stdout(capsys):
                 execution_id="exec-ck",
                 remote=_remote(),
                 state=None,
-            ).decode("utf-8"),
+            ),
         )
         exit_code = DummyAdapter.cli([])
 
@@ -580,7 +580,7 @@ def test_adapter_base_cli_reads_and_writes_files(tmp_path):
 
     in_file = tmp_path / "in.json"
     out_file = tmp_path / "out.json"
-    in_file.write_bytes(
+    in_file.write_text(
         DummyAdapter._dump_payload(
             runnable=Runnable(target=Uri("x"), adapter="dummy", kwargs={}),
             argv_ptr="ptr",

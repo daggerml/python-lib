@@ -72,7 +72,7 @@ class ExecutorBase:
         self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
     ) -> dict[str, Any]:
         self.cleanup(cache_key=cache_key, execution_id=execution_id, remote=remote, state=state)
-        return {"status": "cancel-detached", "error": None}
+        return {"status": "cancelled", "error": None}
 
     # ------------------------------------------------------------------
     # Main dispatch

@@ -1,6 +1,5 @@
 import logging
 from contextlib import contextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, PropertyMock, patch
 
@@ -188,49 +187,26 @@ def test_runtime_cancel_runs_retry_loop_and_returns_stats(caplog):
     index = Mock()
     index.cancel.return_value = {
         "index_id": "idx-1",
-        "requested_by": "alice",
-        "cancelled_path": Path("/tmp/cancelled/idx-1"),
-        "graph": {("idx-1", "exec-1"), ("idx-1", "exec-2")},
-        "candidate_set": {"exec-1", "exec-2"},
-        "own_executions": {"exec-1", "exec-2"},
+        "iterations": 1,
+        "graph_edges": 2,
+        "candidate_count": 2,
+        "own_execution_count": 2,
+        "cancelled_count": 2,
+        "dropped_count": 0,
+        "lock_retry_count": 1,
     }
-    outcomes = {
-        (2, "exec-1"): {"execution_id": "exec-1", "outcome": None, "lock_retry": True, "cancel_requested": False},
-        (2, "exec-2"): {"execution_id": "exec-2", "outcome": -1, "lock_retry": False, "cancel_requested": False},
-        (1, "exec-1"): {"execution_id": "exec-1", "outcome": 1, "lock_retry": False, "cancel_requested": True},
-    }
-
-    def _cancel_candidate(execution_id, *, requested_by, own_executions):
-        assert requested_by == "alice"
-        return outcomes[(len(own_executions), execution_id)]
-
-    index._cancel_execution_candidate.side_effect = _cancel_candidate
-    sleeps = []
     with (
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
         patch.object(dml_module, "make_index_ops", return_value=index),
-        patch.object(dml_module.time, "sleep", side_effect=lambda delay: sleeps.append(delay)),
     ):
         result = ops.runtime.cancel("idx-1")
 
-    index.cancel.assert_called_once_with("idx-1", requested_by="alice")
-    index._complete_index_cancellation.assert_called_once_with(
+    index.cancel.assert_called_once_with(
         "idx-1",
-        cancelled_path=Path("/tmp/cancelled/idx-1"),
-        own_executions={"exec-1"},
+        requested_by="alice",
+        max_workers=ops._context.config.remote.fetch_workers,
     )
-    assert result == {
-        "index_id": "idx-1",
-        "iterations": 2,
-        "graph_edges": 2,
-        "candidate_count": 2,
-        "own_execution_count": 1,
-        "cancelled_count": 1,
-        "dropped_count": 1,
-        "lock_retry_count": 1,
-    }
-    assert sleeps == [0.05]
-    assert "runtime.cancel iteration=1 index_id=idx-1 candidates=2 owned=2" in caplog.text
+    assert result == {"execution_id": "idx-1", **index.cancel.return_value}
 
 
 def test_runtime_cancel_retries_candidate_errors_with_backoff():
@@ -238,35 +214,26 @@ def test_runtime_cancel_retries_candidate_errors_with_backoff():
     index = Mock()
     index.cancel.return_value = {
         "index_id": "idx-1",
-        "requested_by": "alice",
-        "cancelled_path": Path("/tmp/cancelled/idx-1"),
-        "graph": {("idx-1", "exec-1")},
-        "candidate_set": {"exec-1"},
-        "own_executions": {"exec-1"},
+        "iterations": 1,
+        "graph_edges": 1,
+        "candidate_count": 1,
+        "own_execution_count": 1,
+        "cancelled_count": 1,
+        "dropped_count": 0,
+        "lock_retry_count": 0,
     }
-    attempts = {"count": 0}
-
-    def _cancel_candidate(execution_id, *, requested_by, own_executions):
-        assert execution_id == "exec-1"
-        assert requested_by == "alice"
-        assert own_executions == {"exec-1"}
-        attempts["count"] += 1
-        if attempts["count"] < 3:
-            raise DmlRepoError("boom")
-        return {"execution_id": "exec-1", "outcome": 1, "lock_retry": False, "cancel_requested": True}
-
-    index._cancel_execution_candidate.side_effect = _cancel_candidate
-    sleeps = []
     with (
         patch.object(dml_module, "with_db", side_effect=lambda _dml: _opened_db()),
         patch.object(dml_module, "make_index_ops", return_value=index),
-        patch.object(dml_module.time, "sleep", side_effect=lambda delay: sleeps.append(delay)),
     ):
         result = ops.runtime.cancel("idx-1")
 
-    assert attempts["count"] == 3
-    assert sleeps == [0.05, 0.1]
-    assert result["iterations"] == 3
+    index.cancel.assert_called_once_with(
+        "idx-1",
+        requested_by="alice",
+        max_workers=ops._context.config.remote.fetch_workers,
+    )
+    assert result["iterations"] == 1
     assert result["cancelled_count"] == 1
 
 
@@ -513,7 +480,7 @@ def test_remote_root_only_repo_can_create_indexes(tmp_path):
     Dml.init(str(repo_dir), remote_root="s3://bucket/prefix")
     dml = Dml(project_home=str(repo_dir), remote_root="s3://bucket/prefix")
 
-    with patch("daggerml._internal.exec_state.ExecutionState.update_execution_record", return_value={}):
+    with patch("daggerml._internal.exec_state.ExecutionState.create_execution_record", return_value={}):
         index_id = dml.runtime.create()
     node = dml.runtime.put_literal(index_id, 42, name="answer")
 

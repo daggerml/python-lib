@@ -1335,7 +1335,7 @@ class RemoteOps(BaseOps):
         retries: int = 8,
     ) -> dict[str, Any] | None:
         key = self._execution_state_key(execution_id)
-        lifecycle_rank = {"running": 0, "cancel-pending": 1, "cancel-detached": 2, "succeeded": 3, "failed": 3}
+        lifecycle_rank = {"running": 0, "cancel-pending": 1, "cancelled": 2, "succeeded": 3, "failed": 3}
         for _ in range(retries):
             current, etag = self._get_json_key_with_etag(key)
             if current is None or etag is None:
@@ -1417,7 +1417,7 @@ class RemoteOps(BaseOps):
         seen: list[str] = []
         seen_set: set[str] = set()
         unseen = set(execution_ids)
-        terminal = {"succeeded", "failed", "cancel-detached"}
+        terminal = {"succeeded", "failed", "cancelled"}
         inactive = terminal | {"cancel-pending"}
         while unseen:
             exec_id = unseen.pop()

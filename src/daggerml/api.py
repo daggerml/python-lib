@@ -198,17 +198,12 @@ class Dag:
         return result
 
     def __len__(self) -> int:
-        if self.ref is None:
-            info = self.dml.runtime.describe(self._require_index_ref())
-            return len(info["names"])
-        names_dict = self.dml.dag.get(self.ref)["names"]
-        return len(names_dict)
+        return len(self.keys())
 
     def __iter__(self):
         yield from self.keys()
 
     def _get_named_node(self, name: str) -> "Node":
-        # FIXME: Should require active index, and should actually set the node name
         if self.ref is None:
             node_ref = self.dml.runtime.get_node(self._require_index_ref(), name)
             return _make_node(self, node_ref)
@@ -218,6 +213,8 @@ class Dag:
     def _set_named_node(self, name: str, value: Any) -> None:
         if self.ref is not None:
             raise DmlRepoError("Cannot set node names on a committed DAG.")
+        if isinstance(value, Node):
+            value = value.ref
         if isinstance(value, Ref):
             self.dml.runtime.set_node_name(self._require_index_ref(), name, value)
             return
@@ -231,7 +228,8 @@ class Dag:
     def __setitem__(self, name: str, value: Any) -> None:
         if not isinstance(name, str):
             raise TypeError(f"Dag node name must be str, got {type(name).__name__}")
-        self._set_named_node(name, value)
+        # self._set_named_node(name, value)
+        self.put(value, name=name)
 
     def __getattr__(self, name: str) -> "Node":
         if name.startswith("_"):
@@ -240,7 +238,7 @@ class Dag:
 
     def __setattr__(self, name: str, value: Any) -> None:
         dataclass_fields = getattr(type(self), "__dataclass_fields__", {})
-        if name in dataclass_fields or name.startswith("_") or hasattr(type(self), name):
+        if name in dataclass_fields or hasattr(type(self), name):
             object.__setattr__(self, name, value)
             return
         self[name] = value
@@ -249,9 +247,10 @@ class Dag:
         """Get the list of all node names in the dag"""
         if self.ref is None:
             info = self.dml.runtime.describe(self._require_index_ref())
-            return list(info["names"].keys())
+            info = self.dml.dag.get(cast(Ref, info["dag"]))
+            return sorted(info["names"].keys())
         names_dict = self.dml.dag.get(self.ref)["names"]
-        return list(names_dict.keys())
+        return sorted(names_dict.keys())
 
     def values(self) -> list["Node"]:
         """Get the list of all nodes in the dag"""
@@ -430,28 +429,18 @@ class Dag:
         branch = self.dml.branch()["head"]
         if branch is None:
             raise DmlRepoError("Current checkout is detached; attach HEAD to commit")
-
-        # For Errors, pass directly to _commit (don't try to store as literal)
-        if isinstance(value, Error):
-            commit_ref = self.dml.runtime.commit(
-                self._require_index_ref(),
-                value,
-                head=branch,
-                message=self.message,
-                dag_name=self.name,
-            )
-        else:
-            # For other values, ensure it's a Node and get its ref
-            value = value if isinstance(value, Node) else self.put(value)
-            value_ref = value.ref
-            commit_ref = self.dml.runtime.commit(
-                self._require_index_ref(),
-                value_ref,
-                head=branch,
-                message=self.message,
-                dag_name=self.name,
-            )
-
+        # errors are committed as-is, everything else is a node
+        if not isinstance(value, (Error, Node)):
+            value = self.put(value)
+        if isinstance(value, Node):
+            value = value.ref
+        commit_ref = self.dml.runtime.commit(
+            self._require_index_ref(),
+            value,
+            head=branch,
+            message=self.message,
+            dag_name=self.name,
+        )
         # Extract the dag ref from the commit
         self.ref = self.dml.show(revision=commit_ref.to)["commit"]["dags"][self.name]
 

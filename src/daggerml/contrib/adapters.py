@@ -55,7 +55,7 @@ class AdapterBase:
         state: dict[str, Any] | None,
         execution_status: str | None = None,
         cancel_requested_by: str | None = None,
-    ) -> bytes:
+    ) -> str:
         def _encode(value: Any) -> Any:
             if isinstance(value, Runnable):
                 return {
@@ -84,7 +84,7 @@ class AdapterBase:
             "execution_status": execution_status,
             "cancel_requested_by": cancel_requested_by,
         }
-        return json.dumps(payload).encode("utf-8")
+        return json.dumps(payload)
 
     @staticmethod
     def _call_with_supported_kwargs(fn, **kwargs):
@@ -158,8 +158,8 @@ class AdapterBase:
         if not isinstance(result, dict):
             raise DmlRepoError("Adapter output must be a dict")
         status = result.get("status")
-        if status not in {"running", "succeeded", "failed", "cancel-detached"}:
-            raise DmlRepoError("Adapter output status must be one of running|succeeded|failed|cancel-detached")
+        if status not in {"running", "succeeded", "failed", "cancelled"}:
+            raise DmlRepoError("Adapter output status must be one of running|succeeded|failed|cancelled")
         allowed_keys = {"status", "error"}
         if status == "succeeded":
             allowed_keys.add("dag_id")
@@ -172,9 +172,9 @@ class AdapterBase:
         if status == "failed":
             if error is None:
                 raise DmlRepoError("Adapter output failed requires error")
-        elif status == "cancel-detached":
+        elif status == "cancelled":
             if error is not None:
-                raise DmlRepoError("Adapter output cancel-detached requires error=None")
+                raise DmlRepoError("Adapter output cancelled requires error=None")
         elif status == "running":
             if error is not None:
                 raise DmlRepoError("Adapter output running requires error=None")
@@ -224,14 +224,19 @@ class AdapterBase:
     ) -> tuple[dict[str, Any] | None, str | None, str | None]:
         state_backend = ExecutionState(cache_key, remote_root=remote["root"])
         launch_state = state_backend.read_launch_state(execution_id)
-        record = state_backend.read_execution_record(execution_id)
+        try:
+            record = state_backend.read_execution_record(execution_id)
+        except DmlRepoError:
+            record = None
         if launch_state is None and record is None:
             return fallback_state, None, None
         state = fallback_state
         if state is None and launch_state is not None:
             state = launch_state.get("resume_state")
-        return state, (record.get("lifecycle") if record is not None else None), (
-            record.get("cancellation_requested_by") if record is not None else None
+        return (
+            state,
+            (record.get("lifecycle") if record is not None else None),
+            (record.get("cancellation_requested_by") if record is not None else None),
         )
 
     @classmethod
@@ -267,7 +272,7 @@ class AdapterBase:
         persisted_state = state
         current_status = execution_status
         current_cancel_requested_by = cancel_requested_by
-        while args.poll and result.get("status") not in {"succeeded", "failed", "cancel-detached"}:
+        while args.poll and result.get("status") not in {"succeeded", "failed", "cancelled"}:
             persisted_state, current_status, current_cancel_requested_by = cls._refresh_execution_payload(
                 cache_key=cache_key,
                 execution_id=execution_id,
@@ -352,7 +357,7 @@ class LambdaAdapter(AdapterBase):
                 state=state,
                 execution_status=execution_status,
                 cancel_requested_by=cancel_requested_by,
-            ),
+            ).encode("utf-8"),
         )
         stream = response.get("Payload")
         if stream is None:

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ if __name__ == "__main__":
     remote = envelope["remote"]
     argv_ptr = envelope["argv_ptr"]
     execution_id = envelope["execution_id"]
+    cache_key = envelope["cache_key"]
     remote_root = remote["root"]
     cache_key = hashlib.sha256(argv_ptr.encode()).hexdigest()
     cache_dir = os.getenv("DML_TEST_FN_STATE_DIR", "")
@@ -40,14 +42,14 @@ if __name__ == "__main__":
         db = DmlDbEnv.create(str(db_path), namespaces=sorted(NAMESPACES))
         try:
             ops = IndexOps(db, remote_root=remote_root)
-            index_ref = ops.create(argv_ptr=argv_ptr)
+            index_ref = ops.create(execution_id, argv_ptr=argv_ptr)
             node_ops = NodeOps(db)
             argv = node_ops.unroll(ops.get_argv(index_ref))
             try:
                 result = ops.put_literal(index_ref, sum(argv[1:]))
             except Exception as e:
                 result = Error.from_ex(e)
-            commit_ref = ops.commit(index_ref, result, message="async", execution_id=execution_id)
+            commit_ref = ops.commit(index_ref, result, message="async")
             with ops._tx(readonly=True) as txn:
                 commit_obj = txn.get(commit_ref)
             dag_id = commit_obj.dag.id()

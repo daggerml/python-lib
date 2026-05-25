@@ -11,7 +11,6 @@ from daggerml._internal._db import Ref
 from daggerml._internal.ops.base_ops import BaseOps
 from daggerml._internal.revision_uri import parse_revision_uri, validate_ref_name, validate_segment
 from daggerml._internal.types import Commit, DmlPointerConflictError, DmlRepoError, Tree
-from daggerml._internal.util import uuid7
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9\-\*\|_]+$")
 _HEAD_ATTACHED_PREFIX = "ref: refs/local/heads/"
@@ -60,35 +59,34 @@ class HeadOps(BaseOps):
     def update_branch_commit(self, branch_name: str, old_commit: Ref, new_commit: Ref) -> Ref:
         return self._update_pointer_commit(self._branch_path(branch_name), old_commit, new_commit)
 
-    def create_index(self, commit_ref: Ref, index_id: str | None = None) -> str:
-        _id = index_id or str(uuid7())
-        index_path = self._index_path(_id)
-        if index_path.exists():
-            if index_id is None:
-                raise DmlRepoError(f"Index already exists with id: {index_id}")
-            index_path.unlink()
-        self._create_pointer(index_path, commit_ref)
-        return _id
+    def create_index(self, commit_ref: Ref, execution_id: str) -> str:
+        execution_path = self._index_path(execution_id)
+        if execution_path.exists():
+            if execution_id is None:
+                raise DmlRepoError(f"Index already exists with id: {execution_id}")
+            execution_path.unlink()
+        self._create_pointer(execution_path, commit_ref)
+        return execution_id
 
-    def delete_index(self, index_id: str) -> None:
-        self._delete_pointer(self._index_path(index_id))
+    def delete_index(self, execution_id: str) -> None:
+        self._delete_pointer(self._index_path(execution_id))
         return None
 
-    def get_index_commit(self, index_id: str) -> Ref:
-        return self._get_pointer_commit(self._index_path(index_id))
+    def get_index_commit(self, execution_id: str) -> Ref:
+        return self._get_pointer_commit(self._index_path(execution_id))
 
     def list_pointer_roots(self) -> list[Ref]:
         roots = [
             *[self._get_pointer_commit(self._local_branch_path(branch_name)) for branch_name in self.list_branches()],
-            *[self._get_pointer_commit(self._index_path(index_id)) for index_id in self.list_indexes()],
+            *[self._get_pointer_commit(self._index_path(exec_id)) for exec_id in self.list_indexes()],
         ]
         try:
             return [self.resolve_head_commit(), *roots]
         except DmlRepoError:
             return roots
 
-    def update_index_commit(self, index_id: str, old_commit: Ref, new_commit: Ref) -> Ref:
-        return self._update_pointer_commit(self._index_path(index_id), old_commit, new_commit)
+    def update_index_commit(self, execution_id: str, old_commit: Ref, new_commit: Ref) -> Ref:
+        return self._update_pointer_commit(self._index_path(execution_id), old_commit, new_commit)
 
     def get_head_state(self) -> HeadState:
         payload = self._read_head_payload()
@@ -208,7 +206,6 @@ class HeadOps(BaseOps):
         if len(segments) == 2 and segments[0] == ".cancelled" and segments[1] not in {"", ".", ".."}:
             return index_id
         raise DmlRepoError(f"Invalid index id: {index_id!r}")
-        return index_id
 
     @staticmethod
     def _list_ref_names(ref_dir: Path) -> list[str]:

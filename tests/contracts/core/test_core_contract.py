@@ -234,6 +234,8 @@ class TestBasic(TestCase):
             d0.x1 = 42
             self.assertEqual(d0["x1"].value(), 42)
             self.assertEqual(d0.x1.value(), 42)
+            d0._foo = "bar"
+            assert d0["_foo"].value() == "bar"
 
     def test_dag_collection_materialization_roundtrip(self):
         with temporary_dml() as dml:

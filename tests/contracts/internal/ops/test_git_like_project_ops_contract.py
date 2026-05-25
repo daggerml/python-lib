@@ -91,16 +91,14 @@ def test_detached_commit_does_not_advance_branch_head_and_reattach_resumes(temp_
     main_head = head_ops.create_branch("main")
     start = head_ops.get_branch_commit(main_head)
 
-    detached_index = index_ops.create(head=main_head)
+    detached_index = index_ops.create("exec-detached", head=main_head)
     node = index_ops.put_literal(detached_index, 42)
-    detached_commit = index_ops.commit(detached_index, node, head=None, message="detached", execution_id=detached_index)
+    detached_commit = index_ops.commit(detached_index, node, head=None, message="detached")
     assert head_ops.get_branch_commit(main_head) == start
 
-    attached_index = index_ops.create(head=main_head)
+    attached_index = index_ops.create("exec-attached", head=main_head)
     node2 = index_ops.put_literal(attached_index, 84)
-    attached_commit = index_ops.commit(
-        attached_index, node2, head=main_head, message="attached", execution_id=attached_index
-    )
+    attached_commit = index_ops.commit(attached_index, node2, head=main_head, message="attached")
     assert head_ops.get_branch_commit(main_head) == attached_commit
     assert attached_commit != detached_commit
 
@@ -112,29 +110,29 @@ def test_commit_lifecycle_stages_attached_detached_detached_reattach(temp_bo_fn)
 
     # Stage 1: attached commit advances branch head.
     start = head_ops.get_branch_commit(main_head)
-    idx1 = index_ops.create(head=main_head)
+    idx1 = index_ops.create("exec-stage-1", head=main_head)
     n1 = index_ops.put_literal(idx1, "s1")
-    c1 = index_ops.commit(idx1, n1, head=main_head, message="stage-1-attached", execution_id=idx1)
+    c1 = index_ops.commit(idx1, n1, head=main_head, message="stage-1-attached")
     assert head_ops.get_branch_commit(main_head) == c1
 
     # Stage 2: detached commit from branch snapshot does not advance head.
-    idx2 = index_ops.create(head=main_head)
+    idx2 = index_ops.create("exec-stage-2", head=main_head)
     n2 = index_ops.put_literal(idx2, "s2")
-    c2 = index_ops.commit(idx2, n2, head=None, message="stage-2-detached", execution_id=idx2)
+    c2 = index_ops.commit(idx2, n2, head=None, message="stage-2-detached")
     assert head_ops.get_branch_commit(main_head) == c1
 
     # Stage 3: detached commit from detached commit also does not advance any head.
     detached_head = head_ops.create_branch("scratch", c2)
-    idx3 = index_ops.create(head=detached_head)
+    idx3 = index_ops.create("exec-stage-3", head=detached_head)
     n3 = index_ops.put_literal(idx3, "s3")
-    _c3 = index_ops.commit(idx3, n3, head=None, message="stage-3-detached", execution_id=idx3)
+    _c3 = index_ops.commit(idx3, n3, head=None, message="stage-3-detached")
     assert head_ops.get_branch_commit(main_head) == c1
     assert head_ops.get_branch_commit(detached_head) == c2
 
     # Stage 4: re-attach and commit resumes branch progression.
-    idx4 = index_ops.create(head=main_head)
+    idx4 = index_ops.create("exec-stage-4", head=main_head)
     n4 = index_ops.put_literal(idx4, "s4")
-    c4 = index_ops.commit(idx4, n4, head=main_head, message="stage-4-reattach", execution_id=idx4)
+    c4 = index_ops.commit(idx4, n4, head=main_head, message="stage-4-reattach")
     assert head_ops.get_branch_commit(main_head) == c4
     assert c4 != start
 
@@ -146,15 +144,15 @@ def test_headops_stale_pointer_updates_report_current_commit(temp_bo_fn):
     branch = head_ops.create_branch("main")
     start = head_ops.get_branch_commit(branch)
 
-    idx1 = index_ops.create(head=branch)
+    idx1 = index_ops.create("exec-idx1", head=branch)
     node1 = index_ops.put_literal(idx1, "first")
-    commit1 = index_ops.commit(idx1, node1, head=branch, message="first", execution_id=idx1)
+    commit1 = index_ops.commit(idx1, node1, head=branch, message="first")
 
     with pytest.raises(DmlPointerConflictError) as branch_conflict:
         head_ops.update_branch_commit(branch, start, commit1)
     assert branch_conflict.value.current_commit == commit1
 
-    idx2 = index_ops.create(head=branch)
+    idx2 = index_ops.create("exec-idx2", head=branch)
     stale = head_ops.get_index_commit(idx2)
     # write a second node (we don't need the returned ref here)
     _ = index_ops.put_literal(idx2, "second")

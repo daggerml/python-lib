@@ -133,9 +133,7 @@ def test_batch_executor_start_writes_input_payload_to_s3(monkeypatch):
 
     exec_state = ExecutionState(cache_key, remote_root=remote["root"])
     io = exec_state.adapter_io(execution_id, _ADAPTER_IO_NAME)
-    raw = exec_state._get_object_bytes(io._input_key)
-    assert raw is not None
-    payload = json.loads(raw[0])
+    payload = json.loads(exec_state._cas_item(io._input_key).read(raw=True))
     assert payload["cache_key"] == cache_key
     assert payload["execution_id"] == execution_id
 
@@ -195,7 +193,7 @@ def test_batch_executor_poll_returns_succeeded_when_batch_succeeded(monkeypatch)
     # Pre-write result to S3 via AdapterIO
     exec_state = ExecutionState(cache_key, remote_root=remote["root"])
     io = exec_state.adapter_io(execution_id, _ADAPTER_IO_NAME)
-    exec_state._put_object(io._output_key, json.dumps(sub_result).encode())
+    exec_state._cas_item(io._output_key).write(json.dumps(sub_result), raw=True, force=True)
 
     executor = BatchExecutor()
     result = executor.poll(
@@ -264,6 +262,6 @@ def test_batch_executor_cancel_cleans_up_backend_resources(monkeypatch):
         remote=_REMOTE,
     )
 
-    assert result == {"status": "cancel-detached", "error": None}
+    assert result == {"status": "cancelled", "error": None}
     assert fake_client.canceled == [{"jobId": "job-123", "reason": "daggerml cancellation requested"}]
     assert fake_client.deregistered == [{"jobDefinition": "arn:batch:def/123"}]

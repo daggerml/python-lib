@@ -130,9 +130,7 @@ def test_docker_executor_start_writes_input_payload_to_s3(monkeypatch):
     # Verify the input payload was written to S3 via AdapterIO
     exec_state = ExecutionState(cache_key, remote_root=remote["root"])
     io = exec_state.adapter_io(execution_id, "local:docker")
-    raw = exec_state._get_object_bytes(io._input_key)
-    assert raw is not None
-    payload = json.loads(raw[0])
+    payload = json.loads(exec_state._cas_item(io._input_key).read(raw=True))
     assert payload["cache_key"] == cache_key
     assert payload["execution_id"] == execution_id
     assert payload["argv_ptr"] == "s3://test-bucket/argv"
@@ -150,9 +148,8 @@ def test_docker_executor_poll_returns_succeeded_when_container_exited_with_s3_re
     dag_id = "a" * 64
     exec_state = ExecutionState(cache_key, remote_root=remote["root"])
     io = exec_state.adapter_io(execution_id, "local:docker")
-    exec_state._put_object(
-        io._output_key,
-        json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}).encode(),
+    exec_state._cas_item(io._output_key).write(
+        json.dumps({"status": "succeeded", "error": None, "dag_id": dag_id}), raw=True, force=True
     )
 
     job_state = {"container_id": "cid-ok", "cleanup_image": None}
@@ -227,7 +224,7 @@ def test_docker_executor_cancel_removes_container_and_reports_cancelled(monkeypa
         remote=_remote(),
     )
 
-    assert result == {"status": "cancel-detached", "error": None}
+    assert result == {"status": "cancelled", "error": None}
     assert cleanup_calls == [("cid-cancel", "img:tmp", "/usr/bin/docker")]
 
 

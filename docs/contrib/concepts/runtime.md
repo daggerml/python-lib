@@ -21,7 +21,7 @@ The canonical statuses are:
 - `running`
 - `succeeded`
 - `failed`
-- `cancel-detached`
+- `cancelled`
 
 ## Executors own execution behavior
 

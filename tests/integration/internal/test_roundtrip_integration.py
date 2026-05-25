@@ -170,7 +170,7 @@ def test_put_literal_unroll_roundtrip_with_nested_runnables(temp_bo, payload):
     node_ops = NodeOps(_db=temp_bo._db)
 
     branch = head_ops.create_branch(f"rt-{uuid4().hex}")
-    index_ref = index_ops.create(head=branch)
+    index_ref = index_ops.create(f"exec-{uuid4().hex}", head=branch)
     try:
         materialized = _materialize(payload, index_ops, index_ref)
         root_ref = index_ops.put_literal(index_ref, materialized, name="root")

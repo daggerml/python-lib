@@ -1,8 +1,17 @@
+#!/usr/bin/env python3
 import json
 import shutil
 import subprocess
 import sys
 from urllib.parse import urlparse
+
+
+def _ensure_execution_record(payload: dict) -> None:
+    cache_key = payload.get("cache_key")
+    execution_id = payload.get("execution_id")
+    remote_root = (payload.get("remote") or {}).get("root")
+    if not isinstance(cache_key, str) or not isinstance(execution_id, str) or not isinstance(remote_root, str):
+        return
 
 
 def _run_adapter(adapter_name: str, payload: dict) -> int:
@@ -30,6 +39,7 @@ def _run_target(target: str, raw: str) -> int:
 def main() -> None:
     raw = sys.stdin.read()
     payload = json.loads(raw)
+    _ensure_execution_record(payload)
     runnable = payload.get("runnable", {})
     sub = runnable.get("sub")
     if sub is not None:

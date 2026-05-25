@@ -37,7 +37,7 @@ class TerminalStartExecutor(MockExecutor):
 class CancelExecutor(MockExecutor):
     def cancel(self, *, cache_key, execution_id, state, remote):
         MockExecutor.calls.append("cancel")
-        return {"status": "cancel-detached", "error": None}
+        return {"status": "cancelled", "error": None}
 
 
 @pytest.fixture(autouse=True)
@@ -139,4 +139,4 @@ def test_executor_base_handle_routes_cancel_requested_updates_to_cancel():
         remote=_remote(),
     )
     assert MockExecutor.calls == ["cancel"]
-    assert result == {"status": "cancel-detached", "error": None}
+    assert result == {"status": "cancelled", "error": None}

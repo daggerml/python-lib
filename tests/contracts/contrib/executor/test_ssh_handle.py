@@ -104,14 +104,14 @@ def test_ssh_executor_handle_stage_matrix_SSH_HDL_001_to_SSH_HDL_004(
     runnable = _ssh_runnable()
     seen: dict[str, Any] = {}
 
-    def _fake_run(cmd, input=None, capture_output=None, check=None):
+    def _fake_run(cmd, input=None, capture_output=None, check=None, text=None):
         seen["cmd"] = cmd
-        seen["payload"] = json.loads(cast(bytes, input).decode("utf-8"))
+        seen["payload"] = json.loads(cast(str, input))
         return subprocess.CompletedProcess(
             args=cmd,
             returncode=transport_returncode,
-            stdout=transport_stdout,
-            stderr=transport_stderr,
+            stdout=transport_stdout.decode(),
+            stderr=transport_stderr.decode(),
         )
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
@@ -151,15 +151,15 @@ def test_ssh_executor_handle_SSH_HDL_005_forwards_runtime_state_to_transport(mon
         sub=_sub_runnable(),
     )
 
-    def _fake_run(cmd, input=None, capture_output=None, check=None):
-        del cmd, capture_output, check
-        payload = json.loads(cast(bytes, input).decode("utf-8"))
+    def _fake_run(cmd, input=None, capture_output=None, check=None, text=None):
+        del cmd, capture_output, check, text
+        payload = json.loads(cast(str, input))
         assert payload["state"] == {"job_id": "123"}
         return subprocess.CompletedProcess(
             args=[],
             returncode=0,
-            stdout=json.dumps({"status": "succeeded", "error": None, "dag_id": "d" * 64}).encode(),
-            stderr=b"",
+            stdout=json.dumps({"status": "succeeded", "error": None, "dag_id": "d" * 64}),
+            stderr="",
         )
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
@@ -178,16 +178,16 @@ def test_ssh_executor_handle_SSH_HDL_005_forwards_runtime_state_to_transport(mon
 def test_ssh_executor_handle_forwards_cancel_update_fields(monkeypatch):
     runnable = _ssh_runnable()
 
-    def _fake_run(cmd, input=None, capture_output=None, check=None):
-        del cmd, capture_output, check
-        payload = json.loads(cast(bytes, input).decode("utf-8"))
+    def _fake_run(cmd, input=None, capture_output=None, check=None, text=None):
+        del cmd, capture_output, check, text
+        payload = json.loads(cast(str, input))
         assert payload["execution_status"] == "cancel-pending"
         assert payload["cancel_requested_by"] == "alice@example.com"
         return subprocess.CompletedProcess(
             args=[],
             returncode=0,
-            stdout=json.dumps({"status": "cancel-detached", "error": None}).encode(),
-            stderr=b"",
+            stdout=json.dumps({"status": "cancelled", "error": None}),
+            stderr="",
         )
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
@@ -202,4 +202,4 @@ def test_ssh_executor_handle_forwards_cancel_update_fields(monkeypatch):
         argv_ptr="s3://bucket/argv",
         remote=_remote(),
     )
-    assert result == {"status": "cancel-detached", "error": None}
+    assert result == {"status": "cancelled", "error": None}
