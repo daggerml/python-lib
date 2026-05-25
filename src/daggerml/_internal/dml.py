@@ -939,12 +939,35 @@ class Dml:
                 "indexes": current_head_ops.list_indexes(),
             }
 
+    @overload
+    def branch(self) -> BranchPayload: ...
+
+    @overload
+    def branch(self, name: str, /) -> str: ...
+
+    @overload
     def branch(
         self,
         *,
         remote: Annotated[bool, "List remote-tracking branches instead of local branches."] = False,
-    ) -> BranchPayload:
-        """List local branches or discovered remote-tracking branches."""
+    ) -> BranchPayload: ...
+
+    def branch(
+        self,
+        *name: str,
+        remote: Annotated[bool, "List remote-tracking branches instead of local branches."] = False,
+    ) -> BranchPayload | str:
+        """List branches by default, or create a named branch from the current HEAD commit."""
+        if len(name) > 1:
+            raise TypeError("branch() accepts at most one branch name")
+        if name:
+            if remote:
+                raise TypeError("branch() cannot create a branch when remote=True")
+            with with_db(self) as db:
+                current_head_ops = HeadOps(db)
+                head_state = current_head_state(current_head_ops)
+                from_commit = None if head_state is None else head_state.commit
+                return current_head_ops.create_branch(name[0], from_commit)
         if remote:
             return {"branches": remote_tracking_branches(self), "head": None, "remote": True}
         with with_db(self) as db:

@@ -9,7 +9,7 @@ dml --project-home ./demo-repo status
 dml --project-home ./demo-repo branch
 ```
 
-Use `status` for the full picture and `branch` when you only care about branch names and the current attached head.
+Use `status` for the full picture and `branch` when you only care about branch names and the current attached head. Pass one branch name to create it from the current HEAD commit.
 
 Python equivalent:
 
@@ -20,6 +20,7 @@ dml = Dml(project_home="./demo-repo")
 
 print(dml.status())
 print(dml.branch())
+print(dml.branch("feature"))
 ```
 
 ## Look at commits and changes

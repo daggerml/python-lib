@@ -27,7 +27,9 @@ Top-level methods:
 
 - `Dml.init(...)`: initialize a repository under `project_home`.
 - `status()`: current HEAD, branches, DAGs, and open runtime indexes.
-- `branch(remote=False)`: list local branches or discovered remote-tracking branches.
+- `branch()`: list local branches.
+- `branch(name)`: create a local branch from the current HEAD commit and return its name.
+- `branch(remote=True)`: list discovered remote-tracking branches.
 - `log(revision="HEAD", limit=None)`: commit summaries, including each commit's visible `dags` map.
 - `show(revision="HEAD")`: one commit summary plus DAG-level change information.
 - `diff(left="HEAD~1", right="HEAD")`

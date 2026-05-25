@@ -46,8 +46,8 @@ The `dags` field SHALL be the full DAG name-to-ref map for the resolved revision
 - **THEN** the command resolves `HEAD`
 - **AND** returns JSON containing `revision` and `commits`
 
-### Requirement: Branch listing supports local and remote-tracking views
-`dml branch` SHALL list local branches. `dml branch -r` and `dml branch --remote` SHALL list remote-tracking branches.
+### Requirement: Branch listing and creation support local and remote-tracking workflows
+`dml branch` SHALL list local branches. `dml branch <name>` SHALL create a local branch from the current HEAD commit. `dml branch -r` and `dml branch --remote` SHALL list remote-tracking branches.
 
 #### Scenario: Branch lists local branches by default
 - **WHEN** a user runs `dml branch`
@@ -56,6 +56,11 @@ The `dags` field SHALL be the full DAG name-to-ref map for the resolved revision
 #### Scenario: Branch lists remote-tracking branches
 - **WHEN** a user runs `dml branch --remote`
 - **THEN** the command returns JSON with a `branches` field containing remote-tracking branch selectors
+
+#### Scenario: Branch creates a local branch from the current head
+- **WHEN** a user runs `dml branch feature`
+- **THEN** the command creates local branch `feature` from the current HEAD commit
+- **AND** returns the created branch name
 
 ### Requirement: DAG inspection is organized under `dml dag`
 The CLI SHALL expose DAG-oriented inspection commands under `dml dag`: `list`, `get`, `checkout`, and `delete`.

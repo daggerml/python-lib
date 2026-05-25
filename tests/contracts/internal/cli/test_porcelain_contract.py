@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import assert_type
+
+from daggerml._internal.dml import BranchPayload
 from daggerml.api import new
 from tests import temporary_dml
 
@@ -38,3 +41,21 @@ def test_branch_lists_local_and_remote_tracking_views(tmp_path):
     assert remote["remote"] is True
     assert remote["head"] is None
     assert any(branch.startswith("dml://") for branch in remote["branches"])
+
+
+def test_branch_creates_named_branch_from_current_head():
+    with temporary_dml(repo="branch-create") as dml:
+        baseline = dml.show()["revision"]["commit"]
+
+        local = assert_type(dml.branch(), BranchPayload)
+        created = assert_type(dml.branch("feature"), str)
+        remote = assert_type(dml.branch(remote=True), BranchPayload)
+
+        dml.checkout("feature")
+        feature = dml.show()["revision"]["commit"]
+
+    assert local["head"] == "main"
+    assert local["remote"] is False
+    assert created == "feature"
+    assert remote["remote"] is True
+    assert feature == baseline
