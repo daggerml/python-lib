@@ -168,12 +168,17 @@ The system SHALL provide repository inspection workflows for `show`, `log`, and 
 - **WHEN** a user runs `dml diff dml://alice/demo#main HEAD`
 - **THEN** the system resolves both revisions from local state only
 
-### Requirement: Branch listing exposes remote-tracking branches
-The system SHALL support listing locally tracked remote branches for git-like branch inspection.
+### Requirement: Branch creation and listing expose git-like branch inspection workflows
+The system SHALL support creating a local branch from the current HEAD commit and listing locally tracked remote branches for git-like branch inspection.
 
 #### Scenario: Branch remote lists tracked refs
 - **WHEN** a user runs `dml branch --remote`
 - **THEN** the system returns the set of locally tracked remote branch selectors
+
+#### Scenario: Branch create copies the current head commit without moving HEAD
+- **WHEN** a caller invokes `dml.branch("feature")` while HEAD is attached to `main`
+- **THEN** the system creates local branch `feature` at the current HEAD commit
+- **AND** HEAD remains attached to `main`
 
 ### Requirement: Repository status reports current DAG map and live indexes
 The system SHALL provide a repository status workflow that reports the current HEAD state, local branches, the DAG map for the current revision, and live indexes.

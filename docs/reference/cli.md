@@ -64,6 +64,7 @@ Common examples:
 dml init --project-home .
 dml status
 dml branch
+dml branch feature
 dml log HEAD --limit 5
 dml show HEAD
 dml diff HEAD~1 HEAD
