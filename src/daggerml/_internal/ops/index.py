@@ -156,10 +156,6 @@ class IndexOps(BaseOps):
             if status in {"succeeded", "failed"}:
                 es.delete_active_execution()
                 if status == "failed":
-                    error = Error.from_ex(DmlRepoError(result.get("error") or "Adapter failure"))
-                    with self._tx(readonly=False) as txn:
-                        dag_ref = self._build_scratch_dag_in_txn(prepared.argv_ref, txn, error=error)
-                    cops.put(dag_ref, execution_id=callee_execution_id)
                     # set failed execution record
                     try:
                         callee_record = es.read_execution_record(callee_execution_id)
@@ -180,11 +176,29 @@ class IndexOps(BaseOps):
                         if callee_record["lifecycle"] in {"running", "succeeded"}:
                             callee_record.update({"lifecycle": "failed", "updated_at": int(time.time())})
                             es.update_execution_record(callee_record)
-                with self._tx(readonly=False) as txn:
-                    dag_ref = cops.get(prepared.argv_ref, txn)
-                    if dag_ref is not None:
-                        return dag_ref
-                raise DmlRepoError("Adapter reported success but no cached DAG was published")
+                    error = Error.from_ex(DmlRepoError(result.get("error") or "Adapter failure"))
+                    with self._tx(readonly=False) as txn:
+                        dag_ref = self._build_scratch_dag_in_txn(prepared.argv_ref, txn, error=error)
+                elif result["dag_id"] is None:
+                    raise DmlRepoError("Adapter reported success but no cached DAG was published")
+                else:
+                    remote_ops = self._remote_ops()
+                    manifest_oid = remote_ops._decode_ref(remote_ops._remote_get_dag_ref(result["dag_id"]))["target"]
+                    dag_ref = remote_ops.load_ptr(
+                        manifest_oid,
+                        expected_root_ns="dag",
+                    )
+                    with self._tx(readonly=True) as txn:
+                        targets = remote_ops._targets_for_root(txn, dag_ref)
+                    remote_ops.put_cache_ref(
+                        prepared.cache_key,
+                        manifest_oid,
+                        targets=targets,
+                        execution_id=callee_execution_id,
+                    )
+                    return dag_ref
+                cops.put(dag_ref, execution_id=callee_execution_id)
+                return dag_ref
             elif status == "cancelled":
                 es.delete_active_execution()
                 return None
@@ -435,6 +449,7 @@ class IndexOps(BaseOps):
                     ctx.commit.message = message
                 ctx.commit.modified = now()
                 commit_ref = txn.put(ctx.commit)
+                committed_dag_ref = ctx.commit.dag
             if head is None:
                 break
             try:
@@ -450,10 +465,10 @@ class IndexOps(BaseOps):
         exec_record = es.read_execution_record(execution_id)
         exec_record.update({"lifecycle": "succeeded", "updated_at": int(time.time()), "spawned_execution_ids": []})
         es.update_execution_record(exec_record)
-        head_ops.delete_index(execution_id)
+        # check if argv
         if ctx.dag.argv is not None:
-            cops = CacheOps(_db=self._db, remote_root=self.remote_root)
-            cops.put(ctx.commit.dag, execution_id=cast(str, execution_id))
+            self._remote_ops().put_ref_manifest(committed_dag_ref)
+        head_ops.delete_index(execution_id)
         return commit_ref
 
     def _resolve_node_value_ref(self, node_ref: Ref, txn) -> Ref:
@@ -684,7 +699,7 @@ class IndexOps(BaseOps):
         return _PreparedAdapterCall(
             argv_ref=argv_ref,
             adapter_path=adapter_path,
-            cache_key=argv_ref.id(),
+            cache_key=CacheOps(_db=self._db, remote_root=self.remote_root).get_cache_key(argv_ref, txn),
             runnable=self._runnable_envelope(fn_runnable_ref, txn, node_ops),
             caller_execution_id=execution_id,
         )

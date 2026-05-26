@@ -35,9 +35,11 @@ class DagOps(BaseOps):
             dag = txn.get(dag_ref)
             kwargv_ref = self._kwargv_ref_from_nodes(dag, txn)
             cache_key = CacheOps.get_cache_key(dag.argv, txn) if dag.argv is not None else None
+            error = txn.get(dag.error) if dag.error is not None else None
         return {
             "nodes": dag.nodes,
             "names": dag.names,
+            "error": error,
             "result": dag.result,
             "argv": dag.argv,
             "kwargv": kwargv_ref,

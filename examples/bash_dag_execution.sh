@@ -34,23 +34,21 @@ dml init | jq . -C
 
 log "Creating runtime and getting index_id"
 index_id="$(dml runtime create)"
-printf '%s\n' "${index_id}" | jq . -C
-index_id="$(printf '%s\n' "${index_id}" | jq -r .)"
+printf '%s\n' "${index_id}"
 
 log "Putting literals and getting payload_node"
 raw="$(printf '%s\n' '["dict", {"message": ["scalar", "hello"], "value": ["scalar", 42]}]' | dml runtime put-literal "${index_id}" - --name payload)"
-printf '%s\n' "${raw}" | jq . -C
-payload_node="$(printf '%s\n' "${raw}" | jq -r .)"
+printf '%s\n' "${raw}"
+payload_node="${raw}"
 
 log "Putting list literal and getting inputs_node"
 printf '%s\n' '["list", [["scalar", 1], ["scalar", 2], ["scalar", 3]]]' \
-  | dml runtime put-literal "${index_id}" - --name inputs \
-  | jq . -C
+  | dml runtime put-literal "${index_id}" - --name inputs
 
 log "Committing DAG"
 commit_ref="$(dml runtime commit "${index_id}" "${payload_node}" --head main --message "Create CLI example DAG" --dag-name "${dag_name}")"
-printf '%s\n' "${commit_ref}" | jq . -C
+printf '%s\n' "${commit_ref}"
 
 log "Inspecting DAG status and details"
 dml status | jq . -C
-dml dag get "${dag_name}" | jq . -C
+dml dag get --value-type str "${dag_name}" | jq . -C

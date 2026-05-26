@@ -99,6 +99,7 @@ class DagSummaryPayload(TypedDict):
     nodes: list[Ref]
     names: dict[str, Ref]
     result: Ref | None
+    error: Ref | None
     argv: Ref | None
     kwargv: Ref | None
     cache_key: str | None
@@ -422,7 +423,7 @@ class _ConfigNamespace:
         key: Annotated[str, "Configuration setting to resolve, such as remote.root or user."],
         *,
         scope: Annotated[Literal["global", "local"], "Config scope to read from."] = "local",
-    ):
+    ) -> str | None:
         """Return the resolved value for a configuration setting in the selected scope."""
         return config_ops(self._dml).get(key, scope=scope)
 
@@ -431,7 +432,7 @@ class _ConfigNamespace:
         key: Annotated[str, "Configuration setting to update."],
         value: Annotated[str, "Replacement value to write for the setting."],
         scope: Annotated[Literal["global", "local"], "Config scope to update."] = "local",
-    ):
+    ) -> str:
         """Persist one configuration setting in the selected config file."""
         return config_ops(self._dml).set(key, value, scope=scope)
 
@@ -598,7 +599,7 @@ class _DagNamespace:
 
     def get(
         self,
-        value: Annotated[str | Ref, "DAG by name or exact Ref."],
+        value: Annotated[Ref | str, "DAG by name or exact Ref."],
         *,
         revision: Annotated[str | None, "Optional revision when the DAG value is name-based."] = None,
     ) -> DagSummaryPayload:
@@ -622,12 +623,12 @@ class _DagNamespace:
     def describe_node(
         self,
         node: Annotated[
-            str | Ref,
+            Ref | str,
             "Node by name or exact Ref; examples: result, answer, Ref('node-literal:1').",
         ],
         *,
         dag: Annotated[
-            str | Ref | None,
+            Ref | str | None,
             "Optional DAG by name or exact Ref when node is name-based; examples: train, Ref('dag:1').",
         ] = None,
         revision: Annotated[str | None, "Optional revision selector such as HEAD or main."] = None,
@@ -658,35 +659,35 @@ class _DagNamespace:
     @overload
     def get_node(
         self,
-        node: str | Ref,
+        node: Ref | str,
         *,
-        dag: str | Ref | None = None,
+        dag: Ref | str | None = None,
         revision: str | None = None,
         recursive: Literal[False] = False,
     ) -> NodeValue: ...
     @overload
     def get_node(
         self,
-        node: str | Ref,
+        node: Ref | str,
         *,
-        dag: str | Ref | None = None,
+        dag: Ref | str | None = None,
         revision: str | None = None,
         recursive: Literal[True] = True,
     ) -> NodeUnrolledValue: ...
     def get_node(
         self,
         node: Annotated[
-            str | Ref,
+            Ref | str,
             "Node by name or exact Ref; examples: result, answer, Ref('node-literal:1').",
         ],
         *,
         dag: Annotated[
-            str | Ref | None,
+            Ref | str | None,
             "Optional DAG by name or exact Ref when node is name-based; examples: train, Ref('dag:1').",
         ] = None,
         revision: Annotated[str | None, "Optional revision selector such as HEAD or main."] = None,
         recursive: Annotated[bool, "Whether to recursively unroll the node value."] = False,
-    ) -> NodeValue:
+    ) -> Any:
         """Return the value for a committed node."""
         with with_db(self._dml) as db:
             if isinstance(node, Ref):
@@ -742,11 +743,11 @@ class _DagNamespace:
         *,
         branch: Annotated[str | None, "Target branch to mutate; defaults to the active attached branch."] = None,
         user: Annotated[str | None, "User recorded as the delete author."] = None,
-    ):
+    ) -> None:
         """Delete a named DAG from a mutable branch."""
         author = require_user(user or self._dml._context.user, message="user is required for dag delete")
         with with_db(self._dml) as db:
-            return CommitOps(db).delete_dag(name, branch, author)
+            CommitOps(db).delete_dag(name, branch, author)
 
 
 @dataclass(frozen=True)
@@ -1117,7 +1118,7 @@ class Dml:
         *,
         branch: Annotated[str | None, "Branch to update; defaults to the active attached branch."] = None,
         user: Annotated[str, "User identity recorded for the merge commit."],
-    ):
+    ) -> Ref:
         """Merge one revision into a mutable branch."""
         revision_ref = resolve_dml_revision_ref(self, revision)
         with with_db(self) as db:
@@ -1130,7 +1131,7 @@ class Dml:
         *,
         branch: Annotated[str | None, "Branch to update; defaults to the active attached branch."] = None,
         user: Annotated[str, "User identity recorded for the revert commit."],
-    ):
+    ) -> Ref:
         """Create a revert commit for one revision on a mutable branch."""
         revision_ref = resolve_dml_revision_ref(self, revision)
         with with_db(self) as db:

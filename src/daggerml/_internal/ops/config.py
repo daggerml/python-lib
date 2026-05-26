@@ -78,7 +78,7 @@ class ConfigOps:
         if scope == SCOPE_LOCAL and key not in LOCAL_KEYS:
             raise DmlRepoError(f"Config key {key!r} is not valid in local scope")
 
-    def get(self, key: str, *, scope: Literal["global", "local"]) -> str | list[str] | None:
+    def get(self, key: str, *, scope: Literal["global", "local"]) -> str | None:
         self._validate_scope_key(scope, key)
         data = _read_toml(self._path_for_scope(scope))
         if key == "remote.project":
@@ -98,7 +98,7 @@ class ConfigOps:
             return str(value) if value else None
         raise DmlRepoError(f"Unsupported config key: {key}")
 
-    def set(self, key: str, value: str, *, scope: Literal["global", "local"]) -> str | list[str]:
+    def set(self, key: str, value: str, *, scope: Literal["global", "local"]) -> str:
         self._validate_scope_key(scope, key)
         if key == "remote.project":
             value = validate_dml_project_uri(str(value))

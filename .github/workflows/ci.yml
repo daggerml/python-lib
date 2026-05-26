@@ -35,9 +35,27 @@ jobs:
       - name: Install uv
         run: pip install uv==0.11.7
       - name: Sync dependencies
-        run: uv sync --group dev
+        run: uv sync --group dev --all-extras
       - name: pytest
         run: uv run pytest .
+      - name: Run examples
+        run: |
+          set -euo pipefail
+          moto_dir="${RUNNER_TEMP}/moto-example-env"
+          cleanup() {
+            uv run python examples/moto_server_env.py down --moto-dir "$moto_dir"
+          }
+          trap cleanup EXIT
+
+          envfile="$(uv run python examples/moto_server_env.py up --moto-dir "$moto_dir")"
+          # shellcheck disable=SC1090
+          source "$envfile"
+
+          for f in examples/*.sh; do
+            [[ -x "$f" ]] || continue
+            echo "Running $f"
+            uv run "$f"
+          done
   sanitize:
     runs-on: ubuntu-latest
     steps:

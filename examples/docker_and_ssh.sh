@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# exit fast if no docker or ssh support
+if ! docker info > /dev/null 2>&1; then
+  echo "Docker does not seem to be available, skipping docker examples"
+  exit 0
+fi
+if ! ssh -o BatchMode=yes -o ConnectTimeout=5 localhost true > /dev/null 2>&1; then
+  echo "SSH does not seem to be available, skipping SSH examples"
+  exit 0
+fi
 
 set -euo pipefail
 

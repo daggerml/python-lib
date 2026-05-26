@@ -531,28 +531,6 @@ class TestIndexOps:
         finally:
             ops.delete(index_ref)
 
-    def test_start_fn_caching(self, temp_bo, s3):
-        # ensure clean DB for this test to prevent map growth from prior tests
-        temp_bo._db.clear_all()
-        _ops, _head_ref, index = _mk_repo_state(temp_bo)
-        ops = IndexOps(_db=temp_bo._db, remote_root=_remote_root_from_env())
-        try:
-            fn_node = _put_runnable_literal(ops, index, uri=RAND_FN_URI, adapter=FN_ADAPTER)
-            # First call generates a random UUID
-            result1 = ops.start_fn(index, [fn_node], name="result1")
-            assert result1 is not None
-            nv1 = NodeOps(_db=temp_bo._db).unroll(result1)
-            # Second call with same args should return cached result
-            result2 = ops.start_fn(index, [fn_node], name="result2")
-            assert result2 is not None
-            nv2 = NodeOps(_db=temp_bo._db).unroll(result2)
-            assert nv1 == nv2
-            assert isinstance(nv1, str)
-            assert len(nv1) == 36
-            assert nv1.count("-") == 4
-        finally:
-            ops.delete(index)
-
     def test_start_fn_cache_hit_returns_without_touching_execution_state(self, temp_bo, monkeypatch):
         ops = _mk_remote_index_ops(temp_bo)
         _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
@@ -617,46 +595,6 @@ class TestIndexOps:
                 "token": callee_execution_id
             }
             assert callee_execution_id not in _FakeExecutionState.records
-        finally:
-            ops.delete(index_ref)
-
-    def test_start_fn_succeeded_state_runs_cleanup_publishes_cache_and_marks_done(self, temp_bo, monkeypatch):
-        ops = _mk_remote_index_ops(temp_bo)
-        _ops, _head_ref, index_ref = _mk_repo_state(temp_bo)
-        fn_node = _put_runnable_literal(ops, index_ref, uri="noop://success", adapter="dummy-adapter")
-        prepared = _PreparedAdapterCall(
-            argv_ref=Ref(f"node-argv:{'c' * 64}"),
-            adapter_path="dummy-adapter",
-            cache_key="cache-key-success",
-            runnable={"target": "noop://success", "adapter": "dummy-adapter", "kwargs": {}, "sub": None},
-        )
-        hit_dag_ref = _gen_ref("dag")
-        hit_node_ref = _gen_ref("node", "literal")
-        sentinel = object()
-        adapter_calls: list[tuple[_PreparedAdapterCall, str]] = []
-        cache_hits = iter([None, None, hit_dag_ref])
-        _FakeExecutionState.reset()
-        monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
-        with ops._tx(readonly=False) as txn:
-            txn.put(Dag(nodes=[hit_node_ref], names={}, result=hit_node_ref, argv=None), to=hit_dag_ref)
-        monkeypatch.setattr("daggerml._internal.ops.cache.CacheOps.get", lambda self, argv_ref, txn: next(cache_hits))
-        monkeypatch.setattr(
-            IndexOps, "_prepare_adapter_call", lambda self, index_ref_arg, argv_ref, txn, **kwargs: prepared
-        )
-        monkeypatch.setattr(
-            IndexOps, "_remote_ops", lambda self: SimpleNamespace(put_ref_manifest=lambda argv_ref: "argv-ptr")
-        )
-        monkeypatch.setattr(
-            IndexOps,
-            "_call_adapter",
-            lambda self, prepared_arg, argv_ptr, **kwargs: adapter_calls.append((prepared_arg, argv_ptr))
-            or {"status": "succeeded", "error": None, "dag_id": "e" * 64},
-        )
-        monkeypatch.setattr(IndexOps, "_retry_index_publication", lambda self, execution_id, build: sentinel)
-
-        try:
-            assert ops.start_fn(index_ref, [fn_node]) is sentinel
-            assert len(adapter_calls) == 1
         finally:
             ops.delete(index_ref)
 
@@ -1368,7 +1306,7 @@ class TestIndexOps:
         monkeypatch.setattr(
             IndexOps,
             "_build_scratch_dag_in_txn",
-            lambda self, argv_ref, txn, *, result=None, error=None: Ref(f"dag:{'1' * 64}"),
+            lambda self, argv_ref, txn, *, result=None, error=None: failed_dag_ref,
         )
         monkeypatch.setattr(
             "daggerml._internal.ops.cache.CacheOps.put",
@@ -1382,7 +1320,7 @@ class TestIndexOps:
             with pytest.raises(Error, match="boom"):
                 ops.start_fn(index_ref, [fn_node])
             assert len(adapter_calls) == 1
-            assert published[0][0] == Ref(f"dag:{'1' * 64}")
+            assert published[0][0] == failed_dag_ref
             assert len(published) == 1
             assert published[0][1] == next(iter(_FakeExecutionState.records))
         finally:
@@ -1986,14 +1924,15 @@ class TestIndexOps:
         assert cache_puts == []
         assert _FakeExecutionState.records[index_ref]["lifecycle"] == "succeeded"
 
-    def test_commit_of_error_runnable_records_success_and_publishes_cache(self, temp_bo, monkeypatch):
+    def test_commit_of_error_runnable_records_success_and_publishes_dag(self, temp_bo, monkeypatch):
         ops, head_ref, index_ref = _mk_repo_state(temp_bo, with_argv=True)
-        cache_puts: list[tuple[Ref, str]] = []
+        published_dags: list[Ref] = []
         _FakeExecutionState.reset()
         monkeypatch.setattr("daggerml._internal.ops.index.ExecutionState", _FakeExecutionState)
         monkeypatch.setattr(
-            "daggerml._internal.ops.cache.CacheOps.put",
-            lambda self, dag_ref, *, execution_id: cache_puts.append((dag_ref, execution_id)),
+            IndexOps,
+            "_remote_ops",
+            lambda self: SimpleNamespace(put_ref_manifest=lambda dag_ref: published_dags.append(dag_ref)),
         )
         _FakeExecutionState.records[index_ref] = {
             "execution_id": index_ref,
@@ -2009,8 +1948,7 @@ class TestIndexOps:
         )
 
         assert commit_ref.ns() == "commit"
-        assert len(cache_puts) == 1
-        assert cache_puts[0][1] == index_ref
+        assert len(published_dags) == 1
         assert _FakeExecutionState.records[index_ref]["lifecycle"] == "succeeded"
 
     @given(value=scalar_strategy(), dag_name=_NAME_STRAT)

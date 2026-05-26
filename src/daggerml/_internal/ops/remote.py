@@ -1289,6 +1289,8 @@ class RemoteOps(BaseOps):
             """
         )
         for _key, state in self._list_json_prefix("exec/state/"):
+            if state.get("cache_key") is None:
+                continue
             conn.execute(
                 "insert or replace into states values (?, ?, ?, ?, ?, ?)",
                 (

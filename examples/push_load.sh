@@ -48,7 +48,7 @@ log "Running example: 00-hello_world.py"
 python "${examples_dir}/00-hello_world.py"
 
 log "Listing DML refs after running all examples:"
-dml push --create | jq .
+dml push --create
 
 log "Cleaning up first project to test fresh init with existing remote"
 cd .. && rm -rf "${project0}"
@@ -60,8 +60,8 @@ rm -rf "${scratch_dir}/${project1}" || true
 mkdir "${scratch_dir}/${project1}"
 cd "${scratch_dir}/${project1}"
 dml init --remote-project "dml://${dml_user}/${project1}" | jq .
-dml fetch "dml://${dml_user}/${project0}" | jq .
-dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world" --target-name examples/00-hello-world | jq .
+dml fetch "dml://${dml_user}/${project0}"
+dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world" --target-name examples/00-hello-world
 
 log "Running example: 01b-load_fn.py"
 python "${examples_dir}/01b-load_fn.py"

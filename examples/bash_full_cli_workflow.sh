@@ -23,18 +23,17 @@ trap cleanup EXIT
 
 require_env DML_REMOTE_ROOT
 
-mkdir -p "${DML_CONFIG_HOME}"
-dml_user="cool-guy"
-dml config set --scope global user $dml_user
-
-log "Using remote env: ${AWS_ENDPOINT_URL}"
-log "Remote root: ${DML_REMOTE_ROOT}"
-
 log "Setting up DML repo in ${ignore_dir}"
 mkdir -p "${ignore_dir}/examples"
 rm -rf "${scratch_dir}"
 mkdir -p "${scratch_dir}"
+mkdir -p "${DML_CONFIG_HOME}"
 printf '*\n' > "${ignore_dir}/.gitignore"
+dml_user="cool-guy"
+dml config set --scope global user "${dml_user}"
+
+log "Using remote env: ${AWS_ENDPOINT_URL}"
+log "Remote root: ${DML_REMOTE_ROOT}"
 cd "${scratch_dir}"
 
 project0="project-0"
@@ -45,9 +44,9 @@ cd "${scratch_dir}/${project0}"
 dml init --remote-project "dml://${dml_user}/${project0}" | jq .
 
 log "Configuring and inspecting CLI-visible settings"
-dml config set --scope local remote.fetch_workers 2 | jq .
-dml config get remote.root | jq .
-dml config get remote.fetch_workers | jq .
+dml config set --scope local remote.fetch_workers 2
+dml config get remote.root
+dml config get remote.fetch_workers
 dml config show | jq .
 dml config show --contrib | jq .
 
@@ -63,30 +62,30 @@ dml log --revision HEAD --limit 10 | jq .
 dml show --revision HEAD | jq .
 dml diff --left HEAD~1 --right HEAD | jq .
 dml show --revision HEAD | jq .
-dml dag get examples/00-hello-world | jq .
-dml dag describe-node greeting --dag examples/00-hello-world | jq .
-dml dag get-node greeting --dag examples/00-hello-world | jq .
-dml dag get-node greeting --dag examples/00-hello-world --recursive | jq .
+dml dag get --value-type str examples/00-hello-world | jq .
+dml dag describe-node --node-type str greeting --dag-str examples/00-hello-world | jq .
+dml dag get-node --node-type str greeting --dag-str examples/00-hello-world | jq .
+dml dag get-node --node-type str greeting --dag-str examples/00-hello-world --recursive | jq .
 
-hello_dag_ref="$(dml dag get examples/00-hello-world | jq -r '.ref')"
-hello_fn_ref="$(dml dag describe-node hello_fn --dag examples/00-hello-world | jq -r '.ref')"
-greeting_ref="$(dml dag describe-node greeting --dag examples/00-hello-world | jq -r '.ref')"
+hello_dag_ref="$(dml dag get --value-type str examples/00-hello-world | jq -r '.ref')"
+hello_fn_ref="$(dml dag describe-node --node-type str hello_fn --dag-str examples/00-hello-world | jq -r '.ref')"
+greeting_ref="$(dml dag describe-node --node-type str greeting --dag-str examples/00-hello-world | jq -r '.ref')"
 
 log "Exercising low-level runtime and admin CLI commands"
-runtime_idx="$(dml runtime create | jq -r .)"
-scratch_idx="$(dml runtime create | jq -r .)"
-cancel_idx="$(dml runtime create | jq -r .)"
+runtime_idx="$(dml runtime create)"
+scratch_idx="$(dml runtime create)"
+cancel_idx="$(dml runtime create)"
 dml runtime list | jq .
 dml runtime describe "${runtime_idx}" | jq .
 
-seed_ref="$(printf '%s\n' '["scalar","cli-seed"]' | dml runtime put-literal "${runtime_idx}" - --name seed | jq -r .)"
-imported_greeting_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${greeting_ref}" --name imported-greeting | jq -r .)"
-hello_runtime_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${hello_fn_ref}" --name hello-fn | jq -r .)"
-dml runtime get-node "${runtime_idx}" seed | jq .
-dml runtime get-node "${runtime_idx}" imported-greeting | jq .
+seed_ref="$(printf '%s\n' '["scalar","cli-seed"]' | dml runtime put-literal "${runtime_idx}" - --name seed)"
+imported_greeting_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${greeting_ref}" --name imported-greeting)"
+hello_runtime_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${hello_fn_ref}" --name hello-fn)"
+dml runtime get-node "${runtime_idx}" seed
+dml runtime get-node "${runtime_idx}" imported-greeting
 
-dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported_greeting_ref}" | jq .
-dml runtime get-node "${runtime_idx}" cli-greeting-alias | jq .
+dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported_greeting_ref}"
+dml runtime get-node "${runtime_idx}" cli-greeting-alias
 dml runtime describe "${runtime_idx}" | jq .
 dml runtime cancel "${cancel_idx}" | jq .
 dml runtime delete "${scratch_idx}" | jq .
@@ -101,8 +100,8 @@ dml show --revision HEAD | jq .
 
 log "Listing DML refs after running all examples:"
 dml admin remote list --owner "${dml_user}" | jq .
-dml push --create | jq .
-dml push --tag cli-demo-tag | jq .
+dml push --create
+dml push --tag cli-demo-tag
 dml admin remote list | jq .
 dml admin remote gc --min-age-seconds 0 --malformed warn | jq .
 
@@ -116,14 +115,14 @@ rm -rf "${scratch_dir}/${project1}" || true
 mkdir "${scratch_dir}/${project1}"
 cd "${scratch_dir}/${project1}"
 dml init --remote-project "dml://${dml_user}/${project1}"
-dml fetch "dml://${dml_user}/${project0}" | jq .
+dml fetch "dml://${dml_user}/${project0}"
 dml branch --remote | jq .
-dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world" --target-name examples/00-hello-world-copy | jq .
+dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world" --target-name examples/00-hello-world-copy
 dml status | jq .
-dml revert HEAD "${dml_user}" | jq .
-dml merge "dml://${dml_user}/${project0}#main" "${dml_user}" | jq .
-dml pull "dml://${dml_user}/${project0}" "${dml_user}" | jq .
-dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world" | jq .
+dml revert HEAD "${dml_user}"
+dml merge "dml://${dml_user}/${project0}#main" "${dml_user}"
+dml pull "dml://${dml_user}/${project0}" "${dml_user}"
+dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world"
 dml status | jq .
 
 log "Running example: 01b-load_fn.py"
@@ -134,7 +133,7 @@ dml branch | jq .
 dml branch --remote | jq .
 dml log --revision HEAD --limit 10 | jq .
 dml show --revision HEAD | jq .
-dml dag get examples/01b-load-fn --revision HEAD | jq .
-dml dag get-node old_result --dag examples/01b-load-fn --revision HEAD | jq .
+dml dag get --value-type str examples/01b-load-fn --revision HEAD | jq .
+dml dag get-node --node-type str old_result --dag-str examples/01b-load-fn --revision HEAD | jq .
 
 log "All examples completed successfully."
