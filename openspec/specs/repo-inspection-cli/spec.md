@@ -1,3 +1,8 @@
+# repo-inspection-cli Specification
+
+## Purpose
+Define the git-shaped repository inspection and porcelain behavior exposed by the public DML CLI.
+## Requirements
 ### Requirement: Top-level CLI uses git-shaped repository inspection verbs
 The public `dml` CLI SHALL expose repository-oriented porcelain commands at the top level: `status`, `show`, `log`, `diff`, `checkout`, `branch`, `fetch`, `pull`, `push`, `merge`, and `revert`.
 
@@ -78,23 +83,28 @@ The CLI SHALL expose DAG-oriented inspection commands under `dml dag`: `list`, `
 - **AND** `dags` is an object mapping DAG names to DAG refs
 
 ### Requirement: DAG get resolves by name or exact DAG ref
-`dml dag get <name-or-id> [--revision REV]` SHALL resolve either a DAG name within a revision's DAG map or an explicit `dag:<id>` selector.
+`dml dag get <value> [--value-type {str,ref}] [--revision REV]` SHALL resolve either a DAG name within a revision's DAG map or an explicit `dag:<id>` selector.
 
-If the selector is `dag:<id>`, the command SHALL reject any provided `--revision` flag.
+If `--value-type ref` is selected, the command SHALL reject any provided `--revision` flag.
 
 #### Scenario: DAG get resolves name in revision
-- **WHEN** a user runs `dml dag get train --revision HEAD~1`
+- **WHEN** a user runs `dml dag get train --value-type str --revision HEAD~1`
 - **THEN** the command resolves `train` in the DAG map for `HEAD~1`
 - **AND** returns JSON containing `selector`, `revision`, and `dag`
 
 #### Scenario: DAG get loads exact DAG ref
-- **WHEN** a user runs `dml dag get dag:abc123`
+- **WHEN** a user runs `dml dag get dag:abc123 --value-type ref`
 - **THEN** the command loads that exact DAG object
 - **AND** returns JSON containing `selector` and `dag`
 
 #### Scenario: DAG get rejects revision with explicit DAG ref
-- **WHEN** a user runs `dml dag get dag:abc123 --revision HEAD`
+- **WHEN** a user runs `dml dag get dag:abc123 --value-type ref --revision HEAD`
 - **THEN** the command fails without resolving a revision
+
+#### Scenario: DAG get defaults selector by union order
+- **WHEN** a user runs `dml dag get train` without `--value-type`
+- **THEN** the command uses the first non-`None` member of the `value` union in annotation order
+- **AND** it does not infer the member type from the token text
 
 ### Requirement: DAG get includes node data
 The `dml dag get` payload SHALL include the DAG's node data so that users do not need a separate DAG-node inspection endpoint for normal CLI workflows.
@@ -102,3 +112,4 @@ The `dml dag get` payload SHALL include the DAG's node data so that users do not
 #### Scenario: DAG get includes nodes
 - **WHEN** a user runs `dml dag get train`
 - **THEN** the returned `dag` object includes node-level data needed for DAG inspection
+
