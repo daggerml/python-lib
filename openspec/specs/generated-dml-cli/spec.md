@@ -20,7 +20,7 @@ The CLI SHALL omit any public `Dml` or namespace method whose parameter annotati
 - **WHEN** a public method includes a parameter annotated as exactly `Any`
 - **THEN** the CLI exposes that method
 - **AND** the generated argument accepts a file path
-- **AND** omitting that path causes the CLI to read the serialized value from `stdin`
+- **AND** the special value `-` causes the CLI to read the serialized value from `stdin`
 - **AND** the CLI deserializes the text with `daggerml._internal.dml_loads` before invoking the method
 
 #### Scenario: Supported typed method remains exposed
@@ -44,6 +44,13 @@ The CLI SHALL derive argument shape from runtime-visible signatures, defaults, a
 - **AND** when a boolean parameter default is `True`
 - **THEN** the generated CLI exposes a negative `--no-<name>` flag
 
+#### Scenario: Bool and Literal parsing happen before generic transport lookup
+- **WHEN** a generated parameter is annotated as `bool` or `Literal[...]`
+- **THEN** the CLI processes that annotation before generic transport-map lookup
+- **AND** before any direct-transport or union-transport generation logic
+- **AND** `bool` keeps its flag semantics
+- **AND** `Literal[...]` keeps literal-choice parsing semantics
+
 ### Requirement: Generated parsing uses annotations and documented help metadata
 The CLI SHALL parse supported argument types from resolved annotations and SHALL use docstrings plus `Annotated` metadata to generate command help.
 
@@ -66,18 +73,30 @@ The CLI SHALL generate commands from one runtime-visible signature even when ove
 - **WHEN** a public method has overload declarations and one implementation signature
 - **THEN** the CLI uses the implementation signature for generation and does not create multiple command variants
 
-### Requirement: Generated CLI output and errors are JSON
-The generated CLI SHALL emit JSON for successful results and normalized failures.
+### Requirement: Generated CLI output is derived from the output type
+The generated CLI SHALL derive successful output format from the resolved return type and its registered serializer.
 
-#### Scenario: Successful command emits JSON
-- **WHEN** a generated CLI command returns a value and the return annotation is not exactly `Any`
-- **THEN** the CLI serializes that value as JSON using the standard typed-leaf encoder
+#### Scenario: Non-Any successful return uses its type serializer
+- **WHEN** a generated CLI command returns a value and the return annotation is neither exactly `Any` nor a union
+- **THEN** the CLI serializes that value with the serializer registered for that output type
+- **AND** writes the serializer output to `stdout` as-is
 
 #### Scenario: Exact Any return emits DML serialization
 - **WHEN** a generated CLI command return annotation is exactly `Any`
 - **THEN** the CLI serializes that value with `daggerml._internal.dml_dumps`
 - **AND** writes the serialized text to `stdout`
 
+#### Scenario: Union return output follows first non-None output type
+- **WHEN** a generated CLI command return annotation is a union
+- **THEN** the CLI ignores `None` members
+- **AND** selects the first remaining member in annotation order as the output type
+- **AND** serializes the runtime value with that member type's registered serializer
+- **AND** writes the serializer output to `stdout` as-is
+
+### Requirement: Generated CLI failures are normalized
+The generated CLI SHALL emit normalized failures instead of unstructured tracebacks.
+
 #### Scenario: Failed command emits structured JSON error
 - **WHEN** generated command execution raises an exception
 - **THEN** the CLI emits a structured JSON error payload instead of an unstructured traceback
+

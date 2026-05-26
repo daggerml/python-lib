@@ -9,14 +9,16 @@ from unittest.mock import patch
 import pytest
 
 from daggerml._cli import MethodCLI
-from daggerml._internal import Ref, dml_dumps, dml_loads
+from daggerml._internal import Error, Ref, dml_dumps, dml_loads
+
+DEFAULT_NODE_REF = Ref("node:default")
 
 
 class _NamespaceExampleNamespace:
     def __init__(self, project_home: str):
         self.project_home = project_home
 
-    def render(self, payload: list[int], enabled: bool = False):
+    def render(self, payload: list[int], enabled: bool = False) -> dict[str, Any]:
         return {"project_home": self.project_home, "payload": payload, "enabled": enabled}
 
 
@@ -30,7 +32,7 @@ class _NamespaceExample:
 
 
 class _VariadicNamespace:
-    def invalidate(self, *cache_keys: str):
+    def invalidate(self, *cache_keys: str) -> dict[str, list[str]]:
         return {"cache_keys": list(cache_keys)}
 
 
@@ -44,7 +46,7 @@ class _VariadicNamespaceExample:
 
 
 class _MixedVariadicNamespace:
-    def invalidate(self, scope: str, *cache_keys: str):
+    def invalidate(self, scope: str, *cache_keys: str) -> dict[str, str | list[str]]:
         return {"scope": scope, "cache_keys": list(cache_keys)}
 
 
@@ -63,7 +65,7 @@ def test_method_cli_calls_root_classmethod_without_instantiating_root():
             raise AssertionError("root should not be instantiated")
 
         @classmethod
-        def init(cls, value: int = 1):
+        def init(cls, value: int = 1) -> dict[str, Any]:
             return {"kind": cls.__name__, "value": value}
 
     cli = MethodCLI(Example, prog="example")
@@ -179,12 +181,12 @@ def test_method_cli_treats_semantically_invalid_exact_any_input_as_parse_failure
     )
 
 
-def test_method_cli_does_not_treat_optional_any_as_exact_any_transport(tmp_path: Path):
+def test_method_cli_treats_optional_any_union_as_dml_transport(tmp_path: Path):
     class Example:
         def __init__(self):
             pass
 
-        def render(self, payload: Any | None = None):
+        def render(self, payload: Any | None = None) -> dict[str, Any]:
             return {"payload": payload}
 
     cli = MethodCLI(Example, prog="example")
@@ -194,15 +196,15 @@ def test_method_cli_does_not_treat_optional_any_as_exact_any_transport(tmp_path:
     with patch("sys.stdout", new_callable=StringIO) as stdout:
         assert cli.run(["render", "--payload", str(payload_path)]) == 0
 
-    assert json.loads(stdout.getvalue()) == {"payload": str(payload_path)}
+    assert json.loads(stdout.getvalue()) == {"payload": {"alpha": [1, 2]}}
 
 
-def test_method_cli_parses_ref_like_union_positionals_as_refs():
+def test_method_cli_parses_ref_or_error_positionals_as_first_transport_by_default():
     class Example:
         def __init__(self):
             pass
 
-        def commit(self, value: Ref | RuntimeError):
+        def commit(self, value: Ref | Error) -> dict[str, str]:
             return {"type": type(value).__name__, "value": str(value)}
 
     cli = MethodCLI(Example, prog="example")
@@ -213,12 +215,28 @@ def test_method_cli_parses_ref_like_union_positionals_as_refs():
     assert json.loads(stdout.getvalue()) == {"type": "Ref", "value": "Ref(node:abc)"}
 
 
-def test_method_cli_leaves_str_or_ref_positionals_as_strings():
+def test_method_cli_uses_selector_for_multi_transport_positionals():
     class Example:
         def __init__(self):
             pass
 
-        def get(self, value: str | Ref):
+        def get(self, value: str | Ref) -> dict[str, str]:
+            return {"type": type(value).__name__, "value": str(value)}
+
+    cli = MethodCLI(Example, prog="example")
+
+    with patch("sys.stdout", new_callable=StringIO) as stdout:
+        assert cli.run(["get", "node:abc", "--value-type", "ref"]) == 0
+
+    assert json.loads(stdout.getvalue()) == {"type": "Ref", "value": "Ref(node:abc)"}
+
+
+def test_method_cli_defaults_multi_transport_positionals_to_first_member():
+    class Example:
+        def __init__(self):
+            pass
+
+        def get(self, value: str | Ref) -> dict[str, str]:
             return {"type": type(value).__name__, "value": str(value)}
 
     cli = MethodCLI(Example, prog="example")
@@ -227,3 +245,46 @@ def test_method_cli_leaves_str_or_ref_positionals_as_strings():
         assert cli.run(["get", "examples/demo"]) == 0
 
     assert json.loads(stdout.getvalue()) == {"type": "str", "value": "examples/demo"}
+
+
+def test_method_cli_generates_typed_union_flags_for_multi_transport_options(tmp_path: Path):
+    class Example:
+        def __init__(self):
+            pass
+
+        def commit(self, value: Ref | Error = DEFAULT_NODE_REF) -> dict[str, str]:
+            return {"type": type(value).__name__, "value": str(value)}
+
+    cli = MethodCLI(Example, prog="example")
+    payload_path = tmp_path / "err.dml"
+    payload_path.write_text(
+        dml_dumps(Error(message="boom", origin="dml", type="runtimeerror", stack=[])),
+        encoding="utf-8",
+    )
+
+    with patch("sys.stdout", new_callable=StringIO) as stdout:
+        assert cli.run(["commit", "--value-dml", str(payload_path)]) == 0
+
+    assert json.loads(stdout.getvalue()) == {"type": "Error", "value": "boom"}
+
+
+def test_method_cli_rejects_conflicting_typed_union_flags(tmp_path: Path):
+    class Example:
+        def __init__(self):
+            pass
+
+        def commit(self, value: Ref | Error = DEFAULT_NODE_REF) -> dict[str, str]:
+            return value
+
+    cli = MethodCLI(Example, prog="example")
+    payload_path = tmp_path / "err.dml"
+    payload_path.write_text(
+        dml_dumps(Error(message="boom", origin="dml", type="runtimeerror", stack=[])),
+        encoding="utf-8",
+    )
+
+    with patch("sys.stderr", new_callable=StringIO) as stderr, pytest.raises(SystemExit) as exc_info:
+        cli.main(["commit", "--value-ref", "node:abc", "--value-dml", str(payload_path)])
+
+    assert exc_info.value.code == 2
+    assert "not allowed with argument" in stderr.getvalue()

@@ -12,7 +12,104 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union, cast, get_args, get_origin
 
-from daggerml._internal import Dml, Ref, Runnable, Uri, dml_dumps, dml_loads
+from daggerml._internal import Dml, Error, Ref, Runnable, Uri, dml_dumps, dml_loads
+
+
+def _serialize_str(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"expected str, got {type(value).__name__}")
+    return value
+
+
+def _serialize_ref(value: Any) -> str:
+    if not isinstance(value, Ref):
+        raise TypeError(f"expected Ref, got {type(value).__name__}")
+    return str(value.to)
+
+
+def _serialize_int(value: Any) -> str:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"expected int, got {type(value).__name__}")
+    return str(value)
+
+
+def _serialize_float(value: Any) -> str:
+    if not isinstance(value, float):
+        raise TypeError(f"expected float, got {type(value).__name__}")
+    return str(value)
+
+
+def _serialize_bool(value: Any) -> str:
+    if not isinstance(value, bool):
+        raise TypeError(f"expected bool, got {type(value).__name__}")
+    return "true" if value else "false"
+
+
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, Ref):
+        return str(obj.to)
+    if isinstance(obj, Uri):
+        return obj.uri
+    if isinstance(obj, Runnable):
+        raise NotImplementedError("Runnable objects cannot be serialized to JSON directly")
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _serialize_json(value: Any) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, default=_json_default)
+
+
+def _parse_json(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"expected JSON input: {exc.msg}") from exc
+
+
+def _parse_dml_file(value: str) -> Any:
+    try:
+        text = sys.stdin.read() if value == "-" else Path(value).read_text(encoding="utf-8")
+        return dml_loads(text)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc.msg}") from exc
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc}") from exc
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+CLI_SERIALIZERS: dict[Any, Callable[[Any], str]] = {
+    str: _serialize_str,
+    Ref: _serialize_ref,
+    Any: dml_dumps,
+    Error: dml_dumps,
+    dict: _serialize_json,
+    list: _serialize_json,
+    int: _serialize_int,
+    float: _serialize_float,
+    bool: _serialize_bool,
+}
+
+CLI_DESERIALIZERS: dict[str, Callable[[str], Any]] = {
+    "str": str,
+    "ref": Ref,
+    "dml": _parse_dml_file,
+    "json": _parse_json,
+    "int": int,
+    "float": float,
+}
+
+CLI_TRANSPORT_NAMES: dict[Any, str] = {
+    str: "str",
+    Ref: "ref",
+    Any: "dml",
+    Error: "dml",
+    dict: "json",
+    list: "json",
+    int: "int",
+    float: "float",
+    bool: "bool",
+}
 
 
 class PrettyArgumentParser(argparse.ArgumentParser):
@@ -48,7 +145,7 @@ class MethodCLI:
       - default True: --no-foo
     - Annotated[T, "help"] provides per-argument help.
     - Docstrings provide command help and optional parameter help.
-    - Results are printed to stdout as JSON.
+    - Results are printed to stdout using the resolved output transport.
     """
 
     def __init__(
@@ -98,10 +195,10 @@ class MethodCLI:
         init_kwargs = {
             name: data.pop(f"_init_{name}") for name in self._constructor_param_names() if f"_init_{name}" in data
         }
-        method_kwargs = {k: v for k, v in data.items() if not k.startswith("_subcommand_")}
         target = cast(_Target, target)
         root = self.cls if target.kind == "classmethod" else self.cls(**init_kwargs)
         method = self._resolve_method(root, target)
+        method_kwargs = self._normalize_method_kwargs(method, data)
         method_args: list[Any] = []
         sig = inspect.signature(method)
         for name, param in sig.parameters.items():
@@ -114,10 +211,7 @@ class MethodCLI:
             if param.kind is param.VAR_POSITIONAL and name in method_kwargs:
                 method_args.extend(method_kwargs.pop(name))
         result = method(*method_args, **method_kwargs)
-        if self._returns_exact_any(method):
-            print(dml_dumps(result))
-        else:
-            print(json.dumps(result, separators=(",", ":"), sort_keys=True, default=self._json_default))
+        print(self._serialize_result(method, result))
         return 0
 
     def _configure_logging(self, verbosity: int) -> None:
@@ -146,6 +240,8 @@ class MethodCLI:
         subparsers = parser.add_subparsers(dest="_subcommand_" + "_".join(path or ("root",)), required=True)
         for name, member in sorted(vars(typ).items()):
             if self._is_public_method_descriptor(name, member):
+                if not self._callable_is_generatable(member, skip_self=True):
+                    continue
                 command_name = self._kebab(name)
                 doc = self._parse_docstring(inspect.getdoc(member) or "")
                 child = subparsers.add_parser(
@@ -159,6 +255,8 @@ class MethodCLI:
             elif not path and self._is_public_root_classmethod_descriptor(name, member):
                 command_name = self._kebab(name)
                 method = getattr(typ, name)
+                if not self._callable_is_generatable(method, skip_self=False):
+                    continue
                 doc = self._parse_docstring(inspect.getdoc(method) or "")
                 child = subparsers.add_parser(
                     command_name,
@@ -238,37 +336,99 @@ class MethodCLI:
                     raise TypeError(f"{fn.__qualname__}.{name}: bool parameters must have defaults")
                 self._add_bool_flag(parser_or_group, name, dest, default, help_text)
                 continue
-            converter, extra = self._parser_for(typ)
-            if self._is_exact_any(typ):
-                # Exact Any is supported only when it is required (no default).
-                # It must be provided either positionally or via the --kebab-case option.
-                if has_default:
-                    raise TypeError(f"{fn.__qualname__}.{name}: exact Any parameters must not have defaults")
-                if required_as_options:
-                    kwargs = {"dest": dest, "required": True, "help": help_text, **extra}
-                    if converter is not None:
-                        kwargs["type"] = converter
-                    parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
+            literal_spec = self._literal_spec(typ)
+            if literal_spec is not None:
+                converter, extra = literal_spec
+                self._add_scalar_arg(
+                    parser_or_group,
+                    name,
+                    dest,
+                    help_text,
+                    converter,
+                    extra,
+                    has_default=has_default,
+                    default=default,
+                    required_as_options=required_as_options,
+                )
+                continue
+            union_names = self._union_transport_names(typ)
+            if union_names is not None:
+                if len(union_names) == 1:
+                    converter = self._deserializer_for_name(union_names[0])
+                    self._add_scalar_arg(
+                        parser_or_group,
+                        name,
+                        dest,
+                        help_text,
+                        converter,
+                        {},
+                        has_default=has_default,
+                        default=default,
+                        required_as_options=required_as_options,
+                    )
+                elif has_default or required_as_options:
+                    group = parser_or_group.add_mutually_exclusive_group(
+                        required=required_as_options and not has_default
+                    )
+                    for union_name in union_names:
+                        group.add_argument(
+                            f"--{self._kebab(name)}-{union_name}",
+                            dest=dest,
+                            default=default,
+                            type=self._deserializer_for_name(union_name),
+                            help=help_text,
+                        )
                 else:
-                    kwargs = {"help": help_text, **extra}
-                    if converter is not None:
-                        kwargs["type"] = converter
-                    parser_or_group.add_argument(name, **kwargs)
-            elif has_default:
-                kwargs: dict[str, Any] = {"dest": dest, "default": default, "help": help_text, **extra}
-                if converter is not None:
-                    kwargs["type"] = converter
-                parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
-            elif required_as_options:
-                kwargs = {"dest": dest, "required": True, "help": help_text, **extra}
-                if converter is not None:
-                    kwargs["type"] = converter
-                parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
-            else:
-                kwargs = {"help": help_text, **extra}
-                if converter is not None:
-                    kwargs["type"] = converter
-                parser_or_group.add_argument(name, **kwargs)
+                    parser_or_group.add_argument(name, help=help_text)
+                    parser_or_group.add_argument(
+                        f"--{self._kebab(name)}-type",
+                        dest=f"_union_type_{dest}",
+                        choices=union_names,
+                        help=f"Transport for {name}.",
+                    )
+                continue
+            converter, extra = self._parser_for(typ)
+            self._add_scalar_arg(
+                parser_or_group,
+                name,
+                dest,
+                help_text,
+                converter,
+                extra,
+                has_default=has_default,
+                default=default,
+                required_as_options=required_as_options,
+            )
+
+    def _add_scalar_arg(
+        self,
+        parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+        name: str,
+        dest: str,
+        help_text: str,
+        converter: Callable[[str], Any] | None,
+        extra: dict[str, Any],
+        *,
+        has_default: bool,
+        default: Any,
+        required_as_options: bool,
+    ) -> None:
+        if has_default:
+            kwargs: dict[str, Any] = {"dest": dest, "default": default, "help": help_text, **extra}
+            if converter is not None:
+                kwargs["type"] = converter
+            parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
+            return
+        if required_as_options:
+            kwargs = {"dest": dest, "required": True, "help": help_text, **extra}
+            if converter is not None:
+                kwargs["type"] = converter
+            parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
+            return
+        kwargs = {"help": help_text, **extra}
+        if converter is not None:
+            kwargs["type"] = converter
+        parser_or_group.add_argument(name, **kwargs)
 
     def _add_bool_flag(
         self,
@@ -295,47 +455,11 @@ class MethodCLI:
     def _parser_for(self, typ: Any) -> tuple[Callable[[str], Any] | None, dict[str, Any]]:
         if typ in self.parsers:
             return self.parsers[typ], {}
-        if self._is_exact_any(typ):
-            return self._dml_file_parser(), {}
         typ, _ = self._unwrap_optional(typ)
-        origin = get_origin(typ)
-        args = get_args(typ)
-        if origin in (Union, types.UnionType) and Ref in args and str not in args:
-            return Ref, {}
-        if origin is Literal:
-            choices = list(args)
-            parser = type(choices[0]) if choices else str
-            return parser, {"choices": choices}
-        if typ in {Ref, Uri}:
-            return lambda s: typ(s), {}
-        if typ in (str, int, float):
-            return typ, {}
-        if origin in (list, dict):
-            return self._json_parser(typ), {}
-        return str, {}
-
-    def _json_parser(self, typ: Any) -> Callable[[str], Any]:
-        def parse(value: str) -> Any:
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError as exc:
-                raise argparse.ArgumentTypeError(f"expected JSON for {self._type_display(typ)}: {exc.msg}") from exc
-
-        return parse
-
-    def _dml_file_parser(self) -> Callable[[str], Any]:
-        def parse(value: str) -> Any:
-            try:
-                text = sys.stdin.read() if value == "-" else Path(value).read_text(encoding="utf-8")
-                return dml_loads(text)
-            except json.JSONDecodeError as exc:
-                raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc.msg}") from exc
-            except (TypeError, ValueError) as exc:
-                raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc}") from exc
-            except OSError as exc:
-                raise argparse.ArgumentTypeError(str(exc)) from exc
-
-        return parse
+        name = self._transport_name_for_type(typ)
+        if name is None:
+            raise TypeError(f"{self._type_display(typ)} is not CLI-generatable")
+        return self._deserializer_for_name(name), {}
 
     def _split_annotated(self, typ: Any) -> tuple[Any, str | None]:
         if get_origin(typ) is Annotated:
@@ -362,10 +486,152 @@ class MethodCLI:
     def _is_exact_any(self, typ: Any) -> bool:
         return typ is Any
 
-    def _returns_exact_any(self, fn: Callable[..., Any]) -> bool:
+    def _return_type(self, fn: Callable[..., Any]) -> Any:
         hints = typing.get_type_hints(fn, include_extras=True)
-        typ, _ = self._split_annotated(hints.get("return", inspect.signature(fn).return_annotation))
-        return self._is_exact_any(typ)
+        return self._split_annotated(hints.get("return", inspect.signature(fn).return_annotation))[0]
+
+    def _literal_spec(self, typ: Any) -> tuple[Callable[[str], Any] | None, dict[str, Any]] | None:
+        typ, _ = self._unwrap_optional(typ)
+        if get_origin(typ) is not Literal:
+            return None
+        choices = list(get_args(typ))
+        parser = type(choices[0]) if choices else str
+        return parser, {"choices": choices}
+
+    def _transport_name_for_type(self, typ: Any) -> str | None:
+        if typ in CLI_TRANSPORT_NAMES:
+            return CLI_TRANSPORT_NAMES[typ]
+        if typing.is_typeddict(typ):
+            return CLI_TRANSPORT_NAMES[dict]
+        origin = get_origin(typ)
+        if origin is Literal:
+            choices = get_args(typ)
+            if not choices:
+                return None
+            family = type(choices[0])
+            return CLI_TRANSPORT_NAMES.get(family)
+        if origin in CLI_TRANSPORT_NAMES:
+            return CLI_TRANSPORT_NAMES[origin]
+        return None
+
+    def _serializer_for_type(self, typ: Any) -> Callable[[Any], str] | None:
+        if typ in CLI_SERIALIZERS:
+            return CLI_SERIALIZERS[typ]
+        if typing.is_typeddict(typ):
+            return CLI_SERIALIZERS[dict]
+        origin = get_origin(typ)
+        if origin is Literal:
+            choices = get_args(typ)
+            if not choices:
+                return None
+            family = type(choices[0])
+            return CLI_SERIALIZERS.get(family)
+        if origin in CLI_SERIALIZERS:
+            return CLI_SERIALIZERS[origin]
+        return None
+
+    def _deserializer_for_name(self, name: str) -> Callable[[str], Any]:
+        parser = CLI_DESERIALIZERS.get(name)
+        if parser is None:
+            raise TypeError(f"transport {name!r} is not CLI-generatable")
+        return parser
+
+    def _non_none_union_members(self, typ: Any) -> tuple[Any, ...] | None:
+        origin = get_origin(typ)
+        if origin not in (Union, types.UnionType):
+            return None
+        members = tuple(member for member in get_args(typ) if member is not type(None))
+        return members or None
+
+    def _union_transport_names(self, typ: Any) -> list[str] | None:
+        members = self._non_none_union_members(typ)
+        if members is None:
+            return None
+        names: list[str] = []
+        for member in members:
+            if self._is_bool_type(member) or self._literal_spec(member) is not None:
+                return None
+            name = self._transport_name_for_type(member)
+            if name is None:
+                return None
+            if name not in names:
+                names.append(name)
+        return names or None
+
+    def _callable_is_generatable(self, fn: Callable[..., Any], *, skip_self: bool) -> bool:
+        sig = inspect.signature(fn)
+        hints = typing.get_type_hints(fn, include_extras=True)
+        for name, param in sig.parameters.items():
+            if skip_self and name == "self":
+                continue
+            if param.kind is param.VAR_KEYWORD:
+                return False
+            typ, _ = self._split_annotated(hints.get(name, param.annotation))
+            has_default = param.default is not inspect._empty
+            if param.kind is param.VAR_POSITIONAL:
+                try:
+                    self._parser_for(typ)
+                except TypeError:
+                    return False
+                continue
+            if self._is_bool_type(typ):
+                if not has_default:
+                    return False
+                continue
+            if self._literal_spec(typ) is not None:
+                continue
+            union_names = self._union_transport_names(typ)
+            if union_names is not None:
+                try:
+                    for union_name in union_names:
+                        self._deserializer_for_name(union_name)
+                except TypeError:
+                    return False
+                continue
+            try:
+                self._parser_for(typ)
+            except TypeError:
+                return False
+        return True
+
+    def _normalize_method_kwargs(self, method: Callable[..., Any], data: dict[str, Any]) -> dict[str, Any]:
+        method_kwargs = {k: v for k, v in data.items() if not k.startswith("_subcommand_")}
+        sig = inspect.signature(method)
+        hints = typing.get_type_hints(method, include_extras=True)
+        for name, param in sig.parameters.items():
+            typ, _ = self._split_annotated(hints.get(name, param.annotation))
+            union_names = self._union_transport_names(typ)
+            selector_key = f"_union_type_{name}"
+            if selector_key not in method_kwargs:
+                continue
+            selector = method_kwargs.pop(selector_key)
+            if name not in method_kwargs:
+                continue
+            if union_names is None or len(union_names) <= 1:
+                continue
+            if param.default is not inspect._empty:
+                continue
+            selected_name = selector or union_names[0]
+            method_kwargs[name] = self._deserializer_for_name(selected_name)(method_kwargs[name])
+        return method_kwargs
+
+    def _resolved_output_type(self, typ: Any) -> Any:
+        members = self._non_none_union_members(typ)
+        if members is not None:
+            return members[0]
+        return typ
+
+    def _serialize_result(self, method: Callable[..., Any], result: Any) -> str:
+        output_type = self._resolved_output_type(self._return_type(method))
+        serializer = self._serializer_for_type(output_type)
+        if serializer is None:
+            raise TypeError(f"{self._type_display(output_type)} is not CLI-serializable")
+        try:
+            return serializer(result)
+        except Exception as exc:
+            raise TypeError(
+                f"failed to serialize command result as {self._type_display(output_type)}: {exc}"
+            ) from exc
 
     def _is_public_method_descriptor(self, name: str, member: Any) -> bool:
         if name.startswith("_"):
@@ -376,15 +642,6 @@ class MethodCLI:
 
     def _is_public_root_classmethod_descriptor(self, name: str, member: Any) -> bool:
         return not name.startswith("_") and isinstance(member, classmethod)
-
-    def _json_default(self, obj: Any) -> Any:
-        if isinstance(obj, Ref):
-            return str(obj.to)
-        if isinstance(obj, Uri):
-            return obj.uri
-        if isinstance(obj, Runnable):
-            raise NotImplementedError("Runnable objects cannot be serialized to JSON directly")
-        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
     def _kebab(self, name: str) -> str:
         return name.replace("_", "-")
