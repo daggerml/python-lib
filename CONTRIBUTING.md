@@ -64,6 +64,11 @@ requests and appreciate your help in improving this project.
   uv run --dev --all-extras pytest -m "not slow" .
   ```
 - CI continues to run the full suite (`uv run pytest .`) to preserve complete coverage while local quick loops use `-m "not slow"`.
+- We mark tests under `tests/_core/` with `@pytest.mark.core`. Core tests are included by default. You can select or skip them with:
+  ```
+  uv run --dev --all-extras pytest -m core .
+  uv run --dev --all-extras pytest -m "not core" .
+  ```
 - We mark tests that require `daggerml-cli` to be installed with `@pytest.mark.needs_dml`. You can exclude those tests with:
   ```
   uv run --dev --all-extras pytest -m "not needs_dml" .
@@ -80,7 +85,10 @@ This section is for contributors maintaining or restructuring the test suite.
 
 - `tests/contracts/`: fast, isolated tests that verify one documented requirement or invariant.
 - `tests/integration/`: multi-component or infrastructure-dependent tests.
+- `tests/_core/contracts/`: fast, isolated tests for `daggerml._core` contracts.
+- `tests/_core/integration/`: multi-component or infrastructure-dependent tests for `daggerml._core`.
 - Existing folders such as `tests/_internal/` and `tests/contrib/` may remain during migration, but new or refactored suites should target `tests/contracts/` or `tests/integration/`.
+- Subsystem-owned suites such as `tests/_core/` may keep `contracts/` and `integration/` subdirectories under the subsystem root when the subsystem API is stable enough to warrant marker-based selection.
 
 #### File naming
 
@@ -105,6 +113,7 @@ This section is for contributors maintaining or restructuring the test suite.
 
 - Integration tests that require external processes, polling loops, remote roundtrips, or significant runtime orchestration must be marked `@pytest.mark.slow`.
 - Contract tests in `tests/contracts/` should stay unmarked and fast by default.
+- Tests under `tests/_core/` are marked `@pytest.mark.core` by `tests/_core/conftest.py` and remain included in default pytest runs.
 
 #### Migration policy
 

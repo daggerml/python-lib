@@ -1,0 +1,542 @@
+"""Remote operations for CAS, refs, and cache backed by S3.
+
+This module owns the `dml/` remote prefix in the S3 bucket, which has the following structure:
+dml/
+  dml.json  # Remote descriptor file with protocol version and layout information
+  cas/sha256/aa/bb/oid  # CAS objects sharded by first 4 hex chars of OID
+  refs/  # Ref objects for branches, tags, and DAGs
+    projects/<owner>/<project>/heads/<branch>.json
+    projects/<owner>/<project>/tags/<tag>.json
+    cache/<cache_key>.json  # cache entries by key
+    active/<cache_key>.json  # active DAGs for running executions
+    transport/<execution_id>.json  # transport DAGs for running executions
+    tombstone/<uuid>.json  # tombstones for deleted refs, with deletion timestamp in meta
+"""
+
+import json
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import InitVar, dataclass, field, fields, is_dataclass
+from typing import TYPE_CHECKING, Any, Literal, Optional, overload
+from urllib.parse import quote, unquote
+
+from daggerml._core.db import Ref
+from daggerml._core.s3_cas import S3Remote
+from daggerml._core.types import NAMESPACES, Dag, DmlBase, DmlDB, TxnWithValid
+from daggerml._core.uri import ProjectUri
+from daggerml._core.util import uuid7
+
+if TYPE_CHECKING:
+    import boto3
+
+logger = logging.getLogger(__name__)
+
+_MANIFEST_SCALAR_TYPES = (type(None), str, int, float, bool)
+_SERDE_SCALAR = "scalar"
+_SERDE_LIST = "list"
+_SERDE_DICT = "dict"
+_SERDE_REF = "ref"
+
+
+def _encode_cas_value(obj: Any) -> list[Any]:
+    if isinstance(obj, _MANIFEST_SCALAR_TYPES):
+        return [_SERDE_SCALAR, obj]
+    if isinstance(obj, Ref):
+        return [_SERDE_REF, obj.to]
+    if isinstance(obj, list):
+        return [_SERDE_LIST, [_encode_cas_value(value) for value in obj]]
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for key, value in obj.items():
+            out[key] = _encode_cas_value(value)
+        return [_SERDE_DICT, out]
+    raise TypeError(f"Unsupported type for remote CAS serialization: {type(obj).__name__}")
+
+
+def _decode_cas_value(obj: Any) -> Any:
+    if not isinstance(obj, list):
+        raise TypeError(f"Expected remote CAS envelope array, got {type(obj).__name__}")
+    if len(obj) != 2:
+        raise ValueError("Expected remote CAS envelope array of length 2")
+    type_name, value = obj
+    if type_name == _SERDE_SCALAR:
+        if not isinstance(value, _MANIFEST_SCALAR_TYPES):
+            raise TypeError("Remote CAS scalar envelope must carry a JSON scalar")
+        return value
+    if type_name == _SERDE_REF:
+        if not isinstance(value, str):
+            raise TypeError("Remote CAS ref envelope must carry a string")
+        return Ref(value)
+    if type_name == _SERDE_LIST:
+        if not isinstance(value, list):
+            raise TypeError("Remote CAS list envelope must carry a list")
+        return [_decode_cas_value(item) for item in value]
+    if type_name == _SERDE_DICT:
+        if not isinstance(value, dict):
+            raise TypeError("Remote CAS dict envelope must carry a dict")
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("Remote CAS dict envelope keys must be strings")
+            out[key] = _decode_cas_value(item)
+        return out
+    raise ValueError(f"Unknown remote CAS envelope type: {type_name!r}")
+
+
+@dataclass
+class Remote:
+    root_uri: str
+    n_workers: int
+    client: InitVar["boto3.client"]
+    _store: S3Remote = field(init=False)
+    prune_age_seconds: int = 24 * 3600
+
+    def __post_init__(self, client):
+        self._store = S3Remote(self.root_uri.rstrip("/") + "/dml", client)
+        self._ensure_remote_descriptor()
+
+    def _ensure_remote_descriptor(self) -> None:
+        descriptor_key = self._store._key_for("dml.json")
+        expected_descriptor = {
+            "schema": 0,
+            "hash": "sha256",
+            "layout": "cas+refs",
+            "refs_prefix": "refs",
+            "io_prefix": "io",
+            "cas_prefix": "cas/sha256",
+        }
+        try:
+            descriptor = json.loads(self._store._get(descriptor_key))
+            if descriptor != expected_descriptor:
+                raise RuntimeError("Invalid remote descriptor")
+        except self._store.client.exceptions.NoSuchKey:
+            self._store._put_js(descriptor_key, expected_descriptor)
+
+    def _cas_key(self, oid: str) -> str:
+        aa = oid[:2]
+        bb = oid[2:4]
+        return self._store._key_for(f"cas/sha256/{aa}/{bb}/{oid}")
+
+    def _build_ref_payload(self, ref: Ref, metadata: dict | None = None) -> dict:
+        return {"ref": {"to": ref.to}, "created": int(time.time()), "metadata": metadata or {}}
+
+    def _validate_ref_payload(
+        self,
+        payload: dict,
+        *,
+        expected_root_ns: str | None = None,
+        required_metadata: tuple[str, ...] = (),
+    ) -> Ref:
+        ref_data = payload.get("ref")
+        if not isinstance(ref_data, dict):
+            raise ValueError("Remote ref payload missing object field 'ref'")
+        ref_to = ref_data.get("to")
+        if not isinstance(ref_to, str):
+            raise ValueError("Remote ref payload missing string field 'ref.to'")
+        created = payload.get("created")
+        if not isinstance(created, int):
+            raise ValueError("Remote ref payload missing integer field 'created'")
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError("Remote ref payload missing object field 'metadata'")
+        for key in required_metadata:
+            if key not in metadata:
+                raise ValueError(f"Remote ref payload missing required metadata field {key!r}")
+        root_ref = Ref(ref_to)
+        if expected_root_ns is not None and root_ref.ns() != expected_root_ns:
+            raise ValueError(
+                f"Remote ref root namespace mismatch: expected {expected_root_ns!r}, got {root_ref.ns()!r}"
+            )
+        return root_ref
+
+    def _dump_cas_object(self, obj: DmlBase) -> str:
+        return json.dumps(_encode_cas_value(obj.to_dict()), separators=(",", ":"), sort_keys=True, allow_nan=False)
+
+    def _load_cas_object(self, ref: Ref, payload: str) -> DmlBase:
+        cls = NAMESPACES.get(ref.ns())
+        if cls is None:
+            raise ValueError(f"Unknown namespace for remote CAS object: {ref.ns()}")
+        data = _decode_cas_value(json.loads(payload))
+        if not isinstance(data, dict):
+            raise TypeError(f"Remote CAS payload for {ref} must decode to a dict")
+        obj = cls.from_dict(data)
+        if not isinstance(obj, DmlBase):
+            raise TypeError(f"Remote CAS payload for {ref} did not decode to a DmlBase object")
+        return obj
+
+    def _collect_local_objects(self, root_ref: Ref, db: DmlDB) -> dict[str, str]:
+        objects: dict[str, str] = {}
+        visited: set[Ref] = set()
+        pending = [root_ref]
+        with db.tx() as txn:
+            while pending:
+                ref = pending.pop()
+                if ref in visited:
+                    continue
+                visited.add(ref)
+                obj = txn.get(ref)
+                objects[self._cas_key(ref.id())] = self._dump_cas_object(obj)
+                deps: set[Ref] = set()
+                self._collect_direct_refs(obj, deps)
+                pending.extend(deps - visited)
+        return objects
+
+    def _plan_upload(self, objs: dict[str, str]) -> dict[str, str]:
+        with ThreadPoolExecutor(max_workers=self.n_workers) as pool:
+            futures = {pool.submit(self._store._exists, key): key for key in objs}
+            return {key: objs[key] for fut, key in futures.items() if not fut.result()}
+
+    def _upload_objects(self, objects: dict[str, str]) -> None:
+        logger.info(f"Uploading {len(objects)} objects...")
+        t0 = time.time()
+        with ThreadPoolExecutor(max_workers=self.n_workers) as pool:
+            futures = [pool.submit(self._store._put, key, data) for key, data in objects.items()]
+            for future in futures:
+                future.result()
+        t1 = time.time()
+        logger.info(f"Uploaded {len(objects)} objects in {t1 - t0:.2f} seconds")
+
+    def _put_cas(self, ref: Ref, ref_path: str | None, db: DmlDB, exists_ok: bool = True, meta=None) -> None:
+        objs = self._collect_local_objects(ref, db)
+        uploads = self._plan_upload(objs)
+        if uploads:
+            self._upload_objects(uploads)
+        if ref_path is not None:
+            self._store._put_js(
+                self._store._key_for(ref_path),
+                self._build_ref_payload(ref, meta),
+                overwrite=exists_ok,
+            )
+
+    def _ref_key(self, owner: str, project: str, kind: Literal["tag", "branch"], name: str) -> str:
+        kind_dir = "tags" if kind == "tag" else "heads"
+        return f"refs/projects/{owner}/{quote(project, safe='')}/{kind_dir}/{quote(name, safe='')}.json"
+
+    def _cache_key(self, cache_key: str) -> str:
+        return f"refs/cache/{cache_key}.json"
+
+    def _active_key(self, cache_key: str) -> str:
+        return f"refs/active/{cache_key}.json"
+
+    def _transport_key(self, execution_id: str) -> str:
+        return f"refs/transport/{execution_id}.json"
+
+    def _tombstone_key(self) -> str:
+        return f"refs/tombstone/{uuid7().hex}.json"
+
+    def _collect_direct_refs(self, obj, deps: set[Ref]) -> None:
+        if isinstance(obj, Ref):
+            deps.add(obj)
+            return
+        if isinstance(obj, dict):
+            for value in obj.values():
+                self._collect_direct_refs(value, deps)
+            return
+        if isinstance(obj, list):
+            for value in obj:
+                self._collect_direct_refs(value, deps)
+            return
+        if is_dataclass(obj):
+            for field_def in fields(obj):
+                self._collect_direct_refs(getattr(obj, field_def.name), deps)
+            return
+        if isinstance(obj, _MANIFEST_SCALAR_TYPES):
+            return
+        raise ValueError(f"Unsupported object type in remote object graph: {type(obj)!r}")
+
+    def _get_cas(self, ref: Ref, deps: set[Ref], txn: TxnWithValid) -> Ref:
+        if not txn.exists(ref):
+            raw = self._store._get(self._cas_key(ref.id()))
+            obj = self._load_cas_object(ref, raw)
+            local_ref = txn.put(obj)
+            if local_ref != ref:
+                raise ValueError(f"Remote CAS object identity mismatch: expected {ref}, got {local_ref}")
+            self._collect_direct_refs(obj, deps)
+            return local_ref
+        return ref
+
+    def _materialize_manifest(
+        self,
+        manifest: dict,
+        txn: TxnWithValid,
+        *,
+        expected_root_ns: str | None = None,
+        required_metadata: tuple[str, ...] = (),
+    ) -> Ref:
+        root_ref = self._validate_ref_payload(
+            manifest,
+            expected_root_ns=expected_root_ns,
+            required_metadata=required_metadata,
+        )
+        pending = {root_ref}
+        visited: set[Ref] = set()
+        while pending:
+            ref = pending.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            deps: set[Ref] = set()
+            self._get_cas(ref, deps, txn)
+            pending.update(deps - visited)
+        return root_ref
+
+    def _read_ref(self, ref_path: str):
+        return json.loads(self._store._get(self._store._key_for(ref_path)))
+
+    def _raw_ref_view(self, payload: dict) -> dict:
+        if "meta" in payload:
+            return payload
+        return {**payload, "meta": payload["metadata"]}
+
+    @overload
+    def _get_path(
+        self,
+        ref_path: str,
+        db: DmlDB,
+        *,
+        expected_ns: str | None = None,
+        required_metadata: tuple[str, ...] = (),
+        raw: Literal[False] = False,
+    ) -> Ref | None: ...
+    @overload
+    def _get_path(
+        self,
+        ref_path: str,
+        db: DmlDB | None = None,
+        *,
+        expected_ns: str | None = None,
+        required_metadata: tuple[str, ...] = (),
+        raw: Literal[True] = True,
+    ) -> dict | None: ...
+    def _get_path(
+        self,
+        ref_path: str,
+        db: Optional[DmlDB] = None,
+        *,
+        expected_ns: str | None = None,
+        required_metadata: tuple[str, ...] = (),
+        raw: bool = False,
+    ) -> Ref | dict | None:
+        try:
+            manifest = self._read_ref(ref_path)
+        except self._store.client.exceptions.NoSuchKey:
+            return None
+        self._validate_ref_payload(manifest, expected_root_ns=expected_ns, required_metadata=required_metadata)
+        if raw:
+            return self._raw_ref_view(manifest)
+        assert db is not None, "DmlDB instance required to materialize manifest"
+        # FIXME: Consider using `call_w_resize` for this write transaction.
+        with db.tx() as txn:
+            return self._materialize_manifest(
+                manifest,
+                txn,
+                expected_root_ns=expected_ns,
+                required_metadata=required_metadata,
+            )
+
+    def _del(self, ref_path: str) -> bool:
+        full_key = self._store._key_for(ref_path)
+        if not self._store._exists(full_key):
+            return False
+        data = self._store._get(full_key)
+        self._store._put(self._store._key_for(self._tombstone_key()), data)
+        return self._store._delete(full_key)
+
+    def _get_live_oids(self, root_ref: Ref) -> set[str]:
+        live_oids: set[str] = set()
+        visited: set[Ref] = set()
+        pending = [root_ref]
+        while pending:
+            ref = pending.pop()
+            if ref in visited:
+                continue
+            visited.add(ref)
+            live_oids.add(ref.id())
+            try:
+                raw = self._store._get(self._cas_key(ref.id()))
+            except self._store.client.exceptions.NoSuchKey:
+                logger.warning(f"Missing CAS object for live ref {ref}")
+                continue
+            deps: set[Ref] = set()
+            self._collect_direct_refs(self._load_cas_object(ref, raw), deps)
+            pending.extend(deps - visited)
+        return live_oids
+
+    def put_cache(self, dag_ref: Ref, execution_id: str, db: DmlDB) -> str:
+        with db.tx() as txn:
+            dag: Dag = txn.get(dag_ref)
+            cache_key = dag.cache_key(txn)
+        ref_path = self._cache_key(cache_key)
+        self._put_cas(dag_ref, ref_path, db, meta={"execution_id": execution_id})
+        return cache_key
+
+    @overload
+    def get_cache(self, cache_key: str, db: DmlDB, *, raw: Literal[False] = False) -> Ref | None: ...
+    @overload
+    def get_cache(self, cache_key: str, db: DmlDB | None = None, *, raw: Literal[True] = True) -> dict | None: ...
+    def get_cache(self, cache_key: str, db: DmlDB | None = None, raw: bool = False) -> Ref | dict | None:
+        if raw:
+            return self._get_path(
+                self._cache_key(cache_key),
+                expected_ns="dag",
+                required_metadata=("execution_id",),
+                raw=True,
+            )
+        assert db is not None, "DmlDB instance required when raw=False"
+        return self._get_path(
+            self._cache_key(cache_key),
+            db,
+            expected_ns="dag",
+            required_metadata=("execution_id",),
+            raw=False,
+        )
+
+    def delete_cache(self, cache_key: str) -> bool:
+        return self._del(self._cache_key(cache_key))
+
+    def put_ref(
+        self, commit: Ref, owner: str, project: str, kind: Literal["tag", "branch"], name: str, db: DmlDB
+    ) -> str:
+        ref_path = self._ref_key(owner, project, kind, name)
+        self._put_cas(commit, ref_path, db, exists_ok=kind == "branch")
+        return ref_path
+
+    @overload
+    def get_ref(
+        self,
+        owner: str,
+        project: str,
+        kind: Literal["tag", "branch"],
+        name: str,
+        db: DmlDB,
+        raw: Literal[False] = False,
+    ) -> Ref | None: ...
+    @overload
+    def get_ref(
+        self,
+        owner: str,
+        project: str,
+        kind: Literal["tag", "branch"],
+        name: str,
+        db: None = None,
+        raw: Literal[True] = True,
+    ) -> dict | None: ...
+    def get_ref(
+        self,
+        owner: str,
+        project: str,
+        kind: Literal["tag", "branch"],
+        name: str,
+        db: DmlDB | None = None,
+        raw: bool = False,
+    ) -> Ref | dict | None:
+        if raw:
+            return self._get_path(self._ref_key(owner, project, kind, name), expected_ns="commit", raw=True)
+        assert db is not None, "DmlDB instance required when raw=False"
+        return self._get_path(self._ref_key(owner, project, kind, name), db, expected_ns="commit", raw=False)
+
+    def delete_ref(self, owner: str, project: str, kind: Literal["tag", "branch"], name: str) -> bool:
+        return self._del(self._ref_key(owner, project, kind, name))
+
+    def list_projects(self, owner: str | None = None) -> list[ProjectUri]:
+        prefix = "refs/projects/"
+        out = []
+        if owner is None:
+            # List owners first, then recurse into each owner's project prefixes.
+            for owner_prefix in self._store._iter(self._store._key_for(prefix), keys=False):
+                owner_part = owner_prefix[len(self._store._key_for(prefix)) : -1]
+                out.extend(self.list_projects(owner=owner_part))
+            return out
+        prefix += f"{owner}/"
+        for project_prefix in self._store._iter(self._store._key_for(prefix), keys=False):
+            project_part = unquote(project_prefix[len(self._store._key_for(prefix)) : -1])
+            out.append(ProjectUri(owner, project_part))
+        return out
+
+    def list_refs(self, uri: ProjectUri, kind: Literal["tag", "branch"] = "branch") -> list[ProjectUri]:
+        uri = uri.ensure_project(strict=True)
+        kind_dir = "tags" if kind == "tag" else "heads"
+        project_key = "tag" if kind == "tag" else "branch"
+        prefix = f"refs/projects/{uri.owner}/{quote(uri.project, safe='')}/{kind_dir}/"
+        uris = []
+        for key in self._store._iter(self._store._key_for(prefix)):
+            name = unquote(key[len(self._store._key_for(prefix)) :][:-5])
+            uris.append(ProjectUri(uri.owner, uri.project, **{project_key: name}))
+        return uris
+
+    def put_active(self, cache_key: str, execution_id: str, argv: Ref, db: DmlDB) -> None:
+        ref_path = self._active_key(cache_key)
+        self._put_cas(argv, ref_path, db, meta={"execution_id": execution_id})
+
+    @overload
+    def get_active(self, cache_key: str, db: DmlDB, raw: Literal[False] = False) -> Ref | None: ...
+    @overload
+    def get_active(self, cache_key: str, db: None = None, raw: Literal[True] = True) -> dict | None: ...
+    def get_active(self, cache_key: str, db: DmlDB | None = None, raw: bool = False) -> Ref | dict | None:
+        if raw:
+            return self._get_path(
+                self._active_key(cache_key),
+                expected_ns="node-argv",
+                required_metadata=("execution_id",),
+                raw=True,
+            )
+        assert db is not None, "DmlDB instance required when raw=False"
+        return self._get_path(
+            self._active_key(cache_key),
+            db,
+            expected_ns="node-argv",
+            required_metadata=("execution_id",),
+            raw=False,
+        )
+
+    def delete_active(self, cache_key: str) -> bool:
+        return self._del(self._active_key(cache_key))
+
+    def put_transport(self, execution_id: str, dag: Ref, db: DmlDB) -> str:
+        ref_path = self._transport_key(execution_id)
+        self._put_cas(dag, ref_path, db, meta={"ts": int(time.time())})
+        return ref_path
+
+    def get_transport(self, execution_id: str, db: DmlDB) -> Ref | None:
+        ref_path = self._transport_key(execution_id)
+        return self._get_path(ref_path, db, expected_ns="dag", raw=False)
+
+    def delete_transport(self, execution_id: str) -> bool:
+        return self._del(self._transport_key(execution_id))
+
+    def gc(self) -> dict[str, int]:
+        live_oids: set[str] = set()
+        tombstones_deleted = 0
+        t1 = time.time()
+        total_refs = 0
+        refs_prefix = self._store._key_for("refs/")
+        tombstone_prefix = self._store._key_for("refs/tombstone/")
+        for key in self._store._iter(refs_prefix):
+            if key.startswith(tombstone_prefix):
+                continue
+            payload = json.loads(self._store._get(key))
+            root_ref = self._validate_ref_payload(payload)
+            live_oids.update(self._get_live_oids(root_ref))
+            total_refs += 1
+        t2 = time.time()
+        cas_prefix = self._store._key_for("cas/sha256/")
+        cas_deleted = 0
+        cas_kept_live = 0
+        for key in self._store._iter(cas_prefix):
+            oid = key.rsplit("/", 1)[-1]
+            if oid in live_oids:
+                cas_kept_live += 1
+                continue
+            if self._store._delete(key):
+                cas_deleted += 1
+        t3 = time.time()
+        return {
+            "tombstones-deleted": tombstones_deleted,
+            "cas-deleted": cas_deleted,
+            "cas-retained": cas_kept_live,
+            "total-refs": total_refs,
+            "gc-time": int(t3 - t1),
+            "ref-enumeration-time": int(t2 - t1),
+            "cas-enumeration-time": int(t3 - t2),
+        }

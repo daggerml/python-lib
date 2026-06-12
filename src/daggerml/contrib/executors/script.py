@@ -15,65 +15,70 @@ from contextlib import chdir
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 import daggerml as dml
-from daggerml._internal import DmlRepoError, Runnable, Uri
+from daggerml import Runnable, Uri
+from daggerml._core import AdapterResponse
+from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store
 
-if TYPE_CHECKING:
-    from daggerml import Dag
-
 logger = logging.getLogger(__name__)
-
-
-META_KEY = "__dml_script_exec__"
 
 
 class ScriptExecutor(ExecutorBase):
     name = "script"
     adapter = "local"
 
-    def __init__(self, runnable: Runnable | None = None, argv_ptr: str | None = None):
-        self.runnable = runnable
-        self.argv_ptr = argv_ptr
+    ############################# resolve runnable #############################
+    ############################################################################
 
-    @staticmethod
-    def _script_kwargs(kwargs: dict[str, Any]) -> tuple[dict[str, Any], str]:
-        allowed = {"fn", "prepop", "extra_objs", "extra_lines"}
+    @classmethod
+    def resolve_runnable(cls, uri, kwargs, sub):
+        if sub is not None:
+            raise DmlRepoError("script executor does not accept sub runnable")
+        resolved_kwargs, script = cls._script_kwargs(dict(kwargs))
+        script_uri = S3Store().put(data=script.encode("utf-8"), suffix=".py")
+        resolved_kwargs["script_uri"] = script_uri.uri
+        return Runnable(target=Uri("script"), kwargs=resolved_kwargs, sub=sub, adapter="dml-local-adapter")
+
+    @classmethod
+    def _script_kwargs(cls, kwargs: dict) -> tuple[dict, str]:
+        allowed = {"fn", "prepop", "extra_objs", "post_lines"}
         unknown = sorted(set(kwargs.keys()) - allowed)
         if unknown:
             bad = ", ".join(unknown)
             raise DmlRepoError(f"Unknown script executor kwargs: {bad}")
-        fn = kwargs.get("fn")
-        if not callable(fn):
-            raise DmlRepoError("script resolve_runnable requires callable fn")
+        fn = kwargs["fn"]
         prepop = kwargs.get("prepop", {})
-        if not isinstance(prepop, dict):
-            raise DmlRepoError("script prepop must be a dict")
         extra_objs = list(kwargs.get("extra_objs", []))
-        if not isinstance(extra_objs, list):
-            raise DmlRepoError(f"script extra_objs must be a list, not {type(extra_objs).__name__}")
-        extra_lines = list(kwargs.get("extra_lines", []))
-        if not isinstance(extra_lines, list) or not all(isinstance(x, str) for x in extra_lines):
-            raise DmlRepoError("script extra_lines must be a list[str]")
-        call_kwargs = {}
+        post_lines = list(kwargs.get("post_lines", []))
         params = list(inspect.signature(fn).parameters.values())
         if not params or params[0].name != "dag":
             raise DmlRepoError("script fn must include first 'dag' parameter")
-        for p in params[1:]:
-            has_default = p.default is not inspect._empty
-            if has_default:
-                call_kwargs[p.name] = p.default
-        script = ScriptExecutor._render_script(fn, extra_objs=extra_objs, extra_lines=extra_lines)
-        return {
-            META_KEY: {
-                "prepop": prepop,
-                "fn_name": fn.__name__,
-            },
-            **call_kwargs,
-        }, script
+        script = cls._render_script(fn, extra_objs=extra_objs, post_lines=post_lines)
+        return {"prepop": prepop, "fn_name": fn.__name__}, script
+
+    @classmethod
+    def _render_script(cls, fn, extra_objs: list, post_lines: list[str]) -> str:
+        chunks: list[str] = []
+        for obj in [*extra_objs, fn]:
+            try:
+                raw = dedent(inspect.getsource(inspect.unwrap(obj))).strip()
+                chunks.append(cls._strip_funkify_decorators(raw))
+            except (OSError, TypeError) as e:
+                raise DmlRepoError(f"Failed to serialize object source: {e}") from e
+        if post_lines:
+            chunks.extend(post_lines)
+        script = "\n".join(["\n\n".join(chunks), "\n"])
+        try:
+            mod = ast.parse(script)
+        except SyntaxError as e:
+            raise DmlRepoError(f"Generated script is not valid Python: {e}") from e
+        if not any(isinstance(n, ast.FunctionDef) and n.name == fn.__name__ for n in mod.body):
+            raise DmlRepoError(f"Function '{fn.__name__}' is not globally defined in generated script")
+        return script
 
     @staticmethod
     def _strip_funkify_decorators(source: str) -> str:
@@ -83,54 +88,17 @@ class ScriptExecutor(ExecutorBase):
                 node.decorator_list = []
         return ast.unparse(module).strip()
 
-    @staticmethod
-    def _render_script(fn, *, extra_objs: list[Any], extra_lines: list[str]) -> str:
-        chunks: list[str] = []
-        for obj in [*extra_objs, fn]:
-            try:
-                raw = dedent(inspect.getsource(inspect.unwrap(obj))).strip()
-                chunks.append(ScriptExecutor._strip_funkify_decorators(raw))
-            except (OSError, TypeError) as e:
-                raise DmlRepoError(f"Failed to serialize object source: {e}") from e
-
-        if extra_lines:
-            chunks.extend(extra_lines)
-
-        script = "\n".join(["\n\n".join(chunks), "\n"])
-        try:
-            mod = ast.parse(script)
-        except SyntaxError as e:
-            raise DmlRepoError(f"Generated script is not valid Python: {e}") from e
-
-        if not any(isinstance(n, ast.FunctionDef) and n.name == fn.__name__ for n in mod.body):
-            raise DmlRepoError(f"Function '{fn.__name__}' is not globally defined in generated script")
-
-        return script
-
-    @classmethod
-    def resolve_runnable(cls, uri, kwargs, sub):
-        if sub is not None:
-            raise DmlRepoError("script executor does not accept sub runnable")
-        resolved_kwargs, script = cls._script_kwargs(dict(kwargs))
-        script_uri = S3Store().put(data=script.encode("utf-8"), suffix=".py")
-        meta = dict(resolved_kwargs[META_KEY])
-        meta["script_uri"] = script_uri.uri
-        return Runnable(
-            target=Uri("script"),
-            kwargs={**resolved_kwargs, META_KEY: meta},
-            sub=sub,
-            adapter="dml-local-adapter",
-        )
+    ############################# start/poll/cancel ############################
 
     def start(
         self,
-        *,
         cache_key: str,
         execution_id: str,
-        runnable: Runnable,
-        argv_ptr: str,
+        runnable: dict[str, Any],
         remote: dict[str, str],
-    ) -> dict[str, Any]:
+        scratch_uri: str,
+    ) -> AdapterResponse:
+        del runnable, scratch_uri
         workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{execution_id[:8]}-"))
         payload_path = workdir / "supervisor-input.json"
         result_path = workdir / "result.json"
@@ -150,7 +118,6 @@ class ScriptExecutor(ExecutorBase):
                 cache_key,
                 "--remote-root",
                 remote["root"],
-                argv_ptr,
             ],
             "remote": remote,
             "env": {},
@@ -180,20 +147,20 @@ class ScriptExecutor(ExecutorBase):
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
         }
-        return {"status": "running", "error": None, "state": launch_state}
+        return {"lifecycle": "running", "error": None, "state": launch_state, "dag_id": None}
 
     def poll(
         self,
-        *,
         cache_key: str,
         execution_id: str,
+        runnable: dict[str, Any],
         state: dict[str, Any],
         remote: dict[str, str],
-    ) -> dict[str, Any]:
-        del cache_key, execution_id, remote
+        scratch_uri: str,
+    ) -> AdapterResponse:
+        del cache_key, execution_id, runnable, remote, scratch_uri
         result_path = Path(state.get("result_path", ""))
         pid = state.get("pid")
-
         # Polls may run either in the launching adapter process or in a later
         # process. Reap children when we can; otherwise fall back to a direct
         # PID probe for cross-process polling.
@@ -201,34 +168,49 @@ class ScriptExecutor(ExecutorBase):
             try:
                 done_pid, _ = os.waitpid(pid, os.WNOHANG)
                 if done_pid == 0:
-                    return {"status": "running", "error": None, "state": state}
+                    return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
             except ChildProcessError:
                 try:
                     os.kill(pid, 0)
-                    return {"status": "running", "error": None, "state": state}
+                    return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
                 except ProcessLookupError:
                     pass
                 except PermissionError:
-                    return {"status": "running", "error": None, "state": state}
-
+                    return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
         # Process exited — read result
         if result_path.exists():
             try:
                 parsed = json.loads(result_path.read_text())
-                if isinstance(parsed, dict) and parsed.get("status") in {"succeeded", "failed"}:
+                if parsed.get("lifecycle") in {"succeeded", "failed", "cancelled"}:
                     _cleanup_workdir(state)
                     return parsed
             except Exception as e:
                 _cleanup_workdir(state)
-                return {"status": "failed", "error": f"Could not read supervisor result: {e}"}
-
+                return {
+                    "lifecycle": "failed",
+                    "error": f"Could not read supervisor result: {e}",
+                    "state": None,
+                    "dag_id": None,
+                }
         _cleanup_workdir(state)
-        return {"status": "failed", "error": "Script supervisor exited without result"}
+        return {
+            "lifecycle": "failed",
+            "error": "Script supervisor exited without result",
+            "state": None,
+            "dag_id": None,
+        }
 
     def cancel(
-        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
-    ) -> dict[str, Any]:
-        del cache_key, execution_id, remote
+        self,
+        cache_key: str,
+        execution_id: str,
+        runnable: dict[str, Any],
+        state: dict[str, Any],
+        remote: dict[str, str],
+        scratch_uri: str,
+        cancel_requested_by: str | None,
+    ) -> AdapterResponse:
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by
         pid = state.get("pid")
         if isinstance(pid, int):
             try:
@@ -238,7 +220,7 @@ class ScriptExecutor(ExecutorBase):
             except PermissionError:
                 pass
         _cleanup_workdir(state)
-        return {"status": "cancelled", "error": None}
+        return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}
 
 
 def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
@@ -247,52 +229,26 @@ def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def _terminal_runnable(root: Runnable) -> Runnable:
-    current = root
-    while current.sub is not None:
-        current = current.sub
-    return current
-
-
-def run_payload(argv_ptr: str, *, execution_id: str, cache_key: str, remote_root: str) -> dict[str, Any]:
+def run_payload(*, execution_id: str, cache_key: str, remote_root: str) -> dict[str, Any]:
     namespace: dict[str, Any] = {"logger": logging.getLogger("daggerml.contrib.script")}
-
-    def runit(dag):
-        runnable_node, *arg_nodes = dag.argv
-        runnable = _terminal_runnable(cast(Runnable, runnable_node.value()))
-        metadata = cast(dict[str, Any], runnable.kwargs.pop(META_KEY))
-        script_uri = cast(str, metadata["script_uri"])
-        script = S3Store().get(script_uri).decode("utf-8")
-        fn_name = cast(str, metadata["fn_name"])
-        call_kwargs = {k: dag.put(v, name=f"dml.kw:{k}") for k, v in runnable.kwargs.items()}
-        prepop = cast(dict[str, Any], metadata.get("prepop", {}))
-        for key, value in prepop.items():
-            dag.put(value, name=key)
-        exec(script, namespace)
-        fn = namespace.get(fn_name)
-        output = fn(dag, *arg_nodes, **call_kwargs)
-        if dag.ref is None:
-            dag.commit(output)
-
-    def succeeded_result(dag: "Dag") -> dict[str, Any]:
-        if dag.ref is None:
-            raise DmlRepoError("Script worker succeeded without committed DAG")
-        return {"status": "succeeded", "error": None, "dag_id": dag.ref.id()}
-
-    with dml.temporary(remote_root=remote_root, execution_id=execution_id) as dml_instance:
-        try:
-            dag = dml.new(dml=dml_instance, argv_ptr=argv_ptr)
-        except Exception as e:
-            return {"status": "failed", "error": str(e)}
+    with dml.temporary(remote_root=remote_root) as dml_instance:
         with TemporaryDirectory(prefix="dml-script-worker-") as tmpd, chdir(tmpd):
             try:
-                with dag:
-                    runit(dag)
-                return succeeded_result(dag)
+                with dml.new(dml=dml_instance, cache_key=cache_key, execution_id=execution_id) as dag:
+                    runnable_node, *arg_nodes = dag.argv
+                    runnable = runnable_node.value().innermost()
+                    for key, value in runnable.kwargs.get("prepop", {}).items():
+                        dag.put(value, name=key)
+                    exec(S3Store().get(runnable.kwargs["script_uri"]).decode("utf-8"), namespace)
+                    fn = namespace.get(runnable.kwargs["fn_name"])
+                    output = fn(dag, *arg_nodes)
+                    if dag.ref is None:
+                        dag.commit(output)
+                if dag.ref is None:
+                    raise DmlRepoError("Script worker succeeded without committed DAG")
+                return {"lifecycle": "succeeded", "state": None, "error": None, "dag_id": dag.ref.id()}
             except Exception as e:
-                if dag.ref is not None:
-                    return succeeded_result(dag)
-                return {"status": "failed", "error": str(e)}
+                return {"lifecycle": "failed", "error": str(e), "state": None, "dag_id": None}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -301,14 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execution-id", required=True)
     parser.add_argument("--cache-key", required=True)
     parser.add_argument("--remote-root", required=True)
-    parser.add_argument("argv_ptr")
     args = parser.parse_args(argv or sys.argv[1:])
-    result = run_payload(
-        args.argv_ptr,
-        execution_id=args.execution_id,
-        cache_key=args.cache_key,
-        remote_root=args.remote_root,
-    )
+    result = run_payload(execution_id=args.execution_id, cache_key=args.cache_key, remote_root=args.remote_root)
     encoded = json.dumps(result, separators=(",", ":"), sort_keys=True)
     if args.output == "-":
         sys.stdout.write(encoded)

@@ -6,9 +6,8 @@ import shlex
 import subprocess
 from typing import Any, TypedDict, cast
 
-from daggerml import Uri
-from daggerml._internal import DmlRepoError, Runnable
-from daggerml.contrib.adapters import AdapterBase
+from daggerml import Runnable, Uri
+from daggerml.api import DmlRepoError
 from daggerml.contrib.api import is_node_like
 from daggerml.contrib.executors._base import ExecutorBase
 
@@ -25,44 +24,102 @@ class SshExecutor(ExecutorBase):
     name = "ssh"
     adapter = "local"
 
+    def start(
+        self,
+        cache_key: str,
+        execution_id: str,
+        runnable: dict[str, Any],
+        remote: dict[str, str],
+        scratch_uri: str,
+    ) -> dict[str, Any]:
+        return self._send_nested(
+            cache_key=cache_key,
+            execution_id=execution_id,
+            runnable=runnable,
+            remote=remote,
+            scratch_uri=scratch_uri,
+            state=None,
+            cancel_requested_by=None,
+        )
+
+    def poll(
+        self,
+        cache_key: str,
+        execution_id: str,
+        runnable: dict[str, Any],
+        state: dict[str, Any],
+        remote: dict[str, str],
+        scratch_uri: str,
+    ) -> dict[str, Any]:
+        return self._send_nested(
+            cache_key=cache_key,
+            execution_id=execution_id,
+            runnable=runnable,
+            remote=remote,
+            scratch_uri=scratch_uri,
+            state=state,
+            cancel_requested_by=None,
+        )
+
+    def cancel(
+        self,
+        cache_key: str,
+        execution_id: str,
+        runnable: dict[str, Any],
+        state: dict[str, Any],
+        remote: dict[str, str],
+        scratch_uri: str,
+        cancel_requested_by: str | None,
+    ) -> dict[str, Any]:
+        return self._send_nested(
+            cache_key=cache_key,
+            execution_id=execution_id,
+            runnable=runnable,
+            remote=remote,
+            scratch_uri=scratch_uri,
+            state=state,
+            cancel_requested_by=cancel_requested_by,
+        )
+
     @classmethod
-    def handle(
+    def _send_nested(
         cls,
         *,
         cache_key: str,
         execution_id: str,
-        state: dict[str, Any] | None,
-        execution_status: str | None = None,
-        cancel_requested_by: str | None = None,
-        runnable: Runnable,
-        argv_ptr: str,
+        runnable: dict[str, Any],
         remote: dict[str, str],
+        scratch_uri: str,
+        state: dict[str, Any] | None,
+        cancel_requested_by: str | None,
     ) -> dict[str, Any]:
-        if runnable is None or runnable.sub is None:
-            raise DmlRepoError("ssh executor handle requires runnable with sub runnable")
-        kw = cls._validate_kw(runnable.kwargs)
+        sub = runnable.get("sub")
+        if sub is None:
+            raise DmlRepoError("ssh executor requires sub runnable")
+        kw = cls._validate_kw(cast(dict, runnable.get("kwargs", {})))
         cmd = [
             "ssh",
             *kw["flags"],
             kw["host"],
-            cls._remote_command(env_files=kw["env_files"], adapter=runnable.sub.adapter),
+            cls._remote_command(env_files=kw["env_files"], adapter=sub["adapter"]),
         ]
-        payload = AdapterBase._dump_payload(
-            runnable=runnable.sub,
-            argv_ptr=argv_ptr,
-            cache_key=cache_key,
-            execution_id=execution_id,
-            remote=remote,
-            state=state,
-            execution_status=execution_status,
-            cancel_requested_by=cancel_requested_by,
+        payload = json.dumps(
+            {
+                "runnable": sub,
+                "cache_key": cache_key,
+                "execution_id": execution_id,
+                "remote": remote,
+                "scratch_uri": scratch_uri,
+                "state": state,
+                "cancel_requested_by": cancel_requested_by,
+            }
         )
         logger.debug(
             "ssh executor launch host=%s flags=%s env_files=%s adapter=%s cache_key=%s execution_id=%s has_state=%s",
             kw["host"],
             kw["flags"],
             kw["env_files"],
-            runnable.sub.adapter,
+            sub["adapter"],
             cache_key,
             execution_id,
             state is not None,
@@ -84,7 +141,7 @@ class SshExecutor(ExecutorBase):
             elif stdout:
                 error = f"{error}: {stdout}"
             logger.debug("ssh executor transport failed execution_id=%s error=%s", execution_id, error)
-            return {"status": "failed", "error": error}
+            return {"lifecycle": "failed", "error": error, "state": None, "dag_id": None}
         try:
             result = json.loads(stdout)
         except json.JSONDecodeError as e:
@@ -94,19 +151,29 @@ class SshExecutor(ExecutorBase):
                 e,
                 stdout,
             )
-            return {"status": "failed", "error": f"SSH nested adapter returned invalid JSON: {e}"}
-        if not isinstance(result, dict) or result.get("status") not in {
+            return {
+                "lifecycle": "failed",
+                "error": f"SSH nested adapter returned invalid JSON: {e}",
+                "state": None,
+                "dag_id": None,
+            }
+        if result.get("lifecycle") not in {
             "succeeded",
             "failed",
             "running",
             "cancelled",
         }:
             logger.debug("ssh executor unexpected result execution_id=%s result=%r", execution_id, result)
-            return {"status": "failed", "error": f"SSH nested adapter returned unexpected result: {result}"}
+            return {
+                "lifecycle": "failed",
+                "error": f"SSH nested adapter returned unexpected result: {result}",
+                "state": None,
+                "dag_id": None,
+            }
         logger.debug(
-            "ssh executor result execution_id=%s status=%s error=%r",
+            "ssh executor result execution_id=%s lifecycle=%s error=%r",
             execution_id,
-            result.get("status"),
+            result.get("lifecycle"),
             result.get("error"),
         )
         return result

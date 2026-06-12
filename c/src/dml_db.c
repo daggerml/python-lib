@@ -1,8 +1,11 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -14,16 +17,17 @@
 #include "../include/dml_hash.h"
 #include "../include/dml_msgpack.h"
 
-
 struct DmlDbHandle {
     MDB_env *env;
+    MDB_dbi *dbis;
     char **namespaces;
     char *path;
     size_t namespace_count;
     pid_t owner_pid;
 };
 
-struct DmlDbTxn {
+struct DmlDbTxnHandle {
+    DmlDbHandle *db;
     MDB_txn *txn;
     pthread_t owner_thread;
     bool readonly;
@@ -41,6 +45,31 @@ typedef struct {
     size_t count;
     size_t capacity;
 } DmlDumpList;
+
+static int dml_db_reopen(struct DmlDbHandle **p_handle) {
+    struct DmlDbHandle *old_handle;
+    DmlDbHandle *new_handle = NULL;
+    int forked;
+    int rc;
+
+    if (p_handle == NULL || *p_handle == NULL) return DML_DB_ERR_HANDLE_INVALID;
+    old_handle = *p_handle;
+    forked = old_handle->owner_pid != getpid();
+    rc = dml_db_open(
+        old_handle->path,
+        (const char *const *)old_handle->namespaces,
+        old_handle->namespace_count,
+        0,
+        0,
+        &new_handle
+    );
+    if (rc != 0) return rc;
+    if (!forked) {
+        dml_db_close(p_handle);
+    }
+    *p_handle = new_handle;
+    return 0;
+}
 
 static int dml_map_lmdb_rc(int rc) {
     if (rc == MDB_MAP_FULL) {
@@ -61,6 +90,66 @@ static int dml_map_lmdb_rc(int rc) {
     return DML_DB_ERR_LMDB;
 }
 
+int dml_db_get_size(const char *path, size_t *out_size) {
+    struct stat st;
+    size_t total = 0;
+
+    if (path == NULL || out_size == NULL) {
+        return DML_DB_ERR_INPUT_INVALID;
+    }
+    if (stat(path, &st) != 0) {
+        if (errno == ENOENT) {
+            *out_size = 0;
+            return 0;
+        }
+        return dml_map_lmdb_rc(errno);
+    }
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        struct dirent *entry;
+
+        if (dir == NULL) {
+            return dml_map_lmdb_rc(errno);
+        }
+        while ((entry = readdir(dir)) != NULL) {
+            char *child_path = NULL;
+            struct stat child_st;
+            size_t path_len;
+            size_t name_len;
+
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            path_len = strlen(path);
+            name_len = strlen(entry->d_name);
+            child_path = (char *)malloc(path_len + 1 + name_len + 1);
+            if (child_path == NULL) {
+                closedir(dir);
+                return DML_DB_ERR_NOMEM;
+            }
+            memcpy(child_path, path, path_len);
+            child_path[path_len] = '/';
+            memcpy(child_path + path_len + 1, entry->d_name, name_len + 1);
+            if (stat(child_path, &child_st) != 0) {
+                int stat_errno = errno;
+
+                free(child_path);
+                closedir(dir);
+                return dml_map_lmdb_rc(stat_errno);
+            }
+            free(child_path);
+            if (S_ISREG(child_st.st_mode)) {
+                total += (size_t)child_st.st_size;
+            }
+        }
+        closedir(dir);
+    } else if (S_ISREG(st.st_mode)) {
+        total += (size_t)st.st_size;
+    }
+    *out_size = total;
+    return 0;
+}
+
 static void dml_dump_list_free(DmlDumpList *list) {
     if (list == NULL) return;
     for (size_t i = 0; i < list->count; i++) {
@@ -76,6 +165,7 @@ static void dml_dump_list_free(DmlDumpList *list) {
 }
 
 static int dml_dump_list_find(const DmlDumpList *list, const char *key, size_t key_len) {
+    /* TODO: Reachability/orphan traversal uses this as a seen check, so this linear scan can become costly on large graphs. */
     for (size_t i = 0; i < list->count; i++) {
         if (list->entries[i].key_len == key_len &&
             memcmp(list->entries[i].key, key, key_len) == 0) {
@@ -109,15 +199,13 @@ static int dml_dump_list_add(DmlDumpList *list, const char *key, size_t key_len,
 }
 
 static int dml_dump_visit_value(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     DmlDumpList *list,
     const DmlValue *value
 );
 
 static int dml_dump_add_ref(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     DmlDumpList *list,
     const char *key,
     size_t key_len
@@ -135,7 +223,7 @@ static int dml_dump_add_ref(
     if (dml_ref_split(key, key_len, &ns, &ns_len, &ident, &id_len) != 0) {
         return DML_DB_ERR_REF_INVALID;
     }
-    rc = dml_db_get(p_handle, txn, ns, ns_len, ident, id_len, 0, &value);
+    rc = dml_db_get(p_txn, ns, ns_len, ident, id_len, 0, &value);
     if (rc != 0) {
         return rc;
     }
@@ -144,7 +232,7 @@ static int dml_dump_add_ref(
         dml_value_free(value);
         return rc;
     }
-    rc = dml_dump_visit_value(p_handle, txn, list, value);
+    rc = dml_dump_visit_value(p_txn, list, value);
     if (rc != 0) {
         return rc;
     }
@@ -152,24 +240,23 @@ static int dml_dump_add_ref(
 }
 
 static int dml_dump_visit_value(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     DmlDumpList *list,
     const DmlValue *value
 ) {
     if (value == NULL) return 0;
     switch (value->type) {
     case DML_VALUE_REF:
-        return dml_dump_add_ref(p_handle, txn, list, value->as.ref.data, value->as.ref.size);
+        return dml_dump_add_ref(p_txn, list, value->as.ref.data, value->as.ref.size);
     case DML_VALUE_LIST:
         for (size_t i = 0; i < value->as.list.count; i++) {
-            int rc = dml_dump_visit_value(p_handle, txn, list, value->as.list.items[i]);
+            int rc = dml_dump_visit_value(p_txn, list, value->as.list.items[i]);
             if (rc != 0) return rc;
         }
         return 0;
     case DML_VALUE_MAP:
         for (size_t i = 0; i < value->as.map.count; i++) {
-            int rc = dml_dump_visit_value(p_handle, txn, list, value->as.map.entries[i].value);
+            int rc = dml_dump_visit_value(p_txn, list, value->as.map.entries[i].value);
             if (rc != 0) return rc;
         }
         return 0;
@@ -178,117 +265,66 @@ static int dml_dump_visit_value(
     }
 }
 
-static int dml_db_reopen_handle(struct DmlDbHandle **p_handle) {
-    if (p_handle == NULL || *p_handle == NULL) return DML_DB_ERR_HANDLE_INVALID;
-    struct DmlDbHandle *handle = *p_handle;
-    // Copy args needed for reopen
-    char *path_copy = strdup(handle->path);
-    if (!path_copy) return DML_DB_ERR_NOMEM;
-    size_t ns_count = handle->namespace_count;
-    char **ns_copy = NULL;
-    if (ns_count > 0) {
-        ns_copy = (char **)calloc(ns_count, sizeof(char *));
-        if (!ns_copy) {
-            free(path_copy);
-            return DML_DB_ERR_NOMEM;
-        }
-        for (size_t i = 0; i < ns_count; i++) {
-            ns_copy[i] = strdup(handle->namespaces[i]);
-            if (!ns_copy[i]) {
-                for (size_t j = 0; j < i; j++) free(ns_copy[j]);
-                free(ns_copy);
-                free(path_copy);
-                return DML_DB_ERR_NOMEM;
-            }
-        }
-    }
-    // Close old handle FIRST to avoid "two handles in one process" issue
-    dml_db_close(p_handle);
-    struct DmlDbHandle *new_handle = NULL;
-    int rc = dml_db_open(
-        path_copy,
-        (const char *const *)ns_copy,
-        ns_count,
-        0, // create_if_missing: assumed irrelevant for reopen of existing
-        0, // map_size: 0 means keep existing
-        &new_handle
-    );
-    // Cleanup copies
-    free(path_copy);
-    if (ns_copy) {
-        for (size_t i = 0; i < ns_count; i++) free(ns_copy[i]);
-        free(ns_copy);
-    }
-    if (rc != 0) { return rc; }
-    *p_handle = new_handle;
-    return 0;
-}
-
 static int dml_db_validate(struct DmlDbHandle **p_handle, const int reopen) {
     if (p_handle == NULL || *p_handle == NULL) return DML_DB_ERR_HANDLE_INVALID;
     MDB_stat st;
     int rc;
-    int env_was_reopened = 0;
     struct DmlDbHandle *handle = *p_handle;
     if (handle->owner_pid != getpid()) {
         if (reopen) {
-            int rc = dml_db_reopen_handle(p_handle);
+            rc = dml_db_reopen(p_handle);
             if (rc != 0) return rc;
             handle = *p_handle;
-            env_was_reopened = 1;
         } else {
             return DML_DB_ERR_HANDLE_FORKED;
         }
     }
-    if (handle->env == NULL) return DML_DB_ERR_HANDLE_CLOSED;
-    if (handle->namespace_count == 0) return DML_DB_ERR_HANDLE_INVALID;
-    rc = mdb_env_stat((*p_handle)->env, &st);
-    if (rc != MDB_SUCCESS) {
-        // If environment is invalid (e.g., another handle to same DB was closed),
-        // reopen if requested
-        if (rc == EINVAL && reopen) {
-            int rc = dml_db_reopen_handle(p_handle);
+    if (handle->env == NULL) {
+        if (reopen) {
+            rc = dml_db_reopen(p_handle);
             if (rc != 0) return rc;
             handle = *p_handle;
-            env_was_reopened = 1;
-            // Verify the new handle works
-            rc = mdb_env_stat(handle->env, &st);
-            if (rc != MDB_SUCCESS) return dml_map_lmdb_rc(rc);
         } else {
-            return dml_map_lmdb_rc(rc);
+            return DML_DB_ERR_HANDLE_CLOSED;
         }
     }
-    // If we reopened the environment, all existing transactions are now invalid
-    // Signal to caller that they need to retry their transaction
-    if (env_was_reopened) {
-        return DML_DB_ERR_ENV_REOPENED;
+    if (handle->dbis == NULL) return DML_DB_ERR_HANDLE_INVALID;
+    if (handle->namespace_count == 0) return DML_DB_ERR_HANDLE_INVALID;
+    rc = mdb_env_stat(handle->env, &st);
+    if (rc != MDB_SUCCESS && reopen) {
+        rc = dml_db_reopen(p_handle);
+        if (rc != 0) return rc;
+        handle = *p_handle;
+        rc = mdb_env_stat(handle->env, &st);
+    }
+    if (rc != MDB_SUCCESS) {
+        return dml_map_lmdb_rc(rc);
     }
     return 0;
 }
 
-static int dml_db_validate_txn(struct DmlDbHandle **p_handle, struct DmlDbTxn *txn, const int reopen) {
+static int dml_db_validate_txn(struct DmlDbTxnHandle **p_txn, const int reopen) {
     int rc;
-    // If txn is NULL, allow reopening. If txn exists, don't reopen (would invalidate txn)
-    rc = dml_db_validate(p_handle, txn == NULL ? reopen : 0);
+    if (p_txn == NULL || *p_txn == NULL) {
+        return DML_DB_ERR_TXN_INVALID;
+    }
+    rc = dml_db_validate(&(*p_txn)->db, reopen);
     if (rc != 0) {
         if (rc == DML_DB_ERR_HANDLE_FORKED) {
             return DML_DB_ERR_TXN_FORKED;
         }
-        // ENV_REOPENED should not occur when txn != NULL (since we pass reopen=0)
-        // but if it does, it means the handle was reopened elsewhere - propagate it
         return rc;
     }
-    if (txn == NULL || txn->txn == NULL) {
+    if ((*p_txn)->txn == NULL) {
         return DML_DB_ERR_TXN_INVALID;
     }
-    if (pthread_self() != txn->owner_thread) {
+    if (pthread_self() != (*p_txn)->owner_thread) {
         return DML_DB_ERR_TXN_FORKED;
     }
     return 0;
 }
 
-// dml_db_open opens a lmdb database (and optionally create if flag is set and does not exist)
-// we own the handle
+// dml_db_open opens the environment handle.
 int dml_db_open(
     const char *path,
     const char *const *namespaces,
@@ -298,6 +334,7 @@ int dml_db_open(
     DmlDbHandle **out_handle
 ) {
     DmlDbHandle *handle = NULL;
+    MDB_txn *setup_txn = NULL;
     int rc;
     if (path == NULL || out_handle == NULL) {
         return DML_DB_ERR_INPUT_INVALID;
@@ -357,6 +394,33 @@ int dml_db_open(
         }
     }
     handle->path = strdup(path);
+    if (handle->path == NULL) {
+        dml_db_close(&handle);
+        return DML_DB_ERR_NOMEM;
+    }
+    handle->dbis = (MDB_dbi *)calloc(namespace_count, sizeof(MDB_dbi));
+    if (handle->dbis == NULL) {
+        dml_db_close(&handle);
+        return DML_DB_ERR_NOMEM;
+    }
+    rc = mdb_txn_begin(handle->env, NULL, 0, &setup_txn);
+    if (rc != MDB_SUCCESS) {
+        dml_db_close(&handle);
+        return dml_map_lmdb_rc(rc);
+    }
+    for (size_t i = 0; i < namespace_count; i++) {
+        rc = mdb_dbi_open(setup_txn, handle->namespaces[i], MDB_CREATE, &handle->dbis[i]);
+        if (rc != MDB_SUCCESS) {
+            mdb_txn_abort(setup_txn);
+            dml_db_close(&handle);
+            return dml_map_lmdb_rc(rc);
+        }
+    }
+    rc = mdb_txn_commit(setup_txn);
+    if (rc != MDB_SUCCESS) {
+        dml_db_close(&handle);
+        return dml_map_lmdb_rc(rc);
+    }
     *out_handle = handle;
     return 0;
 }
@@ -365,6 +429,10 @@ int dml_db_close(struct DmlDbHandle **p_handle) {
     if (p_handle == NULL || *p_handle == NULL) return 0;
     struct DmlDbHandle *handle = *p_handle;
     *p_handle = NULL;
+    if (handle->dbis != NULL) {
+        free(handle->dbis);
+        handle->dbis = NULL;
+    }
     if (handle->namespaces != NULL) {
         for (size_t i = 0; i < handle->namespace_count; i++) {
             free(handle->namespaces[i]);     // ok if NULL
@@ -381,151 +449,91 @@ int dml_db_close(struct DmlDbHandle **p_handle) {
     return 0;
 }
 
-int dml_db_mapsize(struct DmlDbHandle **p_handle, size_t *out_mapsize) {
-    MDB_envinfo info;
+int dml_db_resize(DmlDbHandle **p_handle, size_t map_size) {
     int rc;
-    if (out_mapsize == NULL) {
-        return DML_DB_ERR_INPUT_INVALID;
-    }
-    *out_mapsize = 0;
+
+    if (map_size == 0) return DML_DB_ERR_INPUT_INVALID;
     rc = dml_db_validate(p_handle, 1);
-    if (rc != 0) {
-        return rc;
-    }
-    memset(&info, 0, sizeof(info));
-    struct DmlDbHandle *handle = *p_handle;
-    rc = mdb_env_info(handle->env, &info);
-    if (rc != MDB_SUCCESS) {
-        return dml_map_lmdb_rc(rc);
-    }
-    *out_mapsize = info.me_mapsize;
-    return 0;
-}
-int dml_db_resize(struct DmlDbHandle **p_handle, size_t mapsize) {
-    int rc;
-    rc = dml_db_validate(p_handle, 1);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = mdb_env_set_mapsize((*p_handle)->env, mapsize);
-    if (rc != MDB_SUCCESS) {
-        return dml_map_lmdb_rc(rc);
-    }
+    if (rc != 0) return rc;
+    rc = mdb_env_set_mapsize((*p_handle)->env, map_size);
+    if (rc != MDB_SUCCESS) return dml_map_lmdb_rc(rc);
     return 0;
 }
 
-// transactions
-int dml_db_txn_begin(DmlDbHandle **p_handle, const int readonly, DmlDbTxn **out_txn) {
+int dml_db_txn_open(DmlDbHandle **p_handle, const int readonly, DmlDbTxnHandle **out_txn) {
+    DmlDbTxnHandle *txn_handle = NULL;
     MDB_txn *txn = NULL;
-    DmlDbTxn *wrapper = NULL;
     int rc;
+
+    if (out_txn == NULL) return DML_DB_ERR_INPUT_INVALID;
+    *out_txn = NULL;
     rc = dml_db_validate(p_handle, 1);
-    // ENV_REOPENED means the env was repaired and is ready for new transactions
-    if (rc != 0 && rc != DML_DB_ERR_ENV_REOPENED) { 
-        return rc; 
-    }
+    if (rc != 0) return rc;
+    txn_handle = (DmlDbTxnHandle *)calloc(1, sizeof(DmlDbTxnHandle));
+    if (txn_handle == NULL) return DML_DB_ERR_NOMEM;
     rc = mdb_txn_begin((*p_handle)->env, NULL, readonly ? MDB_RDONLY : 0, &txn);
-    // If we still get EINVAL after validate, try reopening one more time
-    if (rc == EINVAL) {
-        int rc2 = dml_db_reopen_handle(p_handle);
-        if (rc2 != 0) {
-            return dml_map_lmdb_rc(rc);
-        }
-        // Retry with the new handle
-        rc = mdb_txn_begin((*p_handle)->env, NULL, readonly ? MDB_RDONLY : 0, &txn);
+    if (rc != MDB_SUCCESS) {
+        free(txn_handle);
+        return dml_map_lmdb_rc(rc);
     }
-    if (rc != MDB_SUCCESS) { 
-        return dml_map_lmdb_rc(rc); 
-    }
-    wrapper = (DmlDbTxn *)calloc(1, sizeof(*wrapper));
-    if (wrapper == NULL) {
-        mdb_txn_abort(txn);
-        return DML_DB_ERR_NOMEM;
-    }
-    wrapper->txn = txn;
-    wrapper->owner_thread = pthread_self();
-    wrapper->readonly = readonly ? true : false;
-    *out_txn = wrapper;
+    txn_handle->db = *p_handle;
+    txn_handle->txn = txn;
+    txn_handle->owner_thread = pthread_self();
+    txn_handle->readonly = readonly ? true : false;
+    *out_txn = txn_handle;
     return 0;
 }
-int dml_db_txn_fin(DmlDbHandle **p_handle, DmlDbTxn *txn, const int commit) {
-    int rc = 0;
-    rc = dml_db_validate(p_handle, 0);
-    if (rc != 0) {
-        if (rc == DML_DB_ERR_HANDLE_FORKED) {
-            return DML_DB_ERR_TXN_FORKED;
-        }
-        return rc;
-    }
-    if (txn == NULL) {
-        return rc;
-    }
 
-    // Prevent double-free by checking if txn is already freed
-    if (txn->txn != NULL) {
-        if (txn->readonly) {
-            mdb_txn_abort(txn->txn);
-            rc = 0;
-        } else if (commit) {
-            rc = mdb_txn_commit(txn->txn);
+int dml_db_txn_close(DmlDbTxnHandle **p_txn, const int commit) {
+    int rc = 0;
+    if (p_txn == NULL || *p_txn == NULL) return 0;
+    DmlDbTxnHandle *txn_handle = *p_txn;
+    *p_txn = NULL;
+    if (txn_handle->txn != NULL) {
+        if (txn_handle->readonly || !commit) {
+            mdb_txn_abort(txn_handle->txn);
+        } else {
+            rc = mdb_txn_commit(txn_handle->txn);
             if (rc != MDB_SUCCESS) {
-                // LMDB aborts and frees the txn on commit failure.
                 rc = dml_map_lmdb_rc(rc);
             } else {
                 rc = 0;
             }
-        } else {
-            mdb_txn_abort(txn->txn);
         }
-        // Mark as freed to prevent double-free
-        txn->txn = NULL;
+        txn_handle->txn = NULL;
     }
-    txn->owner_thread = 0;
-    // Only free if not already freed
-    free(txn);
-    // Set txn to NULL to avoid dangling pointer
-    txn = NULL;
+    free(txn_handle);
     return rc;
 }
 
 // io
 int dml_ns_dbi_lookup(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     MDB_dbi *out_dbi
 ) {
-    // look for namespace in handle and if none found, create it
+    // look for namespace in handle and return the cached DBI
     size_t i;
     int rc;
-    unsigned int flags = 0;
-    rc = dml_db_validate_txn(p_handle, txn, 1);
+    rc = dml_db_validate_txn(p_txn, 0);
     if (rc != 0) return rc;
-    if (!txn->readonly) flags |= MDB_CREATE;
     if (ns == NULL || ns_len == 0 || out_dbi == NULL) {
         return DML_DB_ERR_INPUT_INVALID;
     }
-    DmlDbHandle *handle = *p_handle;
+    DmlDbHandle *handle = (*p_txn)->db;
     for (i = 0; i < handle->namespace_count; i++) {
         if (strlen(handle->namespaces[i]) == ns_len &&
             memcmp(handle->namespaces[i], ns, ns_len) == 0) {
             // found
-            rc = mdb_dbi_open(txn->txn, handle->namespaces[i], flags, out_dbi);
-            if (rc == MDB_NOTFOUND) {
-                return DML_DB_ERR_NOT_FOUND;
-            }
-            if (rc != MDB_SUCCESS) {
-                return dml_map_lmdb_rc(rc);
-            }
+            *out_dbi = handle->dbis[i];
             return 0;
         }
     }
     return DML_DB_ERR_NAMESPACE_INVALID;
 }
 int dml_db_put(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -537,7 +545,6 @@ int dml_db_put(
 ) {
     int rc = 0;
     MDB_dbi dbi;
-    DmlDbTxn *local_txn = txn;
     DmlMsgpackBuffer buffer = {0};
 
     char *owned_key = NULL;          // <— if we compute it, we own it
@@ -545,9 +552,9 @@ int dml_db_put(
     MDB_val db_value = {0};
 
     if (ns == NULL || ns_len == 0)   return DML_DB_ERR_INPUT_INVALID;
-    rc = dml_db_validate_txn(p_handle, txn, 0);
+    rc = dml_db_validate_txn(p_txn, 0);
     if (rc != 0) return rc;
-    if (local_txn->readonly) { rc = DML_DB_ERR_TXN_READONLY; goto cleanup; }
+    if ((*p_txn)->readonly) { rc = DML_DB_ERR_TXN_READONLY; goto cleanup; }
     if (raw) {
         // Raw mode: value should be a string DmlValue containing raw bytes
         if (value->type != DML_VALUE_STR) {
@@ -585,13 +592,13 @@ int dml_db_put(
         key = owned_key;
         key_len = owned_key_len;
     }
-    rc = dml_ns_dbi_lookup(p_handle, local_txn, ns, ns_len, &dbi);
+    rc = dml_ns_dbi_lookup(p_txn, ns, ns_len, &dbi);
     if (rc != 0) { goto cleanup; }
     {
         MDB_val db_key = { .mv_size = key_len, .mv_data = (void *)key };
         unsigned int flags = no_overwrite ? MDB_NOOVERWRITE : 0;
 
-        rc = mdb_put(local_txn->txn, dbi, &db_key, &db_value, flags);
+        rc = mdb_put((*p_txn)->txn, dbi, &db_key, &db_value, flags);
         if (rc == MDB_KEYEXIST && no_overwrite) {
             rc = 0;
         }
@@ -621,8 +628,7 @@ cleanup:
     return rc;
 }
 int dml_db_get(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -634,18 +640,16 @@ int dml_db_get(
     MDB_dbi dbi;
     MDB_val db_key;
     MDB_val db_value;
-    DmlDbTxn *local_txn = txn;
-
     if (key == NULL || key_len == 0) return DML_DB_ERR_INPUT_INVALID;
-    rc = dml_db_validate_txn(p_handle, txn, 0);
+    rc = dml_db_validate_txn(p_txn, 0);
     if (rc != 0) return rc;
     // lookup namespace
-    rc = dml_ns_dbi_lookup(p_handle, local_txn, ns, ns_len, &dbi);
+    rc = dml_ns_dbi_lookup(p_txn, ns, ns_len, &dbi);
     if (rc != 0) return rc;
     // get value
     db_key.mv_size = key_len;
     db_key.mv_data = (void *)key;
-    rc = mdb_get(local_txn->txn, dbi, &db_key, &db_value);
+    rc = mdb_get((*p_txn)->txn, dbi, &db_key, &db_value);
     if (rc == MDB_NOTFOUND) {
         return DML_DB_ERR_NOT_FOUND;
     }
@@ -668,8 +672,7 @@ int dml_db_get(
 }
 
 int dml_db_del(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -678,27 +681,24 @@ int dml_db_del(
     int rc = 0;
     MDB_dbi dbi;
     MDB_val db_key;
-    DmlDbTxn *local_txn = txn;
-
     if (key == NULL || key_len == 0) return DML_DB_ERR_INPUT_INVALID;
-    rc = dml_db_validate_txn(p_handle, txn, 0);
+    rc = dml_db_validate_txn(p_txn, 0);
     if (rc != 0) return rc;
-    if (local_txn->readonly) return DML_DB_ERR_TXN_READONLY;
+    if ((*p_txn)->readonly) return DML_DB_ERR_TXN_READONLY;
 
-    rc = dml_ns_dbi_lookup(p_handle, local_txn, ns, ns_len, &dbi);
+    rc = dml_ns_dbi_lookup(p_txn, ns, ns_len, &dbi);
     if (rc != 0) return rc;
 
     db_key.mv_size = key_len;
     db_key.mv_data = (void *)key;
-    rc = mdb_del(local_txn->txn, dbi, &db_key, NULL);
+    rc = mdb_del((*p_txn)->txn, dbi, &db_key, NULL);
     if (rc == MDB_NOTFOUND) return DML_DB_ERR_NOT_FOUND;
     if (rc != MDB_SUCCESS) return dml_map_lmdb_rc(rc);
     return 0;
 }
 
 int dml_db_exists(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -709,14 +709,12 @@ int dml_db_exists(
     MDB_dbi dbi;
     MDB_val db_key;
     MDB_val db_value;
-    DmlDbTxn *local_txn = txn;
-
     if (out_exists == NULL) return DML_DB_ERR_INPUT_INVALID;
     *out_exists = 0;
     if (key == NULL || key_len == 0) return DML_DB_ERR_INPUT_INVALID;
-    rc = dml_db_validate_txn(p_handle, txn, 0);
+    rc = dml_db_validate_txn(p_txn, 0);
     if (rc != 0) return rc;
-    rc = dml_ns_dbi_lookup(p_handle, local_txn, ns, ns_len, &dbi);
+    rc = dml_ns_dbi_lookup(p_txn, ns, ns_len, &dbi);
     if (rc != 0) {
         if (rc == DML_DB_ERR_NOT_FOUND) {
             *out_exists = 0;
@@ -726,7 +724,7 @@ int dml_db_exists(
     }
     db_key.mv_size = key_len;
     db_key.mv_data = (void *)key;
-    rc = mdb_get(local_txn->txn, dbi, &db_key, &db_value);
+    rc = mdb_get((*p_txn)->txn, dbi, &db_key, &db_value);
     if (rc == MDB_NOTFOUND) {
         *out_exists = 0;
         return 0;
@@ -739,8 +737,7 @@ int dml_db_exists(
 }
 
 int dml_db_iter_keys(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     const char *start_token,
     DmlObjCollection *out_page
@@ -750,7 +747,6 @@ int dml_db_iter_keys(
     MDB_cursor *cursor = NULL;
     MDB_val db_key;
     MDB_val db_value;
-    DmlDbTxn *local_txn = txn;
     size_t count = 0;
     size_t keys_len = 0;
     size_t keys_cap = 0;
@@ -768,13 +764,13 @@ int dml_db_iter_keys(
     out_page->next_token = NULL;
 
     if (ns == NULL || ns[0] == '\0') return DML_DB_ERR_INPUT_INVALID;
-    rc = dml_db_validate_txn(p_handle, txn, 0);
+    rc = dml_db_validate_txn(p_txn, 0);
     if (rc != 0) return rc;
-    rc = dml_ns_dbi_lookup(p_handle, local_txn, ns, strlen(ns), &dbi);
+    rc = dml_ns_dbi_lookup(p_txn, ns, strlen(ns), &dbi);
     if (rc != 0) {
         goto cleanup;
     }
-    rc = mdb_cursor_open(local_txn->txn, dbi, &cursor);
+    rc = mdb_cursor_open((*p_txn)->txn, dbi, &cursor);
     if (rc != MDB_SUCCESS) {
         rc = dml_map_lmdb_rc(rc);
         goto cleanup;
@@ -881,14 +877,12 @@ cleanup:
 }
 
 int dml_db_list_orphans(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *const *start_refs,
     size_t start_refs_count,
     DmlValue **out_refs
 ) {
     int rc = 0;
-    DmlDbTxn *local_txn = txn;
     DmlDumpList reachable = {0};
     DmlDumpList orphans = {0};
     MDB_dbi dbi;
@@ -903,7 +897,7 @@ int dml_db_list_orphans(
     if (start_refs_count > 0 && start_refs == NULL) {
         return DML_DB_ERR_INPUT_INVALID;
     }
-    rc = dml_db_validate_txn(p_handle, txn, 0);
+    rc = dml_db_validate_txn(p_txn, 0);
     if (rc != 0) return rc;
 
     for (size_t i = 0; i < start_refs_count; i++) {
@@ -912,18 +906,17 @@ int dml_db_list_orphans(
             goto cleanup;
         }
         size_t ref_len = strlen(start_refs[i]);
-        rc = dml_dump_add_ref(p_handle, local_txn, &reachable, start_refs[i], ref_len);
+        rc = dml_dump_add_ref(p_txn, &reachable, start_refs[i], ref_len);
         if (rc != 0) {
             goto cleanup;
         }
     }
 
-    DmlDbHandle *handle = *p_handle;
-    for (size_t i = 0; i < handle->namespace_count; i++) {
-        const char *ns = handle->namespaces[i];
+    for (size_t i = 0; i < (*p_txn)->db->namespace_count; i++) {
+        const char *ns = (*p_txn)->db->namespaces[i];
         size_t ns_len = strlen(ns);
 
-        rc = dml_ns_dbi_lookup(p_handle, local_txn, ns, ns_len, &dbi);
+        rc = dml_ns_dbi_lookup(p_txn, ns, ns_len, &dbi);
         if (rc == DML_DB_ERR_NOT_FOUND) {
             rc = 0;
             continue;
@@ -931,7 +924,7 @@ int dml_db_list_orphans(
         if (rc != 0) {
             goto cleanup;
         }
-        rc = mdb_cursor_open(local_txn->txn, dbi, &cursor);
+        rc = mdb_cursor_open((*p_txn)->txn, dbi, &cursor);
         if (rc != MDB_SUCCESS) {
             rc = dml_map_lmdb_rc(rc);
             goto cleanup;

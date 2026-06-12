@@ -26,7 +26,7 @@ dml --project-home ./demo-repo config set remote.project dml://alice/demo
 
 ## `DAG not found: <name>`
 
-You will hit this when `load("name")` or `dml dag get name` points at a DAG that is not present in the selected revision.
+You will hit this when `load("name")` points at a DAG that is not present in the selected revision.
 
 Start by checking what exists:
 
@@ -74,7 +74,6 @@ The CLI prints normal command results as JSON. Failures are shown as errors on s
 ```bash
 dml diff --help
 dml pull --help
-dml dag get --help
 ```
 
 ## Related docs

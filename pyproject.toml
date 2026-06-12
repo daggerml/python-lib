@@ -52,8 +52,8 @@ ssh = "daggerml.contrib.executors:SshExecutor"
 cfn = "daggerml.contrib.executors:CfnExecutor"
 
 [project.entry-points."daggerml.codecs"]
-dataframe = "daggerml.contrib.codecs:literal_codecs"
-builtin = "daggerml.codecs:codecs"
+"daggerml.contrib" = "daggerml.contrib.codecs:literal_codecs"
+daggerml = "daggerml.api:codecs"
 
 [project.urls]
 Homepage = "https://daggerml.com"
@@ -76,15 +76,26 @@ path = "daggerml/__about__.py"
 location = "install"
 template = "__version__ = \"${version}\"\n"
 
+[tool.uv]
+cache-keys = [
+  { file = "c/**/*.c" },
+  { file = "c/**/*.h" },
+  { file = "src/**/*.pyx" },
+  { file = "src/**/*.pxd" },
+]
+
 [tool.pytest.ini_options]
 pythonpath = "tests/"
 minversion = "6.0"
 addopts = "-ra --import-mode=importlib"
+norecursedirs = ["ignore"]
 testpaths = [
   "tests",
   "src/daggerml",
 ]
 markers = [
+  "contrib: marks tests for daggerml.contrib (select with '-m contrib' or deselect with '-m \"not contrib\"')",
+  "core: marks tests for daggerml._core (select with '-m core' or deselect with '-m \"not core\"')",
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
   "serial",
 ]

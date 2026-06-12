@@ -184,16 +184,16 @@ def predict_target(dag, dataset, params):
 
 def main() -> None:
     _require_local_tools()
-    with dml.new(name="examples/02-ssh-docker-dataset") as dag:
-        loaded_dag = dml.load("examples/01-docker-dataset")
-        dag.image = loaded_dag.image
-        dag.dataset = loaded_dag.dataset
-        dag.put(loaded_dag["dkr-flags"], name="dkr-flags")
-        with ssh_server(dag):
-            print("Training model and generating predictions within Docker over SSH...")
-            predictions = dag.call(predict_target, dag.dataset, {}, name="predictions")
-            print("Committing DAG to persist artifacts...")
-        dag.commit(predictions)
+    dag = dml.new(name="examples/02-ssh-docker-dataset")
+    loaded_dag = dml.load("examples/01-docker-dataset")
+    dag.image = loaded_dag.image
+    dag.dataset = loaded_dag.dataset
+    dag.put(loaded_dag["dkr-flags"], name="dkr-flags")
+    with ssh_server(dag):
+        print("Training model and generating predictions within Docker over SSH...")
+        predictions = dag.call(predict_target, dag.dataset, {}, name="predictions")
+        print("Committing DAG to persist artifacts...")
+    dag.commit(predictions)
     print("Reading predictions parquet from S3...")
     print(json.dumps(predictions.value(), indent=2))
 

@@ -1,27 +1,24 @@
+from __future__ import annotations
+
 import logging
 import time
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from importlib import metadata
 from tempfile import TemporaryDirectory
-from typing import Any, Iterator, Optional, Union, cast, overload
+from threading import RLock
+from typing import Any, Optional, Protocol, Union, cast, get_args, overload
 
-from daggerml._internal import (
-    Dml,
-    DmlRepoError,
-    Error,
-    Ref,
-    Runnable,
-    Uri,
-)
-from daggerml.codecs import apply_codecs
+from daggerml._core import Dml, DmlRepoError, Error, Ref, Runnable, Uri
 from daggerml.util import BackoffWithJitter, current_time_millis
 
 log = logging.getLogger(__name__)
 
-
 Scalar = Union[str, int, float, bool, type(None), Uri, Runnable]
-Collection = Union[list, tuple, dict]
+Collection = Union[list, dict]
+
 _NO_DEFAULT_DML = object()
 _SCOPED_DEFAULT_DML: ContextVar[object] = ContextVar("daggerml_scoped_default_dml", default=_NO_DEFAULT_DML)
 _PROCESS_DEFAULT_DML: Optional["Dml"] = None
@@ -71,30 +68,29 @@ def use_default_dml(dml: "Dml"):
         _SCOPED_DEFAULT_DML.reset(token)
 
 
-def new(name="", *, message="", argv_ptr=None, dml: Dml | None = None) -> "Dag":
+def new(
+    name="", message="", cache_key: str | None = None, execution_id: str | None = None, dml: Dml | None = None
+) -> "Dag":
     """Create a new DAG using the active or provided Dml runtime."""
     runtime = dml or get_default_dml()
-    index_id = runtime.runtime.create(argv_ptr=argv_ptr)
+    index_id = runtime.runtime.create(cache_key=cache_key, execution_id=execution_id)
     return Dag(dml=runtime, token=index_id, name=name, message=message)
 
 
 def load(name: str, dml=None) -> "Dag":
     """Load a DAG using the active default Dml runtime."""
     dml = dml or get_default_dml()
-    dag_info = dml.dag.get(name)
-    if dag_info is None:
+    dag_ref = dml.show()["dags"].get(name)
+    if dag_ref is None:
         raise DmlRepoError(f"DAG not found: {name}")
-    return Dag(dml=dml, ref=dag_info["ref"], name=name)
+    return Dag(dml=dml, ref=dag_ref, name=name)
 
 
 @contextmanager
 def temporary(**kw):
-    """Create a temporary Dml runtime with an initial commit."""
-    kw.pop("name", None)
-    execution_id = kw.pop("execution_id", None)
+    """Create a temporary Dml runtime with an unborn attached HEAD."""
     with TemporaryDirectory() as tmpdir:
-        resp = Dml.init(project_home=tmpdir, **kw)
-        yield Dml(resp["project_home"], remote_root=resp["remote_root"], execution_id=execution_id)
+        yield Dml.init(project_home=tmpdir, **kw)
 
 
 def status() -> dict[str, object]:
@@ -133,7 +129,7 @@ def _make_node(dag: "Dag", ref: Ref) -> "Node":
         node = ListNode(dag, ref, _info=info)
     elif isinstance(node_value, dict):
         info["length"] = len(node_value)
-        info["keys"] = list(node_value.keys())
+        info["keys"] = sorted(node_value.keys())
         node = DictNode(dag, ref, _info=info)
     elif isinstance(node_value, Runnable):
         node = RunnableNode(dag, ref, _info=info)
@@ -145,13 +141,13 @@ def _make_node(dag: "Dag", ref: Ref) -> "Node":
 @dataclass
 class Dag:
     dml: Dml
-    token: Optional[str] = None  # Working index id
+    token: Optional[Ref] = None  # Working index id
     ref: Optional[Ref] = None
     name: str = ""  # DAG name for commit
     message: str = ""  # Commit message
 
     def __repr__(self):
-        to = self.ref.to if self.ref else (self.token if self.token is not None else "NA")
+        to = self.ref.to if self.ref else (self.token.to if self.token is not None else "NA")
         return f"Dag({to})"
 
     def __hash__(self):
@@ -169,29 +165,24 @@ class Dag:
             err = Error.from_ex(exc_value) if not isinstance(exc_value, Error) else exc_value
             self.commit(err)
 
-    def _require_index_ref(self) -> str:
-        index_id = self.token
-        if index_id is None:
+    def _require_index_ref(self) -> Ref:
+        if self.token is None:
             raise DmlRepoError("No active index")
-        return index_id
+        return self.token
 
     def _put_literal(self, value: Any, *, name: Optional[str] = None) -> Ref:
         index_id = self._require_index_ref()
+        value = apply_codecs(value, dag=self)
         return self.dml.runtime.put_literal(index_id, value, name=name)
 
-    def _stage_value(self, value: Any, *, name: Optional[str] = None) -> Ref:
-        return self._put_literal(apply_codecs(value, dag=self), name=name)
-
-    def _start_fn(
-        self, argv: list[Ref], *, kwargv: Optional[dict[str, Ref]] = None, name: Optional[str] = None
-    ) -> Optional[Ref]:
-        return self.dml.runtime.start_fn(self._require_index_ref(), argv, kwargv=kwargv, name=name)
+    def _start_fn(self, argv: list[Ref], *, name: Optional[str] = None) -> Optional[Ref]:
+        return self.dml.runtime.start_fn(self._require_index_ref(), argv, name=name)
 
     def _call_builtin(self, uri: str, *args: Any, name: Optional[str] = None) -> Ref:
         fn_ref = self._put_literal(Runnable(target=Uri(uri), kwargs={}, adapter=""))
         argv: list[Ref] = [fn_ref]
         for arg in args:
-            argv.append(arg if isinstance(arg, Ref) else self._stage_value(arg))
+            argv.append(arg if isinstance(arg, Ref) else self._put_literal(arg))
         result = self._start_fn(argv, name=name)
         if result is None:
             raise DmlRepoError("Function execution failed")
@@ -207,7 +198,9 @@ class Dag:
         if self.ref is None:
             node_ref = self.dml.runtime.get_node(self._require_index_ref(), name)
             return _make_node(self, node_ref)
-        node_ref = self.dml.dag.describe_node(name, dag=self.ref)["ref"]
+        node_ref = self.dml.dag.describe(self.ref)["names"].get(name)
+        if node_ref is None:
+            raise DmlRepoError(f"Node '{name}' not found in DAG")
         return _make_node(self, node_ref)
 
     def _set_named_node(self, name: str, value: Any) -> None:
@@ -221,14 +214,9 @@ class Dag:
         self.put(value, name=name)
 
     def __getitem__(self, name: str) -> "Node":
-        if not isinstance(name, str):
-            raise TypeError(f"Dag node name must be str, got {type(name).__name__}")
         return self._get_named_node(name)
 
     def __setitem__(self, name: str, value: Any) -> None:
-        if not isinstance(name, str):
-            raise TypeError(f"Dag node name must be str, got {type(name).__name__}")
-        # self._set_named_node(name, value)
         self.put(value, name=name)
 
     def __getattr__(self, name: str) -> "Node":
@@ -245,29 +233,23 @@ class Dag:
 
     def keys(self) -> list[str]:
         """Get the list of all node names in the dag"""
-        if self.ref is None:
-            info = self.dml.runtime.describe(self._require_index_ref())
-            info = self.dml.dag.get(cast(Ref, info["dag"]))
-            return sorted(info["names"].keys())
-        names_dict = self.dml.dag.get(self.ref)["names"]
+        dag = self.ref or self.dml.runtime.describe(self._require_index_ref())["dag"]
+        names_dict = self.dml.dag.describe(dag)["names"]
         return sorted(names_dict.keys())
 
     def values(self) -> list["Node"]:
         """Get the list of all nodes in the dag"""
-        if self.ref is None:
-            info = self.dml.runtime.describe(self._require_index_ref())
-            return [_make_node(self, ref) for ref in info["names"].values()]
-        names_dict = self.dml.dag.get(cast(Ref, self.ref))["names"]
+        dag = self.ref or self.dml.runtime.describe(self._require_index_ref())["dag"]
+        names_dict = self.dml.dag.describe(dag)["names"]
         return [_make_node(self, ref) for ref in names_dict.values()]
 
     @property
     def argv(self) -> "ListNode":
         "Access the dag's argv node"
-        if self.ref is None:
-            argv_ref = self.dml.runtime.get_argv(self._require_index_ref())
-            return cast(ListNode, _make_node(self, argv_ref))
-        argv_ref = self.dml.dag.get(cast(Ref, self.ref))["argv"]
-        assert isinstance(argv_ref, Ref), f"'{self.__class__.__name__}' dag has no argv"
+        dag = self.ref or self.dml.runtime.describe(self._require_index_ref())["dag"]
+        argv_ref = self.dml.dag.describe(dag)["argv"]
+        if not isinstance(argv_ref, Ref):
+            raise DmlRepoError(f"'{self.__class__.__name__}' dag has no argv")
         return cast(ListNode, _make_node(self, argv_ref))
 
     @property
@@ -275,8 +257,9 @@ class Dag:
         """Get the result node of the dag"""
         if self.ref is None:
             raise DmlRepoError("Cannot access result of an uncommitted DAG")
-        ref = self.dml.dag.get(cast(Ref, self.ref)).get("result")
-        assert isinstance(ref, Ref), f"'{self.__class__.__name__}' dag has not been committed yet"
+        ref = self.dml.dag.describe(self.ref).get("result")
+        if not isinstance(ref, Ref):
+            raise DmlRepoError(f"'{self.__class__.__name__}' dag has not been committed yet")
         return _make_node(self, ref)
 
     @overload
@@ -319,7 +302,7 @@ class Dag:
         >>> n3.value()
         {'a': 1, 'b': [42, '23']}
         """
-        return _make_node(self, self._stage_value(value, name=name))
+        return _make_node(self, self._put_literal(value, name=name))
 
     def require(self, dag_name: str, node_name: str | None = None, *, name: str | None = None) -> "Node":
         """
@@ -350,17 +333,16 @@ class Dag:
         >>> imported_n2.value()
         {'a': 1, 'b': [42, '23']}
         """
-        if self.ref is not None:
-            raise DmlRepoError("Cannot import into a committed DAG.")
-        index = self.dml.runtime.describe(self._require_index_ref())
-        dags = self.dml.show(revision=index["commit"].to)["commit"]["dags"]
-        dag_info = dags.get(dag_name)
-        if dag_info is None:
+        index = self._require_index_ref()
+        commit = self.dml.runtime.describe(index)["parents"][0]
+        dag = self.dml.show(revision=commit)["dags"].get(dag_name)
+        if dag is None:
             raise DmlRepoError(f"DAG not found: {dag_name}")
-        dag_info = self.dml.dag.get(dag_info)
+        dag_info = self.dml.dag.describe(dag)
         node_ref = dag_info["names"].get(node_name) if node_name else dag_info.get("result")
         if node_ref is None:
             raise DmlRepoError(f"Node '{node_name}' not found in DAG '{dag_name}'")
+        node_ref = self.dml.runtime.put_import(index, dag, node_ref, name=name)
         return _make_node(self, node_ref)
 
     def call(
@@ -370,7 +352,6 @@ class Dag:
         name: Optional[str] = None,
         sleep: Optional[callable] = None,
         timeout: int = -1,
-        **kw,
     ) -> "Node":
         """
         Call a function node with arguments.
@@ -387,8 +368,6 @@ class Dag:
             A nullary function that returns sleep time in milliseconds
         timeout : int, default=-1
             Maximum time to wait in milliseconds. If <= 0, wait indefinitely.
-        **kw : dict
-            Keyword arguments override default values on the function specification.
 
         Returns
         -------
@@ -402,16 +381,12 @@ class Dag:
         Error
             If the function returns an error
         """
-        kwargv_refs: dict[str, Ref] = {}
-        for key, value in kw.items():
-            kwargv_refs[key] = self._stage_value(value)
-
         sleep = sleep or BackoffWithJitter()
         argv_seed = [fn, *args]
         end = current_time_millis() + timeout
         while timeout <= 0 or current_time_millis() < end:
-            argv_refs = [self._stage_value(value) for value in argv_seed]
-            resp = self._start_fn(argv_refs, kwargv=kwargv_refs, name=name)
+            argv_refs = [self._put_literal(value) for value in argv_seed]
+            resp = self._start_fn(argv_refs, name=name)
             if resp:
                 return _make_node(self, resp)
             time.sleep(sleep() / 1000)
@@ -426,23 +401,12 @@ class Dag:
         value : Union[Node, Error, Any]
             Value to commit
         """
-        branch = self.dml.branch()["head"]
-        if branch is None:
-            raise DmlRepoError("Current checkout is detached; attach HEAD to commit")
         # errors are committed as-is, everything else is a node
         if not isinstance(value, (Error, Node)):
             value = self.put(value)
         if isinstance(value, Node):
             value = value.ref
-        commit_ref = self.dml.runtime.commit(
-            self._require_index_ref(),
-            value,
-            head=branch,
-            message=self.message,
-            dag_name=self.name,
-        )
-        # Extract the dag ref from the commit
-        self.ref = self.dml.show(revision=commit_ref.to)["commit"]["dags"][self.name]
+        self.ref = self.dml.runtime.commit(self._require_index_ref(), value, message=self.message, name=self.name)
 
 
 @dataclass(frozen=True)
@@ -514,9 +478,9 @@ class Node:  # noqa: F811
         """
         node_info = self.dag.dml.dag.describe_node(self.ref)
         dag_ref = node_info.get("dag")
-        if isinstance(dag_ref, Ref):
-            return Dag(dml=self.dag.dml, ref=dag_ref)
-        return self.dag
+        if dag_ref is None:
+            raise DmlRepoError(f"Node '{self.ref}' is not an `import` nor `fn` node. Cannot load DAG.")
+        return Dag(dml=self.dag.dml, ref=dag_ref)
 
     @property
     def type(self):
@@ -553,7 +517,7 @@ class ScalarNode(Node):
 
 
 class RunnableNode(Node):
-    def __call__(self, *args, name=None, sleep=None, timeout=-1, **kw) -> "Node":
+    def __call__(self, *args, name=None, sleep=None, timeout=-1) -> "Node":
         """
         Call this node as a function.
 
@@ -567,8 +531,6 @@ class RunnableNode(Node):
             A nullary function that returns sleep time in milliseconds
         timeout : int, default=-1
             Maximum time to wait in milliseconds. -1 means wait forever.
-        **kw : dict
-            Keyword arguments override runnable defaults.
 
         Returns
         -------
@@ -582,7 +544,7 @@ class RunnableNode(Node):
         Error
             If the function returns an error
         """
-        return self.dag.call(self, *args, name=name, sleep=sleep, timeout=timeout, **kw)
+        return self.dag.call(self, *args, name=name, sleep=sleep, timeout=timeout)
 
 
 class CollectionNode(Node):  # noqa: F811
@@ -817,7 +779,125 @@ class DictNode(CollectionNode):  # noqa: F811
         return self
 
 
-def codecs() -> list[Any]:
-    from daggerml.codecs import codecs as builtins
+################################################################################
+################## Codec system for encoding literals in DAGs ##################
+################################################################################
 
-    return builtins()
+LITERAL_CODEC_ENTRYPOINT_GROUP = "daggerml.codecs"
+_codecs: list[tuple[int, int, "LiteralCodec"]] = []
+_plugins_loaded = False
+_lock = RLock()
+
+
+class LiteralCodec(Protocol):
+    def can_encode(self, value: Any) -> bool: ...
+
+    def encode(self, value: Any, dag: "Dag") -> Any: ...
+
+
+class CodecError(Error):
+    def __init__(self, message: str):
+        super().__init__(message, origin="dml-codec", type="codec-error")
+
+
+def _entry_points(group=LITERAL_CODEC_ENTRYPOINT_GROUP) -> list[metadata.EntryPoint]:
+    points = metadata.entry_points()
+    result = list(points.select(group=group))
+    result.sort(key=lambda ep: (ep.name, ep.value))
+    return result
+
+
+def ensure_literal_codec_plugins_loaded() -> None:
+    global _plugins_loaded
+    if _plugins_loaded:
+        return
+    with _lock:
+        codec_seq = 0
+        if _plugins_loaded:
+            return
+        loaded = []
+        for entry_point in _entry_points():
+            try:
+                registrations = entry_point.load()()
+                for item in registrations:
+                    priority, codec = item
+                    codec_seq += 1
+                    loaded.append((priority, codec_seq, codec))
+            except Exception as e:
+                msg = f"Literal codec plugin '{entry_point.name} ({entry_point.value})' failed: {e}"
+                raise CodecError(msg) from None
+        loaded.sort(key=lambda item: (-item[0], item[1]))
+        _codecs.extend(loaded)
+        _plugins_loaded = True
+
+
+def iter_codecs() -> Iterator[LiteralCodec]:
+    ensure_literal_codec_plugins_loaded()
+    yield from [codec for _priority, _seq, codec in _codecs]
+
+
+def apply_codec(value: Any, *, dag: Dag) -> Any:
+    for codec in iter_codecs():
+        try:
+            if codec.can_encode(value):
+                resp = codec.encode(value, dag)
+                if isinstance(resp, type(value)):
+                    codec_name = codec.__class__.__name__
+                    msg = f"Literal codec {codec_name} encoded {value.__class__.__name__} to {resp.__class__.__name__}."
+                    raise CodecError(msg)
+                return resp
+        except Exception as e:
+            if isinstance(e, DmlRepoError):
+                raise
+            raise CodecError(f"Literal codec {codec.__class__.__name__} failed: {e}") from e
+    raise CodecError(f"No codec found for value of type {type(value).__name__}")
+
+
+def apply_codecs(value: Any, *, dag: Dag) -> Any:
+    while not isinstance(value, (*get_args(Scalar), *get_args(Collection), Error, Ref)):
+        value = apply_codec(value, dag=dag)
+    if isinstance(value, list):
+        return [apply_codecs(v, dag=dag) for v in value]
+    if isinstance(value, dict):
+        return {k: apply_codecs(v, dag=dag) for k, v in value.items()}
+    if isinstance(value, Uri):
+        return Uri(apply_codecs(value.uri, dag=dag))
+    if isinstance(value, Runnable):
+        target = apply_codecs(value.target, dag=dag)
+        sub = apply_codecs(value.sub, dag=dag)
+        kwargs = {k: apply_codecs(v, dag=dag) for k, v in value.kwargs.items()}
+        return Runnable(target=target, adapter=value.adapter, kwargs=kwargs, sub=sub)
+    return value
+
+
+class MiscPyTypeCodec:
+    def can_encode(self, value: Any) -> bool:
+        return isinstance(value, Mapping) or (
+            isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+        )
+
+    def encode(self, value: Sequence | Mapping, dag: Dag) -> Any:
+        if isinstance(value, Mapping):
+            return {k: apply_codecs(v, dag=dag) for k, v in value.items()}
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [apply_codecs(v, dag=dag) for v in value]
+
+
+class NodeCodec:
+    def can_encode(self, value: Any) -> bool:
+        return isinstance(value, Node)
+
+    def encode(self, value: "Node", dag: Dag) -> Ref:
+        assert dag.token is not None, "DAG must have a token to encode nodes"
+        if value.dag.token is not None and value.dag.token == dag.token:
+            return value.ref
+        if value.dag.ref is None:
+            raise CodecError("Cannot encode node from uncommitted DAG in a different index")
+        try:
+            return dag.dml.runtime.put_import(dag._require_index_ref(), value.dag.ref, node=value.ref, name=None)
+        except Exception as e:
+            raise CodecError(f"Failed to encode cross-dag node import: {e}") from e
+
+
+def codecs() -> list:
+    return [(0, NodeCodec()), (0, MiscPyTypeCodec())]

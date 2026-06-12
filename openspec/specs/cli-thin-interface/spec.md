@@ -1,3 +1,8 @@
+# cli-thin-interface Specification
+
+## Purpose
+Define the thin transport-only contract for the generated public CLI surface.
+## Requirements
 ### Requirement: CLI handlers are transport-only
 The CLI command layer SHALL be limited to discovering command shape from the public `Dml` surface, parsing command inputs, invoking domain interfaces, and serializing outputs, and SHALL NOT contain business workflow or domain decision logic.
 
@@ -11,8 +16,19 @@ The CLI command layer SHALL be limited to discovering command shape from the pub
 - **AND** it still delegates all domain behavior to the underlying `Dml` method
 
 #### Scenario: Generated command discovery remains transport-only
-- **WHEN** the CLI inspects `Dml` signatures, annotations, and docstrings to build commands
+- **WHEN** the CLI inspects `Dml` signatures, annotations, docstrings, and transport metadata to build commands
 - **THEN** that inspection is used only to derive transport behavior and not to re-implement domain workflow rules in the CLI layer
+
+#### Scenario: Ordered parser selection remains transport-only
+- **WHEN** a generated command includes an input union parameter
+- **THEN** the CLI only derives parser families, allowed type subsets, and priority order from the annotation
+- **AND** it accepts the first parsed value whose runtime type matches that parser's allowed subset for the parameter
+- **AND** any semantic validation of the resulting value still occurs in the underlying `Dml` method
+
+#### Scenario: Ordered serializer selection remains transport-only
+- **WHEN** a generated command has a union-annotated return type
+- **THEN** the CLI only derives serializer families, allowed type subsets, and priority order from the annotation plus runtime value type
+- **AND** it does not inspect domain semantics to choose among union return members
 
 ### Requirement: One generated CLI module owns the public transport surface
 The `dml` CLI SHALL be implemented through a single generated transport module rather than a package of hand-maintained per-command parser modules.
@@ -40,15 +56,23 @@ Any behavior that determines domain outcomes (state transitions, merge/reconcile
 - **THEN** the branching logic executes in a non-CLI module and CLI code only forwards parsed inputs and surfaces returned outcomes
 
 ### Requirement: CLI output contract remains stable through documented compatibility changes
-Refactoring to enforce a thin CLI boundary MUST preserve documented user-visible command semantics, including success output structure and failure signaling, except where a change explicitly defines a breaking CLI compatibility update.
+Refactoring to enforce a thin CLI boundary MUST preserve documented user-visible command semantics, including failure signaling and structured error payload shape, except where a change explicitly defines a breaking CLI compatibility update.
 
 #### Scenario: Refactor preserves behavior outside documented breaks
 - **WHEN** CLI logic is moved into domain modules for commands whose public contract is unchanged by an approved change
 - **THEN** command outputs and exit outcomes remain equivalent for existing supported invocations
 
-#### Scenario: Approved CLI redesign may replace old command contracts
-- **WHEN** an approved change explicitly redefines the public CLI grammar and JSON payloads
-- **THEN** the implementation MAY remove prior command names and prior output payload shapes for the affected commands
+#### Scenario: Approved CLI redesign may replace targeted command contracts
+- **WHEN** an approved change explicitly redefines the public CLI grammar or successful output serialization rules for affected commands
+- **THEN** the implementation MAY remove prior command spellings and prior successful output serialization forms for those affected commands only
+- **AND** it preserves the established structured error payload shape unless the approved change says otherwise
+
+#### Scenario: Approved serde-priority redesign removes explicit union transport forms
+- **WHEN** the ordered serde-priority change is implemented for generated commands
+- **THEN** affected commands MAY remove `--<name>-type` selectors and typed union option variants
+- **AND** union member transport choice is driven only by parser-family subset maps plus global priority order
+- **AND** union return serializer choice is driven only by serializer-family subset maps plus global priority order
+- **AND** commands unaffected by union annotations preserve their existing public grammar
 
 ### Requirement: CLI tests focus on interface behavior
 CLI-focused tests SHALL validate input parsing, delegation wiring, output serialization, and exit signaling, while domain behavior assertions SHALL be covered in non-CLI test suites.
@@ -80,11 +104,3 @@ CLI help text, examples, and normalized user-facing recovery hints SHALL use the
 #### Scenario: Missing project-home hint uses canonical flag name
 - **WHEN** command execution fails because no local project path can be resolved
 - **THEN** the structured error hint instructs the user to pass `--project-home PATH` or set `DML_PROJECT_HOME`
-
-### Requirement: Shared public flag names do not create ambiguous CLI behavior
-When the CLI uses the same canonical public flag spelling in different parser scopes, command dispatch SHALL preserve the intended meaning for each command path.
-
-#### Scenario: Init keeps its own remote-root input without shadowing the top-level override
-- **WHEN** the CLI exposes both a top-level `--remote-root` option and `init --remote-root`
-- **THEN** parsing and command execution keep those inputs distinguishable
-- **AND** `init` continues to forward its own `--remote-root` value to bootstrap project remote configuration

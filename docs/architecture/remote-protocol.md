@@ -1,10 +1,10 @@
 # Remote Protocol
 
-DaggerML's remote layer is implemented in `src/daggerml/_internal/ops/remote.py` and `src/daggerml/_internal/exec_state.py`. It uses S3 as a content-addressed store plus a small ref namespace.
+DaggerML's remote layer is implemented in `src/daggerml/_core/remote.py` and `src/daggerml/_core/exec_state.py`. It uses S3 as a content-addressed store plus a small ref namespace.
 
 ## The remote surface
 
-When `RemoteOps` initializes, it expects or creates a `dml.json` descriptor describing the `cas+refs` layout. Under that prefix, the important areas are:
+When `Remote` initializes, it expects or creates a `dml.json` descriptor describing the `cas+refs` layout. Under that prefix, the important areas are:
 
 - `cas/sha256/<aa>/<bb>/<oid>`: immutable content-addressed objects,
 - `refs/tags/**`, `refs/cache/**`, and `refs/projects/**`: published refs,
@@ -28,7 +28,7 @@ In practice, refs also carry just enough metadata for the runtime to preserve di
 
 Pushing means taking a local root object, describing the closure needed to reconstruct it, uploading any missing CAS blobs, then publishing a ref that points at the manifest.
 
-For branch and tag sync, the root is a commit. For cache publication, the root is usually a DAG. In both cases `RemoteOps`:
+For branch and tag sync, the root is a commit. For cache publication, the root is usually a DAG. In both cases `Remote`:
 
 1. walks the local object graph into a local manifest,
 2. derives the direct child DAG ids for that manifest layer,
@@ -42,7 +42,7 @@ That direct-DAG metadata is how the remote side keeps nested DAG relationships v
 
 Pulling starts from a remote ref, not from an object id guessed by the client.
 
-`RemoteOps` reads the ref JSON, validates it, loads the target manifest, and then materializes the closure into the local database. If the manifest mentions child DAG ids, it follows `refs/dags/*.json` to load those manifests too. The implementation uses a thread pool so independent manifests and CAS objects can be fetched concurrently, but the resulting objects are still materialized into one local transaction path.
+`Remote` reads the ref JSON, validates it, loads the target manifest, and then materializes the closure into the local database. If the manifest mentions child DAG ids, it follows `refs/dags/*.json` to load those manifests too. The implementation uses a thread pool so independent manifests and CAS objects can be fetched concurrently, but the resulting objects are still materialized into one local transaction path.
 
 At the end of a branch or tag fetch, DaggerML writes a local tracking pointer rather than treating the remote state as separately mounted storage.
 
@@ -52,7 +52,7 @@ The same remote machinery supports two different user-facing stories.
 
 ### Project sync
 
-Project sync uses canonical `dml://owner/project#branch` and `@tag` URIs. `RemoteOps` validates the URI pieces with `revision_uri.py`, maps them onto `refs/projects/...`, and then enforces branch or tag semantics:
+Project sync uses canonical `dml://owner/project#branch` and `@tag` URIs. `Remote` validates the URI pieces with `uri.py`, maps them onto `refs/projects/...`, and then enforces branch or tag semantics:
 
 - branch refs can be updated conditionally,
 - non-fast-forward branch pushes are rejected unless `force` is set,

@@ -22,28 +22,30 @@ The system SHALL allow project branch head refs to move through safe update oper
 - **WHEN** `refs/projects/alice/demo/tags/v1.0.json` already exists
 - **THEN** publishing tag `v1.0` fails without changing the existing tag ref
 
-### Requirement: Project refs use manifest ref payloads
-The system SHALL encode project branch and tag refs using the existing remote ref payload schema for manifest refs.
+### Requirement: Project refs use typed object ref payloads
+The system SHALL encode project branch and tag refs as typed remote ref payloads containing `ref.to`, `created`, and `metadata`.
 
-Project branch and tag refs SHALL point to commit manifests, SHALL include direct DAG `targets`, and SHALL fail before writing the ref if the target manifest is missing, invalid, or has `closure["dag"]` inconsistent with the ref `targets["dag"]`.
+Project branch and tag refs SHALL point to `commit` objects and SHALL fail before writing the ref if the target object is missing or is not a `commit` root.
+
+Project ref `metadata` remains unconstrained in this change.
 
 #### Scenario: Project branch ref payload
 - **WHEN** project `alice/demo` branch `main` is written
-- **THEN** `refs/projects/alice/demo/heads/main.json` contains `kind`, `schema`, `target`, `created_at`, `targets`, and `meta` fields following the remote ref schema
+- **THEN** `refs/projects/alice/demo/heads/main.json` contains `ref.to = "commit:<oid>"`, integer `created`, and object `metadata`
 
 #### Scenario: Project tag ref payload
 - **WHEN** project `alice/demo` tag `v1.0` is written
-- **THEN** `refs/projects/alice/demo/tags/v1.0.json` contains `kind`, `schema`, `target`, `created_at`, `targets`, and `meta` fields following the remote ref schema
+- **THEN** `refs/projects/alice/demo/tags/v1.0.json` contains `ref.to = "commit:<oid>"`, integer `created`, and object `metadata`
 
-#### Scenario: Project ref target validation fails closed
-- **WHEN** a project branch or tag ref would point to a missing manifest, invalid manifest, non-commit manifest, or inconsistent direct DAG targets
+#### Scenario: Project ref root validation fails closed
+- **WHEN** a project branch or tag ref would point to a missing object or a non-`commit` root
 - **THEN** the write fails without creating or updating the project ref
 
 ### Requirement: Shared remote CAS
 The system SHALL store immutable CAS objects in a shared remote CAS under `cas/sha256/<aa>/<bb>/<oid>` independent of owner, project, or branch.
 
 #### Scenario: Two projects reference same object
-- **WHEN** two project refs target manifests that include the same CAS object
+- **WHEN** two project refs point to commit graphs that include the same CAS object
 - **THEN** the remote stores that CAS object at one shared CAS path
 
 ### Requirement: Global DML config
@@ -179,9 +181,19 @@ The system SHALL initialize local project state under `<project-directory>/.dml/
 - **WHEN** `dml init demo` succeeds
 - **THEN** the system writes `demo/.dml/.gitignore` containing `*`
 
-#### Scenario: Init creates initial branch and attaches HEAD
+#### Scenario: Init creates unborn attached HEAD
 - **WHEN** `dml init demo` succeeds
-- **THEN** local storage contains an initial empty commit/tree, local branch `main`, and `.dml/HEAD` attached to `main`
+- **THEN** the system creates `demo/.dml/`, `demo/.dml/config.toml`, `.dml/HEAD`, and local database storage under `demo/.dml/db/`
+- **AND** `.dml/HEAD` is attached to the default branch
+- **AND** the corresponding local branch ref file does not exist yet
+
+#### Scenario: Init does not create initial empty commit
+- **WHEN** `dml init demo` succeeds
+- **THEN** local storage does not contain a synthetic initial empty commit solely to materialize the branch tip
+
+#### Scenario: Detached init without commit is rejected
+- **WHEN** init is requested in detached mode before any commit exists
+- **THEN** init fails because detached HEAD requires a concrete commit
 
 ### Requirement: Init shell hooks
 The system SHALL support `post-init` shell hooks from global DML config that run in the project directory after `.dml/` exists.

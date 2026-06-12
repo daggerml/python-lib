@@ -23,18 +23,17 @@ trap cleanup EXIT
 
 require_env DML_REMOTE_ROOT
 
-mkdir -p "${DML_CONFIG_HOME}"
-dml_user="cool-guy"
-dml config set --scope global user $dml_user
-
-log "Using remote env: ${AWS_ENDPOINT_URL}"
-log "Remote root: ${DML_REMOTE_ROOT}"
-
 log "Setting up DML repo in ${ignore_dir}"
 mkdir -p "${ignore_dir}/examples"
 rm -rf "${scratch_dir}"
 mkdir -p "${scratch_dir}"
+mkdir -p "${DML_CONFIG_HOME}"
 printf '*\n' > "${ignore_dir}/.gitignore"
+dml_user="cool-guy"
+dml config set user "${dml_user}" --scope global
+
+log "Using remote env: ${AWS_ENDPOINT_URL}"
+log "Remote root: ${DML_REMOTE_ROOT}"
 cd "${scratch_dir}"
 
 project0="project-0"
@@ -42,55 +41,67 @@ log "Initializing DML repo in ${project0}"
 rm -rf "${scratch_dir}/${project0}" || true
 mkdir "${scratch_dir}/${project0}"
 cd "${scratch_dir}/${project0}"
-dml init --remote-project "dml://${dml_user}/${project0}" | jq .
+dml --remote-project "dml://${dml_user}/${project0}" init | jq .
 
 log "Configuring and inspecting CLI-visible settings"
-dml config set --scope local remote.fetch_workers 2 | jq .
-dml config get remote.root | jq .
-dml config get remote.fetch_workers | jq .
+dml config set --scope local remote.fetch_workers 2
+dml config get remote.root
+dml config get remote.fetch_workers
 dml config show | jq .
 dml config show --contrib | jq .
 
 log "DML repo initialized. Current status"
 dml status | jq .
+dml rev-parse HEAD | jq .
 
 log "Running example: 00-hello_world.py"
 python "${examples_dir}/00-hello_world.py"
 
 log "Inspecting committed history and DAG state after 00-hello_world.py"
-dml branch | jq .
+dml status | jq '.branches'
 dml log --revision HEAD --limit 10 | jq .
 dml show --revision HEAD | jq .
-dml diff --left HEAD~1 --right HEAD | jq .
+hello_dag_ref="$(dml show --revision HEAD | jq -r '.dags["examples/00-hello-world"]')"
+dml dag delete examples/00-hello-world
+dml diff --revision HEAD --relative-to HEAD~1 | jq .
 dml show --revision HEAD | jq .
-dml dag get examples/00-hello-world | jq .
-dml dag describe-node greeting --dag examples/00-hello-world | jq .
-dml dag get-node greeting --dag examples/00-hello-world | jq .
-dml dag get-node greeting --dag examples/00-hello-world --recursive | jq .
-
-hello_dag_ref="$(dml dag get examples/00-hello-world | jq -r '.ref')"
-hello_fn_ref="$(dml dag describe-node hello_fn --dag examples/00-hello-world | jq -r '.ref')"
-greeting_ref="$(dml dag describe-node greeting --dag examples/00-hello-world | jq -r '.ref')"
+greeting_ref="$(dml dag get-node-by-name "${hello_dag_ref}" greeting)"
+hello_fn_ref="$(dml dag get-node-by-name "${hello_dag_ref}" hello_fn)"
+greeting_fn_dag_ref="$(dml dag describe-node "${greeting_ref}" | jq -r '.dag')"
+greeting_cache_key="$(dml dag describe "${greeting_fn_dag_ref}" | jq -r '.cache_key')"
+dml dag describe "${hello_dag_ref}" | jq .
+dml dag describe-node "${greeting_ref}" | jq .
+dml dag get-argv "${greeting_fn_dag_ref}"
+dml dag get-node "${greeting_ref}" | jq .
+dml dag get-node "${greeting_ref}" --recursive | jq .
 
 log "Exercising low-level runtime and admin CLI commands"
-runtime_idx="$(dml runtime create | jq -r .)"
-scratch_idx="$(dml runtime create | jq -r .)"
-cancel_idx="$(dml runtime create | jq -r .)"
+runtime_idx="$(dml runtime create)"
+scratch_idx="$(dml runtime create)"
+cancel_idx="$(dml runtime create)"
 dml runtime list | jq .
 dml runtime describe "${runtime_idx}" | jq .
 
-seed_ref="$(printf '%s\n' '["scalar","cli-seed"]' | dml runtime put-literal "${runtime_idx}" - --name seed | jq -r .)"
-imported_greeting_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${greeting_ref}" --name imported-greeting | jq -r .)"
-hello_runtime_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${hello_fn_ref}" --name hello-fn | jq -r .)"
-dml runtime get-node "${runtime_idx}" seed | jq .
-dml runtime get-node "${runtime_idx}" imported-greeting | jq .
+seed_ref="$(printf '%s\n' '["scalar","cli-seed"]' | dml runtime put-literal "${runtime_idx}" - --name seed)"
+imported_greeting_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${greeting_ref}" --name imported-greeting)"
+hello_runtime_ref="$(dml runtime put-import "${runtime_idx}" "${hello_dag_ref}" --node "${hello_fn_ref}" --name hello-fn)"
+if dml runtime get-argv "${runtime_idx}" >/dev/null 2>&1; then
+  fail "Expected runtime get-argv to fail for a non-function runtime index"
+fi
+dml runtime get-node "${runtime_idx}" seed
+dml runtime get-node "${runtime_idx}" imported-greeting
+if printf '["%s","%s"]\n' "${hello_runtime_ref}" "${seed_ref}" | dml runtime start-fn "${runtime_idx}" - --name runtime-hello >/dev/null 2>&1; then
+  fail "Expected runtime start-fn CLI JSON argv parsing to reject list[Ref] inputs"
+fi
+dml admin remote get-cache "${greeting_cache_key}"
+dml admin remote invalidate-cache "${greeting_cache_key}" | jq .
+dml admin remote get-cache "${greeting_cache_key}" | jq .
 
-dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported_greeting_ref}" | jq .
-dml runtime get-node "${runtime_idx}" cli-greeting-alias | jq .
+dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported_greeting_ref}"
+dml runtime get-node "${runtime_idx}" cli-greeting-alias
 dml runtime describe "${runtime_idx}" | jq .
 dml runtime cancel "${cancel_idx}" | jq .
-dml runtime delete "${scratch_idx}" | jq .
-dml admin gc --dry-run | jq .
+dml runtime describe "${scratch_idx}" | jq .
 dml admin gc | jq .
 
 log "Exercising top-level checkout workflows"
@@ -100,11 +111,12 @@ dml checkout main | jq .
 dml show --revision HEAD | jq .
 
 log "Listing DML refs after running all examples:"
-dml admin remote list --owner "${dml_user}" | jq .
-dml push --create | jq .
-dml push --tag cli-demo-tag | jq .
-dml admin remote list | jq .
-dml admin remote gc --min-age-seconds 0 --malformed warn | jq .
+dml admin remote list-projects --owner "${dml_user}" | jq .
+dml push
+dml push --revision '#main'
+dml admin remote list-projects | jq .
+dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
+dml admin remote gc | jq .
 
 log "Cleaning up first project to test fresh init with existing remote"
 cd .. && rm -rf "${project0}"
@@ -115,26 +127,54 @@ log "Initializing DML repo in ${project1}"
 rm -rf "${scratch_dir}/${project1}" || true
 mkdir "${scratch_dir}/${project1}"
 cd "${scratch_dir}/${project1}"
-dml init --remote-project "dml://${dml_user}/${project1}"
+dml --remote-project "dml://${dml_user}/${project1}" init | jq .
 dml fetch "dml://${dml_user}/${project0}" | jq .
-dml branch --remote | jq .
-dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world" --target-name examples/00-hello-world-copy | jq .
+dml rev-parse "dml://${dml_user}/${project0}#main" | jq .
+dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
+dml branch move main "dml://${dml_user}/${project0}#main"
+remote_hello_dag_ref="${hello_dag_ref}"
+log "Checking out remote DAG ref ${remote_hello_dag_ref} into examples/00-hello-world-copy"
+dml dag checkout "${remote_hello_dag_ref}" examples/00-hello-world-copy
 dml status | jq .
-dml revert HEAD "${dml_user}" | jq .
-dml merge "dml://${dml_user}/${project0}#main" "${dml_user}" | jq .
-dml pull "dml://${dml_user}/${project0}" "${dml_user}" | jq .
-dml dag checkout "dml://${dml_user}/${project0}#main" "examples/00-hello-world" | jq .
+dml revert HEAD | jq .
+merge_demo_branch="merge-demo"
+dml branch create "${merge_demo_branch}"
+dml checkout "${merge_demo_branch}" | jq .
+merge_demo_idx="$(dml runtime create)"
+merge_demo_ref="$(printf '%s\n' '["scalar","merge-demo"]' | dml runtime put-literal "${merge_demo_idx}" - --name merge-demo)"
+dml runtime commit "${merge_demo_idx}" "${merge_demo_ref}" --message "Add merge demo DAG" --name examples/merge-demo
+dml checkout main | jq .
+dml merge "${merge_demo_branch}" | jq .
+rebase_demo_branch="rebase-demo"
+renamed_rebase_branch="rebase-demo-renamed"
+dml branch create "${rebase_demo_branch}" --revision "dml://${dml_user}/${project0}#main"
+dml checkout "${rebase_demo_branch}" | jq .
+dml rebase main | jq .
+dml checkout main | jq .
+dml branch rename "${rebase_demo_branch}" "${renamed_rebase_branch}"
+dml branch list | jq .
+dml config set remote.project "dml://${dml_user}/${project0}"
+dml pull | jq .
+tag_name="cli-demo-tag"
+dml tag create "${tag_name}"
+dml tag list | jq .
+dml tag delete "${tag_name}"
+dml dag checkout "${remote_hello_dag_ref}" examples/00-hello-world
+dml dag delete examples/merge-demo
+dml branch delete "${renamed_rebase_branch}"
 dml status | jq .
 
 log "Running example: 01b-load_fn.py"
 python "${examples_dir}/01b-load_fn.py"
 
 log "Inspecting fetched and pulled history from the second project"
-dml branch | jq .
-dml branch --remote | jq .
+dml status | jq '.branches'
+dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
 dml log --revision HEAD --limit 10 | jq .
 dml show --revision HEAD | jq .
-dml dag get examples/01b-load-fn --revision HEAD | jq .
-dml dag get-node old_result --dag examples/01b-load-fn --revision HEAD | jq .
+load_fn_dag_ref="$(dml show --revision HEAD | jq -r '.dags["examples/01b-load-fn"]')"
+dml dag describe "${load_fn_dag_ref}" | jq .
+old_result_ref="$(dml dag get-node-by-name "${load_fn_dag_ref}" old_result)"
+dml dag get-node "${old_result_ref}" | jq .
 
 log "All examples completed successfully."

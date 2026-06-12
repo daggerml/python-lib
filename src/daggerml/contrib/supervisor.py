@@ -13,7 +13,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from daggerml._internal import Dml, DmlRepoError
+from daggerml import Dml
+from daggerml.api import DmlRepoError
 
 logger = logging.getLogger(__name__)
 

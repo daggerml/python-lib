@@ -26,16 +26,19 @@ The shared `Dml` class SHALL remain the sole caller-facing boundary for fuzzy se
 - **THEN** `Dml` obtains that config-derived context through the config submodule before invoking lower-level ops
 
 ### Requirement: Shared `Dml` constructor uses root runtime override inputs
-The shared `Dml` constructor SHALL accept the root runtime override inputs already threaded through callers for project-home, remote-uri, user, config-home, and execution identity context.
+The shared `Dml` constructor SHALL accept the full supported runtime configuration surface through Python-friendly keyword parameters, including project, database, remote, default, and user/config-home overrides. `Dml.init(...)` SHALL accept the same configuration kwargs plus bootstrap-only parameters. The shared surface SHALL also expose `Dml.from_config_vars(...)` for constructing `Dml` from flattened canonical config-var dictionaries.
 
-#### Scenario: CLI globals map directly to constructor
-- **WHEN** a caller provides explicit project-home, remote-uri, user, or config-home runtime overrides
-- **THEN** those values can be passed directly to the shared `Dml` constructor without a separate caller-specific context adapter
+#### Scenario: Python kwargs cover the supported config surface
+- **WHEN** a caller provides explicit configuration overrides supported by the shared resolver
+- **THEN** those values can be passed directly to the shared `Dml` constructor using Python-friendly parameter names
 
-#### Scenario: Execution-aware worker maps execution identity directly to constructor
-- **WHEN** an execution-aware worker or adapter entrypoint has an `execution_id`
-- **THEN** it can pass that value directly to the shared `Dml` constructor as a runtime override
-- **AND** it does not need a separate ambient execution-context setup step
+#### Scenario: Init reuses constructor config kwargs
+- **WHEN** a caller provides supported configuration overrides to `Dml.init(...)`
+- **THEN** the init workflow accepts the same config kwargs as `Dml.__init__` in addition to bootstrap-only args
+
+#### Scenario: Canonical config vars use dedicated classmethod
+- **WHEN** a caller already has a flattened config-var dictionary such as `{"remote.root": "s3://bucket/root"}`
+- **THEN** it can construct a `Dml` instance through `Dml.from_config_vars(...)` without translating those keys to Python kwargs first
 
 ### Requirement: Shared `Dml` exact DB object contracts use `Ref`
 The shared `Dml` surface SHALL require `Ref` objects for caller inputs that represent exact DB-backed objects, and it SHALL return `Ref` objects as the canonical identity for DB-backed objects in its payloads.
@@ -212,6 +215,13 @@ Repository bootstrap and recovery workflows SHALL be available through the share
 #### Scenario: Init and recovery use Dml-owned entrypoint
 - **WHEN** a caller invokes repository bootstrap or recovery behavior
 - **THEN** the workflow executes through a `Dml` entrypoint and preserves the documented config-first recovery semantics
+
+### Requirement: Shared `Dml` class exposes clone bootstrap
+The shared `Dml` surface SHALL expose `clone` as a classmethod bootstrap workflow alongside `init`.
+
+#### Scenario: Caller discovers clone on shared Dml surface
+- **WHEN** a caller inspects the shared `Dml` class
+- **THEN** clone bootstrap is available as `Dml.clone(...)` rather than as an instance method or external helper
 
 ### Requirement: Direct user cancellation SHALL use configured user identity
 When `dml.runtime.cancel(index_id)` is invoked without an active runtime execution context, the workflow SHALL still proceed as an out-of-band cancellation operation. In that case, the runtime SHALL record `cancellation_requested_by` from the configured user identity.

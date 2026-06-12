@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+from contextvars import ContextVar
+
+import pytest
+
+import daggerml._core.dml as dml_mod
+import daggerml.api as api
+from daggerml import Dml
+from daggerml._core import Ref
+from tests._core.helpers import local_index_ops
+
+pytestmark = pytest.mark.slow
+
+
+@pytest.fixture(autouse=True)
+def isolated_api_defaults(monkeypatch):
+    monkeypatch.setattr(api, "_PROCESS_DEFAULT_DML", None)
+    monkeypatch.setattr(
+        api,
+        "_SCOPED_DEFAULT_DML",
+        ContextVar("daggerml_integration_scoped_default_dml", default=api._NO_DEFAULT_DML),
+    )
+
+
+@pytest.fixture
+def live_dml(tmp_path, monkeypatch):
+    monkeypatch.setenv("DML_DEFAULT_DB_MAP_SIZE_MAX", str(64 * 1024 * 1024))
+    Dml.init(str(tmp_path), user="tester", remote_root="s3://bucket/root")
+    monkeypatch.setattr(dml_mod, "_index_ops", lambda dml: local_index_ops())
+    return Dml(str(tmp_path), remote_root="s3://bucket/root", user="tester")
+
+
+def test_api_live_001__new_put_commit_and_load_values(live_dml):
+    dag = api.new("values", message="store values", dml=live_dml)
+    scalar = dag.put(42, name="answer")
+    dag.put([1, scalar, 3], name="numbers")
+    result = dag.put({"answer": scalar, "numbers": dag["numbers"]}, name="payload")
+    dag.commit(result)
+
+    loaded = api.load("values", dml=live_dml)
+    assert loaded["answer"].value() == 42
+    assert loaded["numbers"].value() == [1, 42, 3]
+    assert loaded.result.value() == {"answer": 42, "numbers": [1, 42, 3]}
+
+
+def test_api_live_002__named_result_lookup_differs_from_committed_result(live_dml):
+    dag = api.new("result-semantics", dml=live_dml)
+    dag.put("named result", name="result")
+    final = dag.put("committed result")
+    dag.commit(final)
+
+    loaded = api.load("result-semantics", dml=live_dml)
+    assert loaded["result"].value() == "named result"
+    assert loaded.result.value() == "committed result"
+
+
+def test_api_live_003__require_imports_committed_source_node(live_dml):
+    source = api.new("source", dml=live_dml)
+    source.put({"a": 1, "b": [2, 3]}, name="data")
+    source.commit(source["data"])
+
+    consumer = api.new("consumer", dml=live_dml)
+    imported = consumer.require("source", "data", name="imported")
+    consumer.commit(imported)
+
+    loaded = api.load("consumer", dml=live_dml)
+    assert loaded["imported"].value() == {"a": 1, "b": [2, 3]}
+    assert loaded.result.value() == {"a": 1, "b": [2, 3]}
+
+
+def test_api_live_004__collection_helpers_use_real_builtins(live_dml):
+    dag = api.new("collections", dml=live_dml)
+    values = dag.put(["a", "b", "c"], name="values")
+    mapping = dag.put({"x": 1}, name="mapping")
+
+    assert values[1].value() == "b"
+    assert values[1:3].value() == ["b", "c"]
+    assert values.append("d", name="more").value() == ["a", "b", "c", "d"]
+    assert values.contains("b").value() is True
+    assert "b" in values
+
+    assert mapping.get("x").value() == 1
+    assert mapping.get("missing", "fallback").value() == "fallback"
+    assert mapping.assoc("y", 2, name="assoc").value() == {"x": 1, "y": 2}
+
+
+def test_api_live_005__scoped_default_drives_top_level_helpers(live_dml):
+    with api.use_default_dml(live_dml):
+        dag = api.new("defaulted")
+        answer = dag.put(42, name="answer")
+        dag.commit(answer)
+        loaded = api.load("defaulted")
+
+    assert loaded["answer"].value() == 42
+
+
+def test_api_live_006__context_manager_commits_error_capture(live_dml):
+    dag = api.new("captured-error", dml=live_dml)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with dag:
+            raise RuntimeError("boom")
+
+    loaded = api.load("captured-error", dml=live_dml)
+    error_ref = live_dml.dag.describe(loaded.ref)["error"]
+    assert isinstance(error_ref, Ref)

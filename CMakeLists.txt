@@ -66,51 +66,51 @@ if(_dml_sanitize_flags)
   target_link_options(daggerml_core PRIVATE ${_dml_sanitize_flags})
 endif()
 
-set(_db_pyx ${CMAKE_CURRENT_SOURCE_DIR}/src/daggerml/_internal/_db.pyx)
-set(_db_c ${CMAKE_CURRENT_BINARY_DIR}/_db.c)
+set(core_db_pyx ${CMAKE_CURRENT_SOURCE_DIR}/src/daggerml/_core/db.pyx)
+set(core_db_c ${CMAKE_CURRENT_BINARY_DIR}/core_db.c)
 
 add_custom_command(
-  OUTPUT ${_db_c}
-  COMMAND ${Python_EXECUTABLE} -m cython -3 --output-file ${_db_c} ${_db_pyx}
-  DEPENDS ${_db_pyx}
-  COMMENT "Cythonizing _db.pyx"
+  OUTPUT ${core_db_c}
+  COMMAND ${Python_EXECUTABLE} -m cython -3 --output-file ${core_db_c} ${core_db_pyx}
+  DEPENDS ${core_db_pyx}
+  COMMENT "Cythonizing db.pyx"
   VERBATIM
 )
 
-add_library(_db MODULE
-  ${_db_c}
+add_library(db MODULE
+  ${core_db_c}
 )
-set(DB_EXPORTS "${CMAKE_CURRENT_BINARY_DIR}/db.exports")
+set(CORE_DB_EXPORTS "${CMAKE_CURRENT_BINARY_DIR}/core_db.exports")
 if(APPLE)
-  file(WRITE "${DB_EXPORTS}" "_PyInit__db\n")
-  target_link_options(_db PRIVATE
-    "-Wl,-exported_symbols_list,${DB_EXPORTS}"
+  file(WRITE "${CORE_DB_EXPORTS}" "_PyInit_db\n")
+  target_link_options(db PRIVATE
+    "-Wl,-exported_symbols_list,${CORE_DB_EXPORTS}"
   )
 else()
-  file(WRITE "${DB_EXPORTS}" "{_PyInit__db;};")
-  target_link_options(_db PRIVATE
-    "-Wl,--version-script=${DB_EXPORTS}"
+  file(WRITE "${CORE_DB_EXPORTS}" "{_PyInit_db;};")
+  target_link_options(db PRIVATE
+    "-Wl,--version-script=${CORE_DB_EXPORTS}"
   )
 endif()
-target_include_directories(_db PRIVATE c/third_party/lmdb/libraries/liblmdb)
-target_include_directories(_db PRIVATE c/third_party/msgpack/include)
-target_include_directories(_db PRIVATE c/include)
-target_link_libraries(_db PRIVATE daggerml_core lmdb msgpackc sha256 Python::Module)
+target_include_directories(db PRIVATE c/third_party/lmdb/libraries/liblmdb)
+target_include_directories(db PRIVATE c/third_party/msgpack/include)
+target_include_directories(db PRIVATE c/include)
+target_link_libraries(db PRIVATE daggerml_core lmdb msgpackc sha256 Python::Module)
 if(_dml_sanitize_flags)
-  target_compile_options(_db PRIVATE ${_dml_sanitize_flags})
-  target_link_options(_db PRIVATE ${_dml_sanitize_flags})
+  target_compile_options(db PRIVATE ${_dml_sanitize_flags})
+  target_link_options(db PRIVATE ${_dml_sanitize_flags})
   if(DML_ENABLE_ASAN AND NOT APPLE AND CMAKE_C_COMPILER_ID MATCHES "Clang")
-    target_link_options(_db PRIVATE "-shared-libasan")
+    target_link_options(db PRIVATE "-shared-libasan")
   endif()
   if(DML_ENABLE_UBSAN AND CMAKE_C_COMPILER_ID MATCHES "Clang")
-    target_compile_options(_db PRIVATE "-fno-sanitize=function")
+    target_compile_options(db PRIVATE "-fno-sanitize=function")
   endif()
 endif()
 
-set_target_properties(_db PROPERTIES PREFIX "" OUTPUT_NAME "_db")
+set_target_properties(db PROPERTIES PREFIX "" OUTPUT_NAME "db")
 
-install(TARGETS _db
-  LIBRARY DESTINATION daggerml/_internal/
-  RUNTIME DESTINATION daggerml/_internal/
-  ARCHIVE DESTINATION daggerml/_internal/
+install(TARGETS db
+  LIBRARY DESTINATION daggerml/_core/
+  RUNTIME DESTINATION daggerml/_core/
+  ARCHIVE DESTINATION daggerml/_core/
 )

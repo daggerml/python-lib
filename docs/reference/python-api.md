@@ -19,33 +19,73 @@ Those names come from `src/daggerml/__init__.py` and `src/daggerml/api.py`.
 Constructor arguments:
 
 - `project_home: str | None = None`
+- `db_path: str | None = None`
+- `db_map_size_headroom: int | None = None`
+- `db_map_size_max: int | None = None`
+- `default_branch_name: str | None = None`
+- `remote_project: str | None = None`
 - `remote_root: str | None = None`
+- `remote_prune_age_seconds: int | None = None`
+- `remote_fetch_workers: int | None = None`
 - `user: str | None = None`
 - `config_home: str | None = None`
 
 Top-level methods:
 
 - `Dml.init(...)`: initialize a repository under `project_home`.
-- `status()`: current HEAD, branches, DAGs, and open runtime indexes.
-- `branch()`: list local branches.
-- `branch(name)`: create a local branch from the current HEAD commit and return its name.
-- `branch(remote=True)`: list discovered remote-tracking branches.
-- `log(revision="HEAD", limit=None)`: commit summaries, including each commit's visible `dags` map.
+- `Dml.clone(project_uri, project_home=".", ...)`: initialize a repository, persist the branchless `remote.project`, fetch the selected remote ref, and leave `HEAD` at the cloned branch or tag state.
+- `Dml.from_config_vars(...)`: construct a runtime from a flattened canonical config-var dictionary.
+- `status()`: current HEAD, local branches, open runtime indexes, and same-name tracking counts when available.
+- `log(revision="HEAD", limit=10)`: commit summaries, including each commit's visible `dags` map.
 - `show(revision="HEAD")`: one commit summary plus DAG-level change information.
-- `diff(left="HEAD~1", right="HEAD")`
+- `diff(revision="HEAD", relative_to=None)`
 - `checkout(revision)`
-- `fetch(remote_or_uri, branch=None)`
-- `pull(remote_or_uri, remote_branch=None, *, branch=None, user)`
-- `push(tag=None, *, branch=None, create=False, force=False)`
-- `merge(revision, *, branch=None, user)`
-- `revert(revision, *, branch=None, user)`
+- `fetch(project_uri)`
+- `pull(ff_only=True)`
+- `push(revision="HEAD", *, delete=False)`
+- `merge(revision, ff_only=True)`
+- `revert(revision, message=None)`
 
 Namespaces exposed as properties:
 
 - `dml.config`: `get`, `set`, `show`
-- `dml.runtime`: create, inspect, mutate, commit, list, delete, and cancel runtime indexes
-- `dml.dag`: get, inspect nodes, copy a DAG from history, and delete a DAG
-- `dml.admin`: cache, remote, and GC operations
+- `dml.branch`: `list`, `create`, `move`, `rename`, `delete`
+- `dml.tag`: `list`, `create`, `delete`
+- `dml.runtime`: create, inspect, mutate, commit, list, and cancel runtime indexes
+- `dml.dag`: inspect nodes, copy a DAG from history, and delete a DAG
+- `dml.admin`: remote and GC operations
+
+Representative repository examples:
+
+```python
+from daggerml import Dml
+
+dml = Dml(project_home="./demo-repo")
+
+remote = Dml(
+    project_home="./demo-repo",
+    remote_root="s3://my-bucket/demo",
+    remote_fetch_workers=8,
+)
+
+canonical = Dml.from_config_vars(
+    {
+        "project_home": "./demo-repo",
+        "remote.root": "s3://my-bucket/demo",
+        "remote.fetch_workers": 8,
+    }
+)
+
+print(dml.status())
+print(dml.show("@release"))
+clone_status = Dml.clone("dml://alice/demo#main", "./clone", remote_root="s3://my-bucket/demo")
+dml = Dml(project_home="./clone")
+dml.branch.create("feature", "HEAD~1")
+dml.tag.create("v1")
+dml.fetch("dml://alice/demo#main")
+dml.push("@v1")
+dml.push("#feature", delete=True)
+```
 
 ### Default-runtime helpers
 
@@ -71,23 +111,13 @@ That implicit instance is cached after first creation, so later top-level helper
 
 - `new(name="", *, message="", argv_ptr=None, dml=None) -> Dag`
 - `load(name: str, dml=None) -> Dag`
-- `temporary(**kw)` yields a temporary `Dml` initialized in a temporary directory
+- `temporary(**kw)` yields a temporary `Dml` initialized in a temporary directory with an unborn attached HEAD
 
-`load()` looks up a named DAG through `dml.dag.get(name)` and raises `DmlRepoError(f"DAG not found: {name}")` when the name is missing.
+`load()` raises `DmlRepoError(f"DAG not found: {name}")` when the name is missing.
 
 ## Working with DAGs
 
 `new()` returns a mutable `Dag` wrapper backed by a runtime index.
-
-```python
-from daggerml import Dml, new
-
-dml = Dml(project_home=".")
-
-dag = new("demo", message="first dag", dml=dml)
-answer = dag.put(42, name="answer")
-dag.commit(answer)
-```
 
 Important `Dag` behavior:
 
@@ -138,22 +168,6 @@ The public value wrappers re-exported from the package are:
 - `Uri`: URI-backed datum
 - `Runnable`: callable datum stored in the graph
 - `Error`: captured execution error with `message`, `origin`, `type`, and `stack`
-
-## Example: create and read a DAG
-
-```python
-from daggerml import Dml, load, new
-
-dml = Dml(project_home=".")
-
-dag = new("numbers", message="store a list", dml=dml)
-values = dag.put([1, 2, 3], name="values")
-dag.commit(values)
-
-saved = load("numbers", dml=dml)
-print(saved["values"].value())
-print(saved.result.value())
-```
 
 ## Related pages
 

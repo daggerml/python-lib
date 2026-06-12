@@ -6,7 +6,7 @@ If you want change proposals, task lists, or planning artifacts for work on the 
 
 ## Start here
 
-- [Getting started](getting-started.md): install DaggerML, create a repo, make a first DAG, and inspect it.
+- [Getting started](getting-started.md): install DaggerML and create a repo.
 - [Concepts](concepts/README.md): the core ideas behind DAGs, commits, refs, execution, storage, remotes, and values.
 - [Guides](guides/README.md): task-focused walkthroughs built around real DaggerML workflows.
 - [Reference](reference/README.md): the exact Python API, CLI, configuration, and error surfaces.

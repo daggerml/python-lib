@@ -1,6 +1,6 @@
 # Getting Started
 
-Use this page to get a local DaggerML repo running, create one DAG, and inspect it from the CLI.
+Use this page to get a local DaggerML repo running.
 
 ## Install
 
@@ -22,35 +22,6 @@ dml init
 ```
 
 That creates `./demo/.dml/` with the local database and config.
-
-## Create Your First DAG
-
-Run the following code in any Python environment you like, such as a script, a notebook, or a REPL.
-
-```python
-import daggerml as dml
-
-dag = dml.new(name="hello", message="add hello dag")
-result = dag.put({"message": "hello", "value": 42}, name="result")
-dag.put([1, 2, 3], name="inputs")
-dag.commit(result)
-```
-
-This creates a committed DAG named `hello` on the local `main` branch.
-
-## Inspect It
-
-```bash
-dml status
-dml dag get hello
-dml show
-```
-
-Use these commands to answer the first questions you usually have:
-
-- `status`: current HEAD, branches, visible DAGs, and open indexes
-- `dag get hello`: the stored DAG summary, including names and result refs
-- `show`: the current commit plus DAG-level changes from its parent
 
 ## Next Steps
 

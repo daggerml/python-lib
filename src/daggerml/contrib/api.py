@@ -9,9 +9,10 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any, Callable, Protocol, TypeAlias, TypeVar, cast, overload
 
+from daggerml import Runnable
 from daggerml import api as core_api
-from daggerml._internal import DmlRepoError, Runnable
-from daggerml.codecs import DelayedLoad, DelayedRef, DelayedRunnable
+from daggerml.api import DmlRepoError
+from daggerml.contrib.codecs import DelayedLoad, DelayedRef, DelayedRunnable
 
 try:
     from typing import dataclass_transform
@@ -25,24 +26,10 @@ _DAGCLASS_RESERVED_NAMES = {"dag", "dml", "argv", "call", "put", "commit"}
 def _iter_dagclass_members(instance):
     members = getattr(instance, "__dagclass_members__", None)
     order = getattr(instance, "__dagclass_member_order__", None)
-    if isinstance(members, dict) and isinstance(order, list):
-        for name in order:
-            if name in members:
-                yield name, members[name]
-        return
-    seen: set[str] = set()
-    for f in fields(instance):
-        name = f.name
-        if name.startswith("_"):
-            continue
-        seen.add(name)
-        yield name, getattr(instance, name)
-    for name, class_value in instance.__class__.__dict__.items():
-        if name.startswith("_") or name in seen:
-            continue
-        if callable(class_value):
-            continue
-        yield name, getattr(instance, name)
+    if not isinstance(members, dict) or not isinstance(order, list):
+        raise DmlRepoError("dagclass instance is not compiled")
+    for name in order:
+        yield name, members[name]
 
 
 class _DagclassAnalyzer(ast.NodeVisitor):
@@ -395,17 +382,11 @@ def is_node_like(x: object) -> bool:
     return isinstance(x, (core_api.Node, DelayedRef, DelayedLoad, DelayedRunnable))
 
 
-def _ensure_contrib_codecs() -> None:
-    return None
-
-
 def ref(name: str) -> DelayedRef:
-    _ensure_contrib_codecs()
     return DelayedRef(name)
 
 
 def load(dagname: str, nodename: str | None = None) -> DelayedLoad:
-    _ensure_contrib_codecs()
     return DelayedLoad(dagname=dagname, nodename=nodename)
 
 
@@ -480,9 +461,7 @@ def _compile_dagclass_instance(instance) -> None:
 
     instance.__dagclass_members__ = members
     instance.__dagclass_member_order__ = order
-    instance.__dagclass_member_deps__ = member_deps
     instance.__dagclass_compiled__ = True
-    instance.__dagclass_compile_count__ = getattr(instance, "__dagclass_compile_count__", 0) + 1
 
 
 @dataclass_transform()
@@ -543,13 +522,10 @@ def _default_run_name(instance) -> str:
 
 
 def run(instance, *args, name: str | None = None, entrypoint: str | None = None, **kwargs):
-    _ensure_contrib_codecs()
-
     if not getattr(instance.__class__, "__dagclass__", False):
         raise DmlRepoError("api.run instance is not a dagclass instance")
     if not getattr(instance, "__dagclass_compiled__", False):
         raise DmlRepoError("api.run instance is not compiled")
-
     entry = entrypoint or getattr(instance.__class__, "__dagclass_entrypoint__", "main")
     if not hasattr(instance, entry):
         raise DmlRepoError(f"api.run entrypoint not found: {entry}")
@@ -580,8 +556,6 @@ def funkify(
 def funkify(
     sub_or_fn: FunkifyInput | None = None, *, adapter: str = "local", uri: str = "script", **kwargs: Any
 ) -> Callable[[FunkifyInput], DelayedRunnable] | DelayedRunnable:
-    _ensure_contrib_codecs()
-
     def _make(value: FunkifyInput) -> DelayedRunnable:
         if callable(value):
             if "fn" in kwargs:

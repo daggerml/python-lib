@@ -1,3 +1,8 @@
+# repo-inspection-cli Specification
+
+## Purpose
+Define the git-shaped repository inspection and porcelain behavior exposed by the public DML CLI.
+## Requirements
 ### Requirement: Top-level CLI uses git-shaped repository inspection verbs
 The public `dml` CLI SHALL expose repository-oriented porcelain commands at the top level: `status`, `show`, `log`, `diff`, `checkout`, `branch`, `fetch`, `pull`, `push`, `merge`, and `revert`.
 
@@ -15,12 +20,13 @@ The public `dml` CLI SHALL expose repository-oriented porcelain commands at the 
 ### Requirement: Show returns commit metadata, full DAG map, and commit delta
 `dml show <revision>` SHALL resolve the revision locally and return JSON with top-level `revision`, `commit`, `dags`, and `change` fields.
 
-The `dags` field SHALL be the full DAG name-to-ref map for the resolved revision. The `change` field SHALL describe the DAG-map delta introduced by the resolved commit relative to its base commit.
+The `commit` field SHALL expose commit metadata rooted in the resolved commit record and SHALL NOT include `dag`. The `dags` field SHALL be the full DAG name-to-ref map for the resolved revision. The `change` field SHALL describe the DAG-map delta introduced by the resolved commit relative to its base commit.
 
 #### Scenario: Show returns full DAG map and change
 - **WHEN** a user runs `dml show HEAD`
 - **THEN** the command returns JSON containing `revision`, `commit`, `dags`, and `change`
 - **AND** `dags` contains the complete DAG map for the resolved commit
+- **AND** `commit` does not include `dag`
 
 #### Scenario: Show root commit uses empty base
 - **WHEN** a user runs `dml show` on a root commit with no parents
@@ -41,10 +47,16 @@ The `dags` field SHALL be the full DAG name-to-ref map for the resolved revision
 ### Requirement: Log returns commit entries for a revision walk
 `dml log [<revision>] [--limit N]` SHALL return commit entries starting from the resolved revision, defaulting to `HEAD`.
 
+Each returned commit entry SHALL use the same commit-metadata shape as `dml show` and SHALL NOT include `dag`.
+
 #### Scenario: Log defaults to HEAD
 - **WHEN** a user runs `dml log`
 - **THEN** the command resolves `HEAD`
 - **AND** returns JSON containing `revision` and `commits`
+
+#### Scenario: Log entries omit commit dag
+- **WHEN** a user runs `dml log`
+- **THEN** every entry in `commits` omits `dag`
 
 ### Requirement: Branch listing and creation support local and remote-tracking workflows
 `dml branch` SHALL list local branches. `dml branch <name>` SHALL create a local branch from the current HEAD commit. `dml branch -r` and `dml branch --remote` SHALL list remote-tracking branches.
@@ -78,23 +90,29 @@ The CLI SHALL expose DAG-oriented inspection commands under `dml dag`: `list`, `
 - **AND** `dags` is an object mapping DAG names to DAG refs
 
 ### Requirement: DAG get resolves by name or exact DAG ref
-`dml dag get <name-or-id> [--revision REV]` SHALL resolve either a DAG name within a revision's DAG map or an explicit `dag:<id>` selector.
+`dml dag get <value> [--revision REV]` SHALL resolve either a DAG name within a revision's DAG map or an explicit `dag:<id>` selector.
 
-If the selector is `dag:<id>`, the command SHALL reject any provided `--revision` flag.
+The command SHALL not expose `--value-type` or any other explicit union transport selector. Instead it SHALL use the generated CLI's ordered parser-family rules for the `value` annotation.
 
 #### Scenario: DAG get resolves name in revision
 - **WHEN** a user runs `dml dag get train --revision HEAD~1`
 - **THEN** the command resolves `train` in the DAG map for `HEAD~1`
 - **AND** returns JSON containing `selector`, `revision`, and `dag`
 
-#### Scenario: DAG get loads exact DAG ref
+#### Scenario: DAG get loads exact DAG ref when the parser reaches ref construction
 - **WHEN** a user runs `dml dag get dag:abc123`
-- **THEN** the command loads that exact DAG object
+- **THEN** the generated CLI first applies the higher-priority parser families allowed by the annotation
+- **AND** if those families do not yield an accepted value, it falls back to exact `Ref` construction
 - **AND** returns JSON containing `selector` and `dag`
 
 #### Scenario: DAG get rejects revision with explicit DAG ref
 - **WHEN** a user runs `dml dag get dag:abc123 --revision HEAD`
 - **THEN** the command fails without resolving a revision
+
+#### Scenario: DAG get uses ordered parsing instead of explicit selector flags
+- **WHEN** a user runs `dml dag get train`
+- **THEN** the command uses the generated CLI parser order for the `value` annotation
+- **AND** it does not expose or require `--value-type`
 
 ### Requirement: DAG get includes node data
 The `dml dag get` payload SHALL include the DAG's node data so that users do not need a separate DAG-node inspection endpoint for normal CLI workflows.

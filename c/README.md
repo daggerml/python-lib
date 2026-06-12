@@ -26,32 +26,28 @@ This document describes the current C implementation under `/c`.
 
 - `DML_DB_ITER_LIMIT`
 - `DmlDbHandle`
-- `DmlDbTxn`
 - `DmlObjCollection`
 - DB error codes `DML_DB_OK` through `DML_DB_ERR_ENV_REOPENED`
 
 ### Public API
 
-- `int dml_db_open(const char *path, const char *const *namespaces, size_t namespace_count, const int create_if_missing, size_t map_size, DmlDbHandle **out_handle)`
+- `int dml_db_get_size(const char *path, size_t *out_size)` (computes the current LMDB path size on disk)
+- `int dml_db_open(const char *path, const char *const *namespaces, size_t namespace_count, const int create_if_missing, size_t map_size, DmlDbHandle **out_handle)` (`map_size == 0` leaves the environment map size unchanged)
+- `int dml_db_resize(DmlDbHandle **p_handle, size_t map_size)`
 - `int dml_db_close(DmlDbHandle **p_handle)`
-- `int dml_db_mapsize(DmlDbHandle **p_handle, size_t *out_mapsize)`
-- `int dml_db_resize(DmlDbHandle **p_handle, size_t mapsize)`
-- `int dml_db_txn_begin(DmlDbHandle **p_handle, const int readonly, DmlDbTxn **out_txn)`
-- `int dml_db_txn_fin(DmlDbHandle **p_handle, DmlDbTxn *txn, const int commit)`
-- `int dml_db_put(DmlDbHandle **p_handle, DmlDbTxn *txn, const char *ns, size_t ns_len, const char *key, size_t key_len, const DmlValue *value, int no_overwrite, int raw, DmlValue **out_ref)`
-- `int dml_db_get(DmlDbHandle **p_handle, DmlDbTxn *txn, const char *ns, size_t ns_len, const char *key, size_t key_len, int raw, DmlValue **out_value)`
-- `int dml_db_del(DmlDbHandle **p_handle, DmlDbTxn *txn, const char *ns, size_t ns_len, const char *key, size_t key_len)`
-- `int dml_db_exists(DmlDbHandle **p_handle, DmlDbTxn *txn, const char *ns, size_t ns_len, const char *key, size_t key_len, int *out_exists)`
-- `int dml_db_iter_keys(struct DmlDbHandle **p_handle, DmlDbTxn *txn, const char *ns, const char *start_token, DmlObjCollection *out_page)`
+- `int dml_db_put(DmlDbHandle **p_handle, const char *ns, size_t ns_len, const char *key, size_t key_len, const DmlValue *value, int no_overwrite, int raw, DmlValue **out_ref)`
+- `int dml_db_get(DmlDbHandle **p_handle, const char *ns, size_t ns_len, const char *key, size_t key_len, int raw, DmlValue **out_value)`
+- `int dml_db_del(DmlDbHandle **p_handle, const char *ns, size_t ns_len, const char *key, size_t key_len)`
+- `int dml_db_exists(DmlDbHandle **p_handle, const char *ns, size_t ns_len, const char *key, size_t key_len, int *out_exists)`
+- `int dml_db_iter_keys(struct DmlDbHandle **p_handle, const char *ns, const char *start_token, DmlObjCollection *out_page)`
 - `void dml_db_free_obj_collection(DmlObjCollection *page)`
-- `int dml_db_list_orphans(struct DmlDbHandle **p_handle, DmlDbTxn *txn, const char *const *start_refs, size_t start_refs_count, DmlValue **out_refs)`
+- `int dml_db_list_orphans(struct DmlDbHandle **p_handle, const char *const *start_refs, size_t start_refs_count, DmlValue **out_refs)`
 
 ## `c/src/dml_db.c`
 
 ### Internal structs
 
 - `struct DmlDbHandle`
-- `struct DmlDbTxn`
 - `DmlDumpEntry`
 - `DmlDumpList`
 
@@ -61,21 +57,18 @@ This document describes the current C implementation under `/c`.
 - `static void dml_dump_list_free(DmlDumpList *list)`
 - `static int dml_dump_list_find(const DmlDumpList *list, const char *key, size_t key_len)`
 - `static int dml_dump_list_add(DmlDumpList *list, const char *key, size_t key_len, DmlValue *value)`
-- `static int dml_dump_add_ref(DmlDbHandle **p_handle, DmlDbTxn *txn, DmlDumpList *list, const char *key, size_t key_len)`
-- `static int dml_dump_visit_value(DmlDbHandle **p_handle, DmlDbTxn *txn, DmlDumpList *list, const DmlValue *value)`
+- `static int dml_dump_add_ref(DmlDbHandle **p_handle, DmlDumpList *list, const char *key, size_t key_len)`
+- `static int dml_dump_visit_value(DmlDbHandle **p_handle, DmlDumpList *list, const DmlValue *value)`
 - `static int dml_db_reopen_handle(struct DmlDbHandle **p_handle)`
 - `static int dml_db_validate(struct DmlDbHandle **p_handle, const int reopen)`
-- `static int dml_db_validate_txn(struct DmlDbHandle **p_handle, struct DmlDbTxn *txn, const int reopen)`
-- `int dml_ns_dbi_lookup(DmlDbHandle **p_handle, DmlDbTxn *txn, const char *ns, size_t ns_len, MDB_dbi *out_dbi)`
+- `static int dml_db_validate_txn(struct DmlDbHandle **p_handle, const int reopen)`
+- `int dml_ns_dbi_lookup(DmlDbHandle **p_handle, const char *ns, size_t ns_len, MDB_dbi *out_dbi)`
 
 ### Exported functions
 
 - `int dml_db_open(...)`
-- `int dml_db_close(...)`
-- `int dml_db_mapsize(...)`
 - `int dml_db_resize(...)`
-- `int dml_db_txn_begin(...)`
-- `int dml_db_txn_fin(...)`
+- `int dml_db_close(...)`
 - `int dml_db_put(...)`
 - `int dml_db_get(...)`
 - `int dml_db_del(...)`

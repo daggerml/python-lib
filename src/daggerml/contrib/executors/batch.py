@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
+from urllib.parse import urlparse
 
-from daggerml import Uri
-from daggerml._internal import DmlRepoError, ExecutionState, Runnable
-from daggerml.contrib.adapters import AdapterBase
-from daggerml.contrib.executors._lambda import LambdaExecutorBase
+import boto3
+
+from daggerml import Runnable, Uri
+from daggerml.api import DmlRepoError
+from daggerml.contrib.executors.lambda_ import LambdaExecutorBase
 from daggerml.util import get_client
 
 PENDING_BATCH_STATUSES = {"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNING"}
@@ -16,6 +18,37 @@ DEFAULT_MEMORY = 16 * 1024
 DEFAULT_GPU = 0
 
 _ADAPTER_IO_NAME = "lambda:batch"
+
+
+def _scratch_uri(scratch_uri: str, filename: str) -> str:
+    parsed = urlparse(scratch_uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise DmlRepoError("Execution scratch URI must be an s3:// URI")
+    prefix = parsed.path.lstrip("/").rstrip("/")
+    return f"s3://{parsed.netloc}/{prefix}/{_ADAPTER_IO_NAME}/{filename}"
+
+
+def _write_scratch_json(uri: str, payload: Any, *, raw: bool) -> None:
+    parsed = urlparse(uri)
+    data = payload if raw else json.dumps(payload)
+    boto3.client("s3").put_object(
+        Bucket=parsed.netloc,
+        Key=parsed.path.lstrip("/"),
+        Body=data.encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def _read_scratch_output(uri: str) -> str | None:
+    parsed = urlparse(uri)
+    try:
+        response = boto3.client("s3").get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))
+    except Exception as exc:
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return None
+        raise
+    return response["Body"].read().decode("utf-8")
 
 
 class BatchExecutor(LambdaExecutorBase):
@@ -84,33 +117,38 @@ class BatchExecutor(LambdaExecutorBase):
         *,
         cache_key: str,
         execution_id: str,
-        runnable: Runnable,
-        argv_ptr: str,
+        runnable: dict[str, Any],
         remote: dict[str, str],
+        scratch_uri: str,
     ) -> dict[str, Any]:
-        if runnable is None or runnable.sub is None:
+        sub = runnable.get("sub")
+        if sub is None:
             raise DmlRepoError("batch executor start requires runnable with sub runnable")
-        exec_state = ExecutionState(cache_key, remote_root=remote["root"])
-        io = exec_state.adapter_io(execution_id, _ADAPTER_IO_NAME)
-        payload = AdapterBase._dump_payload(
-            runnable=runnable.sub,
-            argv_ptr=argv_ptr,
-            cache_key=cache_key,
-            execution_id=execution_id,
-            remote=remote,
-            state=None,
+        input_uri = _scratch_uri(scratch_uri, "input.json")
+        output_uri = _scratch_uri(scratch_uri, "output.json")
+        payload = json.dumps(
+            {
+                "runnable": sub,
+                "cache_key": cache_key,
+                "execution_id": execution_id,
+                "remote": remote,
+                "scratch_uri": scratch_uri,
+                "state": None,
+                "cancel_requested_by": None,
+            }
         )
-        io.write_input(payload, raw=True)
+        _write_scratch_json(input_uri, payload, raw=True)
         client = self._client()
-        reqs, job_queue = self._resource_requirements(runnable.kwargs)
-        image = self._image_uri(runnable.kwargs.get("image"))
+        kwargs = runnable.get("kwargs", {})
+        reqs, job_queue = self._resource_requirements(kwargs)
+        image = self._image_uri(kwargs.get("image"))
         job_name = f"dml-batch-{cache_key}"
         job_def = client.register_job_definition(
             jobDefinitionName=job_name,
             type="container",
             containerProperties={
                 "image": image,
-                "command": [runnable.sub.adapter, "--poll", "-i", io.input_uri, "-o", io.output_uri],
+                "command": [sub["adapter"], "--poll", "-i", input_uri, "-o", output_uri],
                 "environment": [],
                 "jobRoleArn": self._string("BATCH_TASK_ROLE_ARN", os.environ.get("BATCH_TASK_ROLE_ARN")),
                 "resourceRequirements": reqs,
@@ -118,8 +156,9 @@ class BatchExecutor(LambdaExecutorBase):
         )["jobDefinitionArn"]
         job_id = client.submit_job(jobName=job_name, jobQueue=job_queue, jobDefinition=job_def)["jobId"]
         return {
-            "status": "running",
+            "lifecycle": "running",
             "error": None,
+            "dag_id": None,
             "state": {
                 "job_id": job_id,
                 "job_definition": job_def,
@@ -128,39 +167,59 @@ class BatchExecutor(LambdaExecutorBase):
 
     def poll(
         self,
-        *,
         cache_key: str,
         execution_id: str,
+        runnable: dict[str, Any],
         state: dict[str, Any],
         remote: dict[str, str],
+        scratch_uri: str,
     ) -> dict[str, Any]:
+        del cache_key, execution_id, runnable, remote
         job_id = state.get("job_id")
         if not isinstance(job_id, str) or not job_id:
-            return {"status": "failed", "error": "batch poll: missing job_id in job state"}
+            return {
+                "lifecycle": "failed",
+                "error": "batch poll: missing job_id in job state",
+                "state": None,
+                "dag_id": None,
+            }
         try:
             jobs = self._client().describe_jobs(jobs=[job_id]).get("jobs", [])
         except Exception:
-            return {"status": "running", "error": None, "state": state}
+            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
         if not jobs:
-            return {"status": "running", "error": None, "state": state}
+            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
         job = jobs[0]
         job_status = job["status"]
 
         if job_status in PENDING_BATCH_STATUSES:
-            return {"status": "running", "error": None, "state": state}
+            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
 
         if job_status == "SUCCEEDED":
-            exec_state = ExecutionState(cache_key, remote_root=remote["root"])
-            io = exec_state.adapter_io(execution_id, _ADAPTER_IO_NAME)
             try:
-                raw = io.read_output()
+                raw = _read_scratch_output(_scratch_uri(scratch_uri, "output.json"))
                 if raw is None:
-                    return {"status": "failed", "error": "batch poll: sub-adapter output not yet written to S3"}
+                    return {
+                        "lifecycle": "failed",
+                        "error": "batch poll: sub-adapter output not yet written to S3",
+                        "state": None,
+                        "dag_id": None,
+                    }
                 result = json.loads(raw)
             except Exception as e:
-                return {"status": "failed", "error": f"batch poll: could not read sub-adapter result: {e}"}
-            if not isinstance(result, dict) or result.get("status") not in {"succeeded", "failed"}:
-                return {"status": "failed", "error": f"batch poll: unexpected sub-adapter result: {result}"}
+                return {
+                    "lifecycle": "failed",
+                    "error": f"batch poll: could not read sub-adapter result: {e}",
+                    "state": None,
+                    "dag_id": None,
+                }
+            if result.get("lifecycle") not in {"succeeded", "failed", "cancelled"}:
+                return {
+                    "lifecycle": "failed",
+                    "error": f"batch poll: unexpected sub-adapter result: {result}",
+                    "state": None,
+                    "dag_id": None,
+                }
             return result
 
         # Failed
@@ -174,12 +233,19 @@ class BatchExecutor(LambdaExecutorBase):
         error = f"Batch job {job_id} failed"
         if reason not in {None, ""}:
             error = f"{error}: {reason}"
-        return {"status": "failed", "error": error}
+        return {"lifecycle": "failed", "error": error, "state": None, "dag_id": None}
 
     def cancel(
-        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+        self,
+        cache_key: str,
+        execution_id: str,
+        runnable: dict[str, Any],
+        state: dict[str, Any],
+        remote: dict[str, str],
+        scratch_uri: str,
+        cancel_requested_by: str | None,
     ) -> dict[str, Any]:
-        del cache_key, execution_id, remote
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by
         client = self._client()
         job_id = state.get("job_id")
         job_definition = state.get("job_definition")
@@ -196,4 +262,4 @@ class BatchExecutor(LambdaExecutorBase):
                 client.deregister_job_definition(jobDefinition=job_definition)
             except Exception:
                 pass
-        return {"status": "cancelled", "error": None}
+        return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}

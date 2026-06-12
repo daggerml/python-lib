@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import sys
 import time
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from urllib.parse import urlparse
+from warnings import warn
 
 import boto3
 
-from daggerml._internal import DmlRepoError, ExecutionState, Runnable, Uri
-from daggerml.contrib.executor_registry import get_executor
+from daggerml import Runnable
+from daggerml._core import AdapterResponse
+from daggerml.api import DmlRepoError, _entry_points
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 from daggerml.util import get_client
 
@@ -21,173 +23,14 @@ class AdapterBase:
     name = ""
 
     @classmethod
-    def resolve_runnable(cls, uri, kwargs, sub):
-        spec = get_executor(cls.name, uri)
-        resolved = spec.resolve_runnable(uri, kwargs, sub)
-        if not isinstance(resolved, Runnable):
-            raise DmlRepoError(f"Executor '{uri}' resolve_runnable must return Runnable")
-        return resolved
+    def resolve_runnable(cls, uri, kwargs, sub) -> Runnable:
+        from daggerml.contrib.executors._base import get_executor
+
+        return get_executor(cls.name, uri).resolve_runnable(uri, kwargs, sub)
 
     @classmethod
-    def send(
-        cls,
-        *,
-        runnable: Runnable,
-        argv_ptr: str,
-        cache_key: str,
-        execution_id: str,
-        remote: dict[str, str],
-        state: dict[str, Any] | None,
-        execution_status: str | None,
-        cancel_requested_by: str | None,
-    ):
+    def send(cls, *kw) -> AdapterResponse:
         raise NotImplementedError("Adapter send method is not implemented")
-
-    @classmethod
-    def _dump_payload(
-        cls,
-        *,
-        runnable: Runnable,
-        argv_ptr: str,
-        cache_key: str,
-        execution_id: str,
-        remote: dict[str, str],
-        state: dict[str, Any] | None,
-        execution_status: str | None = None,
-        cancel_requested_by: str | None = None,
-    ) -> str:
-        def _encode(value: Any) -> Any:
-            if isinstance(value, Runnable):
-                return {
-                    "target": value.target.uri,
-                    "kwargs": {k: _encode(v) for k, v in value.kwargs.items()},
-                    "adapter": value.adapter,
-                    "sub": None if value.sub is None else _encode(value.sub),
-                }
-            if isinstance(value, Uri):
-                return value.uri
-            if isinstance(value, dict):
-                return {k: _encode(v) for k, v in value.items()}
-            if isinstance(value, list):
-                return [_encode(v) for v in value]
-            if isinstance(value, tuple):
-                return [_encode(v) for v in value]
-            return value
-
-        payload: dict[str, Any] = {
-            "runnable": _encode(runnable),
-            "argv_ptr": argv_ptr,
-            "cache_key": cache_key,
-            "execution_id": execution_id,
-            "remote": _encode(remote),
-            "state": _encode(state),
-            "execution_status": execution_status,
-            "cancel_requested_by": cancel_requested_by,
-        }
-        return json.dumps(payload)
-
-    @staticmethod
-    def _call_with_supported_kwargs(fn, **kwargs):
-        signature = inspect.signature(fn)
-        if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
-            return fn(**kwargs)
-        supported = {name: value for name, value in kwargs.items() if name in signature.parameters}
-        return fn(**supported)
-
-    @staticmethod
-    def _decode_runnable(value: Any) -> Runnable:
-        if isinstance(value, Runnable):
-            return value
-        if not isinstance(value, dict):
-            raise DmlRepoError("Adapter runnable payload must be a dict")
-        target = value.get("target")
-        kwargs = value.get("kwargs", {})
-        adapter = value.get("adapter")
-        sub = value.get("sub")
-        if not isinstance(target, str):
-            raise DmlRepoError("Adapter runnable target must be a string")
-        if not isinstance(kwargs, dict):
-            raise DmlRepoError("Adapter runnable kwargs must be a dict")
-        if not isinstance(adapter, str):
-            raise DmlRepoError("Adapter runnable adapter must be a string")
-        return Runnable(
-            target=Uri(target),
-            kwargs=kwargs,
-            adapter=adapter,
-            sub=(None if sub is None else AdapterBase._decode_runnable(sub)),
-        )
-
-    @classmethod
-    def _parse_payload(
-        cls, payload: dict
-    ) -> tuple[str, str, str, Runnable, dict[str, str], dict[str, Any] | None, str | None, str | None]:
-        argv_ptr = payload["argv_ptr"]
-        cache_key = payload["cache_key"]
-        execution_id = payload["execution_id"]
-        remote = payload["remote"]
-        state = payload.get("state")
-        execution_status = payload.get("execution_status")
-        cancel_requested_by = payload.get("cancel_requested_by")
-        if not isinstance(argv_ptr, str):
-            raise DmlRepoError("Adapter payload argv_ptr must be a string")
-        if not isinstance(cache_key, str):
-            raise DmlRepoError("Adapter payload cache_key must be a string")
-        if not isinstance(execution_id, str):
-            raise DmlRepoError("Adapter payload execution_id must be a string")
-        if not isinstance(remote, dict):
-            raise DmlRepoError("Adapter payload remote must be a dict")
-        if state is not None and not isinstance(state, dict):
-            raise DmlRepoError("Adapter payload state must be a dict or null")
-        if execution_status is not None and not isinstance(execution_status, str):
-            raise DmlRepoError("Adapter payload execution_status must be a string or null")
-        if cancel_requested_by is not None and not isinstance(cancel_requested_by, str):
-            raise DmlRepoError("Adapter payload cancel_requested_by must be a string or null")
-        return (
-            argv_ptr,
-            cache_key,
-            execution_id,
-            cls._decode_runnable(payload["runnable"]),
-            remote,
-            state,
-            execution_status,
-            cancel_requested_by,
-        )
-
-    @staticmethod
-    def _validate_output(result):
-        if not isinstance(result, dict):
-            raise DmlRepoError("Adapter output must be a dict")
-        status = result.get("status")
-        if status not in {"running", "succeeded", "failed", "cancelled"}:
-            raise DmlRepoError("Adapter output status must be one of running|succeeded|failed|cancelled")
-        allowed_keys = {"status", "error"}
-        if status == "succeeded":
-            allowed_keys.add("dag_id")
-        elif status == "running":
-            allowed_keys.add("state")
-        extra = set(result.keys()) - allowed_keys
-        if extra:
-            raise DmlRepoError(f"Adapter output has unexpected keys: {', '.join(sorted(extra))}")
-        error = result.get("error")
-        if status == "failed":
-            if error is None:
-                raise DmlRepoError("Adapter output failed requires error")
-        elif status == "cancelled":
-            if error is not None:
-                raise DmlRepoError("Adapter output cancelled requires error=None")
-        elif status == "running":
-            if error is not None:
-                raise DmlRepoError("Adapter output running requires error=None")
-            state = result.get("state")
-            if not isinstance(state, dict):
-                raise DmlRepoError("Adapter output running requires state")
-        else:
-            if error is not None:
-                raise DmlRepoError("Adapter output succeeded requires error=None")
-            dag_id = result.get("dag_id")
-            if not isinstance(dag_id, str) or not dag_id:
-                raise DmlRepoError("Adapter output succeeded requires dag_id")
-        return result
 
     @classmethod
     def _read_input(cls, input_path: str) -> str:
@@ -218,78 +61,22 @@ class AdapterBase:
             return
         Path(output_path).write_text(data)
 
-    @staticmethod
-    def _refresh_execution_payload(
-        *, cache_key: str, execution_id: str, remote: dict[str, str], fallback_state: dict[str, Any] | None
-    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
-        state_backend = ExecutionState(cache_key, remote_root=remote["root"])
-        launch_state = state_backend.read_launch_state(execution_id)
-        try:
-            record = state_backend.read_execution_record(execution_id)
-        except DmlRepoError:
-            record = None
-        if launch_state is None and record is None:
-            return fallback_state, None, None
-        state = fallback_state
-        if state is None and launch_state is not None:
-            state = launch_state.get("resume_state")
-        return (
-            state,
-            (record.get("lifecycle") if record is not None else None),
-            (record.get("cancellation_requested_by") if record is not None else None),
-        )
-
     @classmethod
     def cli(cls, argv: list[str] | None = None) -> int:
         parser = argparse.ArgumentParser(description=f"{cls.__name__} CLI")
         parser.add_argument("-i", "--input", default="-")
         parser.add_argument("-o", "--output", default="-")
         parser.add_argument("--poll", action="store_true")
+        # FIXME: `--poll` make `cancel` difficult. We should allow for coordination between caller and this loop.
         args = parser.parse_args(argv)
-
         raw = cls._read_input(args.input)
         payload = json.loads(raw)
-        (
-            argv_ptr,
-            cache_key,
-            execution_id,
-            runnable,
-            remote,
-            state,
-            execution_status,
-            cancel_requested_by,
-        ) = cls._parse_payload(payload)
-        result = cls.send(
-            runnable=runnable,
-            argv_ptr=argv_ptr,
-            cache_key=cache_key,
-            execution_id=execution_id,
-            remote=remote,
-            state=state,
-            execution_status=execution_status,
-            cancel_requested_by=cancel_requested_by,
-        )
-        persisted_state = state
-        current_status = execution_status
-        current_cancel_requested_by = cancel_requested_by
-        while args.poll and result.get("status") not in {"succeeded", "failed", "cancelled"}:
-            persisted_state, current_status, current_cancel_requested_by = cls._refresh_execution_payload(
-                cache_key=cache_key,
-                execution_id=execution_id,
-                remote=remote,
-                fallback_state=persisted_state if persisted_state is not None else result.get("state"),
-            )
-            time.sleep(0.05)
-            result = cls.send(
-                runnable=runnable,
-                argv_ptr=argv_ptr,
-                cache_key=cache_key,
-                execution_id=execution_id,
-                remote=remote,
-                state=persisted_state,
-                execution_status=current_status,
-                cancel_requested_by=current_cancel_requested_by,
-            )
+        result = cls.send(**payload)
+        payload["state"] = payload.get("state")
+        while args.poll and result.get("lifecycle") == "running":
+            payload["state"] = result.get("state") or payload["state"]
+            time.sleep(0.1)
+            result = cls.send(**payload)
         cls._write_output(args.output, json.dumps(result))
         return 0
 
@@ -299,32 +86,10 @@ class LocalAdapter(AdapterBase):
     executable = "dml-local-adapter"
 
     @classmethod
-    def send(
-        cls,
-        *,
-        runnable: Runnable,
-        argv_ptr: str,
-        cache_key: str,
-        execution_id: str,
-        remote: dict[str, str],
-        state: dict[str, Any] | None,
-        execution_status: str | None = None,
-        cancel_requested_by: str | None = None,
-    ):
-        spec = get_executor("local", runnable.target.uri)
-        if not hasattr(spec, "handle"):
-            raise DmlRepoError(f"Executor '{runnable.target.uri}' does not support handle()")
-        result = spec.handle(
-            cache_key=cache_key,
-            execution_id=execution_id,
-            state=state,
-            execution_status=execution_status,
-            cancel_requested_by=cancel_requested_by,
-            runnable=runnable,
-            argv_ptr=argv_ptr,
-            remote=remote,
-        )
-        return cls._validate_output(result)
+    def send(cls, **kw) -> AdapterResponse:
+        from daggerml.contrib.executors._base import get_executor
+
+        return get_executor("local", kw["runnable"]["target"]["uri"]).handle(**kw)
 
 
 class LambdaAdapter(AdapterBase):
@@ -332,39 +97,59 @@ class LambdaAdapter(AdapterBase):
     executable = "dml-lambda-adapter"
 
     @classmethod
-    def send(
-        cls,
-        *,
-        runnable: Runnable,
-        argv_ptr: str,
-        cache_key: str,
-        execution_id: str,
-        remote: dict[str, str],
-        state: dict[str, Any] | None,
-        execution_status: str | None = None,
-        cancel_requested_by: str | None = None,
-    ):
+    def send(cls, **kw) -> AdapterResponse:
         client = get_client("lambda")
         response = client.invoke(
-            FunctionName=runnable.target.uri,
+            FunctionName=kw["runnable"]["target"]["uri"],
             InvocationType="RequestResponse",
-            Payload=cls._dump_payload(
-                runnable=runnable,
-                argv_ptr=argv_ptr,
-                cache_key=cache_key,
-                execution_id=execution_id,
-                remote=remote,
-                state=state,
-                execution_status=execution_status,
-                cancel_requested_by=cancel_requested_by,
-            ).encode("utf-8"),
+            Payload=json.dumps(kw, separators=(",", ":"), sort_keys=True).encode("utf-8"),
         )
         stream = response.get("Payload")
         if stream is None:
             raise DmlRepoError("Lambda adapter invoke response missing Payload")
-        body = stream.read().decode("utf-8")
-        try:
-            result = json.loads(body) if body else {}
-        except json.JSONDecodeError as e:
-            raise DmlRepoError(f"Lambda adapter response payload must be JSON: {e}") from e
-        return cls._validate_output(result)
+        return json.loads(stream.read().decode("utf-8"))
+
+
+################################################################################
+############################### Adapter registry ###############################
+################################################################################
+ADAPTER_ENTRYPOINT_GROUP = "daggerml.contrib.adapters"
+
+_LOCK = Lock()
+_ADAPTER_SPECS: dict[str, str] = {}
+_PLUGINS_LOADED = False
+
+
+def load_adapter_plugins() -> None:
+    global _PLUGINS_LOADED
+    if _PLUGINS_LOADED:
+        return
+    with _LOCK:
+        if _PLUGINS_LOADED:
+            return
+        for ep in _entry_points(ADAPTER_ENTRYPOINT_GROUP):
+            try:
+                loaded = ep.load()
+                if loaded.name in _ADAPTER_SPECS:
+                    # warn about duplicate adapter registration but allow the last one to win
+                    warn(
+                        f"Adapter: '{loaded.name}' is overwriting existing '{ep.name} ({ep.value})'",
+                        stacklevel=2,
+                    )
+                _ADAPTER_SPECS[loaded.name] = loaded
+            except Exception as e:
+                raise DmlRepoError(f"Adapter plugin '{ep.name} ({ep.value})' failed: {e}") from e
+        _PLUGINS_LOADED = True
+
+
+def get_adapter(name: str) -> Any:
+    load_adapter_plugins()
+    spec = _ADAPTER_SPECS.get(name)
+    if spec is None:
+        raise DmlRepoError(f"Adapter '{name}' is not registered")
+    return spec
+
+
+def list_adapters() -> list[str]:
+    load_adapter_plugins()
+    return sorted(_ADAPTER_SPECS.keys())

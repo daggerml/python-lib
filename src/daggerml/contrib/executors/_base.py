@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from threading import Lock
 from typing import Any
+from warnings import warn
 
-from daggerml._internal import Runnable
+from daggerml.api import DmlRepoError, _entry_points
 
 
 class ExecutorBase:
@@ -12,29 +14,19 @@ class ExecutorBase:
     on first launch and the immutable persisted state on later polls. Executors
     return terminal or in-progress result dicts via stdout/return value:
 
-        {"status": "running",    "error": null,  "state": {...}}
-        {"status": "succeeded",  "error": null,  "dag_id": "<hex>"}
-        {"status": "failed",     "error": "<msg>"}
+        {"lifecycle": "running",    "error": null,  "state": {...}, "dag_id": null}
+        {"lifecycle": "succeeded",  "error": null,  "state": null,  "dag_id": "<hex>"}
+        {"lifecycle": "failed",     "error": "<msg>", "state": null, "dag_id": null}
     """
 
     name: str = ""
     adapter: str = ""
-    execution_status: str | None = None
-    cancel_requested_by: str | None = None
 
     # ------------------------------------------------------------------
     # Subclass interface
     # ------------------------------------------------------------------
 
-    def start(
-        self,
-        *,
-        cache_key: str,
-        execution_id: str,
-        runnable: Runnable,
-        argv_ptr: str,
-        remote: dict[str, str],
-    ) -> dict[str, Any]:
+    def start(self, cache_key, execution_id, runnable, remote, scratch_uri) -> dict[str, Any]:
         """Launch execution and return a result dict.
 
         For synchronous executors this should return the terminal result
@@ -43,24 +35,17 @@ class ExecutorBase:
         """
         raise NotImplementedError
 
-    def poll(
-        self,
-        *,
-        cache_key: str,
-        execution_id: str,
-        state: dict[str, Any],
-        remote: dict[str, str],
-    ) -> dict[str, Any]:
+    def poll(self, cache_key, execution_id, runnable, state, remote, scratch_uri) -> dict[str, Any]:
         """Check an in-flight job and return a result dict.
 
         ``state`` is the immutable launch-time state returned by ``start()``.
-        Return a terminal result when done, or ``{"status": "running",
-        "error": None, "state": ...}`` while still running. Later returned
-        state may be ignored by the runtime.
+        Return a terminal result when done, or ``{"lifecycle": "running",
+        "error": None, "state": ..., "dag_id": None}`` while still running.
+        Later returned state may be ignored by the runtime.
         """
         raise NotImplementedError
 
-    def cleanup(self, *, cache_key: str, execution_id: str, remote: dict[str, str], state: dict[str, Any]) -> None:
+    def gc(self, cache_key, execution_id, remote, scratch_uri, state):
         """Optional cleanup hook called after terminal result is handled.
 
         Default is a no-op.  Subclasses may override to terminate external
@@ -69,10 +54,9 @@ class ExecutorBase:
         """
 
     def cancel(
-        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+        self, cache_key, execution_id, runnable, state, remote, scratch_uri, cancel_requested_by
     ) -> dict[str, Any]:
-        self.cleanup(cache_key=cache_key, execution_id=execution_id, remote=remote, state=state)
-        return {"status": "cancelled", "error": None}
+        raise NotImplementedError("This executor does not support cancellation")
 
     # ------------------------------------------------------------------
     # Main dispatch
@@ -84,35 +68,80 @@ class ExecutorBase:
         *,
         cache_key: str,
         execution_id: str,
-        state: dict[str, Any] | None,
-        execution_status: str | None,
+        remote: dict,
+        runnable: dict,
+        state: dict | None,
+        scratch_uri: str,
         cancel_requested_by: str | None,
-        runnable: Runnable,
-        argv_ptr: str,
-        remote: dict[str, str],
     ) -> dict[str, Any]:
         """Call start or poll depending on whether immutable state exists."""
         executor = cls()
-        executor.execution_status = execution_status
-        executor.cancel_requested_by = cancel_requested_by
-        if execution_status == "cancel-pending" and state is not None:
+        if cancel_requested_by is not None:
             return executor.cancel(
                 cache_key=cache_key,
                 execution_id=execution_id,
+                runnable=runnable,
                 state=state,
                 remote=remote,
+                scratch_uri=scratch_uri,
+                cancel_requested_by=cancel_requested_by,
             )
         if state is None:
             return executor.start(
                 cache_key=cache_key,
                 execution_id=execution_id,
                 runnable=runnable,
-                argv_ptr=argv_ptr,
                 remote=remote,
+                scratch_uri=scratch_uri,
             )
         return executor.poll(
             cache_key=cache_key,
             execution_id=execution_id,
+            runnable=runnable,
             state=state,
             remote=remote,
+            scratch_uri=scratch_uri,
         )
+
+
+################################################################################
+############################## Executor registry ###############################
+################################################################################
+EXECUTOR_ENTRYPOINT_GROUP = "daggerml.contrib.executors"
+
+_LOCK = Lock()
+_EXECUTOR_SPECS: dict[tuple[str, str], Any] = {}
+_PLUGINS_LOADED = False
+
+
+def load_executor_plugins() -> None:
+    global _PLUGINS_LOADED
+    with _LOCK:
+        if _PLUGINS_LOADED:
+            return
+        for ep in _entry_points(EXECUTOR_ENTRYPOINT_GROUP):
+            try:
+                loaded = ep.load()
+                if (loaded.adapter, loaded.name) in _EXECUTOR_SPECS:
+                    warn(
+                        f"Duplicate executor plugin for adapter '{loaded.adapter}' and name '{loaded.name}'",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                _EXECUTOR_SPECS[(loaded.adapter, loaded.name)] = loaded
+            except Exception as e:
+                raise DmlRepoError(f"Executor plugin '{ep.name} ({ep.value})' failed: {e}") from e
+        _PLUGINS_LOADED = True
+
+
+def get_executor(adapter: str, name: str) -> Any:
+    load_executor_plugins()
+    spec = _EXECUTOR_SPECS.get((adapter, name))
+    if spec is None:
+        raise DmlRepoError(f"Executor '{name}' is not registered for adapter '{adapter}'")
+    return spec
+
+
+def list_executors(adapter: str) -> list[str]:
+    load_executor_plugins()
+    return sorted(name for _adapter, name in _EXECUTOR_SPECS.keys() if _adapter == adapter)

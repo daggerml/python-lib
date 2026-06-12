@@ -12,7 +12,171 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union, cast, get_args, get_origin
 
-from daggerml._internal import Dml, Ref, Runnable, Uri, dml_dumps, dml_loads
+from daggerml._core import Dml, Error, Ref, Runnable, Uri, dml_dumps, dml_loads
+
+
+def _serialize_as(value: Any, expected: type[Any], render: Callable[[Any], str] = str) -> str:
+    if expected is int:
+        ok = isinstance(value, int) and not isinstance(value, bool)
+    else:
+        ok = isinstance(value, expected)
+    if not ok:
+        raise TypeError(f"expected {expected.__name__}, got {type(value).__name__}")
+    return render(value)
+
+
+def _json_default(obj: Any) -> Any:
+    if isinstance(obj, Ref):
+        return str(obj.to)
+    if isinstance(obj, Uri):
+        return obj.uri
+    if isinstance(obj, Runnable):
+        raise NotImplementedError("Runnable objects cannot be serialized to JSON directly")
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
+def _serialize_json(value: Any) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, default=_json_default)
+
+
+def _read_cli_text(value: str) -> str:
+    if value == "-":
+        return sys.stdin.read()
+    return Path(value).read_text(encoding="utf-8")
+
+
+def _parse_json_file(value: str) -> Any:
+    try:
+        return json.loads(_read_cli_text(value))
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"expected JSON input: {exc.msg}") from exc
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _parse_dml_file(value: str) -> Any:
+    try:
+        return dml_loads(_read_cli_text(value))
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc.msg}") from exc
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc}") from exc
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _parse_bool(value: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    raise argparse.ArgumentTypeError("expected boolean input: true or false")
+
+
+def _parse_none(value: str) -> None:
+    if value == "null":
+        return None
+    raise argparse.ArgumentTypeError("expected null")
+
+
+CLI_FAMILY_PARSERS: dict[str, Callable[[str], Any]] = {
+    "none": _parse_none,
+    "dml": _parse_dml_file,
+    "json": _parse_json_file,
+    "float": float,
+    "int": int,
+    "bool": _parse_bool,
+    "str": str,
+    "ref": Ref,
+}
+
+CLI_FAMILY_SERIALIZERS: dict[str, Callable[[Any], str]] = {
+    "dml": dml_dumps,
+    "json": _serialize_json,
+    "float": lambda value: _serialize_as(value, float),
+    "int": lambda value: _serialize_as(value, int),
+    "bool": lambda value: _serialize_as(value, bool, lambda item: "true" if item else "false"),
+    "str": lambda value: _serialize_as(value, str),
+    "ref": lambda value: _serialize_as(value, Ref, lambda item: str(item.to)),
+}
+
+CLI_SERDE_PRIORITY = ("none", "dml", "json", "float", "int", "bool", "str", "ref")
+CLI_COLLECTION_TYPES = (dict, list)
+CLI_LITERAL_SCALARS = {float, int, bool, str}
+
+
+def _union_members(typ: Any) -> tuple[Any, ...]:
+    origin = get_origin(typ)
+    if origin in (Union, types.UnionType):
+        return get_args(typ)
+    return (typ,)
+
+
+def _is_collection_type(typ: Any) -> bool:
+    return typ in CLI_COLLECTION_TYPES or typing.is_typeddict(typ) or get_origin(typ) in CLI_COLLECTION_TYPES
+
+
+def _family_for_type(typ: Any) -> str | None:
+    if typ is type(None):
+        return "none"
+    if typ is Any or typ is Error:
+        return "dml"
+    if _is_collection_type(typ):
+        return "json"
+    if typ in CLI_LITERAL_SCALARS:
+        return typ.__name__
+    if typ is Ref:
+        return "ref"
+    if get_origin(typ) is Literal:
+        choices = get_args(typ)
+        if not choices or any(type(choice) is not type(choices[0]) for choice in choices):
+            return None
+        return _family_for_type(type(choices[0]))
+    return None
+
+
+def _matches_type(value: Any, typ: Any) -> bool:
+    if typ is Any:
+        return True
+    if typ is type(None):
+        return value is None
+    if typ is Error:
+        return isinstance(value, Error)
+    if typ is Ref:
+        return isinstance(value, Ref)
+    if typ is str:
+        return isinstance(value, str)
+    if typ is bool:
+        return isinstance(value, bool)
+    if typ is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if typ is float:
+        return isinstance(value, float)
+    if typing.is_typeddict(typ):
+        return isinstance(value, dict)
+    origin = get_origin(typ)
+    if origin in CLI_COLLECTION_TYPES:
+        return isinstance(value, origin)
+    if origin is Literal:
+        return value in get_args(typ)
+    return False
+
+
+def _matches_any_type(value: Any, allowed_types: tuple[Any, ...]) -> bool:
+    return any(_matches_type(value, allowed) for allowed in allowed_types)
+
+
+def _serde_families_for_type(typ: Any) -> tuple[_SerdeFamily, ...]:
+    grouped: dict[str, list[Any]] = {}
+    for member in _union_members(typ):
+        family = _family_for_type(member)
+        if family is None:
+            return ()
+        grouped.setdefault(family, []).append(member)
+    ordered = ["none", "dml", "json", *(["str"] if "str" in grouped else [])]
+    ordered.extend(name for name in CLI_SERDE_PRIORITY if name not in ordered)
+    return tuple(_SerdeFamily(name, tuple(grouped[name])) for name in ordered if name in grouped)
 
 
 class PrettyArgumentParser(argparse.ArgumentParser):
@@ -26,6 +190,19 @@ class _Target:
     path: tuple[str, ...]
     method_name: str
     kind: Literal["instance", "classmethod"]
+
+
+@dataclass(frozen=True)
+class _SerdeFamily:
+    name: str
+    allowed_types: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class _ConstructorParam:
+    name: str
+    typ: Any
+    dest: str
 
 
 class MethodCLI:
@@ -48,7 +225,7 @@ class MethodCLI:
       - default True: --no-foo
     - Annotated[T, "help"] provides per-argument help.
     - Docstrings provide command help and optional parameter help.
-    - Results are printed to stdout as JSON.
+    - Results are printed to stdout using the resolved output transport.
     """
 
     def __init__(
@@ -62,6 +239,7 @@ class MethodCLI:
             raise TypeError("MethodCLI expects a class, not an instance")
         self.cls = cls
         self.parsers = dict(parsers or {})
+        self._constructor_params = self._constructor_param_metadata()
         self.parser = PrettyArgumentParser(
             prog=prog or self._kebab(cls.__name__),
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -96,12 +274,14 @@ class MethodCLI:
         if target is None:
             self.parser.error("missing command")
         init_kwargs = {
-            name: data.pop(f"_init_{name}") for name in self._constructor_param_names() if f"_init_{name}" in data
+            param.name: data.pop(param.dest) for param in self._constructor_params.values() if param.dest in data
         }
-        method_kwargs = {k: v for k, v in data.items() if not k.startswith("_subcommand_")}
         target = cast(_Target, target)
         root = self.cls if target.kind == "classmethod" else self.cls(**init_kwargs)
         method = self._resolve_method(root, target)
+        method_kwargs = {k: v for k, v in data.items() if not k.startswith("_subcommand_")}
+        if target.kind == "classmethod":
+            method_kwargs.update({name: init_kwargs[name] for name in self._classmethod_init_arg_names(method)})
         method_args: list[Any] = []
         sig = inspect.signature(method)
         for name, param in sig.parameters.items():
@@ -114,11 +294,14 @@ class MethodCLI:
             if param.kind is param.VAR_POSITIONAL and name in method_kwargs:
                 method_args.extend(method_kwargs.pop(name))
         result = method(*method_args, **method_kwargs)
-        if self._returns_exact_any(method):
-            print(dml_dumps(result))
-        else:
-            print(json.dumps(result, separators=(",", ":"), sort_keys=True, default=self._json_default))
+        if result is not None:
+            print(self._serialize_command_result(target, method, result))
         return 0
+
+    def _serialize_command_result(self, target: _Target, method: Callable[..., Any], result: Any) -> str:
+        if target.kind == "classmethod" and isinstance(result, self.cls):
+            return self._serialize_result(self.cls.status, result.status())
+        return self._serialize_result(method, result)
 
     def _configure_logging(self, verbosity: int) -> None:
         level = logging.WARNING if verbosity <= 0 else logging.INFO if verbosity == 1 else logging.DEBUG
@@ -126,19 +309,24 @@ class MethodCLI:
 
     def _add_constructor_args(self, parser: argparse.ArgumentParser) -> None:
         init = self.cls.__init__
+        if init is object.__init__:
+            return
         doc = self._parse_docstring(inspect.getdoc(init) or inspect.getdoc(self.cls) or "")
         group = parser.add_argument_group("constructor arguments")
         self._add_callable_args(
             group, init, doc.param_help, dest_prefix="_init_", skip_self=True, required_as_options=True
         )
 
-    def _constructor_param_names(self) -> list[str]:
+    def _constructor_param_metadata(self) -> dict[str, _ConstructorParam]:
         sig = inspect.signature(self.cls.__init__)
-        return [
-            name
-            for name, param in sig.parameters.items()
-            if name != "self" and param.kind not in (param.VAR_POSITIONAL, param.VAR_KEYWORD)
-        ]
+        hints = typing.get_type_hints(self.cls.__init__, include_extras=True)
+        params: dict[str, _ConstructorParam] = {}
+        for name, param in sig.parameters.items():
+            if name == "self" or param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                continue
+            typ, _ = self._split_annotated(hints.get(name, param.annotation))
+            params[name] = _ConstructorParam(name=name, typ=typ, dest=f"_init_{name}")
+        return params
 
     def _build_namespace_from_type(
         self, typ: type[Any], parser: argparse.ArgumentParser, path: tuple[str, ...]
@@ -146,6 +334,8 @@ class MethodCLI:
         subparsers = parser.add_subparsers(dest="_subcommand_" + "_".join(path or ("root",)), required=True)
         for name, member in sorted(vars(typ).items()):
             if self._is_public_method_descriptor(name, member):
+                if not self._callable_is_generatable(member, skip_self=True):
+                    continue
                 command_name = self._kebab(name)
                 doc = self._parse_docstring(inspect.getdoc(member) or "")
                 child = subparsers.add_parser(
@@ -159,6 +349,8 @@ class MethodCLI:
             elif not path and self._is_public_root_classmethod_descriptor(name, member):
                 command_name = self._kebab(name)
                 method = getattr(typ, name)
+                if not self._callable_is_generatable(method, skip_self=False):
+                    continue
                 doc = self._parse_docstring(inspect.getdoc(method) or "")
                 child = subparsers.add_parser(
                     command_name,
@@ -167,17 +359,25 @@ class MethodCLI:
                     formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                 )
                 child.set_defaults(_target=_Target(path=path, method_name=name, kind="classmethod"))
-                self._add_callable_args(child, method, doc.param_help, skip_self=False, required_as_options=False)
-        for name, namespace_type in sorted(self._namespace_types_for(typ).items()):
+                self._add_callable_args(
+                    child,
+                    method,
+                    doc.param_help,
+                    skip_self=False,
+                    required_as_options=False,
+                    skip_names=self._classmethod_init_arg_names(method),
+                )
+        for name, namespace in sorted(self._namespace_entries_for(typ).items()):
             child = subparsers.add_parser(
                 self._kebab(name),
-                help=f"{name} commands",
+                help=namespace.help_text,
+                description=namespace.doc.description or namespace.doc.summary,
                 formatter_class=argparse.ArgumentDefaultsHelpFormatter,
             )
-            self._build_namespace_from_type(namespace_type, child, path + (name,))
+            self._build_namespace_from_type(namespace.namespace_type, child, path + (name,))
 
-    def _namespace_types_for(self, typ: type[Any]) -> dict[str, type[Any]]:
-        out: dict[str, type[Any]] = {}
+    def _namespace_entries_for(self, typ: type[Any]) -> dict[str, _Namespace]:
+        out: dict[str, _Namespace] = {}
         for name, member in vars(typ).items():
             if name.startswith("_"):
                 continue
@@ -193,9 +393,13 @@ class MethodCLI:
             ret = prop_hints.get("return")
             if ret is None:
                 continue
-            base, _ = self._split_annotated(ret)
+            base, annotated_help = self._split_annotated(ret)
             if isinstance(base, type) and self._looks_like_namespace_type(base):
-                out[name] = base
+                out[name] = _Namespace(
+                    namespace_type=base,
+                    help_text=annotated_help,
+                    doc=self._parse_docstring(inspect.getdoc(fget) or ""),
+                )
         return out
 
     def _looks_like_namespace_type(self, typ: type[Any]) -> bool:
@@ -213,11 +417,14 @@ class MethodCLI:
         dest_prefix: str = "",
         skip_self: bool,
         required_as_options: bool,
+        skip_names: set[str] | None = None,
     ) -> None:
         sig = inspect.signature(fn)
         hints = typing.get_type_hints(fn, include_extras=True)
         for name, param in sig.parameters.items():
             if skip_self and name == "self":
+                continue
+            if skip_names is not None and name in skip_names:
                 continue
             if param.kind is param.VAR_KEYWORD:
                 raise TypeError(f"{fn.__qualname__}: **kwargs are not supported")
@@ -227,48 +434,78 @@ class MethodCLI:
             default = None if not has_default else param.default
             dest = f"{dest_prefix}{name}"
             if param.kind is param.VAR_POSITIONAL:
-                converter, extra = self._parser_for(typ)
+                converter, extra = self._converter_for_type(typ)
                 kwargs = {"nargs": "*", "help": help_text, **extra}
                 if converter is not None:
                     kwargs["type"] = converter
                 parser_or_group.add_argument(name, **kwargs)
                 continue
-            if self._is_bool_type(typ):
-                if not has_default:
-                    raise TypeError(f"{fn.__qualname__}.{name}: bool parameters must have defaults")
+            if typ is bool and has_default:
                 self._add_bool_flag(parser_or_group, name, dest, default, help_text)
                 continue
-            converter, extra = self._parser_for(typ)
-            if self._is_exact_any(typ):
-                # Exact Any is supported only when it is required (no default).
-                # It must be provided either positionally or via the --kebab-case option.
-                if has_default:
-                    raise TypeError(f"{fn.__qualname__}.{name}: exact Any parameters must not have defaults")
-                if required_as_options:
-                    kwargs = {"dest": dest, "required": True, "help": help_text, **extra}
-                    if converter is not None:
-                        kwargs["type"] = converter
-                    parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
-                else:
-                    kwargs = {"help": help_text, **extra}
-                    if converter is not None:
-                        kwargs["type"] = converter
-                    parser_or_group.add_argument(name, **kwargs)
-            elif has_default:
-                kwargs: dict[str, Any] = {"dest": dest, "default": default, "help": help_text, **extra}
-                if converter is not None:
-                    kwargs["type"] = converter
-                parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
-            elif required_as_options:
-                kwargs = {"dest": dest, "required": True, "help": help_text, **extra}
-                if converter is not None:
-                    kwargs["type"] = converter
-                parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
-            else:
-                kwargs = {"help": help_text, **extra}
-                if converter is not None:
-                    kwargs["type"] = converter
-                parser_or_group.add_argument(name, **kwargs)
+            literal_spec = self._literal_spec(typ)
+            if literal_spec is not None:
+                converter, extra = literal_spec
+                self._add_scalar_arg(
+                    parser_or_group,
+                    name,
+                    dest,
+                    help_text,
+                    converter,
+                    extra,
+                    has_default=has_default,
+                    default=default,
+                    required_as_options=required_as_options,
+                )
+                continue
+            converter, extra = self._converter_for_type(typ)
+            self._add_scalar_arg(
+                parser_or_group,
+                name,
+                dest,
+                help_text,
+                converter,
+                extra,
+                has_default=has_default,
+                default=default,
+                required_as_options=required_as_options,
+            )
+
+    def _add_scalar_arg(
+        self,
+        parser_or_group: argparse.ArgumentParser | argparse._ArgumentGroup,
+        name: str,
+        dest: str,
+        help_text: str,
+        converter: Callable[[str], Any] | None,
+        extra: dict[str, Any],
+        *,
+        has_default: bool,
+        default: Any,
+        required_as_options: bool,
+    ) -> None:
+        if has_default:
+            kwargs: dict[str, Any] = {
+                "dest": dest,
+                "default": default,
+                "help": help_text,
+                "metavar": self._metavar(name),
+                **extra,
+            }
+            if converter is not None:
+                kwargs["type"] = converter
+            parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
+            return
+        if required_as_options:
+            kwargs = {"dest": dest, "required": True, "help": help_text, "metavar": self._metavar(name), **extra}
+            if converter is not None:
+                kwargs["type"] = converter
+            parser_or_group.add_argument(f"--{self._kebab(name)}", **kwargs)
+            return
+        kwargs = {"help": help_text, **extra}
+        if converter is not None:
+            kwargs["type"] = converter
+        parser_or_group.add_argument(name, **kwargs)
 
     def _add_bool_flag(
         self,
@@ -292,50 +529,28 @@ class MethodCLI:
             obj = getattr(obj, name)
         return getattr(obj, target.method_name)
 
-    def _parser_for(self, typ: Any) -> tuple[Callable[[str], Any] | None, dict[str, Any]]:
+    def _classmethod_init_arg_names(self, method: Callable[..., Any]) -> set[str]:
+        sig = inspect.signature(method)
+        hints = typing.get_type_hints(method, include_extras=True)
+        names: set[str] = set()
+        for name, param in sig.parameters.items():
+            if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                continue
+            constructor_param = self._constructor_params.get(name)
+            if constructor_param is None:
+                continue
+            typ, _ = self._split_annotated(hints.get(name, param.annotation))
+            if typ == constructor_param.typ:
+                names.add(name)
+        return names
+
+    def _converter_for_type(self, typ: Any) -> tuple[Callable[[str], Any] | None, dict[str, Any]]:
         if typ in self.parsers:
             return self.parsers[typ], {}
-        if self._is_exact_any(typ):
-            return self._dml_file_parser(), {}
-        typ, _ = self._unwrap_optional(typ)
-        origin = get_origin(typ)
-        args = get_args(typ)
-        if origin in (Union, types.UnionType) and Ref in args and str not in args:
-            return Ref, {}
-        if origin is Literal:
-            choices = list(args)
-            parser = type(choices[0]) if choices else str
-            return parser, {"choices": choices}
-        if typ in {Ref, Uri}:
-            return lambda s: typ(s), {}
-        if typ in (str, int, float):
-            return typ, {}
-        if origin in (list, dict):
-            return self._json_parser(typ), {}
-        return str, {}
-
-    def _json_parser(self, typ: Any) -> Callable[[str], Any]:
-        def parse(value: str) -> Any:
-            try:
-                return json.loads(value)
-            except json.JSONDecodeError as exc:
-                raise argparse.ArgumentTypeError(f"expected JSON for {self._type_display(typ)}: {exc.msg}") from exc
-
-        return parse
-
-    def _dml_file_parser(self) -> Callable[[str], Any]:
-        def parse(value: str) -> Any:
-            try:
-                text = sys.stdin.read() if value == "-" else Path(value).read_text(encoding="utf-8")
-                return dml_loads(text)
-            except json.JSONDecodeError as exc:
-                raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc.msg}") from exc
-            except (TypeError, ValueError) as exc:
-                raise argparse.ArgumentTypeError(f"expected DML-serialized input: {exc}") from exc
-            except OSError as exc:
-                raise argparse.ArgumentTypeError(str(exc)) from exc
-
-        return parse
+        families = _serde_families_for_type(typ)
+        if not families:
+            raise TypeError(f"{self._type_display(typ)} is not CLI-generatable")
+        return self._build_parser(families, typ), {}
 
     def _split_annotated(self, typ: Any) -> tuple[Any, str | None]:
         if get_origin(typ) is Annotated:
@@ -346,26 +561,80 @@ class MethodCLI:
             return base, None
         return typ, None
 
-    def _unwrap_optional(self, typ: Any) -> tuple[Any, bool]:
-        origin = get_origin(typ)
-        args = get_args(typ)
-        if origin in (Union, types.UnionType) and type(None) in args:
-            rest = tuple(a for a in args if a is not type(None))
-            if len(rest) == 1:
-                return rest[0], True
-        return typ, False
-
-    def _is_bool_type(self, typ: Any) -> bool:
-        typ, _ = self._unwrap_optional(typ)
-        return typ is bool
-
-    def _is_exact_any(self, typ: Any) -> bool:
-        return typ is Any
-
-    def _returns_exact_any(self, fn: Callable[..., Any]) -> bool:
+    def _return_type(self, fn: Callable[..., Any]) -> Any:
         hints = typing.get_type_hints(fn, include_extras=True)
-        typ, _ = self._split_annotated(hints.get("return", inspect.signature(fn).return_annotation))
-        return self._is_exact_any(typ)
+        return self._split_annotated(hints.get("return", inspect.signature(fn).return_annotation))[0]
+
+    def _literal_spec(self, typ: Any) -> tuple[Callable[[str], Any] | None, dict[str, Any]] | None:
+        if get_origin(typ) is not Literal:
+            return None
+        choices = list(get_args(typ))
+        parser = type(choices[0]) if choices else str
+        return parser, {"choices": choices}
+
+    def _build_parser(self, families: tuple[_SerdeFamily, ...], typ: Any) -> Callable[[str], Any]:
+        def parse(value: str) -> Any:
+            for family in families:
+                parser = CLI_FAMILY_PARSERS[family.name]
+                try:
+                    parsed = parser(value)
+                except (argparse.ArgumentTypeError, TypeError, ValueError):
+                    continue
+                if _matches_any_type(parsed, family.allowed_types):
+                    return parsed
+            raise argparse.ArgumentTypeError(f"could not parse value as {self._type_display(typ)}")
+
+        return parse
+
+    def _callable_is_generatable(self, fn: Callable[..., Any], *, skip_self: bool) -> bool:
+        sig = inspect.signature(fn)
+        hints = typing.get_type_hints(fn, include_extras=True)
+        for name, param in sig.parameters.items():
+            if skip_self and name == "self":
+                continue
+            if param.kind is param.VAR_KEYWORD:
+                return False
+            typ, _ = self._split_annotated(hints.get(name, param.annotation))
+            has_default = param.default is not inspect._empty
+            if param.kind is param.VAR_POSITIONAL:
+                try:
+                    self._converter_for_type(typ)
+                except TypeError:
+                    return False
+                continue
+            if typ is bool:
+                if not has_default:
+                    try:
+                        self._converter_for_type(typ)
+                    except TypeError:
+                        return False
+                continue
+            if self._literal_spec(typ) is not None:
+                continue
+            try:
+                self._converter_for_type(typ)
+            except TypeError:
+                return False
+        return True
+
+    def _serialize_result(self, method: Callable[..., Any], result: Any) -> str:
+        output_type = self._return_type(method)
+        families = tuple(family for family in _serde_families_for_type(output_type) if family.name != "none")
+        if not families:
+            raise TypeError(f"{self._type_display(output_type)} is not CLI-serializable")
+        for family in families:
+            if not _matches_any_type(result, family.allowed_types):
+                continue
+            serializer = CLI_FAMILY_SERIALIZERS.get(family.name)
+            if serializer is None:
+                raise TypeError(f"{self._type_display(output_type)} is not CLI-serializable")
+            try:
+                return serializer(result)
+            except Exception as exc:
+                raise TypeError(
+                    f"failed to serialize command result as {self._type_display(output_type)}: {exc}"
+                ) from exc
+        raise TypeError(f"failed to serialize command result as {self._type_display(output_type)}")
 
     def _is_public_method_descriptor(self, name: str, member: Any) -> bool:
         if name.startswith("_"):
@@ -377,32 +646,20 @@ class MethodCLI:
     def _is_public_root_classmethod_descriptor(self, name: str, member: Any) -> bool:
         return not name.startswith("_") and isinstance(member, classmethod)
 
-    def _json_default(self, obj: Any) -> Any:
-        if isinstance(obj, Ref):
-            return str(obj.to)
-        if isinstance(obj, Uri):
-            return obj.uri
-        if isinstance(obj, Runnable):
-            raise NotImplementedError("Runnable objects cannot be serialized to JSON directly")
-        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
-
     def _kebab(self, name: str) -> str:
         return name.replace("_", "-")
+
+    def _metavar(self, name: str) -> str:
+        return name.upper()
 
     def _type_display(self, typ: Any) -> str:
         if typ is inspect._empty:
             return "value"
         return str(typ).replace("typing.", "")
 
-    @dataclass
-    class _Doc:
-        summary: str | None
-        description: str | None
-        param_help: dict[str, str]
-
     def _parse_docstring(self, doc: str) -> _Doc:
         if not doc:
-            return self._Doc(None, None, {})
+            return _Doc(None, None, {})
         lines = doc.splitlines()
         summary = lines[0].strip() or None
         param_help: dict[str, str] = {}
@@ -431,7 +688,21 @@ class MethodCLI:
                     continue
             if not in_args and stripped:
                 desc_lines.append(stripped)
-        return self._Doc(summary, "\n".join(desc_lines).strip() or None, param_help)
+        return _Doc(summary, "\n".join(desc_lines).strip() or None, param_help)
+
+
+@dataclass
+class _Doc:
+    summary: str | None
+    description: str | None
+    param_help: dict[str, str]
+
+
+@dataclass(frozen=True)
+class _Namespace:
+    namespace_type: type[Any]
+    help_text: str | None
+    doc: _Doc
 
 
 def cli() -> None:

@@ -8,32 +8,36 @@ The resolved config returned by the internal resolver has this shape:
 
 ```json
 {
-  "project": {
-    "home": "string-or-null"
-  },
-  "db": {
-    "path": "string-or-null"
+  "project_home": "string",
+  "db_path": "string",
+  "default": {
+    "db_map_size_headroom": 1048576,
+    "db_map_size_max": 10737418240,
+    "branch_name": "main"
   },
   "remote": {
     "project": "string-or-null",
-    "root": "string",
-    "fetch_workers": 16
+    "root": "string-or-null",
+    "prune_age_seconds": 86400,
+    "fetch_workers": 32
   },
   "user": "string-or-null",
-  "default_branch": "main",
   "config_home": "string"
 }
 ```
 
 Canonical keys:
 
-- `project.home`
-- `db.path`
+- `project_home`
+- `db_path`
+- `default.db_map_size_headroom`
+- `default.db_map_size_max`
+- `default.branch_name`
+- `remote.prune_age_seconds`
 - `remote.project`
 - `remote.root`
 - `remote.fetch_workers`
 - `user`
-- `default_branch`
 - `config_home`
 
 ## Precedence
@@ -50,17 +54,20 @@ Notes:
 
 - Later layers override earlier ones key by key.
 - Empty or missing higher-precedence values do not erase lower-precedence values.
-- For project-scoped resolution, `project.home` defaults to the current working directory when not provided.
+- For project-scoped resolution, `project_home` defaults to the current working directory when not provided.
 
 ## Environment variables
 
-- `DML_PROJECT_HOME` -> `project.home`
-- `DML_DB_PATH` -> `db.path`
+- `DML_PROJECT_HOME` -> `project_home`
+- `DML_DB_PATH` -> `db_path`
+- `DML_DEFAULT_DB_MAP_SIZE_HEADROOM` -> `default.db_map_size_headroom`
+- `DML_DEFAULT_DB_MAP_SIZE_MAX` -> `default.db_map_size_max`
+- `DML_DEFAULT_BRANCH_NAME` -> `default.branch_name`
 - `DML_REMOTE_PROJECT` -> `remote.project`
 - `DML_REMOTE_ROOT` -> `remote.root`
+- `DML_REMOTE_PRUNE_AGE_SECONDS` -> `remote.prune_age_seconds`
 - `DML_REMOTE_FETCH_WORKERS` -> `remote.fetch_workers`
 - `DML_USER` -> `user`
-- `DML_DEFAULT_BRANCH` -> `default_branch`
 - `DML_CONFIG_HOME` -> `config_home`
 
 Global config home resolution:
@@ -71,20 +78,23 @@ Global config home resolution:
 
 ## Repo-local files
 
-Project state lives under `.dml/` inside `project.home`.
+Project state lives under `.dml/` inside `project_home`.
 
-- `.dml/config.toml`: repo-local remote settings
+- `.dml/config.json`: repo-local remote settings
 - `.dml/db/`: local object database
 - `.dml/HEAD`: current checkout state
 - `.dml/.gitignore`: created during init
 
-`Dml.init(...)` creates `.dml/`, writes `.dml/.gitignore`, writes `.dml/config.toml` if needed, and creates the database when it does not already exist.
+`Dml.init(...)` creates `.dml/`, writes `.dml/.gitignore`, writes `.dml/config.json` if needed, and creates the database when it does not already exist.
+
+`Dml.clone(...)` uses the same bootstrap layout, persists a branchless `remote.project` derived from the clone source URI, fetches the selected branch or tag, and then leaves `HEAD` attached for branch clones or detached for tag clones.
 
 ## Field rules
 
-- `default_branch` defaults to `main`.
-- `db.path` defaults to `<project.home>/.dml/db` for project-scoped resolution.
-- `remote.fetch_workers` must be a positive integer and defaults to `16`.
+- `default.branch_name` defaults to `main`.
+- `db_path` defaults to `<project_home>/.dml/db` for project-scoped resolution.
+- `remote.fetch_workers` must be a positive integer and defaults to `32`.
+- `remote.prune_age_seconds` must be a positive integer and defaults to `86400`.
 - `remote.root` must be empty or an `s3://bucket` or `s3://bucket/prefix` URI.
 - `remote.project` must be a bare `dml://<owner>/<project>` URI.
 - `remote.project` may not include `#branch` or `@tag` in config.
@@ -101,7 +111,17 @@ from daggerml import Dml
 dml = Dml(
     project_home=".",
     remote_root="s3://my-bucket/demo",
+    remote_fetch_workers=8,
     user="alice@example",
+)
+
+same_runtime = Dml.from_config_vars(
+    {
+        "project_home": ".",
+        "remote.root": "s3://my-bucket/demo",
+        "remote.fetch_workers": 8,
+        "user": "alice@example",
+    }
 )
 ```
 
@@ -115,17 +135,17 @@ dml config set remote.root s3://my-bucket/demo
 
 ## Config file locations and contents
 
-Global config is read from `config.toml` under the resolved config home. The current resolver reads:
+Global config is read from `config.json` under the resolved config home. The current resolver reads flattened canonical keys such as:
 
-- `[user].name`
-- `[defaults].branch`
-- `[remote].fetch_workers`
+- `user`
+- `default.branch_name`
+- `remote.fetch_workers`
 
-Project config is read from `.dml/config.toml`. The current resolver reads:
+Project config is read from `.dml/config.json`. The current resolver reads flattened canonical keys such as:
 
-- `[remote].project`
-- `[remote].root`
-- `[remote].fetch_workers`
+- `remote.project`
+- `remote.root`
+- `remote.fetch_workers`
 
 ## Related pages
 

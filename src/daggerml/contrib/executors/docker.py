@@ -7,11 +7,45 @@ import tarfile
 import tempfile
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
-from daggerml import Uri
-from daggerml._internal import DmlRepoError, ExecutionState, Runnable
+import boto3
+
+from daggerml import Runnable, Uri
+from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store, is_s3_uri
+
+
+def _scratch_uri(scratch_uri: str, filename: str) -> str:
+    parsed = urlparse(scratch_uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise DmlRepoError("Execution scratch URI must be an s3:// URI")
+    prefix = parsed.path.lstrip("/").rstrip("/")
+    return f"s3://{parsed.netloc}/{prefix}/local:docker/{filename}"
+
+
+def _write_scratch_json(uri: str, payload: Any, *, raw: bool) -> None:
+    parsed = urlparse(uri)
+    data = payload if raw else json.dumps(payload)
+    boto3.client("s3").put_object(
+        Bucket=parsed.netloc,
+        Key=parsed.path.lstrip("/"),
+        Body=data.encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def _read_scratch_output(uri: str) -> str | None:
+    parsed = urlparse(uri)
+    try:
+        response = boto3.client("s3").get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))
+    except Exception as exc:
+        code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return None
+        raise
+    return response["Body"].read().decode("utf-8")
 
 
 class DockerExecutor(ExecutorBase):
@@ -51,33 +85,10 @@ class DockerExecutor(ExecutorBase):
         return proc.stdout.strip() or proc.stderr.strip()
 
     @staticmethod
-    def _encode_value(value: Any) -> Any:
-        if isinstance(value, Uri):
-            return value.uri
-        if isinstance(value, Runnable):
-            return DockerExecutor._encode_runnable(value)
-        if isinstance(value, dict):
-            return {k: DockerExecutor._encode_value(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [DockerExecutor._encode_value(v) for v in value]
-        if isinstance(value, tuple):
-            return [DockerExecutor._encode_value(v) for v in value]
-        return value
-
-    @staticmethod
-    def _encode_runnable(runnable: Runnable) -> dict[str, Any]:
-        return {
-            "target": runnable.target.uri,
-            "adapter": runnable.adapter,
-            "kwargs": DockerExecutor._encode_value(runnable.kwargs),
-            "sub": None if runnable.sub is None else DockerExecutor._encode_runnable(runnable.sub),
-        }
-
-    @staticmethod
-    def _image_input(runnable: Runnable) -> str:
-        image = runnable.kwargs.get("image")
-        if hasattr(image, "value") and callable(image.value):
-            image = image.value()
+    def _image_input(runnable: dict[str, Any]) -> str:
+        image = runnable.get("kwargs", {}).get("image")
+        if isinstance(image, dict):
+            image = image.get("uri")
         if isinstance(image, Uri):
             return image.uri
         if isinstance(image, str) and image:
@@ -97,7 +108,7 @@ class DockerExecutor(ExecutorBase):
         return cast(str, repo_tags[0])
 
     @staticmethod
-    def _prepare_image(runnable: Runnable, workdir: Path, remote: dict[str, Any]) -> tuple[str, str | None]:
+    def _prepare_image(runnable: dict[str, Any], workdir: Path, remote: dict[str, Any]) -> tuple[str, str | None]:
         image = DockerExecutor._image_input(runnable)
         if not is_s3_uri(image):
             return image, None
@@ -113,14 +124,15 @@ class DockerExecutor(ExecutorBase):
         *,
         cache_key: str,
         execution_id: str,
-        runnable: Runnable,
-        argv_ptr: str,
+        runnable: dict[str, Any],
         remote: dict[str, str],
+        scratch_uri: str,
     ) -> dict[str, Any]:
-        if runnable.sub is None:
+        sub = runnable.get("sub")
+        if sub is None:
             raise DmlRepoError("docker executor requires sub runnable")
-        exec_state = ExecutionState(cache_key, remote_root=remote["root"])
-        io = exec_state.adapter_io(execution_id, "local:docker")
+        input_uri = _scratch_uri(scratch_uri, "input.json")
+        output_uri = _scratch_uri(scratch_uri, "output.json")
 
         workdir = Path(tempfile.mkdtemp(prefix=f"dml-docker-{execution_id}-"))
         try:
@@ -128,34 +140,38 @@ class DockerExecutor(ExecutorBase):
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
-        payload: dict[str, Any] = {
-            "runnable": self._encode_runnable(runnable.sub),
-            "argv_ptr": argv_ptr,
-            "cache_key": cache_key,
-            "execution_id": execution_id,
-            "remote": remote,
-            "state": None,
-        }
-        input_uri = io.write_input(payload, raw=False)
+        payload = json.dumps(
+            {
+                "runnable": sub,
+                "cache_key": cache_key,
+                "execution_id": execution_id,
+                "remote": remote,
+                "scratch_uri": scratch_uri,
+                "state": None,
+                "cancel_requested_by": None,
+            }
+        )
+        _write_scratch_json(input_uri, payload, raw=True)
 
         container_id = self._run_docker(
             "run",
             "-d",
-            *cast(list[str], runnable.kwargs.get("flags", [])),
+            *cast(list[str], runnable.get("kwargs", {}).get("flags", [])),
             "-e",
             f"DML_REMOTE_ROOT={remote['root']}",
             image_ref,
-            runnable.sub.adapter,
+            sub["adapter"],
             "--poll",
             "-i",
             input_uri,
             "-o",
-            io.output_uri,
+            output_uri,
         )
 
         return {
-            "status": "running",
+            "lifecycle": "running",
             "error": None,
+            "dag_id": None,
             "state": {
                 "container_id": container_id,
                 "cleanup_image": cleanup_image,
@@ -164,20 +180,32 @@ class DockerExecutor(ExecutorBase):
 
     def poll(
         self,
-        *,
         cache_key: str,
         execution_id: str,
+        runnable: dict[str, Any],
         state: dict[str, Any],
         remote: dict[str, str],
+        scratch_uri: str,
     ) -> dict[str, Any]:
+        del cache_key, execution_id, runnable, remote
         container_id = state.get("container_id")
 
         if not isinstance(container_id, str) or not container_id:
-            return {"status": "failed", "error": "docker poll: missing container_id in job state"}
+            return {
+                "lifecycle": "failed",
+                "error": "docker poll: missing container_id in job state",
+                "state": None,
+                "dag_id": None,
+            }
 
         docker_bin = shutil.which("docker")
         if docker_bin is None:
-            return {"status": "failed", "error": "docker poll: docker executable not found"}
+            return {
+                "lifecycle": "failed",
+                "error": "docker poll: docker executable not found",
+                "state": None,
+                "dag_id": None,
+            }
 
         proc = subprocess.run(
             [docker_bin, "inspect", "--format", "{{.State.Status}}", container_id],
@@ -191,35 +219,50 @@ class DockerExecutor(ExecutorBase):
             container_status = proc.stdout.strip()
 
         if container_status in ("created", "running", "paused", "restarting"):
-            return {"status": "running", "error": None, "state": state}
+            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
 
         # Container exited
         _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
 
-        exec_state = ExecutionState(cache_key, remote_root=remote["root"])
-        io = exec_state.adapter_io(execution_id, "local:docker")
-        raw = io.read_output()
+        raw = _read_scratch_output(_scratch_uri(scratch_uri, "output.json"))
         if raw is not None:
             try:
                 result = json.loads(raw)
-                if isinstance(result, dict) and result.get("status") in {"succeeded", "failed"}:
+                if result.get("lifecycle") in {"succeeded", "failed", "cancelled"}:
                     return result
             except Exception as e:
-                return {"status": "failed", "error": f"docker poll: could not read output: {e}"}
+                return {
+                    "lifecycle": "failed",
+                    "error": f"docker poll: could not read output: {e}",
+                    "state": None,
+                    "dag_id": None,
+                }
 
-        return {"status": "failed", "error": f"docker container {container_id} exited without output"}
+        return {
+            "lifecycle": "failed",
+            "error": f"docker container {container_id} exited without output",
+            "state": None,
+            "dag_id": None,
+        }
 
     def cancel(
-        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+        self,
+        cache_key: str,
+        execution_id: str,
+        runnable: dict[str, Any],
+        state: dict[str, Any],
+        remote: dict[str, str],
+        scratch_uri: str,
+        cancel_requested_by: str | None,
     ) -> dict[str, Any]:
-        del cache_key, execution_id, remote
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by
         docker_bin = shutil.which("docker")
         if docker_bin is None:
-            return {"status": "cancelled", "error": None}
+            return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}
         container_id = state.get("container_id")
         if isinstance(container_id, str) and container_id:
             _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
-        return {"status": "cancelled", "error": None}
+        return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}
 
 
 def _cleanup_docker(container_id: str, cleanup_image: str | None, docker_bin: str) -> None:

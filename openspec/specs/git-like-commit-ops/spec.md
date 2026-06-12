@@ -4,7 +4,7 @@ Define the git-like repository workflow contracts for revision resolution, check
 ## Requirements
 
 ### Requirement: Merge advances current head
-The system SHALL merge another commit or branch into the current branch by creating a merge commit when needed and advancing the current head.
+The system SHALL merge another commit or branch into the current branch by creating a merge commit when needed and advancing the current head. When the current attached head has no resolved commit because the branch is unborn, merge SHALL treat that destination as empty history and advance the current head to the merged commit without requiring a synthetic base commit.
 
 #### Scenario: Merge non-conflicting branch
 - **WHEN** a user merges a branch whose tree changes do not conflict with the current branch
@@ -13,6 +13,13 @@ The system SHALL merge another commit or branch into the current branch by creat
 #### Scenario: Merge fast-forward
 - **WHEN** the current branch head is an ancestor of the merged commit
 - **THEN** the system advances the current head to the merged commit without creating an unnecessary merge commit
+
+#### Scenario: Merge into unborn attached head
+- **WHEN** `.dml/HEAD` is attached to local branch `main`
+- **AND** branch `main` has no materialized commit ref yet
+- **AND** the merged revision resolves to commit `commit:abc123`
+- **THEN** the system advances branch `main` directly to `commit:abc123`
+- **AND** it does not require or create a synthetic initial commit
 
 ### Requirement: Merge detects DAG-name conflicts
 The system SHALL reject merges where both sides changed the same DAG name to different DAG refs since the merge base.
@@ -141,6 +148,34 @@ The system SHALL remove DAG names from the current branch tree only through an e
 - **WHEN** DAG checkout targets a commit that does not contain the requested DAG name
 - **THEN** the command fails without deleting the target name from the current branch
 
+### Requirement: Commits do not carry a current DAG pointer
+The system SHALL model commits as immutable history records containing parent refs, a tree ref, and commit metadata, and SHALL NOT expose a dedicated commit-level current-DAG field.
+
+#### Scenario: Commit description omits current DAG field
+- **WHEN** the system describes a commit for history inspection
+- **THEN** the description includes commit metadata and the commit tree's DAG map
+- **AND** it does not include `commit.dag` or any equivalent commit-level current-DAG pointer
+
+#### Scenario: Unnamed finalized execution DAG stays out of history
+- **WHEN** runtime work finalizes an execution DAG without adding a named DAG entry to the commit tree
+- **THEN** the finalized DAG is returned as a durable DAG ref
+- **AND** no history commit is created for that finalization
+- **AND** the finalized DAG is not reintroduced as a dedicated field on any commit object
+
+### Requirement: Runtime commit only advances history for named DAG publication
+The system SHALL finalize runtime DAGs independently from history updates. A runtime commit operation SHALL always return the finalized DAG ref and SHALL only create or advance commit history when the finalized DAG is published into the commit tree under a name.
+
+#### Scenario: Named runtime commit creates history and returns finalized DAG
+- **WHEN** runtime work finalizes a DAG with `name` set
+- **THEN** the operation returns the finalized DAG ref
+- **AND** it also creates a commit whose tree records that DAG under the given name
+
+#### Scenario: Unnamed runtime commit does not advance HEAD
+- **WHEN** runtime work finalizes a DAG with `name` unset
+- **THEN** the operation returns the finalized DAG ref
+- **AND** it does not create a commit
+- **AND** it does not change `HEAD` or the current branch ref
+
 ### Requirement: Branch-targeted commit workflows update branches through HeadOps
 The system SHALL perform branch advancement in git-like commit workflows through `HeadOps` public methods rather than direct head storage access.
 
@@ -169,7 +204,7 @@ The system SHALL provide repository inspection workflows for `show`, `log`, and 
 - **THEN** the system resolves both revisions from local state only
 
 ### Requirement: Branch creation and listing expose git-like branch inspection workflows
-The system SHALL support creating a local branch from the current HEAD commit and listing locally tracked remote branches for git-like branch inspection.
+The system SHALL support creating a local branch from the current HEAD commit when one exists, and SHALL preserve git-like unborn-branch behavior when the current attached branch has no commit yet. Local branch listing SHALL continue to report only materialized local branch refs.
 
 #### Scenario: Branch remote lists tracked refs
 - **WHEN** a user runs `dml branch --remote`
@@ -177,7 +212,26 @@ The system SHALL support creating a local branch from the current HEAD commit an
 
 #### Scenario: Branch create copies the current head commit without moving HEAD
 - **WHEN** a caller invokes `dml.branch("feature")` while HEAD is attached to `main`
+- **AND** `main` resolves to a concrete commit
 - **THEN** the system creates local branch `feature` at the current HEAD commit
+- **AND** HEAD remains attached to `main`
+
+#### Scenario: Branch create repoints unborn attached HEAD
+- **WHEN** a caller invokes `dml.branch("feature")` while HEAD is attached to unborn branch `main`
+- **THEN** the system rewrites `.dml/HEAD` to attach to `feature`
+- **AND** it does not create `.dml/refs/local/heads/feature`
+
+#### Scenario: Branch list omits unborn current branch
+- **WHEN** HEAD is attached to unborn branch `main`
+- **THEN** `dml branch list` does not include `main` until that branch ref is materialized
+
+### Requirement: First branch commit materializes an unborn branch ref
+The system SHALL materialize the current branch ref when the first history-producing commit is finalized on an attached unborn branch.
+
+#### Scenario: First named commit on unborn branch writes ref
+- **WHEN** HEAD is attached to unborn branch `main`
+- **AND** runtime finalization produces the first history commit `commit:abc123`
+- **THEN** the system writes `.dml/refs/local/heads/main` pointing to `commit:abc123`
 - **AND** HEAD remains attached to `main`
 
 ### Requirement: Repository status reports current DAG map and live indexes

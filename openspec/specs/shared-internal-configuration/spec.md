@@ -60,6 +60,17 @@ The system SHALL treat explicit arguments, environment variables, project-local 
 - **WHEN** a caller provides init-time options for project/runtime configuration
 - **THEN** the shared `Dml` init/bootstrap workflow resolves them through the shared internal resolver before mutating project state
 
+### Requirement: Dml exposes a canonical config-var construction path
+The system SHALL expose a `Dml` construction path that accepts the flattened canonical config-var keys used by the shared internal resolver, while the Python constructor surface uses Python-friendly keyword names.
+
+#### Scenario: Canonical config-var dict feeds shared resolver directly
+- **WHEN** a caller provides a flattened dictionary of canonical config vars
+- **THEN** the `Dml` config-var factory forwards those keys into shared configuration resolution without requiring caller-side renaming
+
+#### Scenario: Python constructor does not require dot-notation kwargs
+- **WHEN** a caller constructs `Dml` through Python keyword arguments
+- **THEN** the caller uses Python-friendly parameter names rather than canonical dot-notation keys
+
 ### Requirement: Project URI is normalized and exposes helper accessors
 The system SHALL normalize and canonicalize local `remote.project` as an optional branchless project identity through shared revision URI utilities. Resolved configuration SHALL treat checkout state as repository state owned by `.dml/HEAD` rather than as a selector embedded in config.
 

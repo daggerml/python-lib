@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# exit fast if no docker or ssh support
+if ! docker info > /dev/null 2>&1; then
+  echo "Docker does not seem to be available, skipping docker examples"
+  exit 0
+fi
+if ! command -v ssh > /dev/null 2>&1; then
+  echo "SSH client does not seem to be available, skipping SSH examples"
+  exit 0
+fi
 
 set -euo pipefail
 
@@ -24,7 +33,7 @@ require_env DML_REMOTE_ROOT
 
 mkdir -p "${DML_CONFIG_HOME}"
 dml_user="cool-guy"
-dml config set --scope global user $dml_user
+dml config set user "${dml_user}" --scope global
 
 log "Using remote env: ${AWS_ENDPOINT_URL}"
 log "Remote root: ${DML_REMOTE_ROOT}"
@@ -40,7 +49,7 @@ log "Initializing DML repo in ${example_name}"
 rm -rf "${scratch_dir}/${example_name}" || true
 mkdir "${scratch_dir}/${example_name}"
 cd "${scratch_dir}/${example_name}"
-dml init --remote-project "dml://${dml_user}/${example_name}"
+dml --remote-project "dml://${dml_user}/${example_name}" init
 
 log "DML repo initialized. Current status:"
 dml status | jq .

@@ -20,8 +20,12 @@ Global flags:
 
 Success output:
 
-- Commands print their return values as formatted JSON to `stdout`.
-- Commands whose return annotation is exactly `Any` instead write DML-serialized text to `stdout` via `daggerml._internal.dml_dumps`.
+- `None` return values do not print anything to `stdout`.
+- Scalar return values print as plain text to `stdout`.
+- Collection return values print as compact JSON to `stdout`.
+- Root `Dml` classmethod constructors that return `Dml` instances print the new runtime's `status()` payload rather than a serialized runtime object.
+- Commands whose return annotation includes `Any` or `Error` may write DML-serialized text to `stdout` via `daggerml._core.dml_dumps` when that serializer wins the runtime type match.
+- Union return annotations resolve output by building serializer families from the annotation and choosing the highest-priority family whose allowed subset matches the runtime value.
 
 Failure output:
 
@@ -34,12 +38,24 @@ Input parsing rules:
 - Required parameters become positional arguments.
 - Parameters with defaults become `--kebab-case` options.
 - Boolean options become `--flag` or `--no-flag`.
-- `Ref` and `Uri` arguments are parsed from strings.
-- `list[...]` and `dict[...]` arguments are parsed from JSON text.
+- Root classmethod parameters that have the same name and resolved type as constructor parameters are supplied through the global constructor option, not repeated on the command.
+- Generated union parameters do not expose `--<name>-type` or typed union option variants.
+- `Any` and `Error` inputs use DML file/stdin transport. Pass a file path, or `-` for `stdin`.
+- `list[...]`, `dict[...]`, and `TypedDict` inputs use JSON file/stdin transport. Pass a file path, or `-` for `stdin`.
+- `Ref` inputs are constructed from strings.
+- When a parameter allows `None`, the token `null` is preserved as `None`.
+- When `str` is one of the allowed scalar types for a parameter, normal scalar tokens stay strings unless a higher-priority non-scalar family matches first.
 - Variadic `*args: T` parameters become repeated positional arguments parsed as `T`, using `nargs="*"`.
-- Parameters annotated as exactly `Any` are read from a file path argument, or from `stdin` when the path is omitted.
 
-That matters for commands such as `dml admin cache invalidate`, which accepts repeated positional cache keys rather than one JSON list argument.
+Generated value parsing uses one ordered serde model per parameter:
+
+1. `None`
+2. `Any` / `Error`
+3. collections
+4. `str` when present
+5. remaining scalar constructors
+
+Within that order, the CLI derives `parser -> allowed type subset` from the annotation and accepts the first parsed value whose runtime type matches that parser's subset.
 
 ## Top-level commands
 
@@ -47,7 +63,6 @@ Generated directly from public `Dml` methods:
 
 - `dml init`
 - `dml status`
-- `dml branch`
 - `dml log`
 - `dml show`
 - `dml diff`
@@ -62,26 +77,65 @@ Common examples:
 
 ```bash
 dml init --project-home .
+dml --remote-root s3://my-bucket/demo init --project-home .
 dml status
-dml branch
-dml branch feature
+dml branch create feature --revision HEAD~1
+dml tag create v1 --revision @release
+dml fetch dml://alice/demo#main
+dml push --revision @old-tag --delete
 dml log HEAD --limit 5
 dml show HEAD
-dml diff HEAD~1 HEAD
+dml diff
+dml diff --revision HEAD --relative-to HEAD~1
+```
+
+## `branch` namespace
+
+Generated from `Dml.branch`:
+
+- `dml branch list`
+- `dml branch create NAME [REVISION]`
+- `dml branch move NAME REVISION`
+- `dml branch rename OLD NEW`
+- `dml branch delete NAME`
+
+Examples:
+
+```bash
+dml branch list
+dml branch create feature --revision HEAD~1
+dml branch create review --revision dml://alice/demo#main
+dml branch rename feature trunk
+dml branch delete review
+```
+
+## `tag` namespace
+
+Generated from `Dml.tag`:
+
+- `dml tag list`
+- `dml tag create NAME [REVISION]`
+- `dml tag delete NAME`
+
+Examples:
+
+```bash
+dml tag list
+dml tag create v1
+dml tag create v1.1 --revision HEAD~1
+dml tag delete v1
 ```
 
 ## `config` namespace
 
 Generated from `Dml.config`:
 
-- `dml config get KEY [--scope local|global]`
 - `dml config set KEY VALUE [--scope local|global]`
 - `dml config show [--contrib]`
 
 Examples:
 
 ```bash
-dml config get remote.root
 dml config set remote.root s3://my-bucket/demo
 dml config show
 ```
@@ -89,13 +143,6 @@ dml config show
 ## `dag` namespace
 
 Generated from `Dml.dag`:
-
-- `dml dag get VALUE [--revision REV]`
-- `dml dag describe-node NODE [--dag DAG] [--revision REV]`
-- `dml dag get-node NODE [--dag DAG] [--revision REV]`
-- `dml dag unroll-node NODE [--dag DAG] [--revision REV]`
-- `dml dag checkout REVISION DAG_NAME [--branch BRANCH] [--target-name NAME] [--replace] [--user USER]`
-- `dml dag delete NAME [--branch BRANCH] [--user USER]`
 
 Use this namespace for committed DAG history and inspection, not for staging new DAGs from the shell.
 
@@ -113,7 +160,6 @@ Generated from `Dml.runtime`:
 - `commit`
 - `list`
 - `describe`
-- `delete`
 - `cancel`
 
 This is the low-level mutable staging surface behind `daggerml.api.new()` and `Dag`.
@@ -122,7 +168,6 @@ This is the low-level mutable staging surface behind `daggerml.api.new()` and `D
 
 Generated from `Dml.admin` and nested namespaces:
 
-- `dml admin cache invalidate`
 - `dml admin remote list|gc`
 - `dml admin gc [--dry-run]`
 
@@ -130,7 +175,6 @@ Examples:
 
 ```bash
 dml runtime list
-dml admin cache invalidate cache-key-1 cache-key-2
 dml admin remote list
 dml admin gc --dry-run
 ```

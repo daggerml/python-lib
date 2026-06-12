@@ -6,10 +6,9 @@ Use the CLI when you want a quick JSON view of repo state, and use the Python AP
 
 ```bash
 dml --project-home ./demo-repo status
-dml --project-home ./demo-repo branch
 ```
 
-Use `status` for the full picture and `branch` when you only care about branch names and the current attached head. Pass one branch name to create it from the current HEAD commit.
+Use `status` for the full picture.
 
 Python equivalent:
 
@@ -19,8 +18,6 @@ from daggerml import Dml
 dml = Dml(project_home="./demo-repo")
 
 print(dml.status())
-print(dml.branch())
-print(dml.branch("feature"))
 ```
 
 ## Look at commits and changes
@@ -28,14 +25,15 @@ print(dml.branch("feature"))
 ```bash
 dml --project-home ./demo-repo log --limit 5
 dml --project-home ./demo-repo show
-dml --project-home ./demo-repo diff --left HEAD~1 --right HEAD
+dml --project-home ./demo-repo diff
+dml --project-home ./demo-repo diff --revision HEAD --relative-to HEAD~1
 ```
 
 Notes for the generated CLI:
 
 - `log` takes `--limit` because `limit` is an optional method parameter.
 - `log` and `show` include the visible DAG map under `commit["dags"]`.
-- `diff` uses `--left` and `--right` for the same reason.
+- `diff` defaults to `HEAD` and accepts `--relative-to` when you want an explicit base revision.
 
 Python equivalent:
 
@@ -46,34 +44,18 @@ dml = Dml(project_home="./demo-repo")
 
 print(dml.log(limit=5))
 print(dml.show())
-print(dml.diff("HEAD~1", "HEAD"))
-```
-
-## Inspect DAGs at a revision
-
-```bash
-dml --project-home ./demo-repo dag get numbers
-```
-
-Use `show` to discover visible DAG names, then `dag get` when you want one DAG summary.
-
-Python equivalent:
-
-```python
-from daggerml import Dml
-
-dml = Dml(project_home="./demo-repo")
-
-print(dml.show())
-print(dml.dag.get("numbers"))
+print(dml.diff())
+print(dml.diff("HEAD", "HEAD~1"))
 ```
 
 ## Inspect older revisions
 
-Most repo and DAG inspection surfaces take revision selectors such as `HEAD`, `HEAD~1`, `main`, or `origin/main`.
+Most repo and DAG inspection surfaces take revision selectors such as `HEAD`, `HEAD~1`, `main`, `@release`, or `dml://alice/demo#main`.
 
 ```bash
 dml --project-home ./demo-repo show --revision HEAD~1
+dml --project-home ./demo-repo show --revision @release
+dml --project-home ./demo-repo show --revision dml://alice/demo#main
 dml --project-home ./demo-repo log --limit 1
 ```
 

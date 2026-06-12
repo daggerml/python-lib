@@ -1,6 +1,6 @@
 # Type System
 
-The type system in `src/daggerml/_internal/types.py` is the contract that keeps the repository coherent. It is less about static typing in Python and more about making sure persisted objects have a predictable shape and reference each other correctly.
+The type system in `src/daggerml/_core/types.py` is the contract that keeps the repository coherent. It is less about static typing in Python and more about making sure persisted objects have a predictable shape and reference each other correctly.
 
 ## Namespace registry first
 
@@ -42,7 +42,7 @@ Nodes are the computation layer.
 - `ImportNode` imports a value from another DAG.
 - `FnNode` points at a child DAG created by a function call.
 
-Each node knows how to turn itself into a datum ref through `datum_ref(txn)`, which is the common interface used by `NodeOps` and the execution path.
+Each node knows how to turn itself into a datum ref through `datum_ref(txn)`, which is the common interface used by the DAG/runtime read path and the execution path.
 
 ### Graph and history objects
 
@@ -74,8 +74,8 @@ The helper `require_ref()` is used throughout the model to check both "is this a
 
 The type system is not a side file. It affects almost every subsystem:
 
-- `BaseOps` depends on it for serialization and deserialization,
-- the ops layer depends on it for field and namespace guarantees,
+- `DmlDB` and `TxnWithValid` depend on it for serialization and deserialization,
+- the repository modules in `src/daggerml/_core/` depend on it for field and namespace guarantees,
 - remote manifests depend on stable namespace and object-id behavior,
 - the public API depends on it when staging Python values into stored datums.
 

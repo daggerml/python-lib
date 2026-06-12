@@ -33,51 +33,53 @@ Use this file to identify which project docs to read before editing a code path,
 
 ### CLI surface
 
-- Match: `src/daggerml/_cli/**`
+- Match: `src/daggerml/_cli.py`
 - Read:
   - `docs/reference/cli.md`
   - `docs/architecture/internal-modules.md`
 - Also read:
   - `docs/reference/errors.md`
 
-### Internal operations
+### Core repository operations
 
-- Match: `src/daggerml/_internal/ops/**`
+- Match: `src/daggerml/_core/commit.py`, `src/daggerml/_core/dag.py`, `src/daggerml/_core/head.py`, `src/daggerml/_core/index.py`
 - Read:
   - `docs/architecture/ops-layer.md`
   - `docs/architecture/internal-modules.md`
   - `docs/concepts/codecs-and-values.md` (when touching codec serialization/import behavior)
 - Also read:
-  - the matching source module under `src/daggerml/_internal/ops/` for the file being changed
-  - example: editing `src/daggerml/_internal/ops/commit.py` -> read `docs/concepts/commits-and-history.md` and `docs/architecture/ops-layer.md`
+  - the matching source module under `src/daggerml/_core/`
+  - example: editing `src/daggerml/_core/commit.py` -> read `docs/concepts/commits-and-history.md` and `docs/architecture/ops-layer.md`
 
-### Internal codec registry
+### Core runtime orchestration
 
-- Match: `src/daggerml/_internal/codec.py`
+- Match: `src/daggerml/_core/dml.py`, `src/daggerml/_core/config.py`, `src/daggerml/_core/revision.py`, `src/daggerml/_core/uri.py`
 - Read:
-  - `docs/concepts/codecs-and-values.md`
-  - `docs/architecture/ops-layer.md`
+  - `docs/reference/configuration.md`
+  - `docs/concepts/execution.md`
+  - `docs/architecture/system-overview.md`
+  - `docs/reference/errors.md`
 
-### Internal types and contracts
+### Core types and contracts
 
-- Match: `src/daggerml/_internal/types.py`, `src/daggerml/_internal/builtins.py`
+- Match: `src/daggerml/_core/types.py`, `src/daggerml/_core/builtins.py`
 - Read:
   - `docs/concepts/refs-and-namespaces.md`
   - `docs/architecture/type-system.md`
   - `docs/reference/errors.md`
 
-### Internal JSON/string serde helpers
+### Core JSON/string serde helpers
 
-- Match: `src/daggerml/_internal/serde.py`
+- Match: `src/daggerml/_core/serde.py`
 - Read:
   - `docs/concepts/refs-and-namespaces.md`
   - `docs/concepts/codecs-and-values.md`
   - `docs/architecture/type-system.md`
   - `docs/reference/errors.md`
 
-### Internal storage / DB integration
+### Core storage / DB integration
 
-- Match: `src/daggerml/_internal/_db.pyx`, `src/daggerml/_internal/util.py`
+- Match: `src/daggerml/_core/db.pyx`, `src/daggerml/_core/types.py`, `src/daggerml/_core/util.py`
 - Read:
   - `docs/concepts/storage.md`
   - `docs/architecture/storage-internals.md`
@@ -85,7 +87,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 ### Runtime / execution flow
 
-- Match: `src/daggerml/_config.py`, `src/daggerml/util.py`, execution-related internals
+- Match: `src/daggerml/_core/dml.py`, `src/daggerml/_core/index.py`, `src/daggerml/_core/exec_state.py`, `src/daggerml/util.py`
 - Read:
   - `docs/reference/configuration.md`
   - `docs/concepts/execution.md`
@@ -104,7 +106,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 ### Remote and sync behavior
 
-- Match: files related to remote/sync (for example `*_remote*`, remote ops/CLI)
+- Match: `src/daggerml/_core/remote.py`, `src/daggerml/_core/exec_state.py`, `src/daggerml/_core/s3_cas.py`, remote-related CLI/config code
 - Read:
   - `docs/architecture/remote-protocol.md`
   - `docs/concepts/remotes.md`
@@ -112,7 +114,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 ### Commit / DAG / head / index behavior
 
-- Match: files related to commit, dag, head, index (ops or CLI)
+- Match: `src/daggerml/_core/commit.py`, `src/daggerml/_core/dag.py`, `src/daggerml/_core/head.py`, `src/daggerml/_core/index.py`, related CLI code
 - Read:
   - `docs/concepts/commits-and-history.md`
   - `docs/concepts/dags-and-nodes.md`

@@ -111,17 +111,40 @@ The `execution_record` schema SHALL be:
 - **AND** the updated `spawned_execution_ids` SHALL contain `e1`
 
 ### Requirement: Cache refs SHALL remain proper refs and record execution ids
-The runtime SHALL publish `refs/cache/<cache_key>.json` as a normal cache ref to the current manifest for that cache key, and that ref SHALL also record `execution_id` for the current execution. Readers that materialize cached results SHALL continue resolving the cached manifest through the ref target, and graph planners SHALL read `execution_id` from the same cache ref.
+The runtime SHALL publish `refs/cache/<cache_key>.json` as a typed remote ref to the current DAG for that cache key, and that ref SHALL also record `execution_id` in `metadata`.
+
+Readers that materialize cached results SHALL resolve the DAG through `ref.to`, and graph planners SHALL read `execution_id` from the same cache ref metadata.
 
 #### Scenario: Successful execution updates cache pointer
 - **WHEN** execution `e7` becomes the terminal cached result for cache key `ck1`
-- **THEN** the runtime SHALL write `refs/cache/ck1.json` with `execution_id = "e7"`
-- **AND** that object SHALL remain a valid cache ref with its manifest `target`
+- **THEN** the runtime writes `refs/cache/ck1.json` with `ref.to = "dag:<oid>"`
+- **AND** `metadata.execution_id = "e7"`
 
 #### Scenario: Runnable DAG publication uses explicit execution identity
 - **WHEN** an execution-aware worker commits a runnable DAG result
 - **THEN** the runtime publishes the cache entry using the explicit `execution_id` provided through the runtime execution-aware call path
 - **AND** it does not discover that identity through a process-local execution context object
+
+### Requirement: Active execution refs SHALL point to argv roots
+The runtime SHALL publish `refs/active/<cache_key>.json` as a typed remote ref to the `node-argv` root for the currently coordinated execution.
+
+#### Scenario: Active execution stores argv root
+- **WHEN** execution `e7` claims active coordination for cache key `ck1`
+- **THEN** the runtime writes `refs/active/ck1.json` with `ref.to = "node-argv:<oid>"`
+- **AND** `metadata.execution_id = "e7"`
+
+#### Scenario: Terminal result does not change active root type
+- **WHEN** execution `e7` later produces a terminal DAG result
+- **THEN** the runtime publishes that DAG through `cache` or `transport`
+- **AND** it does not overwrite `refs/active/ck1.json` with a `dag` root
+
+### Requirement: Transport refs SHALL point to DAG roots
+The runtime SHALL publish `refs/transport/<execution_id>.json` as a typed remote ref to a `dag` root.
+
+#### Scenario: Finished execution publishes transport DAG
+- **WHEN** execution `e7` finishes and publishes transport state
+- **THEN** `refs/transport/e7.json` contains `ref.to = "dag:<oid>"`
+- **AND** it contains integer `created` and object `metadata`
 
 #### Scenario: Re-run requires prior invalidation
 - **WHEN** a later execution `e8` attempts to publish a terminal cached result for cache key `ck1`
@@ -209,3 +232,16 @@ The runtime SHALL perform cancellation traversal from `spawned_execution_ids` on
 - **WHEN** execution `A` spawned `B`, `B` spawned `C`, and `B` is already terminal before `A` is cancelled
 - **THEN** the runtime MAY cancel `A` without cancelling `C`
 - **AND** that outcome SHALL be treated as an accepted limitation of best-effort cancellation
+
+### Requirement: Contrib migration SHALL NOT change runtime execution-record implementation
+This contrib migration SHALL rely on the existing runtime execution-record and adapter-dispatch implementation. It SHALL NOT modify runtime execution-record storage, `Dml.runtime` behavior, `IndexOps`, `ExecutionState`, adapter-envelope production, cache publication, or public API entrypoints outside contrib.
+
+#### Scenario: Existing runtime creates execution-aware index
+- **WHEN** contrib needs a worker DAG for a runtime execution
+- **THEN** contrib SHALL call the existing public DAG creation path with `cache_key` and `execution_id`
+- **AND** the existing runtime implementation SHALL remain responsible for materializing the active argv and maintaining execution records
+
+#### Scenario: Runtime envelope mismatch is encountered
+- **WHEN** contrib adapter code encounters a protocol mismatch during implementation
+- **THEN** the mismatch SHALL be resolved inside contrib-owned parsing or normalization code if possible
+- **AND** runtime/core files SHALL NOT be modified as part of this change

@@ -7,7 +7,7 @@ from daggerml.contrib import api
 def _run(*cmd: str) -> None:
     import subprocess
 
-    from daggerml._internal import DmlRepoError
+    from daggerml.api import DmlRepoError
 
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
     if proc.returncode == 0:

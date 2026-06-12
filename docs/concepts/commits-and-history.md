@@ -24,7 +24,7 @@ This separation explains why repository operations feel familiar to source contr
 
 ## Branches and HEAD
 
-`HeadOps` manages a HEAD file plus branch and index pointers under `.dml/refs/`.
+`Head` manages a HEAD file plus branch and index pointers under `.dml/refs/`.
 
 - An attached HEAD follows a branch.
 - A detached HEAD points directly at a commit.

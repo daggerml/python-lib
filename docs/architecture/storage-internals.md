@@ -6,7 +6,7 @@ DaggerML stores its real object graph in LMDB, but the repo is not LMDB alone. T
 
 ### 1. Typed objects in LMDB
 
-The database lives at `.dml/db`. `src/daggerml/_internal/_db.pyx` wraps the lower-level C implementation and exposes:
+The database lives at `.dml/db`. `src/daggerml/_core/db.pyx` wraps the lower-level C implementation, and `src/daggerml/_core/types.py` exposes the typed `DmlDB` facade used by the rest of the runtime:
 
 - transactions,
 - namespace-aware put/get/delete/exists operations,
@@ -48,18 +48,13 @@ Committed state is built from a small set of object families:
 - `Node` objects point to datums directly or indirectly.
 - `Datum` objects hold scalar values, collections of datum refs, URIs, or runnable specs.
 
-Because all references are explicit, reachability is also explicit. Local GC starts from pointer roots discovered by `HeadOps` and asks the DB layer which objects are no longer reachable.
+Because all references are explicit, reachability is also explicit. Local GC starts from pointer roots discovered by `Head` and asks the DB layer which objects are no longer reachable.
 
 ## Transactions and retries
 
 The DB layer is transactional, and the Python code leans on that heavily. Write operations are expected to either produce a whole coherent object graph or fail cleanly.
 
-`BaseOps.with_retry` handles the two recoverable cases the DB layer can report during normal operation:
-
-- the LMDB map needs to grow,
-- the environment was reopened and the caller should retry the transaction.
-
-This keeps the storage layer robust without forcing each subsystem to reimplement retry logic.
+Most higher-level code goes through `DmlDB.tx()`, which yields a typed `TxnWithValid` wrapper over the raw LMDB transaction. That keeps object validation and namespace-aware reads and writes in one place instead of spreading raw DB access across the runtime.
 
 ## Local manifests
 

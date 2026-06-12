@@ -1,0 +1,4 @@
+- [x] Replace remote CAS raw DB serialization in `src/daggerml/_core/remote.py` with a private tagged JSON serde for persisted object payloads.
+- [x] Rework remote materialization to decode by expected root namespace, write with `txn.put(obj)`, and fail closed on ref mismatch.
+- [x] Rework remote GC traversal to decode CAS objects directly without creating a temporary `DmlDB`.
+- [x] Update remote roundtrip and remote GC tests to assert only the new JSON CAS format and no backward-compat behavior.

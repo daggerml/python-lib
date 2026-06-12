@@ -8,7 +8,7 @@
 #define DML_DB_ITER_LIMIT 64
 
 typedef struct DmlDbHandle DmlDbHandle;
-typedef struct DmlDbTxn DmlDbTxn;
+typedef struct DmlDbTxnHandle DmlDbTxnHandle;
 typedef struct DmlObjCollection {
     char *keys;  // at most DML_DB_ITER_LIMIT keys concatenated together with null terminators
     size_t *key_lens; // per-key lengths to support binary keys containing NUL bytes
@@ -41,7 +41,10 @@ enum {
     DML_DB_ERR_ENV_REOPENED = -20
 };
 
-// Open a lmdb database (and optionally create if flag is set and does not exist)
+// Compute the current on-disk size of the LMDB path.
+int dml_db_get_size(const char *path, size_t *out_size);
+
+// Open an LMDB environment handle.
 int dml_db_open(
     const char *path,
     const char *const *namespaces,
@@ -50,17 +53,13 @@ int dml_db_open(
     size_t map_size,
     DmlDbHandle **out_handle
 );
+int dml_db_resize(DmlDbHandle **p_handle, size_t map_size);
 int dml_db_close(DmlDbHandle **p_handle);
-
-int dml_db_mapsize(DmlDbHandle **p_handle, size_t *out_mapsize);
-int dml_db_resize(DmlDbHandle **p_handle, size_t mapsize);
-
-int dml_db_txn_begin(DmlDbHandle **p_handle, const int readonly, DmlDbTxn **out_txn);
-int dml_db_txn_fin(DmlDbHandle **p_handle, DmlDbTxn *txn, const int commit);
+int dml_db_txn_open(DmlDbHandle **p_handle, const int readonly, DmlDbTxnHandle **out_txn);
+int dml_db_txn_close(DmlDbTxnHandle **p_txn, const int commit);
 
 int dml_db_put(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -71,8 +70,7 @@ int dml_db_put(
     DmlValue **out_ref
 );
 int dml_db_get(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -81,35 +79,29 @@ int dml_db_get(
     DmlValue **out_value
 );
 int dml_db_del(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
     size_t key_len
 );
 int dml_db_exists(
-    DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    DmlDbTxnHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
     size_t key_len,
     int *out_exists
 );
-
 int dml_db_iter_keys(
-    struct DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    struct DmlDbTxnHandle **p_txn,
     const char *ns,
     const char *start_token,
     DmlObjCollection *out_page
 );
 void dml_db_free_obj_collection(DmlObjCollection *page);
-
 int dml_db_list_orphans(
-    struct DmlDbHandle **p_handle,
-    DmlDbTxn *txn,
+    struct DmlDbTxnHandle **p_txn,
     const char *const *start_refs,
     size_t start_refs_count,
     DmlValue **out_refs

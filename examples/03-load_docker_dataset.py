@@ -13,18 +13,18 @@ import daggerml as dml
 
 
 def main() -> None:
-    with dml.new(name="examples/03-load-docker-dataset") as dag:
-        print("Training model and generating predictions within Docker...")
-        loaded_dag = dml.load("examples/01-docker-dataset")
-        dag.predict_fn = loaded_dag.predict_fn
-        dag.dataset = loaded_dag.dataset
-        predictions = dag.predict_fn(
-            dag.dataset,
-            {"max_iter": 200, "solver": "saga", "penalty": "elasticnet", "l1_ratio": 0.5},
-            name="predictions",
-        )
-        print("Committing DAG to persist artifacts...")
-        dag.commit(predictions)
+    dag = dml.new(name="examples/03-load-docker-dataset")
+    print("Training model and generating predictions within Docker...")
+    loaded_dag = dml.load("examples/01-docker-dataset")
+    dag.predict_fn = loaded_dag.predict_fn
+    dag.dataset = loaded_dag.dataset
+    predictions = dag.predict_fn(
+        dag.dataset,
+        {"max_iter": 200, "solver": "saga", "penalty": "elasticnet", "l1_ratio": 0.5},
+        name="predictions",
+    )
+    print("Committing DAG to persist artifacts...")
+    dag.commit(predictions)
     print("Reading predictions parquet from S3...")
     print(json.dumps(predictions.value(), indent=2))
 

@@ -7,4 +7,4 @@ Use this section when you need exact details about the user-facing surfaces Dagg
 - [Configuration](configuration.md): resolved config shape, precedence, environment variables, and repo-local files.
 - [Errors](errors.md): the error types and failure modes you will see from Python and the CLI.
 
-These pages track the user-facing code in `src/daggerml/` and `src/daggerml/_cli.py`.
+These pages track the user-facing code in `src/daggerml/`, `src/daggerml/_cli.py`, and the runtime core in `src/daggerml/_core/`.

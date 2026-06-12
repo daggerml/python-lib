@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from typing import Any
-from uuid import uuid4
 
 from daggerml import new, temporary
-from daggerml._internal import Runnable
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.util import get_client
 
@@ -31,15 +29,14 @@ class CfnExecutor(ExecutorBase):
 
     @classmethod
     @contextmanager
-    def _tmpdag(cls, argv_ptr, *, remote_root: str):
-        with temporary(remote_root=remote_root, name=f"cfn-{uuid4().hex}") as dml:
-            with new(dml=dml, argv_ptr=argv_ptr) as dag:
+    def _tmpdag(cls, *, cache_key: str, execution_id: str, remote_root: str):
+        with temporary(remote_root=remote_root) as dml:
+            with new(dml=dml, cache_key=cache_key, execution_id=execution_id) as dag:
                 yield dag
 
     @classmethod
-    def _commit_dag(cls, metadata, stack, outputs, *, remote_root: str):
-        argv_ptr = metadata.get("argv_ptr")
-        with cls._tmpdag(argv_ptr, remote_root=remote_root) as dag:
+    def _commit_dag(cls, metadata, stack, outputs, *, cache_key: str, execution_id: str, remote_root: str):
+        with cls._tmpdag(cache_key=cache_key, execution_id=execution_id, remote_root=remote_root) as dag:
             for k, v in outputs.items():
                 dag[k] = v
             dag.stack_id = stack["StackId"]
@@ -50,16 +47,14 @@ class CfnExecutor(ExecutorBase):
 
     def start(
         self,
-        *,
         cache_key: str,
         execution_id: str,
-        runnable: Runnable,
-        argv_ptr: str,
+        runnable: dict[str, Any],
         remote: dict[str, str],
+        scratch_uri: str,
     ) -> dict[str, Any]:
-        del runnable
-        with temporary(remote_root=remote["root"], name=f"cfn-{execution_id}") as dml_inst:
-            with new(dml=dml_inst, argv_ptr=argv_ptr) as dag:
+        with temporary(remote_root=remote["root"]) as dml_inst:
+            with new(dml=dml_inst, cache_key=cache_key, execution_id=execution_id) as dag:
                 name, template, params = dag.argv[1:4].value()
 
         client = self._client()
@@ -94,36 +89,56 @@ class CfnExecutor(ExecutorBase):
             stack_id = old_stack_id
             return_poll = True
 
-        job_state = {"stack_name": name, "stack_id": stack_id, "argv_ptr": argv_ptr}
+        job_state = {"stack_name": name, "stack_id": stack_id}
 
         if return_poll:
-            return self.poll(cache_key=cache_key, execution_id=execution_id, state=job_state, remote=remote)
-        return {"status": "running", "error": None, "state": job_state}
+            return self.poll(
+                cache_key=cache_key,
+                execution_id=execution_id,
+                runnable=runnable,
+                state=job_state,
+                remote=remote,
+                scratch_uri=scratch_uri,
+            )
+        return {"lifecycle": "running", "error": None, "state": job_state, "dag_id": None}
 
     def poll(
         self,
-        *,
         cache_key: str,
         execution_id: str,
+        runnable: dict[str, Any],
         state: dict[str, Any],
         remote: dict[str, str],
+        scratch_uri: str,
     ) -> dict[str, Any]:
-        del cache_key, execution_id
+        del runnable, scratch_uri
         stack_name = state.get("stack_name")
         if not stack_name:
-            return {"status": "failed", "error": "cfn poll: missing stack_name in job state"}
+            return {
+                "lifecycle": "failed",
+                "error": "cfn poll: missing stack_name in job state",
+                "state": None,
+                "dag_id": None,
+            }
         try:
             stacks = self._client().describe_stacks(StackName=stack_name)["Stacks"]
         except Exception:
-            return {"status": "running", "error": None, "state": state}
+            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
         if not stacks:
-            return {"status": "failed", "error": f"Stack not found: {stack_name}"}
+            return {"lifecycle": "failed", "error": f"Stack not found: {stack_name}", "state": None, "dag_id": None}
         stack = stacks[0]
         raw_status = stack["StackStatus"]
         if raw_status in TERMINAL_SUCCESS_STATUSES:
             outputs = {o["OutputKey"]: o["OutputValue"] for o in stack.get("Outputs", [])}
-            dag_id = self._commit_dag(state, stack, outputs, remote_root=remote["root"])
-            return {"status": "succeeded", "error": None, "dag_id": dag_id}
+            dag_id = self._commit_dag(
+                state,
+                stack,
+                outputs,
+                cache_key=cache_key,
+                execution_id=execution_id,
+                remote_root=remote["root"],
+            )
+            return {"lifecycle": "succeeded", "error": None, "state": None, "dag_id": dag_id}
         if raw_status in TERMINAL_FAILED_STATUSES:
             error = f"Stack {stack_name} failed: {raw_status}"
             try:
@@ -133,13 +148,20 @@ class CfnExecutor(ExecutorBase):
                     error = f"{error}\n{chr(10).join(reasons)}"
             except Exception:
                 pass
-            return {"status": "failed", "error": error}
-        return {"status": "running", "error": None, "state": state}
+            return {"lifecycle": "failed", "error": error, "state": None, "dag_id": None}
+        return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
 
     def cancel(
-        self, *, cache_key: str, execution_id: str, state: dict[str, Any], remote: dict[str, str]
+        self,
+        cache_key: str,
+        execution_id: str,
+        runnable: dict[str, Any],
+        state: dict[str, Any],
+        remote: dict[str, str],
+        scratch_uri: str,
+        cancel_requested_by: str | None,
     ) -> dict[str, Any]:
-        del cache_key, execution_id, remote
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by
         stack_name = state.get("stack_name")
         if isinstance(stack_name, str) and stack_name:
             client = self._client()
@@ -150,4 +172,4 @@ class CfnExecutor(ExecutorBase):
                     client.delete_stack(StackName=stack_name)
                 except Exception:
                     pass
-        return {"status": "cancelled", "error": None}
+        return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}
