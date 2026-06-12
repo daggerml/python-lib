@@ -120,7 +120,7 @@ def _state_matches(moto_dir: Path, remote_root: str) -> bool:
     return env.get("DML_REMOTE_ROOT") == remote_root and "AWS_ENDPOINT_URL" in env
 
 
-def _wait_for_ready(moto_dir: Path, pid: int, timeout: float = 10.0) -> None:
+def _wait_for_ready(moto_dir: Path, pid: int, timeout: float = 60.0) -> None:
     env_path = _env_path(moto_dir)
     deadline = time.time() + timeout
     while time.time() < deadline:
