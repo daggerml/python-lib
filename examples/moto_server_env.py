@@ -75,6 +75,12 @@ def _build_env_values(endpoint: str, remote_root: str) -> dict[str, str]:
     }
 
 
+def _normalize_client_host(host: str) -> str:
+    if host in {"0.0.0.0", "::", ""}:
+        return "127.0.0.1"
+    return host
+
+
 def _write_env_file(path: Path, env_values: dict[str, str]) -> None:
     text = "".join(f"export {key}={shlex.quote(value)}\n" for key, value in env_values.items())
     path.write_text(text, encoding="utf-8")
@@ -209,13 +215,17 @@ def cmd_serve(moto_dir: Path, remote_root: str) -> int:
     signal.signal(signal.SIGINT, _handle_signal)
 
     server = ThreadedMotoServer(port=0, verbose=False)
+    print("Starting moto server", file=sys.stderr, flush=True)
     server.start()
     try:
         host, port = server.get_host_and_port()
-        endpoint = f"http://{host}:{port}"
+        endpoint = f"http://{_normalize_client_host(host)}:{port}"
+        print(f"Moto server listening at {endpoint}", file=sys.stderr, flush=True)
         env_values = _build_env_values(endpoint, remote_root)
         for key, value in env_values.items():
             os.environ[key] = value
+        boto3.setup_default_session()
+        print(f"Creating moto bucket {bucket}", file=sys.stderr, flush=True)
         boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket=bucket)
         _write_env_file(_env_path(moto_dir), env_values)
         _state_path(moto_dir).write_text(
