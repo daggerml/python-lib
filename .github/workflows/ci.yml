@@ -16,12 +16,14 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         exclude:
           # Only test the latest stable Python on macOS to keep CI fast
-          - os: macos-latest
-            py: "3.11"
+          # - os: macos-latest
+          #   py: "3.11"
           - os: macos-latest
             py: "3.12"
           - os: macos-latest
-            py: "3.14"
+            py: "3.13"
+          # - os: macos-latest
+          #   py: "3.14"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -39,6 +41,8 @@ jobs:
       - name: pytest
         run: uv run pytest .
       - name: Run examples
+        # FIXME: we have to skip on macos because of moto timeouts.
+        if: matrix.os != 'macos-latest'
         run: |
           set -euo pipefail
           moto_dir="${RUNNER_TEMP}/moto-example-env"

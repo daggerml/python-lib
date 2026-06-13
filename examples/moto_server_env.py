@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import shlex
 import shutil
 import signal
@@ -158,6 +159,13 @@ def _wait_for_http_ready(endpoint: str, proc: subprocess.Popen[str], timeout: fl
     raise RuntimeError(f"timed out waiting for moto server HTTP readiness at {endpoint}")
 
 
+def _server_binding(port: int) -> tuple[str, str]:
+    endpoint = f"http://127.0.0.1:{port}"
+    if platform.system() == "Darwin":
+        return "127.0.0.1", endpoint
+    return "0.0.0.0", endpoint
+
+
 def _cleanup_files(moto_dir: Path) -> None:
     for path in (_env_path(moto_dir), _pid_path(moto_dir), _state_path(moto_dir)):
         try:
@@ -233,9 +241,9 @@ def cmd_serve(moto_dir: Path, remote_root: str) -> int:
     signal.signal(signal.SIGINT, _handle_signal)
 
     port = _reserve_local_port()
-    endpoint = f"http://127.0.0.1:{port}"
+    bind_host, endpoint = _server_binding(port)
     print("Starting moto server", file=sys.stderr, flush=True)
-    proc = subprocess.Popen([moto_server, "-H", "127.0.0.1", "-p", str(port)])
+    proc = subprocess.Popen([moto_server, "-H", bind_host, "-p", str(port)])
     try:
         _wait_for_http_ready(endpoint, proc)
         print(f"Moto server listening at {endpoint}", file=sys.stderr, flush=True)
