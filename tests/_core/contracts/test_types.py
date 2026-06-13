@@ -7,8 +7,7 @@ import pytest
 from hypothesis import given, settings
 
 from daggerml._core.db import DmlDb as RawDmlDB
-from daggerml._core.db import DmlDbRegistryFullError
-from daggerml._core.db import Ref
+from daggerml._core.db import DmlDbRegistryFullError, Ref
 from daggerml._core.types import (
     NAMESPACES,
     Commit,
@@ -188,7 +187,10 @@ def test_raw_db_registry_reuses_same_path_slots_and_enforces_active_capacity(tmp
     for path in paths:
         path.mkdir()
 
-    dbs = [RawDmlDB(str(path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=1024 * 1024) for path in paths]
+    dbs = [
+        RawDmlDB(str(path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=1024 * 1024)
+        for path in paths
+    ]
     for db in dbs:
         with db.tx(create_if_missing=True):
             pass

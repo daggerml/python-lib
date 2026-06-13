@@ -13,10 +13,17 @@ dml = "daggerml._cli:cli"
 Global flags:
 
 - `-v`, `-vv`, `-vvv`: increase logging verbosity
+- `--version`: print `dml, version <version>` and exit
 - `--project-home PATH`
 - `--remote-root URI`
 - `--user NAME`
 - `--config-home PATH`
+
+Help layout:
+
+- Generated help lists leaf commands first under `commands`.
+- Generated namespace groups appear separately under `namespaces`.
+- This grouping applies at the root and on nested namespace parsers such as `dml admin --help`.
 
 Success output:
 

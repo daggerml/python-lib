@@ -12,6 +12,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union, cast, get_args, get_origin
 
+try:
+    from daggerml.__about__ import __version__
+except ImportError:
+    __version__ = "local"
+
 from daggerml._core import Dml, Error, Ref, Runnable, Uri, dml_dumps, dml_loads
 
 
@@ -185,6 +190,64 @@ class PrettyArgumentParser(argparse.ArgumentParser):
         self.exit(2, f"error: {message}\n")
 
 
+class _GroupedSubParsersAction(argparse._SubParsersAction):
+    class _GroupedChoicePseudoAction(argparse._SubParsersAction._ChoicesPseudoAction):
+        def __init__(self, name: str, aliases: tuple[str, ...], help: str | None, category: str) -> None:
+            super().__init__(name, aliases, help)
+            self.category = category
+
+    def add_parser(self, name: str, *, category: str = "command", **kwargs: Any):
+        if kwargs.get("prog") is None:
+            kwargs["prog"] = f"{self._prog_prefix} {name}"
+
+        aliases = tuple(kwargs.pop("aliases", ()))
+
+        if name in self._name_parser_map:
+            raise argparse.ArgumentError(self, f"conflicting subparser: {name}")
+        for alias in aliases:
+            if alias in self._name_parser_map:
+                raise argparse.ArgumentError(self, f"conflicting subparser alias: {alias}")
+
+        if "help" in kwargs:
+            help_text = kwargs.pop("help")
+            choice_action = self._GroupedChoicePseudoAction(name, aliases, help_text, category)
+            self._choices_actions.append(choice_action)
+
+        parser = self._parser_class(**kwargs)
+        self._name_parser_map[name] = parser
+        for alias in aliases:
+            self._name_parser_map[alias] = parser
+        return parser
+
+
+class PrettyHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    def _format_action(self, action):
+        if isinstance(action, _GroupedSubParsersAction):
+            return self._format_grouped_subparsers(action)
+        return super()._format_action(action)
+
+    def _format_grouped_subparsers(self, action: _GroupedSubParsersAction) -> str:
+        parts: list[str] = []
+        format_action = super()._format_action
+        groups = (
+            ("command", "commands"),
+            ("namespace", "namespaces"),
+        )
+        for category, heading in groups:
+            subactions = [
+                subaction
+                for subaction in action._get_subactions()
+                if getattr(subaction, "category", None) == category
+            ]
+            if not subactions:
+                continue
+            parts.append(f"{self._current_indent * ' '}{heading}:\n")
+            self._indent()
+            parts.extend(format_action(subaction) for subaction in subactions)
+            self._dedent()
+        return self._join_parts(parts)
+
+
 @dataclass(frozen=True)
 class _Target:
     path: tuple[str, ...]
@@ -203,6 +266,14 @@ class _ConstructorParam:
     name: str
     typ: Any
     dest: str
+
+
+@dataclass(frozen=True)
+class _SubparserSpec:
+    name: str
+    help: str | None
+    description: str | None
+    category: Literal["command", "namespace"]
 
 
 class MethodCLI:
@@ -242,7 +313,7 @@ class MethodCLI:
         self._constructor_params = self._constructor_param_metadata()
         self.parser = PrettyArgumentParser(
             prog=prog or self._kebab(cls.__name__),
-            formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+            formatter_class=PrettyHelpFormatter,
         )
         self.parser.add_argument(
             "-v",
@@ -251,6 +322,7 @@ class MethodCLI:
             default=0,
             help="Increase logging verbosity. Use -v, -vv, or -vvv.",
         )
+        self.parser.add_argument("--version", action="version", version=f"%(prog)s, version {__version__}")
         self._add_constructor_args(self.parser)
         self._build_namespace_from_type(cls, self.parser, path=())
 
@@ -331,32 +403,42 @@ class MethodCLI:
     def _build_namespace_from_type(
         self, typ: type[Any], parser: argparse.ArgumentParser, path: tuple[str, ...]
     ) -> None:
-        subparsers = parser.add_subparsers(dest="_subcommand_" + "_".join(path or ("root",)), required=True)
+        subparsers = parser.add_subparsers(
+            dest="_subcommand_" + "_".join(path or ("root",)),
+            required=True,
+            action=_GroupedSubParsersAction,
+        )
         for name, member in sorted(vars(typ).items()):
             if self._is_public_method_descriptor(name, member):
                 if not self._callable_is_generatable(member, skip_self=True):
                     continue
-                command_name = self._kebab(name)
                 doc = self._parse_docstring(inspect.getdoc(member) or "")
                 child = subparsers.add_parser(
-                    command_name,
-                    help=doc.summary,
-                    description=doc.description or doc.summary,
-                    formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                    **self._subparser_kwargs(
+                        _SubparserSpec(
+                            name=self._kebab(name),
+                            help=doc.summary,
+                            description=doc.description or doc.summary,
+                            category="command",
+                        )
+                    )
                 )
                 child.set_defaults(_target=_Target(path=path, method_name=name, kind="instance"))
                 self._add_callable_args(child, member, doc.param_help, skip_self=True, required_as_options=False)
             elif not path and self._is_public_root_classmethod_descriptor(name, member):
-                command_name = self._kebab(name)
                 method = getattr(typ, name)
                 if not self._callable_is_generatable(method, skip_self=False):
                     continue
                 doc = self._parse_docstring(inspect.getdoc(method) or "")
                 child = subparsers.add_parser(
-                    command_name,
-                    help=doc.summary,
-                    description=doc.description or doc.summary,
-                    formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                    **self._subparser_kwargs(
+                        _SubparserSpec(
+                            name=self._kebab(name),
+                            help=doc.summary,
+                            description=doc.description or doc.summary,
+                            category="command",
+                        )
+                    )
                 )
                 child.set_defaults(_target=_Target(path=path, method_name=name, kind="classmethod"))
                 self._add_callable_args(
@@ -369,12 +451,25 @@ class MethodCLI:
                 )
         for name, namespace in sorted(self._namespace_entries_for(typ).items()):
             child = subparsers.add_parser(
-                self._kebab(name),
-                help=namespace.help_text,
-                description=namespace.doc.description or namespace.doc.summary,
-                formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                **self._subparser_kwargs(
+                    _SubparserSpec(
+                        name=self._kebab(name),
+                        help=namespace.help_text,
+                        description=namespace.doc.description or namespace.doc.summary,
+                        category="namespace",
+                    )
+                )
             )
             self._build_namespace_from_type(namespace.namespace_type, child, path + (name,))
+
+    def _subparser_kwargs(self, spec: _SubparserSpec) -> dict[str, Any]:
+        return {
+            "name": spec.name,
+            "help": spec.help,
+            "description": spec.description,
+            "formatter_class": PrettyHelpFormatter,
+            "category": spec.category,
+        }
 
     def _namespace_entries_for(self, typ: type[Any]) -> dict[str, _Namespace]:
         out: dict[str, _Namespace] = {}
