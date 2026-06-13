@@ -7,6 +7,7 @@ import pytest
 from hypothesis import given, settings
 
 from daggerml._core.db import DmlDb as RawDmlDB
+from daggerml._core.db import DmlDbRegistryFullError
 from daggerml._core.db import Ref
 from daggerml._core.types import (
     NAMESPACES,
@@ -173,15 +174,57 @@ def test_index_validation_requires_commit_shape_and_dag(tmp_path) -> None:
         )._validate()
 
 
-def test_raw_db_resize_updates_open_env(tmp_path) -> None:
+def test_raw_db_tx_accepts_larger_map_size_on_reopen(tmp_path) -> None:
     db = RawDmlDB(str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=1024 * 1024)
     with db.tx(create_if_missing=True):
         pass
 
-    db.resize(2 * 1024 * 1024)
-
-    with db.tx(readonly=True):
+    with db.tx(readonly=True, map_size=2 * 1024 * 1024):
         pass
+
+
+def test_raw_db_registry_reuses_same_path_slots_and_enforces_active_capacity(tmp_path) -> None:
+    paths = [tmp_path / f"db-{i}" for i in range(10)]
+    for path in paths:
+        path.mkdir()
+
+    dbs = [RawDmlDB(str(path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=1024 * 1024) for path in paths]
+    for db in dbs:
+        with db.tx(create_if_missing=True):
+            pass
+
+    txns = [db.tx(readonly=True) for db in dbs]
+    for txn in txns:
+        txn.__enter__()
+
+    overflow_path = tmp_path / "db-overflow"
+    overflow_path.mkdir()
+    overflow = RawDmlDB(
+        str(overflow_path),
+        namespaces=sorted(NAMESPACES),
+        map_size_headroom=1024 * 1024,
+        max_map_size=1024 * 1024,
+    )
+    with pytest.raises(DmlDbRegistryFullError):
+        with overflow.tx(create_if_missing=True):
+            pass
+
+    txns[1].__exit__(None, None, None)
+
+    replacement_path = tmp_path / "db-replacement"
+    replacement_path.mkdir()
+    replacement = RawDmlDB(
+        str(replacement_path),
+        namespaces=sorted(NAMESPACES),
+        map_size_headroom=1024 * 1024,
+        max_map_size=1024 * 1024,
+    )
+    with replacement.tx(create_if_missing=True):
+        pass
+
+    for i, txn in enumerate(txns):
+        if i != 1:
+            txn.__exit__(None, None, None)
 
 
 @given(runnables)

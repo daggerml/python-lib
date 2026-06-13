@@ -10,7 +10,6 @@ This module wraps the underlying C library (dml_db) that handles:
 """
 import logging
 import sys
-import threading
 from contextlib import contextmanager
 from libc.stdlib cimport malloc, free, calloc
 from libc.string cimport strlen, memcpy
@@ -109,9 +108,7 @@ cdef extern from "dml_db.h":
     int DML_DB_ERR_LMDB
     int DML_DB_ERR_INTERNAL
     int DML_DB_ERR_ENV_REOPENED
-
-    ctypedef struct DmlDbHandle:
-        pass
+    int DML_DB_ERR_REGISTRY_FULL
 
     ctypedef struct DmlObjCollection:
         char *keys
@@ -120,24 +117,22 @@ cdef extern from "dml_db.h":
         size_t count
         char *next_token
 
-    int dml_db_open(
+    ctypedef struct DmlDbHandle:
+        pass
+    int dml_db_txn_open(
         const char *path,
         const char *const *namespaces,
         size_t namespace_count,
+        const int readonly,
         const int create_if_missing,
         size_t map_size,
         DmlDbHandle **out_handle,
     ) nogil
-    int dml_db_resize(DmlDbHandle **p_handle, size_t map_size) nogil
-    int dml_db_close(DmlDbHandle **p_handle) nogil
-    ctypedef struct DmlDbTxnHandle:
-        pass
-    int dml_db_txn_open(DmlDbHandle **p_handle, const int readonly, DmlDbTxnHandle **out_txn) nogil
-    int dml_db_txn_close(DmlDbTxnHandle **p_txn, const int commit) nogil
+    int dml_db_txn_close(DmlDbHandle **p_handle, const int commit) nogil
     int dml_db_get_size(const char *path, size_t *out_size) nogil
 
     int dml_db_put(
-        DmlDbTxnHandle **p_txn,
+        DmlDbHandle **p_txn,
         const char *ns,
         size_t ns_len,
         const char *key,
@@ -148,7 +143,7 @@ cdef extern from "dml_db.h":
         DmlValue **out_ref
     ) nogil
     int dml_db_get(
-        DmlDbTxnHandle **p_txn,
+        DmlDbHandle **p_txn,
         const char *ns,
         size_t ns_len,
         const char *key,
@@ -157,14 +152,14 @@ cdef extern from "dml_db.h":
         DmlValue **out_value
     ) nogil
     int dml_db_del(
-        DmlDbTxnHandle **p_txn,
+        DmlDbHandle **p_txn,
         const char *ns,
         size_t ns_len,
         const char *key,
         size_t key_len
     ) nogil
     int dml_db_exists(
-        DmlDbTxnHandle **p_txn,
+        DmlDbHandle **p_txn,
         const char *ns,
         size_t ns_len,
         const char *key,
@@ -173,14 +168,14 @@ cdef extern from "dml_db.h":
     ) nogil
 
     int dml_db_iter_keys(
-        DmlDbTxnHandle **p_txn,
+        DmlDbHandle **p_txn,
         const char *ns,
         const char *start_token,
         DmlObjCollection *out_page
     ) nogil
     void dml_db_free_obj_collection(DmlObjCollection *page) nogil
     int dml_db_list_orphans(
-        DmlDbTxnHandle **p_txn,
+        DmlDbHandle **p_txn,
         const char *const *start_refs,
         size_t start_refs_count,
         DmlValue **out_refs
@@ -556,6 +551,12 @@ class DmlDbInternalError(DmlDbError):
     """
     pass
 
+class DmlDbRegistryFullError(DmlDbError):
+    """
+    Process-local DB registry capacity was exceeded.
+    """
+    pass
+
 cdef inline object raise_if_error(int rc, str context):
     cls = RuntimeError
     if rc == 0:
@@ -620,6 +621,9 @@ cdef inline object raise_if_error(int rc, str context):
     elif rc == DML_DB_ERR_ENV_REOPENED:
         cls = DmlDbForkedError
         prefix = "database environment invalidated after process change"
+    elif rc == DML_DB_ERR_REGISTRY_FULL:
+        cls = DmlDbRegistryFullError
+        prefix = "database registry is full"
     else:
         prefix = f"unknown database error: {rc}"
     raise cls(f"{prefix}: {context}")
@@ -790,7 +794,7 @@ cdef class Ref:
         return self.ns().split('-')
 
 cdef class DmlDb:
-    """Daggerml database handle with one persistent environment."""
+    """Daggerml database config holder backed by shared registry leases."""
 
     cdef public str path
     cdef public tuple namespaces
@@ -800,17 +804,12 @@ cdef class DmlDb:
     cdef const char* _path_c
     cdef const char** _namespaces_c
     cdef size_t _namespace_count
-    cdef DmlDbHandle* _handle
-    cdef object _open_lock
-
     def __cinit__(self):
         self.path = ""
         self.namespaces = ()
         self._path_c = NULL
         self._namespaces_c = NULL
         self._namespace_count = 0
-        self._handle = NULL
-        self._open_lock = threading.Lock()
 
     def __init__(self, str path, list[str] namespaces, size_t map_size_headroom, size_t max_map_size):
         cdef Py_ssize_t i, n = len(namespaces)
@@ -897,44 +896,20 @@ cdef class DmlDb:
         raise_if_error(rc, "dml_db_get_size")
         return size
 
-    def resize(self, size_t map_size) -> None:
-        cdef int rc
-        cdef size_t map_size_value
-
-        if map_size <= 0:
-            raise ValueError("map_size must be positive")
-        map_size_value = <size_t>map_size
-        self._ensure_open(False)
-        with self._open_lock:
-            rc = dml_db_resize(&self._handle, map_size_value)
-        raise_if_error(rc, "dml_db_resize")
-
-    cdef int _open_handle_locked(self, bint create_if_missing):
-        return dml_db_open(
-            self._path_c,
-            self._namespaces_c,
-            self._namespace_count,
-            1 if create_if_missing else 0,
-            self.max_map_size,
-            &self._handle,
-        )
-
-    cdef void _ensure_open(self, bint create_if_missing):
-        cdef int rc
-        with self._open_lock:
-            if self._handle != NULL:
-                return
-            rc = self._open_handle_locked(create_if_missing)
-            raise_if_error(rc, "dml_db_open")
-
-    cdef DmlDbTxnHandle* _txn_open(self, bint readonly, bint create_if_missing) except NULL:
-        cdef DmlDbTxnHandle *handle = NULL
+    cdef DmlDbHandle* _txn_open(self, bint readonly, bint create_if_missing, size_t map_size) except NULL:
+        cdef DmlDbHandle *handle = NULL
         cdef int rc
 
-        self._ensure_open(create_if_missing)
-        with self._open_lock:
-            with nogil:
-                rc = dml_db_txn_open(&self._handle, 1 if readonly else 0, &handle)
+        with nogil:
+            rc = dml_db_txn_open(
+                self._path_c,
+                self._namespaces_c,
+                self._namespace_count,
+                1 if readonly else 0,
+                1 if create_if_missing else 0,
+                map_size,
+                &handle,
+            )
         raise_if_error(rc, "dml_db_txn_open")
         return handle
 
@@ -950,15 +925,19 @@ cdef class DmlDb:
         if self._path_c != NULL:
             free(<void*>self._path_c)
             self._path_c = NULL
-        if self._handle != NULL:
-            dml_db_close(&self._handle)
         self._namespace_count = 0
 
     @contextmanager
     def tx(self, map_size=None, bint readonly=True, bint create_if_missing=False):
         cdef int rc = 0
         cdef int success = 1
-        cdef DmlDbTxn txn = DmlDbTxn(self, readonly=readonly, create_if_missing=create_if_missing)
+        cdef size_t map_size_value = 0 if map_size is None else <size_t>map_size
+        cdef DmlDbTxn txn = DmlDbTxn(
+            self,
+            readonly=readonly,
+            create_if_missing=create_if_missing,
+            map_size=map_size_value,
+        )
         try:
             yield txn
         except Exception:
@@ -982,20 +961,19 @@ cdef class DmlDb:
             map_size = <size_t>self.get_size() + self.map_size_headroom
             if map_size > self.max_map_size:
                 map_size = self.max_map_size
-            self.resize(map_size)
-            with self.tx(readonly=False) as txn:
+            with self.tx(readonly=False, map_size=map_size) as txn:
                 return fn(txn)
 
 cdef class DmlDbTxn:
     """Daggerml database transaction handle."""
 
-    cdef DmlDbTxnHandle* _handle
+    cdef DmlDbHandle* _handle
 
     def __cinit__(self):
         self._handle = NULL
 
-    def __init__(self, DmlDb db, bint readonly, bint create_if_missing=False):
-        self._handle = db._txn_open(readonly, create_if_missing)
+    def __init__(self, DmlDb db, bint readonly, bint create_if_missing=False, size_t map_size=0):
+        self._handle = db._txn_open(readonly, create_if_missing, map_size)
 
     # --- Data operations on the handle ---
 
