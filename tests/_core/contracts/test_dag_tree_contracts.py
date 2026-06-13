@@ -36,11 +36,9 @@ def test_dag_checkout_on_unborn_head_materializes_first_branch_commit(tmp_path, 
     source = make_local_dml(tmp_path / "source", monkeypatch)
     source_commit = commit_literal_dag(source, "source", 1)
     source_ref = source.show(source_commit)["dags"]["source"]
-
     target = make_local_dml(tmp_path / "target", monkeypatch)
-
-    target.dag.checkout(source_ref, name="source")
-
+    with pytest.warns(UserWarning, match="already exists"):
+        target.dag.checkout(source_ref, name="source")
     assert target.show("HEAD")["dags"]["source"] == source_ref
     assert target.status()["commit"] is not None
     assert target.branch.list() == ["main"]

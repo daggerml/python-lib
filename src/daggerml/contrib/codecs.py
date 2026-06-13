@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
-from io import BytesIO
+from tempfile import NamedTemporaryFile
 from typing import Any
 
-from daggerml import Ref, Uri
-from daggerml.api import Dag, DmlRepoError, apply_codecs
+from daggerml import Uri
+from daggerml.api import Dag, apply_codecs
 from daggerml.contrib.adapters import get_adapter
 from daggerml.contrib.s3 import S3Store
 
@@ -19,9 +19,9 @@ class PandasDataFrameCodec:
         return isinstance(value, self._dataframe_type)
 
     def encode(self, value: Any, dag: Dag) -> Uri:
-        buf = BytesIO()
-        value.to_parquet(buf)
-        return S3Store().put(data=buf.getvalue(), suffix=".parquet")
+        with NamedTemporaryFile(suffix=".parquet") as tmp:
+            value.to_parquet(tmp.name)
+            return S3Store().put(filepath=tmp.name, suffix=".parquet")
 
 
 class PolarsDataFrameCodec:
@@ -32,9 +32,9 @@ class PolarsDataFrameCodec:
         return isinstance(value, self._dataframe_type)
 
     def encode(self, value: Any, dag: Dag) -> Uri:
-        buf = BytesIO()
-        value.write_parquet(buf)
-        return S3Store().put(data=buf.getvalue(), suffix=".parquet")
+        with NamedTemporaryFile(suffix=".parquet") as tmp:
+            value.write_parquet(tmp.name)
+            return S3Store().put(filepath=tmp.name, suffix=".parquet")
 
 
 @dataclass(frozen=True)
@@ -60,27 +60,11 @@ class DelayedActionCodec:
     def can_encode(self, value: Any) -> bool:
         return isinstance(value, (DelayedRef, DelayedLoad, DelayedRunnable))
 
-    def _resolve_load_ref(self, value: DelayedLoad, dag: "Dag") -> Ref:
-        index = dag.dml.runtime.describe(dag._require_index_ref())
-        commit_ref = index["parents"][0]
-        dag_ref = dag.dml.show(revision=commit_ref.to)["dags"].get(value.dagname)
-        if dag_ref is None:
-            raise DmlRepoError(f"DAG not found: {value.dagname}")
-        resolved = dag.dml.dag.describe(dag_ref)
-        if value.nodename is None:
-            node_ref = resolved["result"]
-        else:
-            node_ref = resolved["names"].get(value.nodename)
-        if node_ref is None:
-            raise DmlRepoError(f"Node '{value.nodename}' not found in DAG '{value.dagname}'")
-        return dag.dml.runtime.put_import(dag._require_index_ref(), dag_ref, node=node_ref, name=None)
-
     def encode(self, value: DelayedRef | DelayedLoad | DelayedRunnable, dag: "Dag"):
         if isinstance(value, DelayedRef):
-            return apply_codecs(dag[value.name], dag=dag)
+            return apply_codecs(dag[value.name], dag=dag)  # apply_codecs required for `Node` objects.
         if isinstance(value, DelayedLoad):
-            # FIXME: should return with a node ref, not the python value
-            return dag.dml.dag.get_node(self._resolve_load_ref(value, dag), recursive=True)
+            return apply_codecs(dag.require(value.dagname, name=value.nodename), dag=dag)  # apply_codecs required
         adapter_spec = get_adapter(value.adapter)
         # no need for `apply_codecs` because we return a Runnable which is recursed
         return adapter_spec.resolve_runnable(value.uri, sub=value.sub, kwargs=value.kwargs)
