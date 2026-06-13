@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 
 Scalar = Union[str, int, float, bool, type(None), Uri, Runnable]
 Collection = Union[list, dict]
+ProjectionStep = Union[str, int, list[int]]
 
 _NO_DEFAULT_DML = object()
 _SCOPED_DEFAULT_DML: ContextVar[object] = ContextVar("daggerml_scoped_default_dml", default=_NO_DEFAULT_DML)
@@ -138,6 +139,175 @@ def _make_node(dag: "Dag", ref: Ref) -> "Node":
     return node
 
 
+def _info_for_value(value: Any) -> dict[str, Any]:
+    info: dict[str, Any] = {"data_type": type(value).__name__.lower()}
+    if isinstance(value, list):
+        info["length"] = len(value)
+    elif isinstance(value, dict):
+        info["length"] = len(value)
+        info["keys"] = sorted(value.keys())
+    return info
+
+
+def _normalize_projection_step(key: ProjectionStep | slice, *, length: int | None = None) -> ProjectionStep:
+    if isinstance(key, slice):
+        if key.step is not None:
+            raise ValueError("Slice step is not supported")
+        start = key.start if key.start is not None else 0
+        if key.stop is None:
+            if length is None:
+                raise DmlRepoError("Slice stop requires known collection length")
+            stop = length
+        else:
+            stop = key.stop
+        return [start, stop]
+    return key
+
+
+def _apply_projection_step(value: Any, step: ProjectionStep) -> Any:
+    if isinstance(step, list):
+        if len(step) != 2:
+            raise DmlRepoError("Slice projection requires exactly [start, stop]")
+        return value[slice(*step)]
+    return value[step]
+
+
+def _apply_projection_path(value: Any, path: tuple[ProjectionStep, ...]) -> Any:
+    for step in path:
+        value = _apply_projection_step(value, step)
+    return value
+
+
+def _describe_node(node: "Node") -> Mapping[str, Any]:
+    return node.dag.dml.dag.describe_node(node.ref)
+
+
+def _builtin_name_for_argv(dag: "Dag", argv_refs: list[Ref]) -> str | None:
+    if not argv_refs:
+        return None
+    runnable = dag.dml.dag.get_node(argv_refs[0], recursive=True)
+    if not isinstance(runnable, Runnable):
+        return None
+    if runnable.adapter != "":
+        return None
+    if not runnable.target.uri.startswith("daggerml:"):
+        return None
+    return runnable.target.uri.split(":", 1)[1]
+
+
+def _make_node_in_dag(dag: "Dag", ref: Ref) -> "Node":
+    return _make_node(dag, ref)
+
+
+def _prepend_get_path_step(path: tuple[ProjectionStep, ...], key: ProjectionStep) -> tuple[ProjectionStep, ...] | None:
+    if isinstance(key, list):
+        if len(key) != 2:
+            return None
+        if not path:
+            return None
+        first, *rest = path
+        if not isinstance(first, int):
+            return None
+        return (key[0] + first, *rest)
+    return (key, *path)
+
+
+def _backtrack_builtin(
+    node: "Node", argv_refs: list[Ref], path: tuple[ProjectionStep, ...]
+) -> tuple["Node", tuple[ProjectionStep, ...]] | None:
+    builtin = _builtin_name_for_argv(node.dag, argv_refs)
+    if builtin is None:
+        return None
+    arg_nodes = [_make_node_in_dag(node.dag, ref) for ref in argv_refs[1:]]
+    if builtin == "get":
+        if len(arg_nodes) < 2:
+            return None
+        key = cast(ProjectionStep, arg_nodes[1].value())
+        next_path = _prepend_get_path_step(path, key)
+        if next_path is None:
+            return None
+        return arg_nodes[0], next_path
+    if builtin == "list":
+        if not path:
+            return None
+        index, *rest = path
+        if not isinstance(index, int):
+            return None
+        if index < 0:
+            index += len(arg_nodes)
+        if index < 0 or index >= len(arg_nodes):
+            return None
+        return arg_nodes[index], tuple(rest)
+    if builtin == "dict":
+        if not path:
+            return None
+        key, *rest = path
+        if not isinstance(key, str):
+            return None
+        for idx in range(0, len(arg_nodes), 2):
+            if idx + 1 >= len(arg_nodes):
+                break
+            if arg_nodes[idx].value() == key:
+                return arg_nodes[idx + 1], tuple(rest)
+        return None
+    if builtin == "assoc":
+        if len(arg_nodes) < 3 or not path:
+            return None
+        selected_key, *rest = path
+        assoc_key = arg_nodes[1].value()
+        if selected_key == assoc_key:
+            return arg_nodes[2], tuple(rest)
+        return arg_nodes[0], path
+    if builtin == "conj":
+        if len(arg_nodes) < 2 or not path:
+            return None
+        index, *rest = path
+        if not isinstance(index, int):
+            return None
+        base_len = len(arg_nodes[0].value())
+        if index < 0:
+            index += base_len + 1
+        if index == base_len:
+            return arg_nodes[1], tuple(rest)
+        return arg_nodes[0], path
+    return None
+
+
+def _nearest_context_state(
+    node: "Node", path: tuple[ProjectionStep, ...]
+) -> tuple[Dag, Node, tuple[ProjectionStep, ...], bool]:
+    current = node
+    current_path = path
+    while True:
+        node_info = _describe_node(current)
+        node_type = node_info["type"]
+        if node_type == "ImportNode":
+            source_dag = Dag(dml=current.dag.dml, ref=cast(Ref, node_info["dag"]))
+            source_node = _make_node(source_dag, cast(Ref, node_info["node"]))
+            if current_path:
+                current = source_node
+                continue
+            return source_dag, source_node, current_path, True
+        if node_type == "FnNode":
+            argv_refs = cast(list[Ref], node_info["argv"])
+            source = _backtrack_builtin(current, argv_refs, current_path)
+            if source is not None:
+                current, current_path = source
+                continue
+            fn_dag = Dag(dml=current.dag.dml, ref=cast(Ref, node_info["dag"]))
+            return fn_dag, fn_dag.result, current_path, True
+        return current.dag, current, current_path, False
+
+
+def _resolve_context(node: "Node", path: tuple[ProjectionStep, ...], *, root: bool) -> Dag:
+    context_dag, next_node, next_path, can_recurse = _nearest_context_state(node, path)
+    if not root:
+        return context_dag
+    if not can_recurse:
+        return context_dag
+    return _resolve_context(next_node, next_path, root=True)
+
+
 @dataclass
 class Dag:
     dml: Dml
@@ -153,6 +323,12 @@ class Dag:
     def __hash__(self):
         "Useful only for tests."
         return 42
+
+    def __eq__(self, other):
+        "DAG equality is based on identity, not content."
+        if not isinstance(other, Dag):
+            return False
+        return self.ref == other.ref and self.token == other.token and self.dml == other.dml
 
     def __enter__(self):
         "Catch exceptions and commit an Error"
@@ -289,9 +465,6 @@ class Dag:
 
         Examples
         --------
-        >>> import daggerml as _dml
-        >>> dml = _dml.temporary()
-        >>> dag = new(dml=dml, name="test", message="test")
         >>> n1 = dag.put(42, name="answer")
         >>> n1.value()
         42
@@ -322,8 +495,6 @@ class Dag:
 
         Examples
         --------
-        >>> import daggerml as _dml
-        >>> dml = _dml.temporary()
         >>> dag = new(dml=dml, name="test", message="test")
         >>> n1 = dag.put(42, name="answer")
         >>> n2 = dag.put({"a": 1, "b": [n1, "23"]}, name="data")
@@ -407,6 +578,7 @@ class Dag:
         if isinstance(value, Node):
             value = value.ref
         self.ref = self.dml.runtime.commit(self._require_index_ref(), value, message=self.message, name=self.name)
+        self.token = None  # Clear the working index since it's now committed
 
 
 @dataclass(frozen=True)
@@ -438,49 +610,41 @@ class Node:  # noqa: F811
             return NotImplemented
         return self.ref == other.ref
 
-    def backtrack(self, *keys: Union[str, int]) -> "Node":
+    def context(self, *, root: bool = True) -> Dag:
         """
-        If `key` is provided, it considers this node to be a collection created
-        by the appropriate method and loads the dag that corresponds to this key
+        Resolve the provenance context (DAG) for this node.
+
+        This follows import/function provenance while treating builtin
+        collection-construction and selection DAGs as transparent.
 
         Parameters
         ----------
-        *keys : str, optional
-            Keys to backtrack through the node's structure
+        root : bool, default=True
+            If False, return the nearest sub-DAG in which this value exists as a
+            proper node across a non-builtin import/function boundary. If True,
+            continue recursively until provenance no longer crosses a
+            non-builtin import/function boundary and return that first rooted
+            context.
 
         Returns
         -------
         Dag
-            The dag that this node was imported from (or in the case of a function call, this returns the fndag)
+            The nearest or rooted provenance DAG for this node.
 
         Examples
         --------
-        >>> import daggerml as _dml
-        >>> dml = _dml.temporary()
-        >>> dag = new(dml=dml, name="test", message="test")
-        >>> l0 = dag.put(42)
-        >>> c0 = dag.put({"a": 1, "b": [l0, "23"]})
-        >>> assert c0.backtrack("b", 0) == l0
-        >>> assert c0.backtrack("b").backtrack(0) == l0
-        >>> assert c0["b"][0] != l0  # this is a different node, not the same as l0
-        >>> dml.cleanup()
+        >>> source = new(dml=dml, name="source", message="source")
+        >>> answer = source.put(42, name="answer")
+        >>> payload = source.put({"answer": answer}, name="payload")
+        >>> source.commit(payload)
+        >>> consumer = new(dml=dml, name="consumer", message="consumer")
+        >>> imported = consumer.require("source", "payload", name="payload")
+        >>> consumer.commit(imported)
+        >>> loaded = load("consumer", dml=dml)
+        >>> loaded.result["answer"].context() == source
+        True
         """
-        raise NotImplementedError("Node backtracking is temporarily disabled and will be reintroduced later.")
-
-    def load(self) -> Dag:
-        """
-        Load this node's execution context (DAG).
-
-        Returns
-        -------
-        Dag
-            This node's execution dag.
-        """
-        node_info = self.dag.dml.dag.describe_node(self.ref)
-        dag_ref = node_info.get("dag")
-        if dag_ref is None:
-            raise DmlRepoError(f"Node '{self.ref}' is not an `import` nor `fn` node. Cannot load DAG.")
-        return Dag(dml=self.dag.dml, ref=dag_ref)
+        return _resolve_context(self, (), root=root)
 
     @property
     def type(self):
@@ -547,6 +711,79 @@ class RunnableNode(Node):
         return self.dag.call(self, *args, name=name, sleep=sleep, timeout=timeout)
 
 
+@dataclass(frozen=True)
+class Projection:
+    dag: Dag
+    base: Node
+    path: tuple[ProjectionStep, ...]
+    _info: dict = field(default_factory=dict)
+
+    def __repr__(self):
+        return f"Projection({self.base!r}, path={self.path!r})"
+
+    @classmethod
+    def from_step(cls, base: Node, step: ProjectionStep) -> "Projection":
+        return cls(dag=base.dag, base=base, path=(step,))
+
+    def _extend(self, step: ProjectionStep) -> "Projection":
+        return Projection(dag=self.dag, base=self.base, path=(*self.path, step))
+
+    def value(self):
+        return _apply_projection_path(self.base.value(), self.path)
+
+    def context(self, *, root: bool = True) -> Dag:
+        return _resolve_context(self.base, self.path, root=root)
+
+    def __call__(self, *args, **kwargs):
+        raise TypeError(f"Projection of type '{self.type}' is not callable")
+
+    @property
+    def type(self):
+        if "data_type" in self._info:
+            return self._info["data_type"]
+        return _info_for_value(self.value())["data_type"]
+
+    def __len__(self):
+        if "length" in self._info:
+            return self._info["length"]
+        value = self.value()
+        if not isinstance(value, (list, dict)):
+            raise TypeError(f"Object of type '{type(value).__name__}' has no len()")
+        return len(value)
+
+    def __iter__(self):
+        value = self.value()
+        if isinstance(value, list):
+            for i in range(len(value)):
+                yield self[i]
+            return
+        if isinstance(value, dict):
+            yield from self.keys()
+            return
+        raise TypeError(f"Object of type '{type(value).__name__}' is not iterable")
+
+    def __getitem__(self, key: ProjectionStep | slice) -> "Projection":
+        value = self.value()
+        if isinstance(value, dict):
+            if not isinstance(key, str):
+                raise TypeError(f"Dict keys must be strings but got {type(key).__name__}")
+            step = cast(ProjectionStep, key)
+        elif isinstance(value, list):
+            if not isinstance(key, (int, slice)):
+                raise TypeError(f"List indices must be integers or slices but got {type(key).__name__}")
+            step = _normalize_projection_step(cast(ProjectionStep | slice, key), length=len(value))
+        else:
+            raise TypeError(f"Cannot project into object of type '{type(value).__name__}'")
+        projected = self._extend(step)
+        return Projection(dag=self.dag, base=self.base, path=projected.path, _info=_info_for_value(projected.value()))
+
+    def keys(self) -> list[str]:
+        value = self.value()
+        if not isinstance(value, dict):
+            raise TypeError(f"Cannot get keys of type: {type(value).__name__}")
+        return sorted(value.keys())
+
+
 class CollectionNode(Node):  # noqa: F811
     """
     Representation of a collection node in a DaggerML DAG.
@@ -605,10 +842,20 @@ class ListNode(CollectionNode):  # noqa: F811
     """
 
     @overload
-    def __getitem__(self, key: Union[slice, list[int]]) -> "ListNode": ...
+    def __getitem__(self, key: Union[slice, list[int]]) -> Union["ListNode", Projection]: ...
     @overload
-    def __getitem__(self, key: Union[int, "Node"]) -> "Node": ...
-    def __getitem__(self, key: Union[slice, list[int], int, "Node"]) -> "Node":
+    def __getitem__(self, key: Union[int, "Node"]) -> Union["Node", Projection]: ...
+    def __getitem__(self, key: Union[slice, list[int], int, "Node"]) -> Union["Node", Projection]:
+        if self.dag.ref is not None:
+            if isinstance(key, Node):
+                raise TypeError("Committed list projections require concrete int or slice keys")
+            step = _normalize_projection_step(key, length=len(self))
+            return Projection(
+                dag=self.dag,
+                base=self,
+                path=(step,),
+                _info=_info_for_value(_apply_projection_step(self.value(), step)),
+            )
         if isinstance(key, slice):
             if key.step is not None:
                 raise ValueError("Slice step is not supported")
@@ -669,7 +916,11 @@ class ListNode(CollectionNode):  # noqa: F811
 
 
 class DictNode(CollectionNode):  # noqa: F811
-    def __getitem__(self, key: Union[str, "Node"]) -> "Node":
+    def __getitem__(self, key: Union[str, "Node"]) -> Union["Node", Projection]:
+        if self.dag.ref is not None:
+            if not isinstance(key, str):
+                raise TypeError(f"Dict keys must be strings but got {type(key).__name__}")
+            return Projection(dag=self.dag, base=self, path=(key,), _info=_info_for_value(self.value()[key]))
         return _make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key))
 
     def keys(self) -> list[str]:
@@ -714,7 +965,7 @@ class DictNode(CollectionNode):  # noqa: F811
         """
         return _make_node(self.dag, self.dag._call_builtin("daggerml:get", self.ref, key, default, name=name))
 
-    def items(self) -> Iterator[tuple[str, "Node"]]:
+    def items(self) -> Iterator[tuple[str, "Node|Projection"]]:
         """
         Iterate over key-value pairs of a dictionary node.
 
@@ -728,7 +979,7 @@ class DictNode(CollectionNode):  # noqa: F811
         for k in self:
             yield k, self[k]
 
-    def values(self) -> list["Node"]:
+    def values(self) -> list["Node|Projection"]:
         """
         Get the values of a dictionary node.
 

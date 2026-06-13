@@ -87,7 +87,7 @@ cache-keys = [
 [tool.pytest.ini_options]
 pythonpath = "tests/"
 minversion = "6.0"
-addopts = "-ra --import-mode=importlib --ignore=./ignore/"
+addopts = "-ra --import-mode=importlib --ignore=./ignore/ --doctest-modules"
 testpaths = [
   "tests",
   "src/daggerml",

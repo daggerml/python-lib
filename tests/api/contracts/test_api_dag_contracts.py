@@ -174,14 +174,14 @@ def test_api_dag_017__commit_handles_raw_node_and_error_values(dag, fake_dml, re
     assert dag.ref == refs.dag
 
     fake_dml.runtime.commit.reset_mock()
+    dag = api.Dag(dml=fake_dml, token=refs.index, name="demo", message="msg")
     node = api.Node(dag, refs.dict)
-    dag.ref = None
     dag.commit(node)
     fake_dml.runtime.commit.assert_called_with(refs.index, refs.dict, message="msg", name="demo")
 
     fake_dml.runtime.commit.reset_mock()
+    dag = api.Dag(dml=fake_dml, token=refs.index, name="demo", message="msg")
     err = Error("boom", origin="test", type="RuntimeError")
-    dag.ref = None
     dag.commit(err)
     fake_dml.runtime.commit.assert_called_with(refs.index, err, message="msg", name="demo")
 

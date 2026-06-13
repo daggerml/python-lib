@@ -105,3 +105,95 @@ def test_api_live_006__context_manager_commits_error_capture(live_dml):
     loaded = api.load("captured-error", dml=live_dml)
     error_ref = live_dml.dag.describe(loaded.ref)["error"]
     assert isinstance(error_ref, Ref)
+
+
+def test_api_live_007__open_builtin_selection_context_skips_collection_builtins(live_dml):
+    dag = api.new("open-selection-context", dml=live_dml)
+    answer = dag.put(42, name="answer")
+    payload = dag.put({"answer": answer}, name="payload")
+
+    assert payload["answer"].context(root=False) is dag
+
+
+def test_api_live_008__committed_projection_value_and_context_follow_imported_structure(live_dml):
+    source = api.new("projection-source", dml=live_dml)
+    answer = source.put(42, name="answer")
+    payload = source.put({"answer": answer}, name="payload")
+    source.commit(payload)
+
+    consumer = api.new("projection-consumer", dml=live_dml)
+    imported = consumer.require("projection-source", "payload", name="payload")
+    consumer.commit(imported)
+
+    loaded = api.load("projection-consumer", dml=live_dml)
+    projection = loaded.result["answer"]
+
+    assert isinstance(projection, api.Projection)
+    assert projection.value() == 42
+    assert projection.context(root=False).ref == api.load("projection-source", dml=live_dml).ref
+    assert projection.context(root=True).ref == api.load("projection-source", dml=live_dml).ref
+
+
+def test_api_live_009__committed_projection_supports_nested_traversal(live_dml):
+    dag = api.new("projection-nested", dml=live_dml)
+    payload = dag.put({"outer": [{"inner": 7}]}, name="payload")
+    dag.commit(payload)
+
+    loaded = api.load("projection-nested", dml=live_dml)
+
+    assert loaded.result["outer"][0]["inner"].value() == 7
+
+
+def test_node_context_happy_path(live_dml):
+    source = api.new("source", dml=live_dml)
+    answer = source.put(42, name="answer")
+    source.commit(answer)
+
+    intermediate = api.new("intermediate", dml=live_dml)
+    imported = intermediate.require("source")
+    intermediate.commit(imported)
+
+    final = api.new("final", dml=live_dml)
+    imported_final = final.require("intermediate")
+    final.commit(imported_final)
+
+    loaded = api.load("final", dml=live_dml)
+    assert loaded.result.context(root=False) == intermediate
+    assert loaded.result.context(root=True) == source
+
+
+@pytest.mark.parametrize("coll,key", [(dict, "foo"), (list, 0)])
+def test_node_context_noisy_collection(live_dml, coll, key):
+    source = api.new("source", dml=live_dml)
+    answer = source.put(42, name="answer")
+    source.commit({key: answer} if coll is dict else [answer, 2])
+
+    intermediate = api.new("intermediate", dml=live_dml)
+    imported = intermediate.require("source")
+    intermediate.commit(imported)
+
+    final = api.new("final", dml=live_dml)
+    imported_final = final.require("intermediate")
+    final.commit(imported_final)
+
+    proj = api.load("final", dml=live_dml).result[key]
+    assert proj.context(root=True) == source
+    assert proj.context(root=False) == source
+
+
+@pytest.mark.parametrize("coll,key", [(dict, "foo"), (list, 0)])
+def test_node_context_noisy_collection_access(live_dml, coll, key):
+    source = api.new("source", dml=live_dml)
+    answer = source.put(42, name="answer")
+    source.commit({key: answer} if coll is dict else [answer, 2])
+
+    intermediate = api.new("intermediate", dml=live_dml)
+    intermediate.commit(intermediate.require("source")[key])
+
+    final = api.new("final", dml=live_dml)
+    imported_final = final.require("intermediate")
+    final.commit(imported_final)
+
+    proj = api.load("final", dml=live_dml).result
+    assert proj.context(root=False) == intermediate
+    assert proj.context(root=True) == source

@@ -61,6 +61,13 @@ It helps to think of a DAG as a replayable, inspectable computation artifact:
 - imported results stay marked as imports
 - the final answer is a named or unnamed node selected as `result`
 
+When you inspect a committed DAG through the public API, not every nested dict/list subvalue necessarily has its own persisted node identity. The API can therefore expose read-only `Projection` values for committed collection traversal. A projection lets you keep drilling into nested structure and ask for:
+
+- the selected subvalue with `.value()`
+- the provenance DAG behind that subvalue with `.context(root=...)`
+
+That keeps committed DAG interrogation read-only while still letting callers move from a projected value back to the nearest or rooted non-builtin function/import context that produced it.
+
 See also:
 
 - [Codecs and values](codecs-and-values.md)

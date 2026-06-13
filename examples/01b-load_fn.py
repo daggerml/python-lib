@@ -16,7 +16,7 @@ def main() -> None:
     loaded_dag = dml.load("examples/00-hello-world")
     dag.old_result = loaded_dag.greeting
     dag.hello_fn = loaded_dag.hello_fn
-    # dag.hello_fn = loaded_dag.greeting.load().argv.value()[1]
+    # dag.hello_fn = loaded_dag.greeting.context(root=False).argv.value()[1]
     print(dag.hello_fn(42).value())
     print(dag.hello_fn(-1).value())
     dag.commit(dag.hello_fn(42))

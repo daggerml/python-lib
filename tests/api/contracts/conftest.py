@@ -91,7 +91,12 @@ def fake_dml(refs):
         "argv": refs.argv,
         "cache_key": None,
     }
-    dml.dag.describe_node.return_value = {"id": refs.imported, "type": "ImportNode", "dag": refs.dag2}
+    dml.dag.describe_node.return_value = {
+        "id": refs.imported,
+        "type": "ImportNode",
+        "dag": refs.dag2,
+        "node": refs.scalar,
+    }
     dml.show.return_value = {"dags": {"demo": refs.dag, "other": refs.dag2}}
     return dml
 

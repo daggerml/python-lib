@@ -146,9 +146,16 @@ Every staged or committed node is wrapped as one of these classes:
 Common node methods:
 
 - `node.value()`: materialize the concrete value
-- `node.load()`: load the DAG that owns the node
+- `node.context(root=True)`: resolve the nearest or rooted provenance DAG behind the node
 - `node.argv`: access the node's argv list when present
 - `node.type`: cached type label such as `list`, `dict`, or `runnable`
+
+Committed collection reads can also return a read-only `Projection` object when a selected subvalue does not have its own persisted node identity.
+
+- `projection.value()`: materialize the selected subvalue
+- `projection.context(root=True)`: resolve provenance for the selected subvalue
+- `projection[key]`: continue read-only traversal through nested dict/list structure
+- `projection.type`, `projection.keys()`, `len(projection)`
 
 Collection helpers:
 
@@ -159,6 +166,16 @@ Collection helpers:
 - `CollectionNode.contains(item)`
 
 `RunnableNode(*args, **kw)` delegates to `dag.call(...)` and returns another node.
+
+`context(root=False)` stops at the nearest non-builtin import/function DAG boundary. `context(root=True)` keeps following provenance until it no longer crosses a non-builtin import/function boundary.
+
+Example committed-result inspection flow:
+
+```python
+loaded = load("consumer")
+foo = loaded.result["foo"]
+uuid_value = foo.context(root=False)["uuid"].value()
+```
 
 ## Value types
 
