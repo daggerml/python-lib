@@ -27,7 +27,8 @@ def isolated_api_defaults(monkeypatch):
 def live_dml(tmp_path, monkeypatch):
     monkeypatch.setenv("DML_DEFAULT_DB_MAP_SIZE_MAX", str(64 * 1024 * 1024))
     Dml.init(str(tmp_path), user="tester", remote_root="s3://bucket/root")
-    monkeypatch.setattr(dml_mod, "_index_ops", lambda dml: local_index_ops())
+    ops = local_index_ops()
+    monkeypatch.setattr(dml_mod, "_index_ops", lambda dml: ops)
     return Dml(str(tmp_path), remote_root="s3://bucket/root", user="tester")
 
 

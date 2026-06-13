@@ -138,6 +138,29 @@ def test_runtime_describe_and_list_include_commit_shaped_payload_plus_dag(tmp_pa
     assert listed == [described]
 
 
+def test_runtime_describe_graph_accepts_explicit_roots(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    index = dml.runtime.create()
+
+    graph = dml.runtime.describe_graph(index)
+
+    assert graph["roots"] == [index.id()]
+    assert graph["nodes"][index.id()]["execution_id"] == index.id()
+    assert graph["nodes"][index.id()]["spawned"] == []
+    assert graph["nodes"][index.id()]["children"] == []
+
+
+def test_runtime_describe_graph_defaults_to_open_local_indexes(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    first = dml.runtime.create()
+    second = dml.runtime.create()
+
+    graph = dml.runtime.describe_graph()
+
+    assert set(graph["roots"]) == {first.id(), second.id()}
+    assert set(graph["nodes"]) == {first.id(), second.id()}
+
+
 def test_first_named_commit_materializes_unborn_branch_ref_and_branch_list(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     head = Head(str(tmp_path))

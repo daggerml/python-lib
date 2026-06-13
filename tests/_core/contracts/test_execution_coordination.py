@@ -25,12 +25,15 @@ def _state(cache_key: str = "cache") -> ExecutionState:
 
 
 def _record(execution_id: str, spawned=None, lifecycle="running"):
+    now = int(time.time())
     return {
         "execution_id": execution_id,
         "cache_key": execution_id + "-cache",
         "lifecycle": lifecycle,
-        "updated_at": int(time.time()),
+        "updated_at": now,
+        "created_at": now,
         "spawned_execution_ids": list(spawned or []),
+        "child_execution_ids": [],
         "cancellation_requested_by": None,
     }
 
@@ -60,8 +63,9 @@ def test_spawned_execution_add_drop_retries_cas_conflict() -> None:
     assert state.read_execution_record("caller")["spawned_execution_ids"] == ["callee"]
 
     state._store.conflict_keys.add(key)
-    state._drop_spawned_execution("caller", "callee")
+    state._complete_spawned_execution("caller", "callee")
     assert state.read_execution_record("caller")["spawned_execution_ids"] == []
+    assert state.read_execution_record("caller")["child_execution_ids"] == ["callee"]
 
 
 def test_non_running_caller_cannot_spawn() -> None:
@@ -88,6 +92,34 @@ def test_fake_cas_covers_conditional_write_behavior() -> None:
 
     assert state.create_execution_record(_record("exec"))
     assert not state.create_execution_record(_record("exec"))
+
+
+def test_describe_graph_returns_reachable_active_and_terminal_descendants() -> None:
+    state = _state()
+    root = _record("root", spawned=["active"])
+    root["child_execution_ids"] = ["done"]
+    active = _record("active")
+    done = _record("done", lifecycle="succeeded")
+    done["child_execution_ids"] = ["leaf"]
+    leaf = _record("leaf", lifecycle="failed")
+    unrelated = _record("other")
+    for record in [root, active, done, leaf, unrelated]:
+        state.create_execution_record(record)
+
+    graph = state.describe_graph(["root"])
+
+    assert graph["roots"] == ["root"]
+    assert set(graph["nodes"]) == {"root", "active", "done", "leaf"}
+    assert graph["nodes"]["root"]["spawned"] == ["active"]
+    assert graph["nodes"]["root"]["children"] == ["done"]
+    assert graph["nodes"]["done"]["children"] == ["leaf"]
+
+
+def test_describe_graph_missing_root_raises() -> None:
+    state = _state()
+
+    with pytest.raises(exec_state_mod.DmlRepoError, match="No execution record found"):
+        state.describe_graph(["missing"])
 
 
 def test_exec_state_calls_local_adapter_via_subprocess_envelope(monkeypatch) -> None:

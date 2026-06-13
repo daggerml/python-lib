@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
 from daggerml._core.db import Ref
+from daggerml._core.exec_state import ExecutionGraph
 from daggerml._core.index import IndexOps
 from daggerml._core.s3_cas import CasItem, CasItemConflict
-from daggerml._core.types import DmlDB
+from daggerml._core.types import DmlDB, DmlRepoError
 
 DEFAULT_REMOTE_ROOT = "s3://bucket/root"
 
@@ -35,7 +37,8 @@ def make_local_dml(
     if remote_project is not None:
         init_kwargs["remote_project"] = remote_project
     Dml.init(str(project_home), **init_kwargs)
-    monkeypatch.setattr(dml_mod, "_index_ops", lambda dml: local_index_ops())
+    ops = local_index_ops()
+    monkeypatch.setattr(dml_mod, "_index_ops", lambda dml: ops)
     return Dml(str(project_home), remote_root=remote_root, user=user)
 
 
@@ -67,11 +70,54 @@ def run_parallel(count: int, fn: Callable[[int], Any]) -> list[Any]:
 
 
 class NoopExecutionState:
+    def __init__(self) -> None:
+        self.records: dict[str, dict[str, Any]] = {}
+
     def create_execution_record(self, record: dict[str, Any]) -> bool:
+        if record["execution_id"] in self.records:
+            return False
+        self.records[record["execution_id"]] = dict(record)
         return True
 
+    def update_execution_record(self, record: dict[str, Any]) -> None:
+        self.records[record["execution_id"]] = dict(record)
+
+    def read_execution_record(self, execution_id: str) -> dict[str, Any]:
+        try:
+            return dict(self.records[execution_id])
+        except KeyError as exc:
+            raise DmlRepoError(f"No execution record found for execution_id: {execution_id}") from exc
+
     def finish_execution(self, execution_id: str, dag: Ref, db: DmlDB) -> None:
-        return None
+        record = self.read_execution_record(execution_id)
+        record["lifecycle"] = "succeeded"
+        record["updated_at"] = int(time.time())
+        self.update_execution_record(record)
+
+    def describe_graph(self, root_execution_ids: list[str]) -> ExecutionGraph:
+        roots = list(dict.fromkeys(root_execution_ids))
+        nodes = {}
+        pending = list(reversed(roots))
+        while pending:
+            execution_id = pending.pop()
+            if execution_id in nodes:
+                continue
+            record = self.read_execution_record(execution_id)
+            spawned = list(record["spawned_execution_ids"])
+            children = list(record["child_execution_ids"])
+            nodes[execution_id] = {
+                "execution_id": record["execution_id"],
+                "cache_key": record["cache_key"],
+                "lifecycle": record["lifecycle"],
+                "updated_at": record["updated_at"],
+                "created_at": record["created_at"],
+                "cancel_requested_by": record["cancellation_requested_by"],
+                "children": children,
+                "spawned": spawned,
+            }
+            pending.extend(reversed(children))
+            pending.extend(reversed(spawned))
+        return {"roots": roots, "nodes": nodes}
 
 
 class FakeRemote:
@@ -86,11 +132,12 @@ class FakeRemote:
         return None
 
 
-def local_index_ops() -> IndexOps:
+def local_index_ops(state: NoopExecutionState | None = None) -> IndexOps:
     ops = object.__new__(IndexOps)
     ops.remote_root = "s3://bucket/root"
     ops._remote = FakeRemote()
-    ops.exec_state = lambda cache_key=None: NoopExecutionState()  # type: ignore[method-assign]
+    state = state or NoopExecutionState()
+    ops.exec_state = lambda cache_key=None: state  # type: ignore[method-assign]
     return ops
 
 

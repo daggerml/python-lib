@@ -75,7 +75,9 @@ class ExecutionRecord(TypedDict):
     cache_key: str | None
     lifecycle: LIFECYCLES
     updated_at: int
+    created_at: int
     spawned_execution_ids: list[str]
+    child_execution_ids: list[str]
     cancellation_requested_by: str | None
 
 
@@ -110,6 +112,22 @@ class AdapterResponse(TypedDict):
     state: dict | None
     dag_id: str | None
     error: str | None
+
+
+class ExecutionGraphNode(TypedDict):
+    execution_id: str
+    cache_key: str | None
+    lifecycle: LIFECYCLES
+    updated_at: int
+    created_at: int
+    cancel_requested_by: str | None
+    children: list[str]
+    spawned: list[str]
+
+
+class ExecutionGraph(TypedDict):
+    roots: list[str]
+    nodes: dict[str, ExecutionGraphNode]
 
 
 @dataclass
@@ -338,7 +356,7 @@ class ExecutionState:
             "This execution may be un-cancelable."
         )
 
-    def _drop_spawned_execution(self, caller_id: str, callee_id: str) -> None:
+    def _complete_spawned_execution(self, caller_id: str, callee_id: str) -> None:
         for _ in range(3):
             caller_record = self.read_execution_record(caller_id)
             if caller_record is None:
@@ -347,15 +365,41 @@ class ExecutionState:
                 msg = f"Execution {caller_id} status: {caller_record['lifecycle']} cannot spawn new executions"
                 raise CancelledExecutionError(msg)
             caller_record["spawned_execution_ids"] = sorted(set(caller_record["spawned_execution_ids"]) - {callee_id})
+            caller_record["child_execution_ids"] = sorted({*caller_record["child_execution_ids"], callee_id})
             try:
                 return self.update_execution_record(caller_record)
             except CasItemConflict:
                 # Retry on conflict, which means the caller record was concurrently updated
                 logger.warning(f"CAS conflict when updating execution record for {caller_id}, retrying...")
         logger.warning(
-            f"Failed to drop execution record for {caller_id} after 3 attempts due to CAS conflicts... "
+            f"Failed to finalize spawned execution for {caller_id} after 3 attempts due to CAS conflicts... "
             "Cancel might get annoying"
         )
+
+    def describe_graph(self, root_execution_ids: Sequence[str]) -> ExecutionGraph:
+        roots = list(dict.fromkeys(root_execution_ids))
+        nodes: dict[str, ExecutionGraphNode] = {}
+        pending = list(reversed(roots))
+        while pending:
+            execution_id = pending.pop()
+            if execution_id in nodes:
+                continue
+            record = self.read_execution_record(execution_id)
+            spawned = list(record["spawned_execution_ids"])
+            children = list(record["child_execution_ids"])
+            nodes[execution_id] = {
+                "execution_id": record["execution_id"],
+                "cache_key": record["cache_key"],
+                "lifecycle": record["lifecycle"],
+                "updated_at": record["updated_at"],
+                "created_at": record["created_at"],
+                "cancel_requested_by": record["cancellation_requested_by"],
+                "children": children,
+                "spawned": spawned,
+            }
+            pending.extend(reversed(children))
+            pending.extend(reversed(spawned))
+        return {"roots": roots, "nodes": nodes}
 
     def _record_execution_dependency(self, caller_id: str, callee_id: str) -> None:
         edge = {"caller_execution_id": caller_id, "callee_execution_id": callee_id}
@@ -419,7 +463,7 @@ class ExecutionState:
                     with db.tx() as txn:
                         error = txn.put(Error(error_msg, "fn-call", "adapter-error"))
                         dag = txn.put(Dag(nodes=[argv_node], names={}, argv=argv_node, error=error))
-                self._drop_spawned_execution(caller_id=index.id(), callee_id=active_id)
+                self._complete_spawned_execution(caller_id=index.id(), callee_id=active_id)
                 self._remote.put_cache(dag, active_id, db)
                 self._remote.delete_active(self.cache_key)
         finally:

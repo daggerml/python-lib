@@ -13,7 +13,7 @@ from daggerml._core.commit import CommitDescription, CommitDiffPayload, CommitFu
 from daggerml._core.config import Config, flatten_dict
 from daggerml._core.dag import DagDescription, DagOps, NodeDescriptionPayload
 from daggerml._core.db import DmlDbKeyNotFoundError, Ref
-from daggerml._core.exec_state import ExecutionState, InvalidationResponse
+from daggerml._core.exec_state import ExecutionGraph, ExecutionState, InvalidationResponse
 from daggerml._core.head import Head
 from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
@@ -374,6 +374,13 @@ class _RuntimeNamespace:
         """Cancel active execution state for a runtime index."""
         resp = _exec_state(self._dml).cancel(index.id(), self._dml._config.user, self._dml._db)
         return cast(RuntimeCancelSummary, {"id": index, **resp})
+
+    def describe_graph(self, *roots: Annotated[Ref | str, "Execution roots to inspect."]) -> ExecutionGraph:
+        """Describe reachable execution lineage for one or more runtime roots."""
+        execution_ids = [root.id() if isinstance(root, Ref) else root for root in roots]
+        if not execution_ids:
+            execution_ids = [item["id"].id() for item in self.list()]
+        return _index_ops(self._dml).exec_state().describe_graph(execution_ids)
 
 
 @dataclass(frozen=True)

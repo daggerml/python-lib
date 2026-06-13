@@ -93,7 +93,7 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 - `admin.cache`: `invalidate`
 - `admin.remote`: `list`, `gc`
 - `admin`: `gc`
-- `runtime`: `create`, `describe`, `put_literal`, `put_import`, `start_fn`, `cancel`, `commit`
+- `runtime`: `create`, `describe`, `describe_graph`, `put_literal`, `put_import`, `start_fn`, `cancel`, `commit`
 - `config`: `get`, `set`, `show`
 - `ops`: `commit`, `head`, `dag`, `node`, `index`, `cache`, `remote`, `gc`, `config`
 
@@ -109,9 +109,26 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 - **WHEN** a caller needs to cancel work rooted at an index
 - **THEN** the shared `Dml` exposes that workflow as `dml.runtime.cancel(index_id)`
 
+#### Scenario: Runtime namespace exposes describe_graph
+- **WHEN** a caller needs execution-lineage inspection rooted at one or more runtime executions
+- **THEN** the shared `Dml` exposes that workflow as `dml.runtime.describe_graph(...)`
+
 #### Scenario: Exact subsystem objects are grouped under ops
 - **WHEN** a caller needs direct exact-input subsystem behavior such as `CommitOps`, `HeadOps`, or `IndexOps`
 - **THEN** the shared `Dml` exposes those objects under `dml.ops.*` rather than as direct top-level `Dml` attributes
+
+### Requirement: Shared `Dml` runtime namespace SHALL normalize roots for execution graph inspection
+The shared `Dml` runtime namespace SHALL expose `describe_graph(*roots: Ref | str)` for execution-lineage inspection. If the caller provides no roots, the runtime namespace SHALL use all currently open local runtime indexes as roots. Before delegating to execution-state graph extraction, the runtime namespace SHALL normalize the selected roots to execution-id strings.
+
+#### Scenario: Explicit roots are normalized and delegated
+- **WHEN** a caller invokes `dml.runtime.describe_graph(idx1, "exec-2")`
+- **THEN** the runtime namespace SHALL normalize those roots to execution-id strings
+- **AND** it SHALL delegate the graph extraction using only those normalized root ids
+
+#### Scenario: Empty input defaults to open local indexes
+- **WHEN** a caller invokes `dml.runtime.describe_graph()` with no explicit roots
+- **THEN** the runtime namespace SHALL read the currently open local runtime indexes
+- **AND** it SHALL use those index ids as the root execution ids for graph extraction
 
 ### Requirement: Shared `Dml` surface SHALL be introspection-ready
 The shared `Dml` boundary and its public namespaces SHALL expose runtime documentation that explains class purpose, method behavior, and parameter meaning without changing workflow semantics, and that metadata SHALL be sufficient for generated CLI help.

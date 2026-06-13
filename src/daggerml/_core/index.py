@@ -119,13 +119,16 @@ class IndexOps:
             )
         # Create initial execution record.
         state = self.exec_state(cache_key=cache_key)
+        now_ts = int(time.time())
         state.create_execution_record(
             {
                 "execution_id": index.id(),
                 "cache_key": cache_key,
                 "lifecycle": "running",
-                "updated_at": int(time.time()),
+                "updated_at": now_ts,
+                "created_at": now_ts,
                 "spawned_execution_ids": [],
+                "child_execution_ids": [],
                 "cancellation_requested_by": None,
             }
         )
