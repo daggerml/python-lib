@@ -150,6 +150,14 @@ Use this file to identify which project docs to read before editing a code path,
   - `CONTRIBUTING.md`
   - `c/README.md` (for C build changes)
 
+### Examples and CI helpers
+
+- Match: `examples/**`, `.github/workflows/**`
+- Read:
+  - `README.md`
+  - `CONTRIBUTING.md`
+  - `docs/architecture/system-overview.md`
+
 ### Documentation edits
 
 - Match: `docs/**`

@@ -13,11 +13,14 @@ import os
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import boto3
 
@@ -73,12 +76,6 @@ def _build_env_values(endpoint: str, remote_root: str) -> dict[str, str]:
         "AWS_ENDPOINT_URL": endpoint,
         "DML_REMOTE_ROOT": remote_root,
     }
-
-
-def _normalize_client_host(host: str) -> str:
-    if host in {"0.0.0.0", "::", ""}:
-        return "127.0.0.1"
-    return host
 
 
 def _write_env_file(path: Path, env_values: dict[str, str]) -> None:
@@ -139,6 +136,28 @@ def _wait_for_ready(moto_dir: Path, pid: int, timeout: float = 60.0) -> None:
     raise RuntimeError(f"timed out waiting for moto server readiness\n{log_text}".rstrip())
 
 
+def _reserve_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_http_ready(endpoint: str, proc: subprocess.Popen[str], timeout: float = 30.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"moto server exited before becoming ready with code {proc.returncode}")
+        try:
+            with urlopen(endpoint, timeout=1.0):
+                return
+        except HTTPError:
+            # Any HTTP response means the server is accepting connections.
+            return
+        except URLError:
+            time.sleep(0.1)
+    raise RuntimeError(f"timed out waiting for moto server HTTP readiness at {endpoint}")
+
+
 def _cleanup_files(moto_dir: Path) -> None:
     for path in (_env_path(moto_dir), _pid_path(moto_dir), _state_path(moto_dir)):
         try:
@@ -196,10 +215,9 @@ def cmd_print_env(moto_dir: Path) -> int:
 
 
 def cmd_serve(moto_dir: Path, remote_root: str) -> int:
-    try:
-        from moto.server import ThreadedMotoServer
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("Install moto[server] to run this helper") from exc
+    moto_server = shutil.which("moto_server")
+    if moto_server is None:
+        raise RuntimeError("Install moto[server] to run this helper")
 
     bucket, _prefix = _parse_remote_root(remote_root)
     moto_dir.mkdir(parents=True, exist_ok=True)
@@ -214,12 +232,12 @@ def cmd_serve(moto_dir: Path, remote_root: str) -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    server = ThreadedMotoServer(port=0, verbose=False)
+    port = _reserve_local_port()
+    endpoint = f"http://127.0.0.1:{port}"
     print("Starting moto server", file=sys.stderr, flush=True)
-    server.start()
+    proc = subprocess.Popen([moto_server, "-H", "127.0.0.1", "-p", str(port)])
     try:
-        host, port = server.get_host_and_port()
-        endpoint = f"http://{_normalize_client_host(host)}:{port}"
+        _wait_for_http_ready(endpoint, proc)
         print(f"Moto server listening at {endpoint}", file=sys.stderr, flush=True)
         env_values = _build_env_values(endpoint, remote_root)
         for key, value in env_values.items():
@@ -233,9 +251,17 @@ def cmd_serve(moto_dir: Path, remote_root: str) -> int:
             encoding="utf-8",
         )
         while not stop:
+            if proc.poll() is not None:
+                raise RuntimeError(f"moto server exited unexpectedly with code {proc.returncode}")
             time.sleep(0.2)
     finally:
-        server.stop()
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10.0)
         _cleanup_files(moto_dir)
     return 0
 
