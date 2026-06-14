@@ -106,6 +106,23 @@ class IndexOps:
                     expected_root_ns="node-argv",
                 )
                 nodes.append(argv)
+            # Create initial execution record.
+            state = self.exec_state(cache_key=cache_key)
+            now_ts = int(time.time())
+            exec_id = execution_id or uuid7().hex
+            state.create_execution_record(
+                {
+                    "execution_id": exec_id,
+                    "cache_key": cache_key,
+                    "lifecycle": "running",
+                    "updated_at": now_ts,
+                    "created_at": now_ts,
+                    "spawned_execution_ids": [],
+                    "child_execution_ids": [],
+                    "cancellation_requested_by": None,
+                }
+            )
+            # create db state
             dag_ref = txn.put(Dag(nodes=nodes, names={}, argv=argv))
             index = txn.put(
                 Index(
@@ -115,23 +132,8 @@ class IndexOps:
                     message="",
                     dag=dag_ref,
                 ),
-                to=Ref(f"index:{execution_id or uuid7().hex}"),
+                to=Ref(f"index:{exec_id}"),
             )
-        # Create initial execution record.
-        state = self.exec_state(cache_key=cache_key)
-        now_ts = int(time.time())
-        state.create_execution_record(
-            {
-                "execution_id": index.id(),
-                "cache_key": cache_key,
-                "lifecycle": "running",
-                "updated_at": now_ts,
-                "created_at": now_ts,
-                "spawned_execution_ids": [],
-                "child_execution_ids": [],
-                "cancellation_requested_by": None,
-            }
-        )
         return index
 
     def put_import(self, index: Ref, dag: Ref, node: Optional[Ref], name: Optional[str] = None, *, db: DmlDB) -> Ref:

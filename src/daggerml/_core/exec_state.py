@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 LOCK_TTL: float = 300.0
 LIFECYCLES = Literal["running", "succeeded", "failed", "cancel-pending", "cancelled"]
+GRAPH_LIFECYCLES = Literal["running", "succeeded", "failed", "cancel-pending", "cancelled", "pending"]
 
 
 class CancelledExecutionError(Exception):
@@ -117,7 +118,7 @@ class AdapterResponse(TypedDict):
 class ExecutionGraphNode(TypedDict):
     execution_id: str
     cache_key: str | None
-    lifecycle: LIFECYCLES
+    lifecycle: GRAPH_LIFECYCLES
     updated_at: int
     created_at: int
     cancel_requested_by: str | None
@@ -384,7 +385,20 @@ class ExecutionState:
             execution_id = pending.pop()
             if execution_id in nodes:
                 continue
-            record = self.read_execution_record(execution_id)
+            record = self._read(self._key_for_execution(execution_id))
+            if record is None:
+                nodes[execution_id] = {
+                    "execution_id": execution_id,
+                    "cache_key": None,
+                    "lifecycle": "pending",
+                    "updated_at": 0,
+                    "created_at": 0,
+                    "cancel_requested_by": None,
+                    "children": [],
+                    "spawned": [],
+                }
+                continue
+            record = cast(ExecutionRecord, record)
             spawned = list(record["spawned_execution_ids"])
             children = list(record["child_execution_ids"])
             nodes[execution_id] = {

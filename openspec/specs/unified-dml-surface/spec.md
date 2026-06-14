@@ -118,7 +118,7 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 - **THEN** the shared `Dml` exposes those objects under `dml.ops.*` rather than as direct top-level `Dml` attributes
 
 ### Requirement: Shared `Dml` runtime namespace SHALL normalize roots for execution graph inspection
-The shared `Dml` runtime namespace SHALL expose `describe_graph(*roots: Ref | str)` for execution-lineage inspection. If the caller provides no roots, the runtime namespace SHALL use all currently open local runtime indexes as roots. Before delegating to execution-state graph extraction, the runtime namespace SHALL normalize the selected roots to execution-id strings.
+The shared `Dml` runtime namespace SHALL expose `describe_graph(*roots: Ref | str, visual: bool = False)` for execution-lineage inspection. If the caller provides no roots, the runtime namespace SHALL use all currently open local runtime indexes as roots. Before delegating to execution-state graph extraction, the runtime namespace SHALL normalize the selected roots to execution-id strings. When `visual` is `False`, the method SHALL return the extracted `ExecutionGraph`. When `visual` is `True`, the method SHALL render a human-friendly graph view and return `None`.
 
 #### Scenario: Explicit roots are normalized and delegated
 - **WHEN** a caller invokes `dml.runtime.describe_graph(idx1, "exec-2")`
@@ -129,6 +129,12 @@ The shared `Dml` runtime namespace SHALL expose `describe_graph(*roots: Ref | st
 - **WHEN** a caller invokes `dml.runtime.describe_graph()` with no explicit roots
 - **THEN** the runtime namespace SHALL read the currently open local runtime indexes
 - **AND** it SHALL use those index ids as the root execution ids for graph extraction
+
+#### Scenario: Visual mode renders instead of returning the raw graph
+- **WHEN** a caller invokes `dml.runtime.describe_graph(idx1, visual=True)`
+- **THEN** the runtime namespace SHALL fetch the same execution graph data it would use for raw inspection
+- **AND** it SHALL render a human-friendly execution graph view
+- **AND** it SHALL return `None`
 
 ### Requirement: Shared `Dml` surface SHALL be introspection-ready
 The shared `Dml` boundary and its public namespaces SHALL expose runtime documentation that explains class purpose, method behavior, and parameter meaning without changing workflow semantics, and that metadata SHALL be sufficient for generated CLI help.

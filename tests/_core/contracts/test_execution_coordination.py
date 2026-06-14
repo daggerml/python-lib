@@ -118,8 +118,19 @@ def test_describe_graph_returns_reachable_active_and_terminal_descendants() -> N
 def test_describe_graph_missing_root_raises() -> None:
     state = _state()
 
-    with pytest.raises(exec_state_mod.DmlRepoError, match="No execution record found"):
-        state.describe_graph(["missing"])
+    graph = state.describe_graph(["missing"])
+
+    assert graph["roots"] == ["missing"]
+    assert graph["nodes"]["missing"] == {
+        "execution_id": "missing",
+        "cache_key": None,
+        "lifecycle": "pending",
+        "updated_at": 0,
+        "created_at": 0,
+        "cancel_requested_by": None,
+        "children": [],
+        "spawned": [],
+    }
 
 
 def test_exec_state_calls_local_adapter_via_subprocess_envelope(monkeypatch) -> None:

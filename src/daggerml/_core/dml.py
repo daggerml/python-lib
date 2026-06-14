@@ -21,6 +21,32 @@ from daggerml._core.types import DmlDB, DmlRepoError, Error
 from daggerml._core.uri import ProjectUri
 
 
+def _format_graph_age(seconds: int | float | None) -> str:
+    if seconds is None or seconds < 0:
+        return "-"
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs}s"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h"
+
+
+def _graph_lifecycle_style(lifecycle: str) -> str:
+    return {
+        "running": "yellow",
+        "succeeded": "green",
+        "failed": "red",
+        "cancelled": "magenta",
+        "pending": "dim",
+    }.get(lifecycle, "white")
+
+
 def _require_remote_root(dml: "Dml") -> str:
     remote_root = dml._config.remote.root
     if not remote_root:
@@ -61,6 +87,61 @@ def _exec_state(dml: "Dml", cache_key=None) -> ExecutionState:
         client=_require_s3_client(dml),
         cache_key=cache_key,
     )
+
+
+def _render_execution_graph(graph: ExecutionGraph) -> None:
+    try:
+        from rich import box
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.text import Text
+        from rich.tree import Tree
+    except ImportError as exc:
+        raise DmlRepoError(
+            "rich is required for visual describe_graph output; install daggerml[visual] or pip install rich"
+        ) from exc
+
+    now = int(time())
+
+    def render_node(execution_id: str):
+        node = graph["nodes"][execution_id]
+        style = _graph_lifecycle_style(node["lifecycle"])
+        age_seconds = max(0, now - node["created_at"]) if node["created_at"] else 0
+        idle_seconds = max(0, now - node["updated_at"]) if node["updated_at"] else age_seconds
+        title = Text.assemble(
+            (node["lifecycle"].upper(), f"bold {style}"),
+            (f" call {_format_graph_age(age_seconds)} -> {_format_graph_age(idle_seconds)}", "bold white"),
+            (f" [{len(node['spawned'])} : {len(node['children'])}]", "dim white"),
+        )
+        details = Table.grid(padding=(0, 1))
+        details.add_column(style="bold cyan", ratio=1)
+        details.add_column(ratio=5)
+        details.add_row("exec", node["execution_id"])
+        details.add_row("cache", node["cache_key"] or "-")
+        if node["cancel_requested_by"]:
+            details.add_row("cancel", node["cancel_requested_by"])
+        return Panel(details, title=title, border_style=style, box=box.ROUNDED, expand=False)
+
+    seen: set[str] = set()
+
+    def add_edges(tree: Tree, execution_id: str) -> None:
+        if execution_id in seen:
+            return
+        seen.add(execution_id)
+        node = graph["nodes"][execution_id]
+        for target_id in [*node["children"], *node["spawned"]]:
+            if target_id in seen:
+                continue
+            add_edges(tree.add(render_node(target_id)), target_id)
+
+    call_tree = Tree(Text("Execution Call Stack", style="bold white"), guide_style="dim")
+    if graph["roots"]:
+        for root_id in graph["roots"]:
+            add_edges(call_tree.add(render_node(root_id)), root_id)
+    else:
+        call_tree.add(Text("<no roots>", style="dim"))
+    Console().print(Panel(call_tree, title="Execution Graph", expand=False))
 
 
 def _reject_named_remote_selector(revision: str) -> None:
@@ -375,12 +456,20 @@ class _RuntimeNamespace:
         resp = _exec_state(self._dml).cancel(index.id(), self._dml._config.user, self._dml._db)
         return cast(RuntimeCancelSummary, {"id": index, **resp})
 
-    def describe_graph(self, *roots: Annotated[Ref | str, "Execution roots to inspect."]) -> ExecutionGraph:
+    def describe_graph(
+        self,
+        *roots: Annotated[Ref | str, "Execution roots to inspect."],
+        visual: Annotated[bool, "Render a human-friendly graph view instead of returning the raw payload."] = False,
+    ) -> ExecutionGraph | None:
         """Describe reachable execution lineage for one or more runtime roots."""
         execution_ids = [root.id() if isinstance(root, Ref) else root for root in roots]
         if not execution_ids:
             execution_ids = [item["id"].id() for item in self.list()]
-        return _index_ops(self._dml).exec_state().describe_graph(execution_ids)
+        graph = _index_ops(self._dml).exec_state().describe_graph(execution_ids)
+        if visual:
+            _render_execution_graph(graph)
+            return None
+        return graph
 
 
 @dataclass(frozen=True)

@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
+import daggerml._core.dml as dml_mod
 from daggerml._cli import MethodCLI
 from daggerml._core import Dml, Error, Ref, dml_dumps
+from tests._core.helpers import make_local_dml
 
 
 class _SerdeFixture:
@@ -146,3 +148,31 @@ def test_cli_sp_009__none_return_prints_nothing(capsys) -> None:
     assert cli.run(["emit-none"]) == 0
 
     assert capsys.readouterr().out == ""
+
+
+def test_cli_sp_010__dml_describe_graph_visual_flag_suppresses_json_output(tmp_path: Path, monkeypatch, capsys) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    index = dml.runtime.create()
+    cli = MethodCLI(Dml, prog="dml")
+
+    def fake_render(graph) -> None:
+        assert graph["roots"] == [index.id()]
+        print("rendered-graph")
+
+    monkeypatch.setattr(dml_mod, "_render_execution_graph", fake_render)
+
+    assert cli.run(["--project-home", str(tmp_path), "runtime", "describe-graph", index.id(), "--visual"]) == 0
+
+    assert capsys.readouterr().out == "rendered-graph\n"
+
+
+def test_cli_sp_011__dml_describe_graph_raw_path_still_emits_json(tmp_path: Path, monkeypatch, capsys) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    index = dml.runtime.create()
+    cli = MethodCLI(Dml, prog="dml")
+
+    assert cli.run(["--project-home", str(tmp_path), "runtime", "describe-graph", index.id()]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["roots"] == [index.id()]
+    assert payload["nodes"][index.id()]["execution_id"] == index.id()

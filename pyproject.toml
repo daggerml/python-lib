@@ -31,10 +31,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+viz = [
+  "rich",
+]
 table = [
   "tabulate",
   "asciidag",
 ]
+
 [project.scripts]
 dml = "daggerml._cli:cli"
 dml-local-adapter = "daggerml.contrib.adapters:LocalAdapter.cli"
