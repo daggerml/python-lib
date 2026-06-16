@@ -42,8 +42,9 @@ def _graph_lifecycle_style(lifecycle: str) -> str:
         "running": "yellow",
         "succeeded": "green",
         "failed": "red",
-        "cancelled": "magenta",
-        "pending": "dim",
+        "cancel-pending": "dark_goldenrod italic",
+        "cancelled": "dim",
+        "pending": "cyan",
     }.get(lifecycle, "white")
 
 
@@ -118,7 +119,8 @@ def _render_execution_graph(graph: ExecutionGraph) -> None:
         details.add_column(style="bold cyan", ratio=1)
         details.add_column(ratio=5)
         details.add_row("exec", node["execution_id"])
-        details.add_row("cache", node["cache_key"] or "-")
+        if node["cache_key"]:
+            details.add_row("cache", node["cache_key"])
         if node["cancel_requested_by"]:
             details.add_row("cancel", node["cancel_requested_by"])
         return Panel(details, title=title, border_style=style, box=box.ROUNDED, expand=False)

@@ -13,7 +13,6 @@ import sys
 import tempfile
 from contextlib import chdir
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from textwrap import dedent
 from typing import Any
 
@@ -231,24 +230,23 @@ def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
 
 def run_payload(*, execution_id: str, cache_key: str, remote_root: str) -> dict[str, Any]:
     namespace: dict[str, Any] = {"logger": logging.getLogger("daggerml.contrib.script")}
-    with dml.temporary(remote_root=remote_root) as dml_instance:
-        with TemporaryDirectory(prefix="dml-script-worker-") as tmpd, chdir(tmpd):
-            try:
-                with dml.new(dml=dml_instance, cache_key=cache_key, execution_id=execution_id) as dag:
-                    runnable_node, *arg_nodes = dag.argv
-                    runnable = runnable_node.value().innermost()
-                    for key, value in runnable.kwargs.get("prepop", {}).items():
-                        dag.put(value, name=key)
-                    exec(S3Store().get(runnable.kwargs["script_uri"]).decode("utf-8"), namespace)
-                    fn = namespace.get(runnable.kwargs["fn_name"])
-                    output = fn(dag, *arg_nodes)
-                    if dag.ref is None:
-                        dag.commit(output)
+    with dml.temporary(remote_root=remote_root) as tmpdml, chdir(tmpdml._config.project_home):
+        try:
+            with dml.new(dml=tmpdml, cache_key=cache_key, execution_id=execution_id) as dag:
+                runnable_node, *arg_nodes = dag.argv
+                runnable = runnable_node.value().innermost()
+                for key, value in runnable.kwargs.get("prepop", {}).items():
+                    dag.put(value, name=key)
+                exec(S3Store().get(runnable.kwargs["script_uri"]).decode("utf-8"), namespace)
+                fn = namespace.get(runnable.kwargs["fn_name"])
+                output = fn(dag, *arg_nodes)
                 if dag.ref is None:
-                    raise DmlRepoError("Script worker succeeded without committed DAG")
-                return {"lifecycle": "succeeded", "state": None, "error": None, "dag_id": dag.ref.id()}
-            except Exception as e:
-                return {"lifecycle": "failed", "error": str(e), "state": None, "dag_id": None}
+                    dag.commit(output)
+            if dag.ref is None:
+                raise DmlRepoError("Script worker succeeded without committed DAG")
+            return {"lifecycle": "succeeded", "state": None, "error": None, "dag_id": dag.ref.id()}
+        except Exception as e:
+            return {"lifecycle": "failed", "error": str(e), "state": None, "dag_id": None}
 
 
 def main(argv: list[str] | None = None) -> int:

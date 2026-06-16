@@ -141,13 +141,14 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
     )["error"]
 
 
-def test_script_worker_dag_creation_uses_cache_key_and_execution_id(monkeypatch):
+def test_script_worker_dag_creation_uses_cache_key_and_execution_id(monkeypatch, tmp_path):
     calls = {}
+    tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))
 
     @contextmanager
     def fake_temporary(**kwargs):
         calls["temporary"] = kwargs
-        yield "temp-dml"
+        yield tmpdml
 
     def fake_new(**kwargs):
         calls["new"] = kwargs
@@ -156,12 +157,13 @@ def test_script_worker_dag_creation_uses_cache_key_and_execution_id(monkeypatch)
     monkeypatch.setattr(script_mod.dml, "temporary", fake_temporary)
     monkeypatch.setattr(script_mod.dml, "new", fake_new)
     result = script_mod.run_payload(execution_id="exec-1", cache_key="cache-1", remote_root="s3://bucket/root")
-    assert calls["new"] == {"dml": "temp-dml", "cache_key": "cache-1", "execution_id": "exec-1"}
+    assert calls["new"] == {"dml": tmpdml, "cache_key": "cache-1", "execution_id": "exec-1"}
     assert result["lifecycle"] == "failed"
 
 
-def test_contrib_script_006__run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch):
+def test_contrib_script_006__run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_path):
     calls = {"put": []}
+    tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))
 
     class FakeDag:
         def __init__(self):
@@ -196,7 +198,7 @@ def test_contrib_script_006__run_payload_uses_prepop_and_script_uri_from_runnabl
 
     @contextmanager
     def fake_temporary(**kwargs):
-        yield "temp-dml"
+        yield tmpdml
 
     def fake_new(**kwargs):
         calls["new"] = kwargs

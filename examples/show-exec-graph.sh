@@ -28,11 +28,21 @@ mkdir -p "${DML_CONFIG_HOME}"
 cd "${project_home}"
 dml init > /dev/null
 
+log "Running wait_fn.py in the background"
 python "${examples_dir}/wait_fn.py" &
 wait_pid=$!
 
+log "Waiting for the runtime to start and show the execution graph"
+for i in {1..3}; do
+  sleep 0.1
+  dml runtime describe-graph --visual
+done
+index_id=$(dml runtime list | jq -r '.[0].id')
+log "Canceling runtime with index ID: ${index_id}"
+dml runtime cancel $index_id
+
 for i in {1..6}; do
-  sleep 1
+  sleep 0.2
   dml runtime describe-graph --visual
 done
 wait "${wait_pid}"

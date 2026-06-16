@@ -429,7 +429,7 @@ class ExecutionState:
             return resp  # Step 1: Cache hit
         # Step 2: Not in cache. Lock execution
         if not self.lock():
-            logger.warning(f"Failed to acquire lock for cache key: {self.cache_key}")
+            logger.warning(f"`start_fn` failed to acquire lock for cache key: {self.cache_key}. Returning None")
             return None
         try:
             # Step 3: Re-check cache after acquiring lock, then call adapter if still not cached

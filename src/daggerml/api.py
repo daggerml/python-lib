@@ -88,9 +88,9 @@ def load(name: str, dml=None) -> "Dag":
 
 
 @contextmanager
-def temporary(**kw):
+def temporary(prefix="dml-tmp-", **kw):
     """Create a temporary Dml runtime with an unborn attached HEAD."""
-    with TemporaryDirectory() as tmpdir:
+    with TemporaryDirectory(prefix=prefix) as tmpdir:
         yield Dml.init(project_home=tmpdir, **kw)
 
 
