@@ -33,16 +33,18 @@ python "${examples_dir}/wait_fn.py" &
 wait_pid=$!
 
 log "Waiting for the runtime to start and show the execution graph"
-for i in {1..3}; do
+for i in {1..6}; do
   sleep 0.1
   dml runtime describe-graph --visual
 done
 index_id=$(dml runtime list | jq -r '.[0].id')
 log "Canceling runtime with index ID: ${index_id}"
-dml runtime cancel $index_id
+dml runtime cancel $index_id &
+wait_pid2=$!
 
-for i in {1..6}; do
-  sleep 0.2
+for i in {1..4}; do
+  sleep 1
   dml runtime describe-graph --visual
 done
 wait "${wait_pid}"
+wait "${wait_pid2}"

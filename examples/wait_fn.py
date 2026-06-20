@@ -14,15 +14,17 @@ from daggerml.contrib import api
 
 @api.funkify
 def hello(dag, arg, fn=None):
-    from random import random
+    from random import Random
     from time import sleep
 
+    # set random seed for reproducibility
     resp = n = arg.value()
-    sleep(random() + n)
+    rng = Random(42 + n)
+    sleep(rng.random() + n)
     if fn is not None:
         print(f"Running {fn} with arg {2 * n}")
-        resp = fn(2 * n).value()
-    sleep(random() + n)
+        resp = fn(3 * n).value()
+    sleep(rng.random() + n)
     return f"Hello, {resp}!"
 
 
@@ -30,6 +32,9 @@ if __name__ == "__main__":
     dag = dml.new(name="wait_fn")
     dag.hello_fn = hello
     with ThreadPoolExecutor() as executor:
-        future1 = executor.submit(dag.call, hello, 0.2, dag.hello_fn, name="hello-23")
-        future2 = executor.submit(dag.call, hello, 0.2, dag.hello_fn, name="hello-42")
-        dag.commit([future1.result(), future2.result()])
+        future1 = executor.submit(dag.call, hello, 0.4, dag.hello_fn, name="hello-23")
+        future2 = executor.submit(dag.call, hello, 0.3, dag.hello_fn, name="hello-42")
+        try:
+            dag.commit([future1.result(), future2.result()])
+        except dml.CancelledError:
+            pass
