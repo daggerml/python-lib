@@ -50,7 +50,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 LOCK_TTL: float = 300.0
-EXECUTION_LIFECYCLES = Literal["running", "succeeded", "failed", "cancel-pending", "cancel-ready", "canceled"]
+EXECUTION_LIFECYCLES = Literal[
+    "pending", "running", "succeeded", "failed", "cancel-pending", "cancel-ready", "canceled"
+]
 ADAPTER_LIFECYCLES = Literal["running", "succeeded", "failed", "cancelled"]
 GRAPH_LIFECYCLES = Literal["running", "succeeded", "failed", "cancel-pending", "cancel-ready", "canceled", "pending"]
 INDEX_LIFECYCLES = Literal["active", "inactive", "canceled"]
@@ -334,6 +336,27 @@ class ExecutionState:
         # owned by the execution runtime
         return self._write(self._key_for_execution(record["execution_id"]), record, overwrite=False)
 
+    def reserve_execution(self, execution_id: str | None = None) -> str:
+        if self.cache_key is None:
+            raise DmlRepoError("cache_key is required for execution reservation")
+        now_ts = int(time.time())
+        exec_id = execution_id or uuid7().hex
+        created = self.create_execution_record(
+            {
+                "execution_id": exec_id,
+                "cache_key": self.cache_key,
+                "lifecycle": "pending",
+                "updated_at": now_ts,
+                "created_at": now_ts,
+                "spawned_execution_ids": [],
+                "child_execution_ids": [],
+                "cancellation_requested_by": None,
+            }
+        )
+        if not created:
+            raise DmlRepoError(f"Execution record already exists for execution_id: {exec_id}")
+        return exec_id
+
     def read_execution_record(self, execution_id: str) -> ExecutionRecord:
         resp = self._read(self._key_for_execution(execution_id))
         if resp is None:
@@ -459,14 +482,20 @@ class ExecutionState:
                 return resp
             active_id = self.get_active_execution_id()
             if active_id is None:
-                active_id = uuid7().hex
+                active_id = self.reserve_execution()
                 self.put_active_execution(active_id, argv=argv_node, db=db)
             else:
-                active_record = self.read_execution_record(active_id)
-                if self._is_cancel_lifecycle(active_record["lifecycle"]):
+                try:
+                    active_record = self.read_execution_record(active_id)
+                except DmlRepoError:
                     self._remote.delete_active(self.cache_key)
-                    active_id = uuid7().hex
+                    active_id = self.reserve_execution()
                     self.put_active_execution(active_id, argv=argv_node, db=db)
+                else:
+                    if self._is_cancel_lifecycle(active_record["lifecycle"]):
+                        self._remote.delete_active(self.cache_key)
+                        active_id = self.reserve_execution()
+                        self.put_active_execution(active_id, argv=argv_node, db=db)
             # add spawned execution to `index.id()`'s record
             self._record_execution_dependency(caller_id=index.id(), callee_id=active_id)
             self._add_spawned_execution(caller_id=index.id(), callee_id=active_id)
@@ -484,6 +513,13 @@ class ExecutionState:
             try:
                 resp = self._call_adapter(adapter_envelope)
             except Exception as exc:
+                try:
+                    record = self.read_execution_record(active_id)
+                except DmlRepoError:
+                    record = None
+                if record is not None and not self._is_cancel_lifecycle(record["lifecycle"]):
+                    record.update({"lifecycle": "failed", "updated_at": int(time.time())})
+                    self.update_execution_record(record)
                 logger.error(f"Adapter call failed for execution {active_id}: {exc}")
                 raise DmlRepoError(f"Adapter call failed for execution {active_id}") from exc
             dag = None
@@ -499,6 +535,10 @@ class ExecutionState:
                     logger.info(f"Execution {active_id} succeeded with DAG {dag.id}")
                     self._remote.delete_transport(active_id)
                 else:
+                    record = self.read_execution_record(active_id)
+                    if not self._is_cancel_lifecycle(record["lifecycle"]):
+                        record.update({"lifecycle": "failed", "updated_at": int(time.time())})
+                        self.update_execution_record(record)
                     logger.error(f"Execution {active_id} failed with error: {resp['error']}")
                     error_msg = resp["error"] or "Unknown error"
                     with db.tx() as txn:
@@ -681,7 +721,7 @@ class ExecutionState:
             record = state.read_execution_record(execution_id)
             if state.list_execution_callers(execution_id):
                 return
-            if record["lifecycle"] not in ("running", "cancel-pending", "cancel-ready"):
+            if record["lifecycle"] not in ("pending", "running", "cancel-pending", "cancel-ready"):
                 return
             if record["lifecycle"] != "cancel-pending":
                 state._mark_execution_lifecycle(execution_id, "cancel-pending", requested_by=requested_by)
@@ -776,7 +816,7 @@ class ExecutionState:
         mode: Literal["full", "drive"] = "full",
     ) -> dict[str, list[dict[str, str | None]]]:
         record = self.read_execution_record(execution_id)
-        if record["lifecycle"] not in ("running", "cancel-pending", "cancel-ready", "canceled"):
+        if record["lifecycle"] not in ("pending", "running", "cancel-pending", "cancel-ready", "canceled"):
             raise DmlRepoError(f"Execution {execution_id} is not active and cannot be cancelled")
         if mode == "full":
             if requested_by is None:

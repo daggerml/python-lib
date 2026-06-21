@@ -8,8 +8,10 @@ from unittest.mock import patch
 import pytest
 
 import daggerml._core.exec_state as exec_state_mod
+from daggerml._core.db import Ref
 from daggerml._core.exec_state import CancellationError, ExecutionState
 from daggerml._core.s3_cas import CasItemConflict
+from daggerml._core.types import Runnable, Uri
 from daggerml.contrib.adapters import LocalAdapter
 from tests._core.helpers import FakeCasStore, FakeExecutionRemote, run_parallel
 
@@ -93,6 +95,54 @@ def test_fake_cas_covers_conditional_write_behavior() -> None:
 
     assert state.create_execution_record(_record("exec"))
     assert not state.create_execution_record(_record("exec"))
+
+
+def test_get_or_start_fn_reserves_pending_execution_before_active_publication() -> None:
+    state = _state()
+    state.create_execution_record(_record("caller"))
+
+    with patch.object(
+        state,
+        "_call_adapter",
+        return_value={"lifecycle": "running", "error": None, "state": {"token": "abc"}, "dag_id": None},
+    ):
+        resp = state.get_or_start_fn(
+            Ref("index:caller"),
+            Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter"),
+            Ref("node-argv:argv"),
+            db=None,
+        )
+
+    assert resp is None
+    active = state._remote.get_active("cache", raw=True)
+    assert active is not None
+    active_id = active["meta"]["execution_id"]
+    assert state.read_execution_record(active_id)["lifecycle"] == "pending"
+
+
+def test_get_or_start_fn_replaces_stale_active_pointer_missing_record() -> None:
+    state = _state()
+    state.create_execution_record(_record("caller"))
+    state._remote.active["cache"] = {"meta": {"execution_id": "stale"}, "argv": "node-argv:old"}
+
+    with patch.object(
+        state,
+        "_call_adapter",
+        return_value={"lifecycle": "running", "error": None, "state": {"token": "abc"}, "dag_id": None},
+    ):
+        resp = state.get_or_start_fn(
+            Ref("index:caller"),
+            Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter"),
+            Ref("node-argv:new"),
+            db=None,
+        )
+
+    assert resp is None
+    active = state._remote.get_active("cache", raw=True)
+    assert active is not None
+    active_id = active["meta"]["execution_id"]
+    assert active_id != "stale"
+    assert state.read_execution_record(active_id)["lifecycle"] == "pending"
 
 
 def test_describe_graph_returns_reachable_active_and_terminal_descendants() -> None:
@@ -244,6 +294,23 @@ def test_plan_cancel_preserves_shared_child_callers() -> None:
     assert state.read_execution_record("left")["lifecycle"] == "cancel-pending"
     assert state.read_execution_record("shared")["lifecycle"] == "running"
     assert state.list_execution_callers("shared") == ["other"]
+
+
+def test_plan_cancel_marks_pending_execution_cancel_pending() -> None:
+    state = _state()
+    state.create_execution_record(_record("root", spawned=["child"]))
+    state.create_execution_record(_record("child", lifecycle="pending"))
+    state._record_execution_dependency("root", "child")
+
+    with patch.object(
+        state,
+        "_state_for_execution",
+        side_effect=lambda execution_id: (state.read_execution_record(execution_id), state),
+    ), patch.object(state, "lock", return_value=True), patch.object(state, "unlock", return_value=None):
+        state._plan_cancel("root", "user")
+
+    assert state.read_execution_record("root")["lifecycle"] == "cancel-pending"
+    assert state.read_execution_record("child")["lifecycle"] == "cancel-pending"
 
 
 def test_run_cancel_driver_sets_cancel_ready_and_calls_ready_children() -> None:

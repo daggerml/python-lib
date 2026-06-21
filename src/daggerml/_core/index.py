@@ -100,6 +100,20 @@ class IndexOps:
     ) -> Ref:
         if (cache_key is None) != (execution_id is None):
             raise DmlRepoError("Must provide either both (execution_id and cache_key) or neither.")
+        state = self.exec_state(cache_key=cache_key)
+        exec_id = execution_id or uuid7().hex
+        if execution_id is not None:
+            record = state.read_execution_record(exec_id)
+            lifecycle = record["lifecycle"]
+            if lifecycle == "cancel-pending":
+                state.cancel(exec_id, None, db, mode="drive")
+                msg = f"Execution {exec_id} is {lifecycle} and cannot be activated"
+                raise CancellationError(msg, lifecycle=lifecycle)
+            if lifecycle in ("cancel-ready", "canceled"):
+                msg = f"Execution {exec_id} is {lifecycle} and cannot be activated"
+                raise CancellationError(msg, lifecycle=lifecycle)
+            if lifecycle != "pending":
+                raise DmlRepoError(f"Execution {exec_id} is {lifecycle} and cannot be activated")
         # FIXME: Consider using `call_w_resize` for this write transaction.
         with db.tx() as txn:
             argv = None
@@ -113,28 +127,29 @@ class IndexOps:
                 parents = [commit]
             if execution_id is not None:
                 argv_manifest = self._remote.get_active(cast(str, cache_key), raw=True)
+                if argv_manifest is None:
+                    raise DmlRepoError(f"No active execution payload found for cache key: {cache_key}")
                 argv = self._remote._materialize_manifest(
                     cast(dict, argv_manifest),
                     txn,
                     expected_root_ns="node-argv",
                 )
                 nodes.append(argv)
-            # Create initial execution record.
-            state = self.exec_state(cache_key=cache_key)
-            now_ts = int(time.time())
-            exec_id = execution_id or uuid7().hex
-            state.create_execution_record(
-                {
-                    "execution_id": exec_id,
-                    "cache_key": cache_key,
-                    "lifecycle": "running",
-                    "updated_at": now_ts,
-                    "created_at": now_ts,
-                    "spawned_execution_ids": [],
-                    "child_execution_ids": [],
-                    "cancellation_requested_by": None,
-                }
-            )
+            # Create initial execution record for non-execution-aware roots.
+            if execution_id is None:
+                now_ts = int(time.time())
+                state.create_execution_record(
+                    {
+                        "execution_id": exec_id,
+                        "cache_key": cache_key,
+                        "lifecycle": "running",
+                        "updated_at": now_ts,
+                        "created_at": now_ts,
+                        "spawned_execution_ids": [],
+                        "child_execution_ids": [],
+                        "cancellation_requested_by": None,
+                    }
+                )
             # create db state
             dag_ref = txn.put(Dag(nodes=nodes, names={}, argv=argv))
             index = txn.put(
@@ -148,6 +163,20 @@ class IndexOps:
                 ),
                 to=Ref(f"index:{exec_id}"),
             )
+        if execution_id is not None:
+            record = state.read_execution_record(exec_id)
+            lifecycle = record["lifecycle"]
+            if lifecycle == "cancel-pending":
+                state.cancel(exec_id, None, db, mode="drive")
+                msg = f"Execution {exec_id} is {lifecycle} and cannot be activated"
+                raise CancellationError(msg, lifecycle=lifecycle)
+            if lifecycle in ("cancel-ready", "canceled"):
+                msg = f"Execution {exec_id} is {lifecycle} and cannot be activated"
+                raise CancellationError(msg, lifecycle=lifecycle)
+            if lifecycle != "pending":
+                raise DmlRepoError(f"Execution {exec_id} is {lifecycle} and cannot be activated")
+            record.update({"lifecycle": "running", "updated_at": int(time.time())})
+            state.update_execution_record(record)
         return index
 
     def put_import(self, index: Ref, dag: Ref, node: Optional[Ref], name: Optional[str] = None, *, db: DmlDB) -> Ref:
