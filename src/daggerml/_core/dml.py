@@ -43,7 +43,8 @@ def _graph_lifecycle_style(lifecycle: str) -> str:
         "succeeded": "green",
         "failed": "red",
         "cancel-pending": "dark_goldenrod italic",
-        "cancelled": "dim",
+        "cancel-ready": "dark_orange",
+        "canceled": "dim",
         "pending": "cyan",
     }.get(lifecycle, "white")
 
@@ -453,9 +454,15 @@ class _RuntimeNamespace:
                 )
         return sorted(objs, key=lambda x: x["created"], reverse=True)
 
-    def cancel(self, index: Annotated[Ref, "Runtime index to cancel."]) -> RuntimeCancelSummary:
+    def cancel(
+        self,
+        index: Annotated[Ref, "Runtime index to cancel."],
+        *,
+        mode: Annotated[Literal["full", "drive"], "Cancellation mode."] = "full",
+    ) -> RuntimeCancelSummary:
         """Cancel active execution state for a runtime index."""
-        resp = _exec_state(self._dml).cancel(index.id(), self._dml._config.user, self._dml._db)
+        requested_by = self._dml._config.user if mode == "full" else None
+        resp = _exec_state(self._dml).cancel(index.id(), requested_by, self._dml._db, mode=mode)
         return cast(RuntimeCancelSummary, {"id": index, **resp})
 
     def describe_graph(

@@ -105,10 +105,6 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 - **WHEN** a caller needs DAG inspection, admin maintenance, runtime staging behavior, or config access
 - **THEN** the shared `Dml` exposes those methods under `dag`, `admin`, `runtime`, and `config` namespaces respectively
 
-#### Scenario: Runtime namespace exposes cancel
-- **WHEN** a caller needs to cancel work rooted at an index
-- **THEN** the shared `Dml` exposes that workflow as `dml.runtime.cancel(index_id)`
-
 #### Scenario: Runtime namespace exposes describe_graph
 - **WHEN** a caller needs execution-lineage inspection rooted at one or more runtime executions
 - **THEN** the shared `Dml` exposes that workflow as `dml.runtime.describe_graph(...)`
@@ -135,6 +131,20 @@ The shared `Dml` runtime namespace SHALL expose `describe_graph(*roots: Ref | st
 - **THEN** the runtime namespace SHALL fetch the same execution graph data it would use for raw inspection
 - **AND** it SHALL render a human-friendly execution graph view
 - **AND** it SHALL return `None`
+
+### Requirement: Shared `Dml` exposes runtime cancel with explicit mode selection
+The shared `Dml` runtime namespace SHALL expose cancellation as `dml.runtime.cancel(index_or_execution, mode="full")`. `mode` SHALL accept `"full"` and `"drive"`.
+
+- `mode = "full"` SHALL run the full root-facing cancellation workflow.
+- `mode = "drive"` SHALL run only the cancellation driver needed by an already-canceling execution.
+
+#### Scenario: Runtime namespace exposes full cancellation by default
+- **WHEN** a caller invokes `dml.runtime.cancel(idx1)` without an explicit mode
+- **THEN** the runtime namespace SHALL use `mode = "full"`
+
+#### Scenario: Runtime namespace exposes drive mode for internal cancellation progress
+- **WHEN** a caller invokes `dml.runtime.cancel(e1, mode="drive")`
+- **THEN** the runtime namespace SHALL expose the driver-only cancellation behavior for that execution
 
 ### Requirement: Shared `Dml` surface SHALL be introspection-ready
 The shared `Dml` boundary and its public namespaces SHALL expose runtime documentation that explains class purpose, method behavior, and parameter meaning without changing workflow semantics, and that metadata SHALL be sufficient for generated CLI help.

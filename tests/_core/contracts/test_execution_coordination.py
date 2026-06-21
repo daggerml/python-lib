@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import time
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 import daggerml._core.exec_state as exec_state_mod
-from daggerml._core.exec_state import CancelledExecutionError, ExecutionState
+from daggerml._core.exec_state import CancellationError, ExecutionState
 from daggerml._core.s3_cas import CasItemConflict
 from daggerml.contrib.adapters import LocalAdapter
 from tests._core.helpers import FakeCasStore, FakeExecutionRemote, run_parallel
@@ -70,9 +71,9 @@ def test_spawned_execution_add_drop_retries_cas_conflict() -> None:
 
 def test_non_running_caller_cannot_spawn() -> None:
     state = _state()
-    state.create_execution_record(_record("caller", lifecycle="cancelled"))
+    state.create_execution_record(_record("caller", lifecycle="canceled"))
 
-    with pytest.raises(CancelledExecutionError):
+    with pytest.raises(CancellationError):
         state._add_spawned_execution("caller", "callee")
 
 
@@ -218,3 +219,70 @@ def test_exec_state_subprocess_shim_preserves_resume_state(monkeypatch) -> None:
     assert running == {"lifecycle": "running", "error": None, "state": {"token": "abc"}, "dag_id": None}
     assert terminal == {"lifecycle": "succeeded", "error": None, "state": None, "dag_id": "d" * 64}
     assert seen_states == [None, {"token": "abc"}]
+
+
+def test_plan_cancel_preserves_shared_child_callers() -> None:
+    state = _state()
+    root = _record("root", spawned=["left"])
+    left = _record("left", spawned=["shared"])
+    other = _record("other", spawned=["shared"])
+    shared = _record("shared")
+    for record in [root, left, other, shared]:
+        state.create_execution_record(record)
+    state._record_execution_dependency("root", "left")
+    state._record_execution_dependency("left", "shared")
+    state._record_execution_dependency("other", "shared")
+
+    with patch.object(
+        state,
+        "_state_for_execution",
+        side_effect=lambda execution_id: (state.read_execution_record(execution_id), state),
+    ), patch.object(state, "lock", return_value=True), patch.object(state, "unlock", return_value=None):
+        state._plan_cancel("root", "user")
+
+    assert state.read_execution_record("root")["lifecycle"] == "cancel-pending"
+    assert state.read_execution_record("left")["lifecycle"] == "cancel-pending"
+    assert state.read_execution_record("shared")["lifecycle"] == "running"
+    assert state.list_execution_callers("shared") == ["other"]
+
+
+def test_run_cancel_driver_sets_cancel_ready_and_calls_ready_children() -> None:
+    state = _state()
+    root = _record("root", spawned=["child"], lifecycle="cancel-pending")
+    child = _record("child", lifecycle="cancel-pending")
+    child["cache_key"] = "child-cache"
+    state.create_execution_record(root)
+    state.create_execution_record(child)
+
+    child_reads = {"count": 0}
+
+    def read_record(execution_id: str):
+        record = ExecutionState.read_execution_record(state, execution_id)
+        if execution_id == "child":
+            child_reads["count"] += 1
+            if child_reads["count"] >= 2:
+                record["lifecycle"] = "cancel-ready"
+        return record
+
+    with patch.object(state, "_set_local_index_lifecycle", return_value=None), patch.object(
+        state, "read_execution_record", side_effect=read_record
+    ), patch.object(
+        state,
+        "_state_for_execution",
+        side_effect=lambda execution_id: (read_record(execution_id), state),
+    ), patch.object(state, "lock", return_value=True), patch.object(state, "unlock", return_value=None), patch.object(
+        state, "_invoke_cancel_adapter", return_value="cancelled"
+    ) as invoke:
+        plan = state._run_cancel_driver("root", "user", db=None, timeout_seconds=0.01)
+
+    assert state.read_execution_record("root")["lifecycle"] == "cancel-ready"
+    assert plan["cancelled"] == [{"cache_key": "child-cache", "execution_id": "child"}]
+    invoke.assert_called_once_with("child", "user", None)
+
+
+def test_finish_execution_rejects_cancel_lifecycle() -> None:
+    state = _state()
+    state.create_execution_record(_record("exec", lifecycle="cancel-pending"))
+
+    with pytest.raises(CancellationError):
+        state.finish_execution("exec", "dag:done", db=None)

@@ -30,9 +30,9 @@ The runtime SHALL persist the currently active execution for a `cache_key` at `a
 - **AND** it SHALL treat the cache key as having no active execution
 
 ### Requirement: Runtime SHALL maintain one mutable execution record per execution id
-The runtime SHALL persist one mutable lifecycle object per execution id as `execution_record`, separate from caller-owned `launch_state`. `execution_record` SHALL include `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `spawned_execution_ids`, `child_execution_ids`, and `cancellation_requested_by`, where `cancellation_requested_by` is `str | null`. `lifecycle` SHALL be one of `running`, `cancel-pending`, `cancelled`, `succeeded`, or `failed`. `spawned_execution_ids` SHALL be the deduped set of active direct child execution ids still in flight for cancellation traversal. `child_execution_ids` SHALL be the deduped set of completed direct child execution ids retained for lineage monitoring. `execution_record` updates SHALL use compare-and-swap with the latest known ETag. If a compare-and-swap update observes ETag drift, the runtime SHALL reread the record and SHALL raise cancellation interruption only when the reread lifecycle is already a `cancel-*` value; otherwise it SHALL continue from the latest valid reread state.
+The runtime SHALL persist one mutable lifecycle object per execution id as `execution_record`, separate from caller-owned `launch_state`. `execution_record` SHALL include `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `spawned_execution_ids`, `child_execution_ids`, and `cancellation_requested_by`, where `cancellation_requested_by` is `str | null`. `lifecycle` SHALL be one of `running`, `cancel-pending`, `cancel-ready`, `canceled`, `succeeded`, or `failed`. `spawned_execution_ids` SHALL be the deduped set of active direct child execution ids still in flight for cancellation traversal. `child_execution_ids` SHALL be the deduped set of completed direct child execution ids retained for lineage monitoring. Direct canceled descendants SHALL NOT be moved into `child_execution_ids`. `execution_record` updates SHALL use compare-and-swap with the latest known ETag. If a compare-and-swap update observes ETag drift, the runtime SHALL reread the record and SHALL raise cancellation interruption only when the reread lifecycle is already a `cancel-*` value; otherwise it SHALL continue from the latest valid reread state.
 
-The same `execution_record` schema SHALL also be used for each live index id. For index-root records, the object path SHALL be `exec/state/<index_id>.json`, `execution_id` SHALL equal the `index_id`, `cache_key` SHALL equal the `index_id`, and both `spawned_execution_ids` and `child_execution_ids` SHALL track the deduped direct execution descendants started from that index according to their active vs terminal state.
+The same `execution_record` schema SHALL also be used for each live index id. For index-root records, the object path SHALL be `exec/state/<index_id>.json`, `execution_id` SHALL equal the `index_id`, `cache_key` MAY be `null` when the root has no lock-bearing execution cache identity, and both `spawned_execution_ids` and `child_execution_ids` SHALL track the deduped direct execution descendants started from that index according to their active vs terminal state.
 
 `IndexOps.commit` SHALL always finalize the committing execution or root record as `lifecycle = "succeeded"`. A committed DAG `Error` value SHALL mean the execution successfully produced a DAG whose terminal result is an error. Runtime `failed` SHALL be reserved for execution-path failures that prevent successful DAG completion.
 
@@ -41,8 +41,8 @@ The same `execution_record` schema SHALL also be used for each live index id. Fo
 The `execution_record` schema SHALL be:
 
 - `execution_id: str`
-- `cache_key: str`
-- `lifecycle: "running" | "cancel-pending" | "cancelled" | "succeeded" | "failed"`
+- `cache_key: str | null`
+- `lifecycle: "running" | "cancel-pending" | "cancel-ready" | "canceled" | "succeeded" | "failed"`
 - `updated_at: int`
 - `created_at: int`
 - `spawned_execution_ids: list[str]`
@@ -52,7 +52,7 @@ The `execution_record` schema SHALL be:
 #### Scenario: Index creation creates the initial execution record
 - **WHEN** `IndexOps.create` initializes a new runtime root
 - **THEN** it SHALL create an `execution_record` for that root before execution starts
-- **AND** that record SHALL use `execution_id = index_id` and `cache_key = index_id`
+- **AND** that record SHALL use `execution_id = index_id`
 - **AND** that record SHALL initialize `created_at` and `updated_at`
 - **AND** that record SHALL initialize `spawned_execution_ids = []` and `child_execution_ids = []`
 
@@ -68,7 +68,7 @@ The `execution_record` schema SHALL be:
 
 #### Scenario: CAS reread raises on cancellation lifecycle drift
 - **WHEN** a compare-and-swap update for `execution_record` observes an ETag conflict
-- **AND** the reread lifecycle is `cancel-pending` or `cancelled`
+- **AND** the reread lifecycle is `cancel-pending`, `cancel-ready`, or `canceled`
 - **THEN** the runtime SHALL surface cancellation interruption rather than continuing normal execution updates
 
 #### Scenario: Top-level cancellation stores user provenance
@@ -79,9 +79,13 @@ The `execution_record` schema SHALL be:
 - **WHEN** execution `e1` triggers `cancel(e2)` during nested cancellation
 - **THEN** `exec/state/e2.json` SHALL store `cancellation_requested_by = "e1"`
 
-#### Scenario: Cancellation terminal state is cancelled
+#### Scenario: Cancel-ready is a runtime-owned intermediate lifecycle
+- **WHEN** runtime cancellation has finished driving direct spawned descendants for execution `e1`
+- **THEN** the runtime SHALL persist `exec/state/e1.json` with `lifecycle = "cancel-ready"` before any parent adapter cancel step treats `e1` as ready
+
+#### Scenario: Full cancel writes terminal canceled after F2
 - **WHEN** runtime cancellation completes for execution `e1`
-- **THEN** `exec/state/e1.json` SHALL store `lifecycle = "cancelled"`
+- **THEN** `exec/state/e1.json` SHALL store `lifecycle = "canceled"`
 
 #### Scenario: Root record accumulates active spawned execution ids
 - **WHEN** index `idx1` starts execution `e1`
@@ -117,13 +121,31 @@ The `execution_record` schema SHALL be:
 
 #### Scenario: Terminal direct child moves from spawned to child lineage
 - **WHEN** caller execution `e0` has active direct child `e1` in `spawned_execution_ids`
-- **AND** `e1` reaches terminal lifecycle `succeeded`, `failed`, or `cancelled`
+- **AND** `e1` reaches terminal lifecycle `succeeded` or `failed`
 - **THEN** the runtime SHALL remove `e1` from `e0`'s `spawned_execution_ids`
 - **AND** it SHALL add `e1` to `e0`'s `child_execution_ids`
+
+#### Scenario: Canceled direct child does not move into child lineage
+- **WHEN** caller execution `e0` has direct child `e1` in `spawned_execution_ids`
+- **AND** `e1` reaches lifecycle `canceled`
+- **THEN** the runtime SHALL remove `e1` from `e0`'s active cancellation planning as needed
+- **BUT** it SHALL NOT add `e1` to `e0`'s `child_execution_ids`
 
 #### Scenario: Spawned and child execution summaries remain disjoint
 - **WHEN** the runtime persists an `execution_record`
 - **THEN** no execution id SHALL appear in both `spawned_execution_ids` and `child_execution_ids` in the same record
+
+### Requirement: Adapter cancel dispatch SHALL target direct children that are cancel-ready
+The runtime SHALL dispatch adapter cancellation only for direct spawned child executions of the current execution, and only after the target child's execution record has reached `lifecycle = "cancel-ready"`. Runtime lifecycle ownership remains outside the adapter response contract.
+
+#### Scenario: Parent waits for child cancel-ready before adapter cancel dispatch
+- **WHEN** execution `e0` is driving cancellation for direct child `e1`
+- **AND** `exec/state/e1.json` is still `cancel-pending`
+- **THEN** `F2(e0)` SHALL NOT invoke adapter cancellation for `e1` yet
+
+#### Scenario: Adapter cancel response does not define execution-record lifecycle names
+- **WHEN** adapter cancellation is invoked for execution `e1`
+- **THEN** the adapter response contract SHALL remain separate from execution-record-only lifecycle values such as `cancel-ready`
 
 ### Requirement: Runtime SHALL expose descendant execution graphs from execution records
 The runtime SHALL expose an execution-record-owned graph query that accepts root execution ids and returns only the reachable descendant closure from those roots. The payload SHALL have shape `{roots: list[str], nodes: dict[str, node_payload]}` where each `node_payload` contains `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `cancel_requested_by`, `children`, and `spawned`. `children` SHALL be derived from `child_execution_ids`, and `spawned` SHALL be derived from `spawned_execution_ids`. The graph query SHALL read only execution-record objects and SHALL include each reachable execution at most once.
@@ -191,7 +213,7 @@ The runtime SHALL publish `refs/transport/<execution_id>.json` as a typed remote
 ### Requirement: Adapter envelope and result schema SHALL follow the runtime-owned execution contract
 The adapter envelope SHALL include `argv_ptr`, `cache_key`, `execution_id`, `remote`, `runnable`, `state`, `execution_status`, and `cancel_requested_by`. For cancellation, the runtime SHALL send `execution_status = "cancel-pending"` only to adapter chains responsible for direct child executions.
 
-Cancel-path adapter returns SHALL NOT control runtime lifecycle persistence. The runtime SHALL ignore those cancel return values when deciding whether to write `cancelled`.
+Cancel-path adapter returns SHALL NOT control runtime lifecycle persistence. The runtime SHALL ignore those cancel return values when deciding whether to write `canceled`.
 
 #### Scenario: First adapter call uses null state
 - **WHEN** the runtime invokes an adapter for a new execution
@@ -204,7 +226,7 @@ Cancel-path adapter returns SHALL NOT control runtime lifecycle persistence. The
 
 #### Scenario: Runtime ignores cancel return for terminal lifecycle write
 - **WHEN** an adapter returns from a cancel update
-- **THEN** the runtime SHALL NOT require a `cancelled` adapter result before writing `lifecycle = "cancelled"`
+- **THEN** the runtime SHALL NOT require a specific adapter success token before writing `lifecycle = "canceled"`
 
 #### Scenario: Parent cancellation targets child adapter chains only
 - **WHEN** `cancel(e1)` fans out over direct children
@@ -250,7 +272,7 @@ The runtime SHALL document at the `IndexOps.commit` lifecycle update site that c
 - **AND** the comment distinguishes DAG error results from runtime execution failures
 
 ### Requirement: Runtime SHALL separate caller-owned launch state from runtime-owned lifecycle state
-The runtime SHALL treat `launch_state` as caller-owned state for launch and resume, and `execution_record` as execution-runtime-owned state for lifecycle, spawned execution summaries, and cancellation metadata. The caller runtime MAY transition a callee `execution_record` only to `cancel-pending` or `cancelled` during orphan-triggered cancellation, and SHALL NOT otherwise mutate lifecycle state owned by the callee execution runtime.
+The runtime SHALL treat `launch_state` as caller-owned state for launch and resume, and `execution_record` as execution-runtime-owned state for lifecycle, spawned execution summaries, and cancellation metadata. The caller runtime MAY transition a callee `execution_record` only to `cancel-pending` or `canceled` during orphan-triggered cancellation, and SHALL NOT otherwise mutate lifecycle state owned by the callee execution runtime.
 
 #### Scenario: Caller runtime owns launch state updates
 - **WHEN** `start_fn` launches or resumes execution `e1`

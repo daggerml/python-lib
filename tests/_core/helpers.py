@@ -72,6 +72,7 @@ def run_parallel(count: int, fn: Callable[[int], Any]) -> list[Any]:
 class NoopExecutionState:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, Any]] = {}
+        self.cancel_calls: list[tuple[str, str | None, str]] = []
 
     def create_execution_record(self, record: dict[str, Any]) -> bool:
         if record["execution_id"] in self.records:
@@ -93,6 +94,10 @@ class NoopExecutionState:
         record["lifecycle"] = "succeeded"
         record["updated_at"] = int(time.time())
         self.update_execution_record(record)
+
+    def cancel(self, execution_id: str, requested_by: str | None, db: DmlDB, *, mode: str = "full") -> dict:
+        self.cancel_calls.append((execution_id, requested_by, mode))
+        return {"active-callers": [], "inactive": [], "cancelled": [], "timeout": [], "error": []}
 
     def describe_graph(self, root_execution_ids: list[str]) -> ExecutionGraph:
         roots = list(dict.fromkeys(root_execution_ids))

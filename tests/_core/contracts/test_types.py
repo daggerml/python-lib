@@ -153,6 +153,14 @@ def test_index_validation_requires_commit_shape_and_dag(tmp_path) -> None:
         base_commit = txn.get(commit_ref)
 
     Index(parents=[commit_ref], tree=base_commit.tree, author="user", message="", dag=Ref("dag:ok"))._validate()
+    Index(
+        parents=[commit_ref],
+        tree=base_commit.tree,
+        author="user",
+        message="",
+        dag=Ref("dag:ok"),
+        lifecycle="inactive",
+    )._validate()
 
     with pytest.raises(TypeError, match=r"Index\.tree"):
         Index(
@@ -170,6 +178,16 @@ def test_index_validation_requires_commit_shape_and_dag(tmp_path) -> None:
             author="user",
             message="",
             dag=Ref("commit:not-a-dag"),
+        )._validate()
+
+    with pytest.raises(TypeError, match=r"Index\.lifecycle"):
+        Index(
+            parents=[commit_ref],
+            tree=base_commit.tree,
+            author="user",
+            message="",
+            dag=Ref("dag:ok"),
+            lifecycle="paused",
         )._validate()
 
 

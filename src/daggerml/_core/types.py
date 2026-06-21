@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Optional, Union, cast
+from typing import Any, Literal, Optional, Union, cast
 from uuid import uuid4
 
 try:
@@ -817,13 +817,19 @@ class Index(Commit):
     ----------
     dag : Ref
         Reference to the in-progress DAG for this index.
+    lifecycle : {"active", "inactive", "canceled"}
+        Local mutation lifecycle for cancellation coordination.
     """
 
     dag: Ref = field(kw_only=True)
+    lifecycle: Literal["active", "inactive", "canceled"] = field(default="active", kw_only=True)
 
     def _validate(self) -> None:
         super()._validate()
         require_ref(self.dag, expected_ns=["dag"], context=f"{self.__class__.__name__}.dag")
+        if self.lifecycle not in {"active", "inactive", "canceled"}:
+            msg = f"{self.__class__.__name__}.lifecycle must be one of 'active', 'inactive', 'canceled'"
+            raise TypeError(msg)
 
 
 def _cleanup_opposite_entry(db: "TxnWithValid", ref: Ref, *, opposite_ns: str, noun: str) -> None:

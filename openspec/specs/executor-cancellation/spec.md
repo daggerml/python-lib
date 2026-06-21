@@ -1,10 +1,9 @@
-### Requirement: Executors SHALL handle `cancel-pending` as a synchronous cancellation step
-When the runtime invokes an executor with `execution_status = "cancel-pending"`, the executor SHALL treat that call as synchronous cancellation work. The executor MAY delegate nested cancellation by calling `Dml.runtime.cancel(child)` for a direct child execution it is responsible for, then SHALL tear down its own external resources and return.
+### Requirement: Executors SHALL handle runtime cancel invocation as a synchronous cancellation step
+When the runtime invokes an executor through the cancellation path for a direct child execution, the executor SHALL treat that invocation as synchronous cancellation work. The executor cancel contract SHALL remain separate from execution-record-only lifecycle states such as `cancel-ready`.
 
-#### Scenario: Nested executor delegates once then tears down
-- **WHEN** an executor owns nested execution work beneath execution `e1`
-- **THEN** it MAY call `Dml.runtime.cancel(child)` once for each direct child execution it is responsible for
-- **AND** it SHALL then perform its own teardown before returning
+#### Scenario: Executor cancel invocation happens after runtime readiness gating
+- **WHEN** the runtime invokes executor cancellation for child execution `e1`
+- **THEN** the runtime SHALL already have observed `exec/state/e1.json` at `lifecycle = "cancel-ready"`
 
 #### Scenario: Leaf executor tears down directly
 - **WHEN** an executor has no nested runtime work to cancel
@@ -29,18 +28,9 @@ Executor-owned cancellation SHALL tear down external resources and SHALL NOT mut
 - **THEN** it SHALL start rollback or cancellation of the stack operation
 - **AND** it SHALL return promptly with enough stack context for the caller to identify the affected stack
 
-### Requirement: Cancel-path return values SHALL be advisory only
-Executors SHALL return a success or failure indication from cancel handling, but the runtime SHALL treat that indication as advisory and SHALL NOT use it as the source of truth for lifecycle state. A successful cancel update SHALL return `status = "cancelled"`. A failed cancel update SHALL return `status = "failed"` with an error payload.
+### Requirement: Cancel-path return values SHALL remain advisory only
+Executors SHALL return a success or failure indication from cancel handling, but the runtime SHALL continue to own execution-record lifecycle persistence, including `cancel-ready` and `canceled`.
 
-#### Scenario: Runtime ignores successful cancel return for lifecycle ownership
-- **WHEN** an executor returns a successful cancel response
-- **THEN** the runtime SHALL still own the `cancelled` lifecycle write
-
-#### Scenario: Successful cancel update returns cancelled
-- **WHEN** an executor completes its cancel-path work without error
-- **THEN** it SHALL return `status = "cancelled"`
-
-#### Scenario: Failed cancel update returns failed
-- **WHEN** an executor encounters an error while handling a cancel update
-- **THEN** it SHALL return `status = "failed"`
-- **AND** it SHALL include an error payload
+#### Scenario: Executor return does not own cancel-ready or canceled persistence
+- **WHEN** an executor returns from one cancel-path invocation
+- **THEN** that return SHALL NOT itself define or persist execution-record lifecycle values such as `cancel-ready` or `canceled`

@@ -1,6 +1,6 @@
 """DaggerML public package exports."""
 
-from daggerml._core import Dml, Error, Ref, Runnable, Uri
+from daggerml._core import CancellationError, Dml, Error, Ref, Runnable, Uri
 from daggerml.api import (
     Dag,
     Node,
@@ -20,6 +20,7 @@ except ImportError:
     __version__ = "local"
 
 __all__ = (
+    "CancellationError",
     "Dag",
     "Dml",
     "Error",

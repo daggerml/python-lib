@@ -20,7 +20,6 @@ def hello(dag, arg, fn=None):
     # set random seed for reproducibility
     resp = n = arg.value()
     rng = Random(42 + n)
-    sleep(rng.random() + n)
     if fn is not None:
         print(f"Running {fn} with arg {2 * n}")
         resp = fn(3 * n).value()
@@ -34,7 +33,8 @@ if __name__ == "__main__":
     with ThreadPoolExecutor() as executor:
         future1 = executor.submit(dag.call, hello, 0.4, dag.hello_fn, name="hello-23")
         future2 = executor.submit(dag.call, hello, 0.3, dag.hello_fn, name="hello-42")
-        try:
-            dag.commit([future1.result(), future2.result()])
-        except dml.CancelledError:
-            pass
+        for f in [future1, future2]:
+            try:
+                print(f.result())
+            except dml.CancellationError:
+                print("Task was cancelled.")
