@@ -14,9 +14,9 @@ class ExecutorBase:
     on first launch and the immutable persisted state on later polls. Executors
     return terminal or in-progress result dicts via stdout/return value:
 
-        {"lifecycle": "running",    "error": null,  "state": {...}, "dag_id": null}
-        {"lifecycle": "succeeded",  "error": null,  "state": null,  "dag_id": "<hex>"}
-        {"lifecycle": "failed",     "error": "<msg>", "state": null, "dag_id": null}
+        {"status": "running",    "error": null,  "state": {...}, "dag_id": null}
+        {"status": "succeeded",  "error": null,  "state": null,  "dag_id": "<hex>"}
+        {"status": "failed",     "error": "<msg>", "state": null, "dag_id": null}
     """
 
     name: str = ""
@@ -39,7 +39,7 @@ class ExecutorBase:
         """Check an in-flight job and return a result dict.
 
         ``state`` is the immutable launch-time state returned by ``start()``.
-        Return a terminal result when done, or ``{"lifecycle": "running",
+        Return a terminal result when done, or ``{"status": "running",
         "error": None, "state": ..., "dag_id": None}`` while still running.
         Later returned state may be ignored by the runtime.
         """
@@ -66,17 +66,19 @@ class ExecutorBase:
     def handle(
         cls,
         *,
+        operation: str,
         cache_key: str,
         execution_id: str,
         remote: dict,
         runnable: dict,
         state: dict | None,
         scratch_uri: str,
-        cancel_requested_by: str | None,
+        requested_by: str | None = None,
+        argv_ptr: str | None = None,
     ) -> dict[str, Any]:
-        """Call start or poll depending on whether immutable state exists."""
+        """Dispatch an explicit adapter operation to the executor."""
         executor = cls()
-        if cancel_requested_by is not None:
+        if operation == "cancel":
             return executor.cancel(
                 cache_key=cache_key,
                 execution_id=execution_id,
@@ -84,7 +86,7 @@ class ExecutorBase:
                 state=state,
                 remote=remote,
                 scratch_uri=scratch_uri,
-                cancel_requested_by=cancel_requested_by,
+                cancel_requested_by=requested_by,
             )
         if state is None:
             return executor.start(

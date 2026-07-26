@@ -93,7 +93,7 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 - `admin.cache`: `invalidate`
 - `admin.remote`: `list`, `gc`
 - `admin`: `gc`
-- `runtime`: `create`, `describe`, `describe_graph`, `put_literal`, `put_import`, `start_fn`, `cancel`, `commit`
+- `runtime`: `create`, `describe`, `read_execution_record`, `describe_graph`, `put_literal`, `put_import`, `start_fn`, `cancel`, `commit`
 - `config`: `get`, `set`, `show`
 - `ops`: `commit`, `head`, `dag`, `node`, `index`, `cache`, `remote`, `gc`, `config`
 
@@ -112,6 +112,23 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 #### Scenario: Exact subsystem objects are grouped under ops
 - **WHEN** a caller needs direct exact-input subsystem behavior such as `CommitOps`, `HeadOps`, or `IndexOps`
 - **THEN** the shared `Dml` exposes those objects under `dml.ops.*` rather than as direct top-level `Dml` attributes
+
+### Requirement: Shared `Dml` runtime namespace SHALL expose direct execution-record inspection
+The shared `Dml` runtime namespace SHALL expose `read_execution_record(execution: Ref | str)` for direct execution-state inspection. The runtime namespace SHALL normalize either input form to an execution-id string before delegation. When the read succeeds, the method SHALL return the raw execution record typed dict without reshaping or enrichment.
+
+#### Scenario: Runtime namespace reads an execution record from a runtime ref
+- **WHEN** a caller invokes `dml.runtime.read_execution_record(idx1)`
+- **THEN** the runtime namespace SHALL normalize `idx1` to `idx1.id()`
+- **AND** it SHALL delegate the read using that execution id
+
+#### Scenario: Runtime namespace reads an execution record from an execution id string
+- **WHEN** a caller invokes `dml.runtime.read_execution_record("exec-2")`
+- **THEN** the runtime namespace SHALL use `"exec-2"` as the delegated execution id without additional reshaping
+
+#### Scenario: Runtime namespace preserves underlying read failures
+- **WHEN** a caller invokes `dml.runtime.read_execution_record("missing")`
+- **AND** no execution record exists for `"missing"`
+- **THEN** the runtime namespace SHALL surface the same missing-record failure from the underlying execution-state reader
 
 ### Requirement: Shared `Dml` runtime namespace SHALL normalize roots for execution graph inspection
 The shared `Dml` runtime namespace SHALL expose `describe_graph(*roots: Ref | str, visual: bool = False)` for execution-lineage inspection. If the caller provides no roots, the runtime namespace SHALL use all currently open local runtime indexes as roots. Before delegating to execution-state graph extraction, the runtime namespace SHALL normalize the selected roots to execution-id strings. When `visual` is `False`, the method SHALL return the extracted `ExecutionGraph`. When `visual` is `True`, the method SHALL render a human-friendly graph view and return `None`.

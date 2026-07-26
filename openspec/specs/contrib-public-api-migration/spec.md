@@ -36,17 +36,17 @@ Contrib modules SHALL prefer existing public `daggerml.api` or package-root expo
 - **WHEN** contrib code creates, loads, mutates, calls, or commits DAG values
 - **THEN** it SHALL use existing public DAG/session APIs rather than direct lower-level runtime operations unless there is no public equivalent
 
-### Requirement: Contrib adapters SHALL conform to the existing runtime envelope
-Contrib adapter parsing SHALL accept the adapter envelope emitted by the existing runtime implementation without requiring `argv_ptr`. Contrib SHALL derive worker DAG access from `cache_key`, `execution_id`, and `remote.root` rather than from an argv pointer field.
+### Requirement: Contrib adapters SHALL conform to runtime operation contracts
+Contrib adapter parsing SHALL accept `AdapterInvokeRequest` for invocation and `AdapterCancelRequest` for cancellation. Contrib SHALL derive worker DAG access for invocation from `cache_key`, `execution_id`, and `remote.root`. Cancellation SHALL use the argv pointer supplied in the cancel request, not a mutable active pointer.
 
-#### Scenario: Adapter receives current runtime envelope
-- **WHEN** a contrib adapter receives an envelope containing `cache_key`, `execution_id`, `remote`, `runnable`, `state`, `scratch_uri`, and cancellation metadata
-- **THEN** it SHALL parse the envelope successfully without requiring `argv_ptr`
+#### Scenario: Adapter receives invoke request
+- **WHEN** a contrib adapter receives an `AdapterInvokeRequest` containing `cache_key`, `execution_id`, remote data, runnable data, and resume state
+- **THEN** it SHALL parse the request without cancellation-only fields
 
-#### Scenario: Nested executor forwards adapter payload
+#### Scenario: Nested executor forwards operation payload
 - **WHEN** a contrib executor delegates to a nested adapter through Docker, SSH, Batch, or another nested transport
-- **THEN** it SHALL forward the current runtime envelope fields needed by the nested adapter
-- **AND** it SHALL NOT invent or require an `argv_ptr` field
+- **THEN** it SHALL forward the applicable invoke or cancel request fields needed by the nested adapter
+- **AND** it SHALL preserve the cancel request argv pointer when forwarding cancellation
 
 ### Requirement: Contrib SHALL preserve adapter result semantics expected by runtime
 Contrib adapters and executors SHALL return terminal and non-terminal execution results in the shape expected by the current runtime caller. Any status/lifecycle normalization required for contrib executors SHALL be handled within contrib-owned adapter code.

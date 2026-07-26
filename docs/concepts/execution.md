@@ -28,7 +28,7 @@ Those nodes are not extra metadata bolted on later. They are part of the persist
 
 That means function execution is not just "run a process." It is a repository operation that first asks whether this exact computation already has a known DAG result.
 
-When execution crosses the adapter boundary, DaggerML sends a structured payload that includes the staged argv identity, the cache key derived from it, the runnable spec, remote settings, and any saved resume state. Adapter responses then fall into a small set of states: still running, succeeded with a DAG id, failed with an error payload, or detached from cancellation.
+When execution crosses the adapter boundary, DaggerML sends an `AdapterInvokeRequest` containing the cache key, execution id, runnable spec, remote settings, and any saved resume state. `AdapterCancelRequest` is a separate operation: it carries the execution-owned argv pointer needed to cancel a detached attempt. Invocation responses are `running`, `succeeded`, or `failed`; cancellation responses are separate from runtime lifecycle state.
 
 The important design point is that adapters do not get to redefine execution identity. The argv-backed cache key and the stored execution records remain the source of truth.
 
@@ -38,9 +38,14 @@ For non-builtin execution, DaggerML uses remote state to coordinate work:
 
 - a cache ref for completed results
 - an active-execution pointer for in-flight work on the same cache key
+- a cancel-target ref for an execution being canceled
 - launch and lifecycle records for resume and status tracking
 
 If another caller is already driving the same computation, a later caller can detect that and resume or wait rather than launching duplicate work.
+
+Cancellation runs in two phases. Phase 1 locks each targeted cache key, marks the execution `cancel-requested`, and moves its active argv ref to an execution-owned cancel target. Phase 2 is distributed: runtimes wait for direct callees to become `cancel-ready`, cancel those callees, and then become ready themselves. A ready handoff times out after 60 seconds, allowing cleanup to be retried.
+
+Execution records retain direct child lineage in two lists. `spawned_execution_ids` contains children that have not normally completed; `child_execution_ids` contains children that completed with either `succeeded` or `failed`. A canceled child remains in `spawned_execution_ids` so the canceled call graph remains inspectable.
 
 ## What success and failure mean
 

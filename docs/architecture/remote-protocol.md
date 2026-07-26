@@ -70,13 +70,16 @@ Cache sync uses `refs/cache/<cache_key>.json`. The cache key comes from the argv
 - the active execution id for a cache key,
 - launch state for resumable work,
 - execution lifecycle records,
+- execution-owned cancel-target refs for detached cancellation,
 - caller/callee lineage edges,
 - invalidation and cancellation tombstones,
 - adapter IO objects under `io/...`.
 
 This is what makes async and detached execution workable across processes. The local repo still owns typed DAG state, but the remote side owns the coordination data needed to produce or invalidate that DAG state safely.
 
-At the adapter boundary, the runtime publishes and reloads JSON transport blobs rather than passing Python objects directly. Those payloads carry the runnable, argv pointer, cache key, execution id, remote config, execution lifecycle status, and resume state needed for later polls. Adapters answer with a similarly small status payload so the runtime can decide whether to keep waiting, import a successful DAG, or materialize a failure.
+Caller execution records are the launch coordination boundary: a child must be recorded in its caller before its adapter can run. CAS contention retries from the latest record and surfaces failure rather than launching an untracked child. Direct children remain in `spawned_execution_ids` until normal terminal completion; canceled children stay there as durable canceled lineage.
+
+At the adapter boundary, `AdapterInvokeRequest` carries the runnable, cache key, execution id, remote config, and resume state needed for launch or polling. `AdapterCancelRequest` is separate and carries the argv pointer from `refs/cancel-targets/<execution_id>.json` plus cancellation data. The active ref is only a cache-key discovery pointer; Phase 1 cancellation moves that unchanged argv manifest to the cancel-target ref before active ownership is removed.
 
 ## Remote cleanup
 

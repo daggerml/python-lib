@@ -22,7 +22,7 @@ def hello(dag, arg, fn=None):
     rng = Random(42 + n)
     if fn is not None:
         print(f"Running {fn} with arg {2 * n}")
-        resp = fn(3 * n).value()
+        resp = fn(5 * n).value()
     sleep(rng.random() + n)
     return f"Hello, {resp}!"
 
@@ -36,5 +36,5 @@ if __name__ == "__main__":
         for f in [future1, future2]:
             try:
                 print(f.result())
-            except dml.CancellationError:
+            except dml.CanceledExecutionError:
                 print("Task was cancelled.")

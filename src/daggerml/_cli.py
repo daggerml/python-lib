@@ -19,6 +19,8 @@ except ImportError:
 
 from daggerml._core import Dml, Error, Ref, Runnable, Uri, dml_dumps, dml_loads
 
+logger = logging.getLogger(__name__)
+
 
 def _serialize_as(value: Any, expected: type[Any], render: Callable[[Any], str] = str) -> str:
     if expected is int:
@@ -235,9 +237,7 @@ class PrettyHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         )
         for category, heading in groups:
             subactions = [
-                subaction
-                for subaction in action._get_subactions()
-                if getattr(subaction, "category", None) == category
+                subaction for subaction in action._get_subactions() if getattr(subaction, "category", None) == category
             ]
             if not subactions:
                 continue
@@ -376,8 +376,10 @@ class MethodCLI:
         return self._serialize_result(method, result)
 
     def _configure_logging(self, verbosity: int) -> None:
-        level = logging.WARNING if verbosity <= 0 else logging.INFO if verbosity == 1 else logging.DEBUG
-        logging.basicConfig(level=level, format="%(levelname)s: %(message)s", force=True)
+        level = [logging.WARNING, logging.INFO, logging.DEBUG][min(verbosity, 2)]
+        logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s", force=True)
+        logging.getLogger("daggerml").setLevel(level)
+        logger.info("verbosity level: %d, logging level: %s", verbosity, logging.getLevelName(level))
 
     def _add_constructor_args(self, parser: argparse.ArgumentParser) -> None:
         init = self.cls.__init__

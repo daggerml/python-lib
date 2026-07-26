@@ -22,6 +22,7 @@ from daggerml.contrib.s3 import S3Store
 
 EXCLUDE_PATTERNS = (
     # ".git",  # we need .git to install lib from the repo
+    ".dml/*",
     "ignore/*",
     ".venv/*",
     ".mypy_cache/*",

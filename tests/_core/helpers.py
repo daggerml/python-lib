@@ -11,7 +11,7 @@ from daggerml._core.db import Ref
 from daggerml._core.exec_state import ExecutionGraph
 from daggerml._core.index import IndexOps
 from daggerml._core.s3_cas import CasItem, CasItemConflict
-from daggerml._core.types import DmlDB, DmlRepoError
+from daggerml._core.types import BadExecutionStatusError, CanceledExecutionError, DmlDB, DmlRepoError
 
 DEFAULT_REMOTE_ROOT = "s3://bucket/root"
 
@@ -94,6 +94,26 @@ class NoopExecutionState:
         record["lifecycle"] = "succeeded"
         record["updated_at"] = int(time.time())
         self.update_execution_record(record)
+
+    def require_mutation(self, execution_id: str, db: DmlDB, *, mode: str = "activation") -> dict[str, Any]:
+        record = self.read_execution_record(execution_id)
+        lifecycle = record["lifecycle"]
+        allowed = "pending" if mode == "activation" else "running"
+        action = "activated" if mode == "activation" else "mutated"
+        if lifecycle == allowed:
+            return record
+        if lifecycle == "cancel-requested":
+            self.cancel(execution_id, None, db, mode="drive")
+            raise CanceledExecutionError(
+                f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
+            )
+        if lifecycle in ("cancel-ready", "canceled"):
+            raise CanceledExecutionError(
+                f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
+            )
+        raise BadExecutionStatusError(
+            f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
+        )
 
     def cancel(self, execution_id: str, requested_by: str | None, db: DmlDB, *, mode: str = "full") -> dict:
         self.cancel_calls.append((execution_id, requested_by, mode))
@@ -211,6 +231,7 @@ class FakeCasStore:
 class FakeExecutionRemote:
     def __init__(self) -> None:
         self.active: dict[str, dict[str, Any]] = {}
+        self.cancel_targets: dict[str, dict[str, Any]] = {}
         self.cache: dict[str, Ref] = {}
 
     def get_cache(self, cache_key: str, db=None):
@@ -224,6 +245,19 @@ class FakeExecutionRemote:
 
     def delete_active(self, cache_key: str) -> None:
         self.active.pop(cache_key, None)
+
+    def move_active_to_cancel_target(self, cache_key: str, execution_id: str) -> bool:
+        active = self.active.get(cache_key)
+        if active is None or active["meta"]["execution_id"] != execution_id:
+            return False
+        self.cancel_targets[execution_id] = self.active.pop(cache_key)
+        return True
+
+    def get_cancel_target(self, execution_id: str, raw: bool = False):
+        return self.cancel_targets.get(execution_id)
+
+    def delete_cancel_target(self, execution_id: str) -> None:
+        self.cancel_targets.pop(execution_id, None)
 
     def put_cache(self, dag: Ref, active_id: str, db=None) -> None:
         self.cache[active_id] = dag

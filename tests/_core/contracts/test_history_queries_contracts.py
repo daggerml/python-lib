@@ -3,9 +3,13 @@ from __future__ import annotations
 import sys
 from types import ModuleType
 
+import pytest
+
 import daggerml._core.dml as dml_mod
+from daggerml._core import DmlRepoError
+from daggerml._core.db import Ref
 from daggerml._core.head import Head
-from tests._core.helpers import commit_literal_dag, make_local_dml
+from tests._core.helpers import NoopExecutionState, commit_literal_dag, make_local_dml
 
 
 def test_status_reports_attached_head_branch_list_and_live_indexes(tmp_path, monkeypatch) -> None:
@@ -163,6 +167,54 @@ def test_runtime_describe_graph_defaults_to_open_local_indexes(tmp_path, monkeyp
 
     assert set(graph["roots"]) == {first.id(), second.id()}
     assert set(graph["nodes"]) == {first.id(), second.id()}
+
+
+def test_runtime_read_execution_record_accepts_ref_and_returns_raw_payload(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    index = dml.runtime.create()
+    record = {
+        "execution_id": index.id(),
+        "cache_key": None,
+        "lifecycle": "running",
+        "updated_at": 10,
+        "created_at": 9,
+        "spawned_execution_ids": ["child-1"],
+        "child_execution_ids": ["child-0"],
+        "cancellation_requested_by": "tester",
+    }
+    state = NoopExecutionState()
+    state.create_execution_record(record)
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: state)
+
+    assert dml.runtime.read_execution_record(index) == record
+
+
+def test_runtime_read_execution_record_accepts_execution_id_string(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    record = {
+        "execution_id": "exec-2",
+        "cache_key": "cache-2",
+        "lifecycle": "pending",
+        "updated_at": 20,
+        "created_at": 19,
+        "spawned_execution_ids": [],
+        "child_execution_ids": ["child-1"],
+        "cancellation_requested_by": None,
+    }
+    state = NoopExecutionState()
+    state.create_execution_record(record)
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: state)
+
+    assert dml.runtime.read_execution_record("exec-2") == record
+
+
+def test_runtime_read_execution_record_surfaces_missing_record_error(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    state = NoopExecutionState()
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: state)
+
+    with pytest.raises(DmlRepoError, match="No execution record found for execution_id: missing"):
+        dml.runtime.read_execution_record(Ref("index:missing"))
 
 
 def test_runtime_describe_graph_visual_renders_and_returns_none(tmp_path, monkeypatch) -> None:

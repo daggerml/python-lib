@@ -7,23 +7,22 @@
 | Local adapter | `local` | `dml-local-adapter` | Calls a local executor's `handle(...)` method. |
 | Lambda adapter | `lambda` | `dml-lambda-adapter` | Invokes an AWS Lambda function and validates canonical JSON output. |
 
-All adapters exchange the same logical payload fields:
+Invoke requests exchange:
 
 - `runnable`
-- `argv_ptr`
 - `cache_key`
 - `execution_id`
 - `remote`
 - `state`
-- `execution_status`
-- `cancel_requested_by`
+
+Cancel requests separately exchange `execution_id`, `cache_key`, `argv_ptr`, `runnable`, `remote`, saved `state`, `scratch_uri`, and `requested_by`.
 
 Canonical adapter results are:
 
 - `{"status": "running", "error": null, "state": {...}}`
 - `{"status": "succeeded", "error": null, "dag_id": "<hex>"}`
 - `{"status": "failed", "error": "..."}`
-- `{"status": "cancelled", "error": null}`
+- `{"status": "cancelled", "error": null}` for cancel operations
 
 ## Built-in executors
 

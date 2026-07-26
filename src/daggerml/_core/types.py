@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Literal, Optional, Union, cast
+from typing import Any, Optional, Union, cast
 from uuid import uuid4
 
 try:
@@ -490,6 +490,22 @@ class DmlRepoError(Error):
         super().__init__(message=message, origin=origin, type=type, stack=stack or [])
 
 
+class BadExecutionStatusError(DmlRepoError):
+    """Raised when an execution lifecycle cannot satisfy a requested mutation mode."""
+
+    def __init__(self, message: str, *, lifecycle: str | None = None):
+        super().__init__(message, type="badexecutionstatuserror")
+        self.lifecycle = lifecycle
+
+
+class CanceledExecutionError(BadExecutionStatusError):
+    """Raised when cancellation lifecycle blocks activation or mutation."""
+
+    def __init__(self, message: str, *, lifecycle: str | None = None):
+        super().__init__(message, lifecycle=lifecycle)
+        self.type = "canceledexecutionerror"
+
+
 class DmlPointerConflictError(DmlRepoError):
     """Raised when a branch or index commit update loses a stale-write race."""
 
@@ -817,19 +833,13 @@ class Index(Commit):
     ----------
     dag : Ref
         Reference to the in-progress DAG for this index.
-    lifecycle : {"active", "inactive", "canceled"}
-        Local mutation lifecycle for cancellation coordination.
     """
 
     dag: Ref = field(kw_only=True)
-    lifecycle: Literal["active", "inactive", "canceled"] = field(default="active", kw_only=True)
 
     def _validate(self) -> None:
         super()._validate()
         require_ref(self.dag, expected_ns=["dag"], context=f"{self.__class__.__name__}.dag")
-        if self.lifecycle not in {"active", "inactive", "canceled"}:
-            msg = f"{self.__class__.__name__}.lifecycle must be one of 'active', 'inactive', 'canceled'"
-            raise TypeError(msg)
 
 
 def _cleanup_opposite_entry(db: "TxnWithValid", ref: Ref, *, opposite_ns: str, noun: str) -> None:

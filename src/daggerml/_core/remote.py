@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, overload
 from urllib.parse import quote, unquote
 
 from daggerml._core.db import Ref
-from daggerml._core.s3_cas import S3Remote
+from daggerml._core.s3_cas import CasItemConflict, S3Remote
 from daggerml._core.types import NAMESPACES, Dag, DmlBase, DmlDB, TxnWithValid
 from daggerml._core.uri import ProjectUri
 from daggerml._core.util import uuid7
@@ -221,6 +221,9 @@ class Remote:
 
     def _transport_key(self, execution_id: str) -> str:
         return f"refs/transport/{execution_id}.json"
+
+    def _cancel_target_key(self, execution_id: str) -> str:
+        return f"refs/cancel-targets/{execution_id}.json"
 
     def _tombstone_key(self) -> str:
         return f"refs/tombstone/{uuid7().hex}.json"
@@ -492,6 +495,48 @@ class Remote:
 
     def delete_active(self, cache_key: str) -> bool:
         return self._del(self._active_key(cache_key))
+
+    def move_active_to_cancel_target(self, cache_key: str, execution_id: str) -> bool:
+        """Move an execution's active argv manifest to its stable cancel target."""
+        active_key = self._store._key_for(self._active_key(cache_key))
+        try:
+            active = self._store._get(active_key, cas=True)
+        except self._store.client.exceptions.NoSuchKey:
+            return False
+        manifest = json.loads(active.data)
+        self._validate_ref_payload(manifest, expected_root_ns="node-argv", required_metadata=("execution_id",))
+        if manifest["metadata"]["execution_id"] != execution_id:
+            return False
+        target_key = self._store._key_for(self._cancel_target_key(execution_id))
+        try:
+            self._store._put(target_key, active.data, overwrite=False)
+        except CasItemConflict:
+            pass
+        return self._store._delete(active)
+
+    @overload
+    def get_cancel_target(self, execution_id: str, db: DmlDB, *, raw: Literal[False] = False) -> Ref | None: ...
+    @overload
+    def get_cancel_target(self, execution_id: str, db: None = None, *, raw: Literal[True] = True) -> dict | None: ...
+    def get_cancel_target(self, execution_id: str, db: DmlDB | None = None, raw: bool = False) -> Ref | dict | None:
+        if raw:
+            return self._get_path(
+                self._cancel_target_key(execution_id),
+                expected_ns="node-argv",
+                required_metadata=("execution_id",),
+                raw=True,
+            )
+        assert db is not None, "DmlDB instance required to materialize a cancel target"
+        return self._get_path(
+            self._cancel_target_key(execution_id),
+            db,
+            expected_ns="node-argv",
+            required_metadata=("execution_id",),
+            raw=False,
+        )
+
+    def delete_cancel_target(self, execution_id: str) -> bool:
+        return self._del(self._cancel_target_key(execution_id))
 
     def put_transport(self, execution_id: str, dag: Ref, db: DmlDB) -> str:
         ref_path = self._transport_key(execution_id)

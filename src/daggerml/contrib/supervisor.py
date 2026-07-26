@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -209,28 +210,32 @@ def _parse_cmd_payload(
 
 def _validate_output(result: Any) -> dict[str, Any]:
     if not isinstance(result, dict):
-        raise DmlRepoError("Supervisor result must be a dict")
+        raise DmlRepoError(f"Supervisor result must be a dict; received: {result!r}")
     status = result.get("status")
     if status not in {"succeeded", "failed"}:
-        raise DmlRepoError("Supervisor result status must be one of succeeded|failed after worker exit")
+        raise DmlRepoError(
+            "Supervisor result status must be one of succeeded|failed after worker exit; " f"received: {result!r}"
+        )
     if status == "failed":
         expected = {"status", "error"}
         if set(result.keys()) != expected:
-            raise DmlRepoError("Supervisor failed result keys must be exactly: status, error")
+            raise DmlRepoError(f"Supervisor failed result keys must be exactly: status, error; received: {result!r}")
         error = result.get("error")
         if error is None:
-            raise DmlRepoError("Supervisor result failed requires error")
+            raise DmlRepoError(f"Supervisor result failed requires error; received: {result!r}")
         return result
 
     expected = {"status", "error", "dag_id"}
     if set(result.keys()) != expected:
-        raise DmlRepoError("Supervisor succeeded result keys must be exactly: status, error, dag_id")
+        raise DmlRepoError(
+            f"Supervisor succeeded result keys must be exactly: status, error, dag_id; received: {result!r}"
+        )
     error = result.get("error")
     if error is not None:
-        raise DmlRepoError("Supervisor result succeeded requires error=None")
+        raise DmlRepoError(f"Supervisor result succeeded requires error=None; received: {result!r}")
     dag_id = result.get("dag_id")
     if not isinstance(dag_id, str) or not re.fullmatch(r"[0-9a-f]{64}", dag_id):
-        raise DmlRepoError("Supervisor result succeeded requires real dag_id")
+        raise DmlRepoError(f"Supervisor result succeeded requires real dag_id; received: {result!r}")
     return result
 
 
@@ -240,7 +245,7 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     workdir = tempfile.mkdtemp(prefix=f"dml-supervisor-{execution_id[:8]}-")
     repo_dir = Path(workdir) / "repo"
     repo_dir.mkdir(parents=True, exist_ok=True)
-    Dml.init(str(repo_dir), remote_root=remote["root"], user="worker")
+    dml = Dml.init(str(repo_dir), remote_root=remote["root"], user="worker")
     env = dict(env)
     env["DML_PROJECT_HOME"] = str(repo_dir)
     result_path = Path(workdir) / "result.json"
@@ -275,6 +280,15 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     )
     stdout_thread.start()
     stderr_thread.start()
+    while proc.poll() is None:
+        if dml.runtime.read_execution_record(execution_id)["lifecycle"].startswith("cancel"):
+            # log to log streams that we're cancelling
+            stdout_sink.emit_lifecycle(event="cancel")
+            stderr_sink.emit_lifecycle(event="cancel")
+            proc.terminate()
+            dml.runtime.cancel(execution_id, mode="drive")
+            break
+        time.sleep(0.1)
     proc.wait()
     stdout_thread.join()
     stderr_thread.join()
@@ -287,11 +301,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception as e:
             result = {"status": "failed", "error": f"Supervisor could not read worker result: {e}"}
     elif proc.returncode is not None and proc.returncode < 0:
-        import signal as _signal
-
         sig = -proc.returncode
         try:
-            sig_name = _signal.Signals(sig).name
+            sig_name = signal.Signals(sig).name
         except ValueError:
             sig_name = str(sig)
         result = {"status": "failed", "error": f"Worker killed by signal {sig_name}"}

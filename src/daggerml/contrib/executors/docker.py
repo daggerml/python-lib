@@ -142,13 +142,13 @@ class DockerExecutor(ExecutorBase):
 
         payload = json.dumps(
             {
+                "operation": "invoke",
                 "runnable": sub,
                 "cache_key": cache_key,
                 "execution_id": execution_id,
                 "remote": remote,
                 "scratch_uri": scratch_uri,
                 "state": None,
-                "cancel_requested_by": None,
             }
         )
         _write_scratch_json(input_uri, payload, raw=True)
@@ -169,7 +169,7 @@ class DockerExecutor(ExecutorBase):
         )
 
         return {
-            "lifecycle": "running",
+            "status": "running",
             "error": None,
             "dag_id": None,
             "state": {
@@ -192,7 +192,7 @@ class DockerExecutor(ExecutorBase):
 
         if not isinstance(container_id, str) or not container_id:
             return {
-                "lifecycle": "failed",
+                "status": "failed",
                 "error": "docker poll: missing container_id in job state",
                 "state": None,
                 "dag_id": None,
@@ -201,7 +201,7 @@ class DockerExecutor(ExecutorBase):
         docker_bin = shutil.which("docker")
         if docker_bin is None:
             return {
-                "lifecycle": "failed",
+                "status": "failed",
                 "error": "docker poll: docker executable not found",
                 "state": None,
                 "dag_id": None,
@@ -219,7 +219,7 @@ class DockerExecutor(ExecutorBase):
             container_status = proc.stdout.strip()
 
         if container_status in ("created", "running", "paused", "restarting"):
-            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
+            return {"status": "running", "error": None, "state": state, "dag_id": None}
 
         # Container exited
         _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
@@ -228,18 +228,18 @@ class DockerExecutor(ExecutorBase):
         if raw is not None:
             try:
                 result = json.loads(raw)
-                if result.get("lifecycle") in {"succeeded", "failed", "cancelled"}:
+                if result.get("status") in {"succeeded", "failed"}:
                     return result
             except Exception as e:
                 return {
-                    "lifecycle": "failed",
+                    "status": "failed",
                     "error": f"docker poll: could not read output: {e}",
                     "state": None,
                     "dag_id": None,
                 }
 
         return {
-            "lifecycle": "failed",
+            "status": "failed",
             "error": f"docker container {container_id} exited without output",
             "state": None,
             "dag_id": None,
@@ -258,11 +258,11 @@ class DockerExecutor(ExecutorBase):
         del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by
         docker_bin = shutil.which("docker")
         if docker_bin is None:
-            return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}
+            return {"status": "cancelled", "error": None}
         container_id = state.get("container_id")
         if isinstance(container_id, str) and container_id:
             _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
-        return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}
+        return {"status": "cancelled", "error": None}
 
 
 def _cleanup_docker(container_id: str, cleanup_image: str | None, docker_bin: str) -> None:

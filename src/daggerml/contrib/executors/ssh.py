@@ -105,13 +105,14 @@ class SshExecutor(ExecutorBase):
         ]
         payload = json.dumps(
             {
+                "operation": "cancel" if cancel_requested_by is not None else "invoke",
                 "runnable": sub,
                 "cache_key": cache_key,
                 "execution_id": execution_id,
                 "remote": remote,
                 "scratch_uri": scratch_uri,
                 "state": state,
-                "cancel_requested_by": cancel_requested_by,
+                "requested_by": cancel_requested_by,
             }
         )
         logger.debug(
@@ -141,7 +142,7 @@ class SshExecutor(ExecutorBase):
             elif stdout:
                 error = f"{error}: {stdout}"
             logger.debug("ssh executor transport failed execution_id=%s error=%s", execution_id, error)
-            return {"lifecycle": "failed", "error": error, "state": None, "dag_id": None}
+            return {"status": "failed", "error": error, "state": None, "dag_id": None}
         try:
             result = json.loads(stdout)
         except json.JSONDecodeError as e:
@@ -152,12 +153,12 @@ class SshExecutor(ExecutorBase):
                 stdout,
             )
             return {
-                "lifecycle": "failed",
+                "status": "failed",
                 "error": f"SSH nested adapter returned invalid JSON: {e}",
                 "state": None,
                 "dag_id": None,
             }
-        if result.get("lifecycle") not in {
+        if result.get("status") not in {
             "succeeded",
             "failed",
             "running",
@@ -165,15 +166,15 @@ class SshExecutor(ExecutorBase):
         }:
             logger.debug("ssh executor unexpected result execution_id=%s result=%r", execution_id, result)
             return {
-                "lifecycle": "failed",
+                "status": "failed",
                 "error": f"SSH nested adapter returned unexpected result: {result}",
                 "state": None,
                 "dag_id": None,
             }
         logger.debug(
-            "ssh executor result execution_id=%s lifecycle=%s error=%r",
+            "ssh executor result execution_id=%s status=%s error=%r",
             execution_id,
-            result.get("lifecycle"),
+            result.get("status"),
             result.get("error"),
         )
         return result

@@ -13,7 +13,7 @@ from warnings import warn
 import boto3
 
 from daggerml import Runnable
-from daggerml._core import AdapterResponse
+from daggerml._core.exec_state import AdapterCancelResponse, AdapterInvokeResponse
 from daggerml.api import DmlRepoError, _entry_points
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 from daggerml.util import get_client
@@ -29,7 +29,7 @@ class AdapterBase:
         return get_executor(cls.name, uri).resolve_runnable(uri, kwargs, sub)
 
     @classmethod
-    def send(cls, *kw) -> AdapterResponse:
+    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCancelResponse:
         raise NotImplementedError("Adapter send method is not implemented")
 
     @classmethod
@@ -73,7 +73,7 @@ class AdapterBase:
         payload = json.loads(raw)
         result = cls.send(**payload)
         payload["state"] = payload.get("state")
-        while args.poll and result.get("lifecycle") == "running":
+        while args.poll and payload.get("operation") == "invoke" and result.get("status") == "running":
             payload["state"] = result.get("state") or payload["state"]
             time.sleep(0.1)
             result = cls.send(**payload)
@@ -86,7 +86,7 @@ class LocalAdapter(AdapterBase):
     executable = "dml-local-adapter"
 
     @classmethod
-    def send(cls, **kw) -> AdapterResponse:
+    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCancelResponse:
         from daggerml.contrib.executors._base import get_executor
 
         return get_executor("local", kw["runnable"]["target"]["uri"]).handle(**kw)
@@ -97,7 +97,7 @@ class LambdaAdapter(AdapterBase):
     executable = "dml-lambda-adapter"
 
     @classmethod
-    def send(cls, **kw) -> AdapterResponse:
+    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCancelResponse:
         client = get_client("lambda")
         response = client.invoke(
             FunctionName=kw["runnable"]["target"]["uri"],

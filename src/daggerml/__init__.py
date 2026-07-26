@@ -1,6 +1,15 @@
 """DaggerML public package exports."""
 
-from daggerml._core import CancellationError, Dml, Error, Ref, Runnable, Uri
+from daggerml._core import (
+    BadExecutionStatusError,
+    CanceledExecutionError,
+    CancellationError,
+    Dml,
+    Error,
+    Ref,
+    Runnable,
+    Uri,
+)
 from daggerml.api import (
     Dag,
     Node,
@@ -20,6 +29,8 @@ except ImportError:
     __version__ = "local"
 
 __all__ = (
+    "BadExecutionStatusError",
+    "CanceledExecutionError",
     "CancellationError",
     "Dag",
     "Dml",

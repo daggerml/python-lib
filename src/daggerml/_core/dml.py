@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
+from functools import wraps
 from pathlib import Path
 from time import time
 from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict, cast, overload
@@ -13,10 +14,11 @@ from daggerml._core.commit import CommitDescription, CommitDiffPayload, CommitFu
 from daggerml._core.config import Config, flatten_dict
 from daggerml._core.dag import DagDescription, DagOps, NodeDescriptionPayload
 from daggerml._core.db import DmlDbKeyNotFoundError, Ref
-from daggerml._core.exec_state import ExecutionGraph, ExecutionState, InvalidationResponse
+from daggerml._core.exec_state import ExecutionGraph, ExecutionRecord, ExecutionState, InvalidationResponse
 from daggerml._core.head import Head
 from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
+from daggerml._core.s3_cas import CasItemConflict
 from daggerml._core.types import DmlDB, DmlRepoError, Error
 from daggerml._core.uri import ProjectUri
 
@@ -42,7 +44,7 @@ def _graph_lifecycle_style(lifecycle: str) -> str:
         "running": "yellow",
         "succeeded": "green",
         "failed": "red",
-        "cancel-pending": "dark_goldenrod italic",
+        "cancel-requested": "dark_goldenrod italic",
         "cancel-ready": "dark_orange",
         "canceled": "dim",
         "pending": "cyan",
@@ -89,6 +91,26 @@ def _exec_state(dml: "Dml", cache_key=None) -> ExecutionState:
         client=_require_s3_client(dml),
         cache_key=cache_key,
     )
+
+
+_RUNTIME_MUTATION_RETRY_ERRORS = (CasItemConflict,)
+_RUNTIME_MUTATION_RETRY_ATTEMPTS = 2
+
+
+def _retry_runtime_mutation(fn=None, errors=_RUNTIME_MUTATION_RETRY_ERRORS, attempts=_RUNTIME_MUTATION_RETRY_ATTEMPTS):
+    if fn is None:
+        return lambda fn: _retry_runtime_mutation(fn, errors=errors, attempts=attempts)
+
+    @wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        for attempt in range(attempts):
+            try:
+                return fn(self, *args, **kwargs)
+            except errors:
+                if attempt + 1 >= _RUNTIME_MUTATION_RETRY_ATTEMPTS:
+                    raise
+
+    return wrapper
 
 
 def _render_execution_graph(graph: ExecutionGraph) -> None:
@@ -319,6 +341,7 @@ RuntimeCancelSummary = TypedDict(
 class _RuntimeNamespace:
     _dml: "Dml"
 
+    @_retry_runtime_mutation
     def create(
         self,
         cache_key: Annotated[str | None, "Cache key to reuse execution results."] = None,
@@ -335,6 +358,7 @@ class _RuntimeNamespace:
             db=self._dml._db,
         )
 
+    @_retry_runtime_mutation
     def put_literal(
         self,
         index: Annotated[Ref, "Runtime index to write into."],
@@ -345,6 +369,7 @@ class _RuntimeNamespace:
         """Stage a literal value into a runtime index."""
         return _index_ops(self._dml).put_literal(index, value, name=name, db=self._dml._db)
 
+    @_retry_runtime_mutation
     def put_import(
         self,
         index: Annotated[Ref, "Runtime index to write into."],
@@ -368,6 +393,7 @@ class _RuntimeNamespace:
         """Resolve one named node from a runtime index."""
         return _index_ops(self._dml).get_node(index, name, db=self._dml._db)
 
+    @_retry_runtime_mutation
     def set_node_name(
         self,
         index: Annotated[Ref, "Runtime index to mutate."],
@@ -377,6 +403,7 @@ class _RuntimeNamespace:
         """Assign a name to an existing node in a runtime index."""
         return _index_ops(self._dml).set_node_name(index, name, node, db=self._dml._db)
 
+    @_retry_runtime_mutation
     def start_fn(
         self,
         index: Annotated[Ref, "Runtime index to execute in."],
@@ -387,6 +414,7 @@ class _RuntimeNamespace:
         """Start a function call in a runtime index."""
         return _index_ops(self._dml).start_fn(index, argv, name=name, db=self._dml._db)
 
+    @_retry_runtime_mutation
     def commit(
         self,
         index: Annotated[Ref, "Runtime index to commit."],
@@ -454,15 +482,26 @@ class _RuntimeNamespace:
                 )
         return sorted(objs, key=lambda x: x["created"], reverse=True)
 
+    def read_execution_record(
+        self,
+        execution: Annotated[Ref | str, "Runtime index ref or execution id to inspect."],
+    ) -> ExecutionRecord:
+        """Read the raw execution record for one runtime execution."""
+        execution_id = execution.id() if isinstance(execution, Ref) else execution
+        return _exec_state(self._dml).read_execution_record(execution_id)
+
     def cancel(
         self,
-        index: Annotated[Ref, "Runtime index to cancel."],
+        index: Annotated[Ref | str, "Runtime index to cancel."],
         *,
         mode: Annotated[Literal["full", "drive"], "Cancellation mode."] = "full",
     ) -> RuntimeCancelSummary:
         """Cancel active execution state for a runtime index."""
+        if isinstance(index, str) and index.startswith("index:"):
+            index = Ref(index)
         requested_by = self._dml._config.user if mode == "full" else None
-        resp = _exec_state(self._dml).cancel(index.id(), requested_by, self._dml._db, mode=mode)
+        idx = index.id() if isinstance(index, Ref) else index
+        resp = _exec_state(self._dml).cancel(idx, requested_by, self._dml._db, mode=mode)
         return cast(RuntimeCancelSummary, {"id": index, **resp})
 
     def describe_graph(

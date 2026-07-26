@@ -73,7 +73,7 @@ def test_contrib_script_004__start_returns_durable_running_state(monkeypatch):
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
     )
-    assert result["lifecycle"] == "running"
+    assert result["status"] == "running"
     assert result["dag_id"] is None
     assert result["state"]["pid"] == 123
     assert "workdir" in result["state"]
@@ -92,7 +92,7 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
         "stderr_path": str(success_dir / "stderr.log"),
     }
     (success_dir / "result.json").write_text(
-        json.dumps({"lifecycle": "succeeded", "error": None, "state": None, "dag_id": "a" * 64})
+        json.dumps({"status": "succeeded", "error": None, "state": None, "dag_id": "a" * 64})
     )
     assert ScriptExecutor().poll(
         cache_key="ck",
@@ -101,7 +101,7 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
         state=dict(success_state),
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
-    )["lifecycle"] == "succeeded"
+    )["status"] == "succeeded"
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -120,7 +120,7 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
         state=bad_state,
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
-    )["lifecycle"] == "failed"
+    )["status"] == "failed"
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -158,10 +158,26 @@ def test_script_worker_dag_creation_uses_cache_key_and_execution_id(monkeypatch,
     monkeypatch.setattr(script_mod.dml, "new", fake_new)
     result = script_mod.run_payload(execution_id="exec-1", cache_key="cache-1", remote_root="s3://bucket/root")
     assert calls["new"] == {"dml": tmpdml, "cache_key": "cache-1", "execution_id": "exec-1"}
-    assert result["lifecycle"] == "failed"
+    assert result["status"] == "failed"
+    assert "stop after DAG creation" in result["error"]
+    assert "Traceback" in result["error"]
 
 
-def test_contrib_script_006__run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_path):
+def test_contrib_script_006__cancel_without_launch_state_is_still_cancelled():
+    result = ScriptExecutor().cancel(
+        cache_key="ck",
+        execution_id="exec",
+        runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
+        state=None,
+        remote={"root": "s3://bucket/root"},
+        scratch_uri="s3://bucket/scratch",
+        cancel_requested_by="user",
+    )
+
+    assert result == {"status": "cancelled", "error": None}
+
+
+def test_contrib_script_007__run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_path):
     calls = {"put": []}
     tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))
 
@@ -215,7 +231,7 @@ def test_contrib_script_006__run_payload_uses_prepop_and_script_uri_from_runnabl
 
     result = script_mod.run_payload(execution_id="exec-1", cache_key="cache-1", remote_root="s3://bucket/root")
 
-    assert result == {"lifecycle": "succeeded", "state": None, "error": None, "dag_id": "d" * 64}
+    assert result == {"status": "succeeded", "state": None, "error": None, "dag_id": "d" * 64}
     assert calls["script_uri"] == "s3://bucket/script.py"
     assert calls["put"] == [("seed", 7)]
     assert calls["commit"] == "result:arg-node"

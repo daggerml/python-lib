@@ -53,13 +53,13 @@ The invalidate tombstone schema SHALL be:
 - **THEN** that object SHALL contain `execution_id`, `cache_key`, `requested_by`, and `requested_at`
 
 ### Requirement: Manual cancellation SHALL support `full` and `drive` runtime modes
-The system SHALL expose runtime cancellation in two modes. `mode = "full"` SHALL run `F1` planning followed by `F2` driving and then SHALL mark the current execution `canceled`. `mode = "drive"` SHALL run the same `F2` driver without running `F1` and SHALL NOT mark the current execution `canceled`.
+The system SHALL expose runtime cancellation in two modes. `mode = "full"` SHALL run Phase 1 planning followed by Phase 2 cleanup. `mode = "drive"` SHALL run Phase 2 cleanup without rerunning Phase 1. Runtime lifecycle transitions remain governed by the distributed cancellation protocol.
 
 `F1(ex0)` SHALL operate as follows:
 
 1. Acquire the execution coordination lock for `ex0` when `ex0` has a lock-bearing `cache_key`.
 2. If `ex0` still has active callers, return without mutating `ex0`.
-3. Update `exec/state/<ex0>.json` so that `lifecycle = "cancel-pending"`.
+3. Update `exec/state/<ex0>.json` so that `lifecycle = "cancel-requested"`, remove direct caller/callee edges, and move the active argv manifest to the execution-owned cancel target only when the active ref still names `ex0`.
 4. Read `spawned_execution_ids` from `exec/state/<ex0>.json`.
 5. For each direct child `ex1` in that list, delete the live caller edge `exec/edges/<ex1>/<ex0>.json`.
 6. If `exec/edges/<ex1>/` has no remaining caller records after that delete, recurse into `F1(ex1)`.
@@ -69,7 +69,7 @@ The system SHALL expose runtime cancellation in two modes. `mode = "full"` SHALL
 
 1. Mark the local index for `ex0` as `inactive`.
 2. Reread `spawned_execution_ids` from `exec/state/<ex0>.json`.
-3. Build the direct drive set from those spawned executions whose lifecycle is `cancel-pending`.
+3. Build the direct drive set from those spawned executions whose lifecycle is `cancel-requested`.
 4. Repeat until the direct drive set is empty or the F2 timeout is reached.
 5. For each `ex1` still in the direct drive set, acquire `ex1`'s execution coordination lock.
 6. If `ex1.lifecycle = "cancel-ready"`, invoke the adapter cancellation path for `ex1` and remove `ex1` from the direct drive set.
@@ -92,9 +92,9 @@ The system SHALL expose runtime cancellation in two modes. `mode = "full"` SHALL
 - **AND** another caller edge for `e2` still exists
 - **THEN** `F1(e0)` SHALL NOT recurse into `F1(e2)`
 
-#### Scenario: F2 drives only direct spawned children that remain cancel-pending
+#### Scenario: F2 drives only direct spawned children that remain cancel-requested
 - **WHEN** `ex0.spawned_execution_ids = [e1, e2, e3]`
-- **AND** only `e1` and `e3` have `lifecycle = "cancel-pending"`
+- **AND** only `e1` and `e3` have `lifecycle = "cancel-requested"`
 - **THEN** `F2(ex0)` SHALL build its direct drive set as `{e1, e3}`
 
 ### Requirement: Mutation-time cancellation rendezvous SHALL happen outside LMDB

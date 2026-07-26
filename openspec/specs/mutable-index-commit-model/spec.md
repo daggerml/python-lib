@@ -25,50 +25,42 @@ The system SHALL preserve the current external runtime and history behavior whil
 - **WHEN** current runtime workflows create an index, stage DAG work, and finalize it
 - **THEN** they produce the same externally visible results as before this model refactor
 
-### Requirement: Local indexes SHALL expose a durable cancellation tombstone lifecycle
-The system SHALL persist local `Index` objects with a local lifecycle that distinguishes mutable, canceling, and terminal-canceled states. The local lifecycle SHALL be `active`, `inactive`, or `canceled`.
+### Requirement: Mutating index workflows SHALL check execution lifecycle before each write transaction
+Every mutating `IndexOps` workflow SHALL instantiate `ExecutionState`, use execution lifecycle state in S3 as the sole mutation authority, and call `ExecutionState.require_mutation(execution_id, db, mode=...)` before each LMDB write transaction that can change index or DAG state.
 
-`active` SHALL allow normal mutation. `inactive` SHALL mean cancellation is in progress and local mutators must not continue normal writes. `canceled` SHALL be the terminal local tombstone for a canceled index and SHALL remain available for late callers until separate cleanup removes it.
+Execution-aware `IndexOps.create(cache_key, execution_id)` SHALL use `mode = "activation"`.
 
-#### Scenario: F2 marks the local index inactive before adapter driving
-- **WHEN** runtime cancellation begins `F2(ex0)` for a local index
-- **THEN** the system SHALL persist that local index lifecycle as `inactive` before driving direct child cancellation
-
-#### Scenario: Finished local cancellation leaves a tombstone
-- **WHEN** the runtime reaches terminal local cancellation state for an index
-- **THEN** the system SHALL persist that local index lifecycle as `canceled`
-
-### Requirement: Mutating index workflows SHALL check local lifecycle inside each transaction
-Every mutating index workflow SHALL check the local index lifecycle from inside the LMDB transaction that would perform the mutation. If one workflow spans multiple transactions, it SHALL perform that check at the start of each transaction.
-
-Execution-aware `IndexOps.create(cache_key, execution_id)` SHALL also be treated as a mutation operation for cancellation and activation gating. Before it creates or mutates local index state, it SHALL read the existing execution record for `execution_id` and:
-
-- proceed only when `lifecycle = "pending"`
-- call `ExecutionState.cancel(execution_id, None, db, mode="drive")` and then raise `CancellationError` when `lifecycle = "cancel-pending"`
-- raise `CancellationError` without local mutation when `lifecycle = "cancel-ready"` or `lifecycle = "canceled"`
-- raise `DmlRepoError` without local mutation when the lifecycle is `running`, `succeeded`, or `failed`, or when the execution record is missing
-
-#### Scenario: Single-transaction mutation checks local lifecycle in-txn
-- **WHEN** `put_literal`, `put_import`, `set_node_name`, `start_fn`, or `commit` begins its mutating transaction
-- **THEN** that workflow SHALL read the local index lifecycle from inside that transaction before performing mutation work
+`put_literal`, `put_import`, `set_node_name`, `start_fn`, and `commit` SHALL use `mode = "mutation"`.
 
 #### Scenario: Execution-aware create activates only from pending
 - **WHEN** `IndexOps.create(cache_key="ck1", execution_id="e1")` begins activation
-- **THEN** it SHALL create local index state only if `exec/state/e1.json` currently has `lifecycle = "pending"`
+- **THEN** it SHALL call `ExecutionState.require_mutation("e1", db, mode="activation")` before creating local index state
 
-#### Scenario: Execution-aware create drives cancel-pending before failing
-- **WHEN** `IndexOps.create(cache_key="ck1", execution_id="e1")` reads `exec/state/e1.json`
-- **AND** the lifecycle is `cancel-pending`
-- **THEN** it SHALL stop local activation work
-- **AND** it SHALL call `ExecutionState.cancel("e1", None, db, mode="drive")`
-- **AND** it SHALL raise `CancellationError`
+#### Scenario: Mutating index op writes only from running
+- **WHEN** `put_literal`, `put_import`, `set_node_name`, `start_fn`, or `commit` begins a write transaction for execution `e1`
+- **THEN** that workflow SHALL call `ExecutionState.require_mutation("e1", db, mode="mutation")` before performing mutation work
 
-#### Scenario: Execution-aware create raises on terminal cancel without drive
-- **WHEN** `IndexOps.create(cache_key="ck1", execution_id="e1")` reads `exec/state/e1.json`
-- **AND** the lifecycle is `cancel-ready` or `canceled`
-- **THEN** it SHALL raise `CancellationError`
-- **AND** it SHALL NOT create or mutate local index state
+#### Scenario: Multi-transaction mutation workflow rechecks execution lifecycle
+- **WHEN** one mutating workflow performs more than one LMDB write transaction
+- **THEN** it SHALL call `ExecutionState.require_mutation(...)` again before each later write transaction boundary
 
-#### Scenario: Multi-transaction workflow rechecks at each transaction boundary
-- **WHEN** one mutating workflow performs more than one LMDB transaction
-- **THEN** it SHALL recheck local index lifecycle at the start of each transaction before continuing
+### Requirement: Local Index objects SHALL not own mutation lifecycle state
+The system SHALL NOT rely on a persisted `Index.lifecycle` field to determine whether an execution can still be mutated. Local `Index` objects MAY still be read for structural commit and DAG state, but execution lifecycle ownership SHALL remain in the execution record.
+
+#### Scenario: Mutation eligibility ignores local lifecycle tombstones
+- **WHEN** a mutating workflow decides whether execution `e1` may continue
+- **THEN** it uses the execution record for `e1` as the lifecycle authority
+- **AND** it does not require a local `Index.lifecycle` value to make that decision
+
+### Requirement: DML runtime mutation entrypoints retry only CAS conflicts
+Runtime mutation entrypoints on the DML surface (`put_literal`, `put_import`, `set_node_name`, `start_fn`, `commit`, and other methods decorated with the runtime-mutation retry wrapper) SHALL retry the full orchestration path only when the raised error is a remote CAS conflict (`CasItemConflict`). The DML-layer retry wrapper SHALL NOT retry `DmlDbMapFullError` or other LMDB/db-env failures; map-full recovery remains owned by the DB environment layer.
+
+#### Scenario: Runtime commit retries full orchestration after CAS conflict
+- **WHEN** `runtime.commit(...)` fails during post-index orchestration with `CasItemConflict`
+- **THEN** the DML-layer retry wrapper re-runs the full commit orchestration path from the beginning
+- **AND** a subsequent successful attempt returns the committed DAG ref
+
+#### Scenario: Runtime commit does not retry map-full at the DML layer
+- **WHEN** `runtime.commit(...)` fails during post-index orchestration with `DmlDbMapFullError`
+- **THEN** the DML-layer retry wrapper does not re-run the orchestration path
+- **AND** the error propagates to the caller

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import traceback
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -9,12 +10,12 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from tempfile import TemporaryDirectory
 from threading import RLock
-from typing import Any, Optional, Protocol, Union, cast, get_args, overload
+from typing import Any, Literal, Optional, Protocol, Union, cast, get_args, overload
 
-from daggerml._core import Dml, DmlRepoError, Error, Ref, Runnable, Uri
+from daggerml._core import CancellationError, Dml, DmlRepoError, Error, Ref, Runnable, Uri
 from daggerml.util import BackoffWithJitter, current_time_millis
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 Scalar = Union[str, int, float, bool, type(None), Uri, Runnable]
 Collection = Union[list, dict]
@@ -195,10 +196,6 @@ def _builtin_name_for_argv(dag: "Dag", argv_refs: list[Ref]) -> str | None:
     return runnable.target.uri.split(":", 1)[1]
 
 
-def _make_node_in_dag(dag: "Dag", ref: Ref) -> "Node":
-    return _make_node(dag, ref)
-
-
 def _prepend_get_path_step(path: tuple[ProjectionStep, ...], key: ProjectionStep) -> tuple[ProjectionStep, ...] | None:
     if isinstance(key, list):
         if len(key) != 2:
@@ -218,7 +215,7 @@ def _backtrack_builtin(
     builtin = _builtin_name_for_argv(node.dag, argv_refs)
     if builtin is None:
         return None
-    arg_nodes = [_make_node_in_dag(node.dag, ref) for ref in argv_refs[1:]]
+    arg_nodes = [_make_node(node.dag, ref) for ref in argv_refs[1:]]
     if builtin == "get":
         if len(arg_nodes) < 2:
             return None
@@ -335,9 +332,10 @@ class Dag:
         assert not self.ref
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type, exc_value, tb):
         if exc_value is not None:
             # Convert exception to Error and commit it
+            traceback.print_exception(exc_type, exc_value, tb)
             err = Error.from_ex(exc_value) if not isinstance(exc_value, Error) else exc_value
             self.commit(err)
 
@@ -579,6 +577,22 @@ class Dag:
             value = value.ref
         self.ref = self.dml.runtime.commit(self._require_index_ref(), value, message=self.message, name=self.name)
         self.token = None  # Clear the working index since it's now committed
+
+    def cancel(self, mode: Literal["full", "drive"] = "full"):
+        """Cancel the DAG's execution.
+
+        Parameters
+        ----------
+        mode : str, default="plan"
+            Cancellation mode. "plan" cancels the execution plan, while "drive" also attempts to stop any
+            currently running tasks. "drive" is more aggressive and may be necessary for long-running DAGs.
+        """
+        if self.token is None:
+            raise DmlRepoError("Cannot cancel a committed DAG")
+        logger.info(f"Cancelling execution {self.token} with mode '{mode}'")
+        self.dml.runtime.cancel(self.token, mode=mode)
+        self.token = None  # Clear the index ref to indicate it's no longer active
+        raise CancellationError(f"DAG execution cancelled with mode '{mode}'")
 
 
 @dataclass(frozen=True)

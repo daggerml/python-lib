@@ -23,17 +23,17 @@ When the DAG stages values, contrib lowering resolves:
 
 That is where contrib turns declarative wrappers into concrete `Runnable` objects with concrete adapters and targets.
 
-## 3. The adapter boundary receives a canonical payload
+## 3. The adapter boundary receives an operation-specific payload
 
-The adapter is given:
+`AdapterInvokeRequest` is given:
 
 - the `Runnable`
-- the `argv_ptr`
 - `cache_key`
 - `execution_id`
 - `remote`
 - optional persisted `state`
-- optional lifecycle fields such as `execution_status`
+
+`AdapterCancelRequest` is given the execution id, cancellation requester, saved state, and an argv pointer from the execution-owned cancel target. It is not reconstructed from the mutable active ref.
 
 Adapters are expected to perform one bounded step and return canonical JSON-compatible output.
 
@@ -41,11 +41,11 @@ Adapters are expected to perform one bounded step and return canonical JSON-comp
 
 For the built-in local path, `LocalAdapter.send(...)` looks up the executor by `(adapter="local", runnable.target.uri)` and delegates to `spec.handle(...)`.
 
-`ExecutorBase.handle(...)` then decides whether to:
+`ExecutorBase.handle(...)` dispatches the explicit operation. For invocation it decides whether to:
 
 - call `start(...)` for a first launch,
 - call `poll(...)` for a resumed launch,
-- call `cancel(...)` when cancellation is pending.
+- call `cancel(...)` for a cancel operation.
 
 That shared control flow is why detached backends can still fit the same runtime model as synchronous ones.
 

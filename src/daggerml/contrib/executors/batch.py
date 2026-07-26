@@ -128,13 +128,13 @@ class BatchExecutor(LambdaExecutorBase):
         output_uri = _scratch_uri(scratch_uri, "output.json")
         payload = json.dumps(
             {
+                "operation": "invoke",
                 "runnable": sub,
                 "cache_key": cache_key,
                 "execution_id": execution_id,
                 "remote": remote,
                 "scratch_uri": scratch_uri,
                 "state": None,
-                "cancel_requested_by": None,
             }
         )
         _write_scratch_json(input_uri, payload, raw=True)
@@ -156,7 +156,7 @@ class BatchExecutor(LambdaExecutorBase):
         )["jobDefinitionArn"]
         job_id = client.submit_job(jobName=job_name, jobQueue=job_queue, jobDefinition=job_def)["jobId"]
         return {
-            "lifecycle": "running",
+            "status": "running",
             "error": None,
             "dag_id": None,
             "state": {
@@ -178,7 +178,7 @@ class BatchExecutor(LambdaExecutorBase):
         job_id = state.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             return {
-                "lifecycle": "failed",
+                "status": "failed",
                 "error": "batch poll: missing job_id in job state",
                 "state": None,
                 "dag_id": None,
@@ -186,21 +186,21 @@ class BatchExecutor(LambdaExecutorBase):
         try:
             jobs = self._client().describe_jobs(jobs=[job_id]).get("jobs", [])
         except Exception:
-            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
+            return {"status": "running", "error": None, "state": state, "dag_id": None}
         if not jobs:
-            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
+            return {"status": "running", "error": None, "state": state, "dag_id": None}
         job = jobs[0]
         job_status = job["status"]
 
         if job_status in PENDING_BATCH_STATUSES:
-            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
+            return {"status": "running", "error": None, "state": state, "dag_id": None}
 
         if job_status == "SUCCEEDED":
             try:
                 raw = _read_scratch_output(_scratch_uri(scratch_uri, "output.json"))
                 if raw is None:
                     return {
-                        "lifecycle": "failed",
+                        "status": "failed",
                         "error": "batch poll: sub-adapter output not yet written to S3",
                         "state": None,
                         "dag_id": None,
@@ -208,14 +208,14 @@ class BatchExecutor(LambdaExecutorBase):
                 result = json.loads(raw)
             except Exception as e:
                 return {
-                    "lifecycle": "failed",
+                    "status": "failed",
                     "error": f"batch poll: could not read sub-adapter result: {e}",
                     "state": None,
                     "dag_id": None,
                 }
-            if result.get("lifecycle") not in {"succeeded", "failed", "cancelled"}:
+            if result.get("status") not in {"succeeded", "failed"}:
                 return {
-                    "lifecycle": "failed",
+                    "status": "failed",
                     "error": f"batch poll: unexpected sub-adapter result: {result}",
                     "state": None,
                     "dag_id": None,
@@ -233,7 +233,7 @@ class BatchExecutor(LambdaExecutorBase):
         error = f"Batch job {job_id} failed"
         if reason not in {None, ""}:
             error = f"{error}: {reason}"
-        return {"lifecycle": "failed", "error": error, "state": None, "dag_id": None}
+        return {"status": "failed", "error": error, "state": None, "dag_id": None}
 
     def cancel(
         self,
@@ -262,4 +262,4 @@ class BatchExecutor(LambdaExecutorBase):
                 client.deregister_job_definition(jobDefinition=job_definition)
             except Exception:
                 pass
-        return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}
+        return {"status": "cancelled", "error": None}

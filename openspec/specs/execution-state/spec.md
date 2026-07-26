@@ -117,14 +117,109 @@ The runtime SHALL persist caller-owned `launch_state` for each execution attempt
 - **AND** it SHALL pass `resume_state` from `launch_state` to the adapter
 
 ### Requirement: Cancellation orphaning SHALL remove current-execution ownership under lock
-When cancellation leaves an execution with no remaining live callers, the runtime SHALL acquire the coordination lock for that execution's `cache_key`, recheck that no live callers remain, ensure the execution is not terminal, and remove `active/<cache_key>` before marking cancellation intent on lifecycle state.
+When Phase 1 cancellation processes an execution ID, the runtime SHALL acquire the coordination lock for that execution's `cache_key`, retrying until acquired. If the execution has live callers, processing that ID SHALL stop without changing its lifecycle or active ownership. Otherwise, the runtime SHALL set lifecycle to `cancel-requested`, remove each direct caller/callee edge, and move `refs/active/<cache_key>.json` to `refs/cancel-targets/<execution_id>.json` while conditionally verifying that the active ref still names that execution. The move SHALL preserve the existing argv manifest without regeneration. Direct callees SHALL then be added to the Phase 1 work set.
 
-#### Scenario: Orphaned callee loses active pointer before cancellation lifecycle update
-- **WHEN** cancellation removes the last live caller edge for callee execution `e1`
-- **THEN** the runtime SHALL lock the coordination key for `e1`'s `cache_key`
-- **AND** it SHALL delete `active/<cache_key>` before setting the callee lifecycle to a `cancel-*` value
+#### Scenario: User cancellation starts with explicit execution IDs
+- **WHEN** a user requests cancellation for execution IDs `e1` and `e2`
+- **THEN** Phase 1 initializes its work set with exactly those IDs
 
-#### Scenario: New caller relaunches after detached cancellation
-- **WHEN** a later caller computes the same `cache_key` after the prior execution was cancellation-detached and `active/<cache_key>` is absent
-- **THEN** the runtime SHALL treat the computation as having no current execution
-- **AND** it SHALL create a fresh execution attempt instead of resuming the detached one
+#### Scenario: Live callers prevent cancellation planning
+- **WHEN** Phase 1 pops `e1`
+- **AND** `e1` still has live callers
+- **THEN** Phase 1 stops processing `e1`
+- **AND** it does not mark `e1` cancel-requested
+
+#### Scenario: Orphaned execution moves active ownership to a cancel target
+- **WHEN** Phase 1 processes orphaned execution `e1` for cache key `ck1`
+- **AND** `active/ck1` names `e1`
+- **THEN** it marks `e1` as `cancel-requested`
+- **AND** it removes `e1` as caller from each direct callee before planning those callees
+- **AND** it moves the existing active manifest to `cancel-targets/e1`
+- **AND** it does not regenerate the argv manifest
+
+#### Scenario: Active ref rebinding is not overwritten
+- **WHEN** Phase 1 processes `e1`
+- **AND** `active/ck1` names a different execution
+- **THEN** it does not move or delete that active ref
+
+### Requirement: Cancellation Phase 1 SHALL not invoke adapters
+Phase 1 SHALL only plan cancellation, update lifecycle state, move active ownership, and enqueue direct callees. It SHALL perform no adapter invocation.
+
+#### Scenario: Planning completes without adapter work
+- **WHEN** Phase 1 processes a cancellation work set
+- **THEN** no invoke or cancel adapter operation is sent
+
+### Requirement: Cancellation Phase 2 SHALL be distributed and leaves-first
+Each runtime handling a `cancel-requested` execution SHALL wait for its direct callees to reach `cancel-ready`, invoke cancellation for those callees using their cancel-target refs, persist those callees as `canceled`, and then persist its own execution as `cancel-ready`. The wait SHALL time out after 60 seconds, after which the runtime SHALL perform the cancel-adapter work anyway.
+
+#### Scenario: Parent waits for callees
+- **WHEN** a cancel-requested execution has a callee that is not `cancel-ready`
+- **THEN** its runtime does not yet invoke that callee's cancel adapter
+
+#### Scenario: Leaf-first cleanup advances the parent
+- **WHEN** all direct callees of `e1` are `cancel-ready`
+- **THEN** the runtime invokes their cancel adapters
+- **AND** it marks those callees `canceled`
+- **AND** it marks `e1` `cancel-ready`
+
+#### Scenario: Readiness timeout forces cleanup
+- **WHEN** an execution remains `cancel-ready` for more than 60 seconds without normal handoff cleanup
+- **THEN** a runtime invokes the applicable cancel adapters anyway
+- **AND** the cleanup path remains safe to retry
+
+### Requirement: ExecutionState SHALL expose a public mutation lifecycle guard
+The runtime SHALL expose `ExecutionState.require_mutation(execution_id, db, mode="activation" | "mutation")` as the canonical public guard for mutation eligibility. The guard SHALL read `exec/state/<execution_id>.json`, classify the stored lifecycle for the requested mode, and either return the execution record unchanged or raise a typed execution-status error.
+
+For `mode = "activation"`, only `lifecycle = "pending"` SHALL be accepted.
+
+For `mode = "mutation"`, only `lifecycle = "running"` SHALL be accepted.
+
+If the lifecycle is `cancel-requested`, the guard SHALL drive Phase 2 cancellation before raising `CanceledExecutionError`.
+
+If the lifecycle is `cancel-ready` or `canceled`, the guard SHALL raise `CanceledExecutionError` without driving cancellation.
+
+If the lifecycle is any other non-accepted value for the requested mode, the guard SHALL raise `BadExecutionStatusError`.
+
+#### Scenario: Activation guard accepts pending execution
+- **WHEN** `ExecutionState.require_mutation("e1", db, mode="activation")` reads `exec/state/e1.json`
+- **AND** the lifecycle is `pending`
+- **THEN** it returns the stored execution record without mutation
+
+#### Scenario: Mutation guard accepts running execution
+- **WHEN** `ExecutionState.require_mutation("e1", db, mode="mutation")` reads `exec/state/e1.json`
+- **AND** the lifecycle is `running`
+- **THEN** it returns the stored execution record without mutation
+
+#### Scenario: Activation guard rejects non-pending non-cancel states
+- **WHEN** `ExecutionState.require_mutation("e1", db, mode="activation")` reads `exec/state/e1.json`
+- **AND** the lifecycle is `running`, `succeeded`, or `failed`
+- **THEN** it raises `BadExecutionStatusError`
+
+#### Scenario: Mutation guard rejects non-running non-cancel states
+- **WHEN** `ExecutionState.require_mutation("e1", db, mode="mutation")` reads `exec/state/e1.json`
+- **AND** the lifecycle is `pending`, `succeeded`, or `failed`
+- **THEN** it raises `BadExecutionStatusError`
+
+#### Scenario: Cancel-requested drives cancellation before raising
+- **WHEN** `ExecutionState.require_mutation("e1", db, mode="activation")` or `ExecutionState.require_mutation("e1", db, mode="mutation")` reads `exec/state/e1.json`
+- **AND** the lifecycle is `cancel-requested`
+- **THEN** it drives Phase 2 cancellation for `e1`
+- **AND** it raises `CanceledExecutionError`
+
+#### Scenario: Terminal cancel states raise without driving
+- **WHEN** `ExecutionState.require_mutation("e1", db, mode="activation")` or `ExecutionState.require_mutation("e1", db, mode="mutation")` reads `exec/state/e1.json`
+- **AND** the lifecycle is `cancel-ready` or `canceled`
+- **THEN** it raises `CanceledExecutionError`
+
+### Requirement: Execution coordination retries SHALL not silently abandon CAS mutations
+For child-registration and terminal-child bookkeeping mutations, the execution-state layer SHALL retry compare-and-swap conflicts with bounded exponential backoff. Retry exhaustion SHALL be returned to the calling workflow as an error rather than being logged and treated as success.
+
+#### Scenario: Registration conflict is retried from the latest record
+- **WHEN** a child-registration CAS update conflicts
+- **THEN** the runtime SHALL reread the caller execution record before retrying
+- **AND** it SHALL evaluate the latest lifecycle before attempting the next update
+
+#### Scenario: Exhaustion is observable to the caller
+- **WHEN** a bounded execution-record coordination retry budget is exhausted
+- **THEN** the execution-state layer SHALL raise an error to its caller
+- **AND** it SHALL not return a successful coordination result

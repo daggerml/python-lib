@@ -100,7 +100,7 @@ class CfnExecutor(ExecutorBase):
                 remote=remote,
                 scratch_uri=scratch_uri,
             )
-        return {"lifecycle": "running", "error": None, "state": job_state, "dag_id": None}
+        return {"status": "running", "error": None, "state": job_state, "dag_id": None}
 
     def poll(
         self,
@@ -115,7 +115,7 @@ class CfnExecutor(ExecutorBase):
         stack_name = state.get("stack_name")
         if not stack_name:
             return {
-                "lifecycle": "failed",
+                "status": "failed",
                 "error": "cfn poll: missing stack_name in job state",
                 "state": None,
                 "dag_id": None,
@@ -123,9 +123,9 @@ class CfnExecutor(ExecutorBase):
         try:
             stacks = self._client().describe_stacks(StackName=stack_name)["Stacks"]
         except Exception:
-            return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
+            return {"status": "running", "error": None, "state": state, "dag_id": None}
         if not stacks:
-            return {"lifecycle": "failed", "error": f"Stack not found: {stack_name}", "state": None, "dag_id": None}
+            return {"status": "failed", "error": f"Stack not found: {stack_name}", "state": None, "dag_id": None}
         stack = stacks[0]
         raw_status = stack["StackStatus"]
         if raw_status in TERMINAL_SUCCESS_STATUSES:
@@ -138,7 +138,7 @@ class CfnExecutor(ExecutorBase):
                 execution_id=execution_id,
                 remote_root=remote["root"],
             )
-            return {"lifecycle": "succeeded", "error": None, "state": None, "dag_id": dag_id}
+            return {"status": "succeeded", "error": None, "state": None, "dag_id": dag_id}
         if raw_status in TERMINAL_FAILED_STATUSES:
             error = f"Stack {stack_name} failed: {raw_status}"
             try:
@@ -148,8 +148,8 @@ class CfnExecutor(ExecutorBase):
                     error = f"{error}\n{chr(10).join(reasons)}"
             except Exception:
                 pass
-            return {"lifecycle": "failed", "error": error, "state": None, "dag_id": None}
-        return {"lifecycle": "running", "error": None, "state": state, "dag_id": None}
+            return {"status": "failed", "error": error, "state": None, "dag_id": None}
+        return {"status": "running", "error": None, "state": state, "dag_id": None}
 
     def cancel(
         self,
@@ -172,4 +172,4 @@ class CfnExecutor(ExecutorBase):
                     client.delete_stack(StackName=stack_name)
                 except Exception:
                     pass
-        return {"lifecycle": "cancelled", "error": None, "state": None, "dag_id": None}
+        return {"status": "cancelled", "error": None}

@@ -19,11 +19,11 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import InitVar, dataclass, field
-from typing import TYPE_CHECKING, Any, NoReturn, Optional, cast
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from daggerml._core.builtins import BUILTIN_FNS
 from daggerml._core.db import Ref
-from daggerml._core.exec_state import CancellationError, ExecutionState
+from daggerml._core.exec_state import ExecutionState
 from daggerml._core.remote import Remote
 from daggerml._core.types import (
     ArgvNode,
@@ -67,18 +67,8 @@ class IndexOps:
         kw = {"n_workers": self._remote.n_workers, "client": self._remote._store.client}
         return ExecutionState(self.remote_root, cache_key=cache_key, **kw)
 
-    def _require_active_index(self, index: Ref, txn) -> tuple[Any, Index]:
-        ctx = txn.get_ctx(index)
-        index_obj = cast(Index, ctx.commit)
-        if index_obj.lifecycle != "active":
-            msg = f"Index {index.id()} is {index_obj.lifecycle} and cannot be mutated"
-            raise CancellationError(msg, lifecycle=index_obj.lifecycle)
-        return ctx, index_obj
-
-    def _handle_mutation_cancellation(self, index: Ref, exc: CancellationError, db: DmlDB) -> NoReturn:
-        if exc.lifecycle == "inactive":
-            self.exec_state().cancel(index.id(), None, db, mode="drive")
-        raise exc
+    def _require_mutation(self, index: Ref, db: DmlDB, *, mode: Literal["activation", "mutation"] = "mutation") -> None:
+        self.exec_state().require_mutation(index.id(), db, mode=mode)
 
     def _update_dag(self, index: Ref, node: Ref, name: Optional[str], ctx, txn) -> Ref:
         if node not in ctx.dag.nodes:
@@ -103,17 +93,7 @@ class IndexOps:
         state = self.exec_state(cache_key=cache_key)
         exec_id = execution_id or uuid7().hex
         if execution_id is not None:
-            record = state.read_execution_record(exec_id)
-            lifecycle = record["lifecycle"]
-            if lifecycle == "cancel-pending":
-                state.cancel(exec_id, None, db, mode="drive")
-                msg = f"Execution {exec_id} is {lifecycle} and cannot be activated"
-                raise CancellationError(msg, lifecycle=lifecycle)
-            if lifecycle in ("cancel-ready", "canceled"):
-                msg = f"Execution {exec_id} is {lifecycle} and cannot be activated"
-                raise CancellationError(msg, lifecycle=lifecycle)
-            if lifecycle != "pending":
-                raise DmlRepoError(f"Execution {exec_id} is {lifecycle} and cannot be activated")
+            record = state.require_mutation(exec_id, db, mode="activation")
         # FIXME: Consider using `call_w_resize` for this write transaction.
         with db.tx() as txn:
             argv = None
@@ -159,51 +139,38 @@ class IndexOps:
                     author=author,
                     message="",
                     dag=dag_ref,
-                    lifecycle="active",
                 ),
                 to=Ref(f"index:{exec_id}"),
             )
         if execution_id is not None:
-            record = state.read_execution_record(exec_id)
-            lifecycle = record["lifecycle"]
-            if lifecycle == "cancel-pending":
-                state.cancel(exec_id, None, db, mode="drive")
-                msg = f"Execution {exec_id} is {lifecycle} and cannot be activated"
-                raise CancellationError(msg, lifecycle=lifecycle)
-            if lifecycle in ("cancel-ready", "canceled"):
-                msg = f"Execution {exec_id} is {lifecycle} and cannot be activated"
-                raise CancellationError(msg, lifecycle=lifecycle)
-            if lifecycle != "pending":
-                raise DmlRepoError(f"Execution {exec_id} is {lifecycle} and cannot be activated")
             record.update({"lifecycle": "running", "updated_at": int(time.time())})
             state.update_execution_record(record)
         return index
 
     def put_import(self, index: Ref, dag: Ref, node: Optional[Ref], name: Optional[str] = None, *, db: DmlDB) -> Ref:
         """Import a node from another DAG into the current index DAG."""
-        try:
-            with db.tx() as txn:
-                ctx, index_obj = self._require_active_index(index, txn)
-                if index_obj.dag == dag:
-                    raise DmlRepoError("Cannot import from the current DAG")
-                dag_obj: Dag = txn.get(dag)
-                if not dag_obj.is_finished():
-                    raise DmlRepoError("Cannot import from an unfinished DAG")
-                if node is None and dag_obj.error is not None:
-                    msg = f"Dag: {dag} is finished with error: {dag_obj.error}, cannot import result node."
-                    raise DmlRepoError(msg)
-                node_ = cast(Ref, node or dag_obj.result)
-                if node_ not in dag_obj.nodes:
-                    raise DmlRepoError("Node to import not found in source DAG")
-                imp_node = txn.put(ImportNode(dag, node_))
-                ctx.dag.nodes = sorted({*ctx.dag.nodes, imp_node})
-                if name is not None:
-                    ctx.dag.names[name] = imp_node
-                index_obj.dag = txn.put(ctx.dag)
-                txn.put(index_obj, to=index)
-            return imp_node
-        except CancellationError as exc:
-            self._handle_mutation_cancellation(index, exc, db)
+        self._require_mutation(index, db)
+        with db.tx() as txn:
+            ctx = txn.get_ctx(index)
+            index_obj = cast(Index, ctx.commit)
+            if index_obj.dag == dag:
+                raise DmlRepoError("Cannot import from the current DAG")
+            dag_obj: Dag = txn.get(dag)
+            if not dag_obj.is_finished():
+                raise DmlRepoError("Cannot import from an unfinished DAG")
+            if node is None and dag_obj.error is not None:
+                msg = f"Dag: {dag} is finished with error: {dag_obj.error}, cannot import result node."
+                raise DmlRepoError(msg)
+            node_ = cast(Ref, node or dag_obj.result)
+            if node_ not in dag_obj.nodes:
+                raise DmlRepoError("Node to import not found in source DAG")
+            imp_node = txn.put(ImportNode(dag, node_))
+            ctx.dag.nodes = sorted({*ctx.dag.nodes, imp_node})
+            if name is not None:
+                ctx.dag.names[name] = imp_node
+            index_obj.dag = txn.put(ctx.dag)
+            txn.put(index_obj, to=index)
+        return imp_node
 
     def _run_builtin(self, argv_node_refs: list[Ref], dag, txn) -> Ref:
         argv_refs = [txn.get(x).datum_ref(txn) for x in argv_node_refs]
@@ -280,13 +247,11 @@ class IndexOps:
 
     def put_literal(self, index: Ref, value: Any, name: Optional[str] = None, *, db: DmlDB) -> Ref:
         # FIXME: Consider using `call_w_resize` for this write transaction.
-        try:
-            with db.tx() as txn:
-                ctx, _index_obj = self._require_active_index(index, txn)
-                node_ref = self._put_literal(value, ctx.dag, txn)
-                return self._update_dag(index, node_ref, name, ctx, txn)
-        except CancellationError as exc:
-            self._handle_mutation_cancellation(index, exc, db)
+        self._require_mutation(index, db)
+        with db.tx() as txn:
+            ctx = txn.get_ctx(index)
+            node_ref = self._put_literal(value, ctx.dag, txn)
+            return self._update_dag(index, node_ref, name, ctx, txn)
 
     def get_argv(self, index: Ref, *, db: DmlDB) -> Ref:
         """Return the argv node for an index (raises if missing)."""
@@ -306,52 +271,46 @@ class IndexOps:
 
     def set_node_name(self, index: Ref, name: str, node_ref: Ref, *, db: DmlDB) -> Ref:
         """Set or replace a node name in the index DAG."""
-        try:
-            with db.tx() as txn:
-                ctx, _index_obj = self._require_active_index(index, txn)
-                return self._update_dag(index, node_ref, name, ctx, txn)
-        except CancellationError as exc:
-            self._handle_mutation_cancellation(index, exc, db)
+        self._require_mutation(index, db)
+        with db.tx() as txn:
+            ctx = txn.get_ctx(index)
+            return self._update_dag(index, node_ref, name, ctx, txn)
 
     def start_fn(self, index: Ref, argv: list[Ref], name: Optional[str] = None, *, db: DmlDB) -> Optional[Ref]:
         # FIXME: Consider using `call_w_resize` for this write transaction.
-        try:
-            with db.tx() as txn:
-                ctx, _index_obj = self._require_active_index(index, txn)
-                if not set(argv).issubset(set(ctx.dag.nodes)):
-                    raise DmlRepoError("All argv nodes must be part of current DAG.")
-                # Keep the runnable read narrow so we do not unroll argv values early.
-                runnable = txn.get(txn.get(argv[0]).datum_ref(txn)).value(txn)
-                if not isinstance(runnable, Runnable):
-                    raise DmlRepoError("First argv node must resolve to a Runnable datum.")
-                if runnable.adapter == "":
-                    resp = self._run_builtin(argv, ctx.dag, txn)
-                    return self._update_dag(index, resp, name, ctx, txn)
-                # adapter-backed function call.
-                # Step 0: construct argv node and compute cache key
-                argv_node = ArgvNode(value=txn.put(ListDatum([txn.get(x).datum_ref(txn) for x in argv])))
-                cache_key = argv_node.cache_key(txn)
-                argv_node_ref = txn.put(argv_node)
-        except CancellationError as exc:
-            self._handle_mutation_cancellation(index, exc, db)
+        self._require_mutation(index, db)
+        with db.tx() as txn:
+            ctx = txn.get_ctx(index)
+            if not set(argv).issubset(set(ctx.dag.nodes)):
+                raise DmlRepoError("All argv nodes must be part of current DAG.")
+            # Keep the runnable read narrow so we do not unroll argv values early.
+            runnable = txn.get(txn.get(argv[0]).datum_ref(txn)).value(txn)
+            if not isinstance(runnable, Runnable):
+                raise DmlRepoError("First argv node must resolve to a Runnable datum.")
+            if runnable.adapter == "":
+                resp = self._run_builtin(argv, ctx.dag, txn)
+                return self._update_dag(index, resp, name, ctx, txn)
+            # adapter-backed function call.
+            # Step 0: construct argv node and compute cache key
+            argv_node = ArgvNode(value=txn.put(ListDatum([txn.get(x).datum_ref(txn) for x in argv])))
+            cache_key = argv_node.cache_key(txn)
+            argv_node_ref = txn.put(argv_node)
         state = self.exec_state(cache_key=cache_key)
         resp = state.get_or_start_fn(index, runnable, argv_node_ref, db)
         if resp is None:
             # execution is still running, caller should poll for completion and then import the result node when done.
             return None
         # FIXME: Consider using `call_w_resize` for this write transaction.
-        try:
-            with db.tx() as txn:
-                # add FnNode pointing to this dag
-                hydrated = txn.get(resp)
-                if not hydrated.is_finished():
-                    raise DmlRepoError(f"Cached DAG {cache_key} is not finished.")
-                ctx, _index_obj = self._require_active_index(index, txn)
-                node = txn.put(FnNode(argv=argv, dag=resp))
-                ctx.dag.nodes = sorted({*ctx.dag.nodes, node})
-                self._update_dag(index, node, name, ctx, txn)
-        except CancellationError as exc:
-            self._handle_mutation_cancellation(index, exc, db)
+        self._require_mutation(index, db)
+        with db.tx() as txn:
+            # add FnNode pointing to this dag
+            hydrated = txn.get(resp)
+            if not hydrated.is_finished():
+                raise DmlRepoError(f"Cached DAG {cache_key} is not finished.")
+            ctx = txn.get_ctx(index)
+            node = txn.put(FnNode(argv=argv, dag=resp))
+            ctx.dag.nodes = sorted({*ctx.dag.nodes, node})
+            self._update_dag(index, node, name, ctx, txn)
         if hydrated.error is not None:
             with db.tx() as txn:
                 err = txn.get(hydrated.error)
@@ -369,32 +328,31 @@ class IndexOps:
         db: DmlDB,
     ) -> tuple[Ref, Ref | None]:
         # FIXME: Consider using `call_w_resize` for this write transaction.
-        try:
-            with db.tx() as txn:
-                ctx, index_obj = self._require_active_index(index, txn)
-                if ctx.dag is None:
-                    raise DmlRepoError("Index commit has no DAG.")
-                if isinstance(value, Error):
-                    ctx.dag.error = txn.put(value)
-                else:
-                    if value not in ctx.dag.nodes:
-                        raise DmlRepoError("Value node is not part of DAG.")
-                    ctx.dag.result = value
-                dag_ref = txn.put(ctx.dag)
-                commit_ref = None
-                if name is not None:
-                    ctx.tree.dags[name] = dag_ref
-                    commit_ref = txn.put(
-                        Commit(
-                            parents=list(index_obj.parents),
-                            tree=txn.put(ctx.tree),
-                            author=author,
-                            message=message or "",
-                            created=now(),
-                        )
+        self._require_mutation(index, db)
+        with db.tx() as txn:
+            ctx = txn.get_ctx(index)
+            index_obj = cast(Index, ctx.commit)
+            if ctx.dag is None:
+                raise DmlRepoError("Index commit has no DAG.")
+            if isinstance(value, Error):
+                ctx.dag.error = txn.put(value)
+            else:
+                if value not in ctx.dag.nodes:
+                    raise DmlRepoError("Value node is not part of DAG.")
+                ctx.dag.result = value
+            dag_ref = txn.put(ctx.dag)
+            commit_ref = None
+            if name is not None:
+                ctx.tree.dags[name] = dag_ref
+                commit_ref = txn.put(
+                    Commit(
+                        parents=list(index_obj.parents),
+                        tree=txn.put(ctx.tree),
+                        author=author,
+                        message=message or "",
+                        created=now(),
                     )
-                txn.delete(index)
-        except CancellationError as exc:
-            self._handle_mutation_cancellation(index, exc, db)
+                )
+            txn.delete(index)
         self.exec_state().finish_execution(index.id(), dag_ref, db)
         return dag_ref, commit_ref

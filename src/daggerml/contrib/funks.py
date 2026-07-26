@@ -9,16 +9,18 @@ def _run(*cmd: str) -> None:
 
     from daggerml.api import DmlRepoError
 
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    proc = subprocess.run(cmd, check=False)
     if proc.returncode == 0:
         return
     raise DmlRepoError(
-        f"Command failed ({proc.returncode}): {' '.join(cmd)}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+        f"Command failed (exit code {proc.returncode}): {' '.join(cmd)}. See the execution logs for command output."
     )
 
 
 @api.funkify(uri="script", adapter="local", extra_objs=(_run,))
 def docker_build(dag, context_tarball, build_flags=(), repo=None):
+    from contextlib import chdir
+    from tempfile import TemporaryDirectory
     from uuid import uuid4
 
     from daggerml import Uri
@@ -29,17 +31,19 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
     store = S3Store()
     tag = uuid4().hex
     local_image = f"dml:{tag}"
-    store.untar(context_tarball.value(), ".")
-    _run("docker", "build", *build_flags, "-t", local_image, ".")
-    repo = repo.value() if repo is not None else None
-    if repo is not None:
-        remote_image = f"{repo.uri}:{tag}"
-        _run("docker", "tag", local_image, remote_image)
-        _run("docker", "push", remote_image)
-        return dag.put(Uri(remote_image), name="remote-image")
-    image_tar = "./image.tar"
-    _run("docker", "save", "-o", str(image_tar), local_image)
-    return store.put(filepath=str(image_tar), suffix=".tar")
+    with TemporaryDirectory(prefix="dml-docker-build-") as build_dir:
+        store.untar(context_tarball.value(), build_dir)
+        with chdir(build_dir):
+            _run("docker", "build", *build_flags, "-t", local_image, ".")
+            repo = repo.value() if repo is not None else None
+            if repo is not None:
+                remote_image = f"{repo.uri}:{tag}"
+                _run("docker", "tag", local_image, remote_image)
+                _run("docker", "push", remote_image)
+                return dag.put(Uri(remote_image), name="remote-image")
+            image_tar = "./image.tar"
+            _run("docker", "save", "-o", str(image_tar), local_image)
+            return store.put(filepath=str(image_tar), suffix=".tar")
 
 
 def cfn(template: dict, params: dict, name: str, dag: Dag | None = None) -> Node:

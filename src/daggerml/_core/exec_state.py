@@ -35,14 +35,25 @@ import json
 import logging
 import shutil
 import subprocess
+import sys
 import time
+import traceback
 from dataclasses import InitVar, asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, TypedDict, cast
 from uuid import uuid4
 
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItem, CasItemConflict, S3Remote
-from daggerml._core.types import Dag, DmlDB, DmlRepoError, Error, Index, Ref, Runnable
+from daggerml._core.types import (
+    BadExecutionStatusError,
+    CanceledExecutionError,
+    Dag,
+    DmlDB,
+    DmlRepoError,
+    Error,
+    Ref,
+    Runnable,
+)
 from daggerml._core.util import uuid7
 
 if TYPE_CHECKING:
@@ -50,19 +61,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 LOCK_TTL: float = 300.0
+COORDINATION_CAS_ATTEMPTS = 5
+COORDINATION_CAS_BACKOFF_SECONDS = 0.01
 EXECUTION_LIFECYCLES = Literal[
-    "pending", "running", "succeeded", "failed", "cancel-pending", "cancel-ready", "canceled"
+    "pending", "running", "succeeded", "failed", "cancel-requested", "cancel-ready", "canceled"
 ]
-ADAPTER_LIFECYCLES = Literal["running", "succeeded", "failed", "cancelled"]
-GRAPH_LIFECYCLES = Literal["running", "succeeded", "failed", "cancel-pending", "cancel-ready", "canceled", "pending"]
-INDEX_LIFECYCLES = Literal["active", "inactive", "canceled"]
+INVOKE_LIFECYCLES = Literal["running", "succeeded", "failed"]
+CANCEL_STATUSES = Literal["cancelled", "failed"]
+GRAPH_LIFECYCLES = Literal["running", "succeeded", "failed", "cancel-requested", "cancel-ready", "canceled", "pending"]
+CANCEL_READY_TIMEOUT_SECONDS = 60.0
 
 
-class CancellationError(DmlRepoError):
+class CancellationError(CanceledExecutionError):
     """Raised when local or remote cancellation blocks further work."""
 
     def __init__(self, message: str, *, lifecycle: str | None = None):
-        super().__init__(message, type="cancellationerror")
+        super().__init__(message, lifecycle=lifecycle)
+        self.type = "cancellationerror"
         self.lifecycle = lifecycle
 
 
@@ -105,20 +120,36 @@ class RemotePayload(TypedDict):
     root: str
 
 
-class AdapterEnvelope(TypedDict):
+class AdapterInvokeRequest(TypedDict):
+    operation: Literal["invoke"]
     cache_key: str
     execution_id: str
     remote: RemotePayload
     runnable: dict
     state: dict | None
     scratch_uri: str
-    cancel_requested_by: str | None
+
+class AdapterCancelRequest(TypedDict):
+    operation: Literal["cancel"]
+    cache_key: str
+    execution_id: str
+    argv_ptr: str
+    remote: RemotePayload
+    runnable: dict
+    state: dict | None
+    scratch_uri: str
+    requested_by: str | None
 
 
-class AdapterResponse(TypedDict):
-    lifecycle: ADAPTER_LIFECYCLES
+class AdapterInvokeResponse(TypedDict):
+    status: INVOKE_LIFECYCLES
     state: dict | None
     dag_id: str | None
+    error: str | None
+
+
+class AdapterCancelResponse(TypedDict):
+    status: CANCEL_STATUSES
     error: str | None
 
 
@@ -240,14 +271,16 @@ class ExecutionState:
     def _key_for_edge(self, callee_execution_id: str, caller_execution_id: str) -> str:
         return f"{self._key_for_edge_prefix(callee_execution_id)}{caller_execution_id}.json"
 
-    def _call_adapter(self, envelope: AdapterEnvelope) -> AdapterResponse:
+    def _call_adapter(
+        self, request: AdapterInvokeRequest | AdapterCancelRequest
+    ) -> AdapterInvokeResponse | AdapterCancelResponse:
         if self.cache_key is None:
             raise DmlRepoError("cache_key is required for adapter calls")
-        adapter = envelope["runnable"]["adapter"]
+        adapter = request["runnable"]["adapter"]
         adapter_path = shutil.which(adapter)
         if adapter_path is None:
             raise DmlRepoError(f"Adapter executable not found: {adapter}")
-        inp = json.dumps(envelope, sort_keys=True, separators=(",", ":"))
+        inp = json.dumps(request, sort_keys=True, separators=(",", ":"))
         result = subprocess.run([adapter_path], input=inp, text=True, capture_output=True)
         if result.returncode != 0:
             raise DmlRepoError(f"Adapter process failed with code {result.returncode}: {result.stderr}")
@@ -255,7 +288,9 @@ class ExecutionState:
             response = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise DmlRepoError(f"Failed to parse adapter response as JSON: {result.stdout}") from exc
-        return AdapterResponse(**response)
+        if request["operation"] == "invoke":
+            return AdapterInvokeResponse(**response)
+        return AdapterCancelResponse(**response)
 
     # ------------------------------------------------------------------
     # Public API
@@ -366,24 +401,38 @@ class ExecutionState:
     def update_execution_record(self, record: ExecutionRecord) -> None:
         self._update(self._key_for_execution(record["execution_id"]), record)
 
+    def delete_execution_record(self, execution_id: str) -> bool:
+        return self._delete(self._key_for_execution(execution_id))
+
     @staticmethod
     def _is_cancel_lifecycle(lifecycle: str) -> bool:
         return lifecycle.startswith("cancel") or lifecycle == "canceled"
 
-    def _set_local_index_lifecycle(self, execution_id: str, lifecycle: INDEX_LIFECYCLES, db: DmlDB) -> None:
-        with db.tx() as txn:
-            index_ref = Ref(f"index:{execution_id}")
-            try:
-                index_obj = cast(Index, txn.get(index_ref))
-            except DmlRepoError:
-                return
-            if index_obj.lifecycle == "canceled" or index_obj.lifecycle == lifecycle:
-                return
-            index_obj.lifecycle = lifecycle
-            txn.put(index_obj, to=index_ref)
+    def require_mutation(
+        self,
+        execution_id: str,
+        db: DmlDB,
+        *,
+        mode: Literal["activation", "mutation"] = "activation",
+    ) -> ExecutionRecord:
+        record = self.read_execution_record(execution_id)
+        lifecycle = record["lifecycle"]
+        allowed = "pending" if mode == "activation" else "running"
+        action = "activated" if mode == "activation" else "mutated"
+        if lifecycle == allowed:
+            return record
+        if lifecycle == "cancel-requested":
+            self.cancel(execution_id, None, db, mode="drive")
+            msg = f"Execution {execution_id} is {lifecycle} and cannot be {action}"
+            raise CanceledExecutionError(msg, lifecycle=lifecycle)
+        if lifecycle in ("cancel-ready", "canceled"):
+            msg = f"Execution {execution_id} is {lifecycle} and cannot be {action}"
+            raise CanceledExecutionError(msg, lifecycle=lifecycle)
+        msg = f"Execution {execution_id} is {lifecycle} and cannot be {action}"
+        raise BadExecutionStatusError(msg, lifecycle=lifecycle)
 
     def _add_spawned_execution(self, caller_id: str, callee_id: str) -> None:
-        for _ in range(3):
+        for attempt in range(COORDINATION_CAS_ATTEMPTS):
             caller_record = self.read_execution_record(caller_id)
             if caller_record is None:
                 raise DmlRepoError(f"No execution record found for caller execution_id: {caller_id}")
@@ -394,19 +443,20 @@ class ExecutionState:
             try:
                 return self.update_execution_record(caller_record)
             except CasItemConflict:
-                # Retry on conflict, which means the caller record was concurrently updated
-                logger.warning(f"CAS conflict when updating execution record for {caller_id}...")
-        logger.warning(
-            f"Failed to update execution record for {caller_id} after 3 attempts due to CAS conflicts... "
-            "This execution may be un-cancelable."
+                # Registration is the launch fence: never invoke an untracked child.
+                logger.warning("CAS conflict when registering child execution for %s; retrying...", caller_id)
+                time.sleep(COORDINATION_CAS_BACKOFF_SECONDS * (2**attempt))
+        raise DmlRepoError(
+            f"Failed to register child execution {callee_id} for {caller_id} after "
+            f"{COORDINATION_CAS_ATTEMPTS} CAS attempts"
         )
 
     def _complete_spawned_execution(self, caller_id: str, callee_id: str) -> None:
-        for _ in range(3):
+        for attempt in range(COORDINATION_CAS_ATTEMPTS):
             caller_record = self.read_execution_record(caller_id)
             if caller_record is None:
                 raise DmlRepoError(f"No execution record found for caller execution_id: {caller_id}")
-            if caller_record["lifecycle"] != "running":
+            if caller_record["lifecycle"] not in ("running", "cancel-requested", "cancel-ready", "canceled"):
                 msg = f"Execution {caller_id} status: {caller_record['lifecycle']} cannot spawn new executions"
                 raise CancellationError(msg, lifecycle=caller_record["lifecycle"])
             caller_record["spawned_execution_ids"] = sorted(set(caller_record["spawned_execution_ids"]) - {callee_id})
@@ -414,11 +464,12 @@ class ExecutionState:
             try:
                 return self.update_execution_record(caller_record)
             except CasItemConflict:
-                # Retry on conflict, which means the caller record was concurrently updated
-                logger.warning(f"CAS conflict when updating execution record for {caller_id}, retrying...")
-        logger.warning(
-            f"Failed to finalize spawned execution for {caller_id} after 3 attempts due to CAS conflicts... "
-            "Cancel might get annoying"
+                # Keep terminal coordination state intact until this lineage update succeeds.
+                logger.warning("CAS conflict when completing child execution for %s; retrying...", caller_id)
+                time.sleep(COORDINATION_CAS_BACKOFF_SECONDS * (2**attempt))
+        raise DmlRepoError(
+            f"Failed to record completed child execution {callee_id} for {caller_id} after "
+            f"{COORDINATION_CAS_ATTEMPTS} CAS attempts"
         )
 
     def describe_graph(self, root_execution_ids: Sequence[str]) -> ExecutionGraph:
@@ -475,15 +526,18 @@ class ExecutionState:
         if not self.lock():
             logger.warning(f"`start_fn` failed to acquire lock for cache key: {self.cache_key}. Returning None")
             return None
+        logger.info(f"Acquired lock for cache key: {self.cache_key}. Checking for active execution...")
         try:
             # Step 3: Re-check cache after acquiring lock, then call adapter if still not cached
             resp = self._remote.get_cache(self.cache_key, db=db)
             if resp is not None:
                 return resp
             active_id = self.get_active_execution_id()
+            created_active = False
             if active_id is None:
                 active_id = self.reserve_execution()
                 self.put_active_execution(active_id, argv=argv_node, db=db)
+                created_active = True
             else:
                 try:
                     active_record = self.read_execution_record(active_id)
@@ -491,27 +545,36 @@ class ExecutionState:
                     self._remote.delete_active(self.cache_key)
                     active_id = self.reserve_execution()
                     self.put_active_execution(active_id, argv=argv_node, db=db)
+                    created_active = True
                 else:
                     if self._is_cancel_lifecycle(active_record["lifecycle"]):
                         self._remote.delete_active(self.cache_key)
                         active_id = self.reserve_execution()
                         self.put_active_execution(active_id, argv=argv_node, db=db)
+                        created_active = True
             # add spawned execution to `index.id()`'s record
             self._record_execution_dependency(caller_id=index.id(), callee_id=active_id)
-            self._add_spawned_execution(caller_id=index.id(), callee_id=active_id)
+            try:
+                self._add_spawned_execution(caller_id=index.id(), callee_id=active_id)
+            except Exception:
+                self.delete_execution_dependency(caller_execution_id=index.id(), callee_execution_id=active_id)
+                if created_active:
+                    self._remote.delete_active(self.cache_key)
+                    self.delete_execution_record(active_id)
+                raise
             # get launch state
             launch_state = self.read_launch_state(active_id)
-            adapter_envelope = AdapterEnvelope(
+            adapter_request = AdapterInvokeRequest(
+                operation="invoke",
                 cache_key=self.cache_key,
                 execution_id=active_id,
                 remote={"root": self.root_uri},
                 runnable=asdict(runnable),
                 state=launch_state,
                 scratch_uri=self.adapter_scratch(active_id),
-                cancel_requested_by=None,
             )
             try:
-                resp = self._call_adapter(adapter_envelope)
+                resp = cast(AdapterInvokeResponse, self._call_adapter(adapter_request))
             except Exception as exc:
                 try:
                     record = self.read_execution_record(active_id)
@@ -523,17 +586,15 @@ class ExecutionState:
                 logger.error(f"Adapter call failed for execution {active_id}: {exc}")
                 raise DmlRepoError(f"Adapter call failed for execution {active_id}") from exc
             dag = None
-            if resp["lifecycle"] == "running" and launch_state is None:
+            if resp["status"] == "running" and launch_state is None:
                 self.create_launch_state(active_id, resp["state"] or {})
-            elif resp["lifecycle"] == "running":
+            elif resp["status"] == "running":
                 self.update_launch_state(active_id, resp["state"] or {})
-            elif resp["lifecycle"] == "cancelled":
-                raise CancellationError(f"Execution {active_id} was cancelled", lifecycle="canceled")
             else:
                 dag = self._remote.get_transport(active_id, db=db)
+                has_transport = dag is not None
                 if dag is not None:
                     logger.info(f"Execution {active_id} succeeded with DAG {dag.id}")
-                    self._remote.delete_transport(active_id)
                 else:
                     record = self.read_execution_record(active_id)
                     if not self._is_cancel_lifecycle(record["lifecycle"]):
@@ -545,6 +606,8 @@ class ExecutionState:
                         error = txn.put(Error(error_msg, "fn-call", "adapter-error"))
                         dag = txn.put(Dag(nodes=[argv_node], names={}, argv=argv_node, error=error))
                 self._complete_spawned_execution(caller_id=index.id(), callee_id=active_id)
+                if has_transport:
+                    self._remote.delete_transport(active_id)
                 self._remote.put_cache(dag, active_id, db)
                 self._remote.delete_active(self.cache_key)
         finally:
@@ -552,15 +615,21 @@ class ExecutionState:
         return dag
 
     def finish_execution(self, execution_id: str, dag: Ref, db) -> None:
-        record = self.read_execution_record(execution_id)
-        if record is None:
-            raise DmlRepoError(f"No execution record found for execution_id: {execution_id}")
-        if self._is_cancel_lifecycle(record["lifecycle"]):
-            msg = f"Execution {execution_id} status: {record['lifecycle']} cannot be finalized"
-            raise CancellationError(msg, lifecycle=record["lifecycle"])
-        record.update({"lifecycle": "succeeded", "updated_at": int(time.time())})
-        self.update_execution_record(record)
-        self._remote.put_transport(execution_id, dag, db)
+        try:
+            record = self.read_execution_record(execution_id)
+            if record is None:
+                raise DmlRepoError(f"No execution record found for execution_id: {execution_id}")
+            if self._is_cancel_lifecycle(record["lifecycle"]):
+                msg = f"Execution {execution_id} status: {record['lifecycle']} cannot be finalized"
+                raise CancellationError(msg, lifecycle=record["lifecycle"])
+            record.update({"lifecycle": "succeeded", "updated_at": int(time.time())})
+            self.update_execution_record(record)
+            self._remote.put_transport(execution_id, dag, db)
+        except Exception:
+            logger.exception("Failed to finalize execution %s", execution_id)
+            print(f"Failed to finalize execution {execution_id}", file=sys.stderr)
+            traceback.print_exc()
+            raise
 
     def delete_execution_dependency(self, *, caller_execution_id: str, callee_execution_id: str) -> None:
         self._delete(self._key_for_edge(callee_execution_id, caller_execution_id))
@@ -660,17 +729,56 @@ class ExecutionState:
         *,
         requested_by: str | None = None,
     ) -> ExecutionRecord:
-        record = self.read_execution_record(execution_id)
-        record["lifecycle"] = lifecycle
-        record["updated_at"] = int(time.time())
-        if requested_by is not None:
-            record["cancellation_requested_by"] = requested_by
-        self.update_execution_record(record)
-        return record
+        allowed_sources = {
+            "cancel-requested": frozenset({"pending", "running", "cancel-requested"}),
+            "cancel-ready": frozenset({"cancel-requested", "cancel-ready"}),
+            "canceled": frozenset({"cancel-requested", "cancel-ready", "canceled"}),
+            "succeeded": frozenset({"pending", "running", "succeeded"}),
+            "failed": frozenset({"pending", "running", "failed"}),
+            "pending": frozenset({"pending"}),
+            "running": frozenset({"pending", "running"}),
+        }
+        allowed = allowed_sources.get(lifecycle)
+        if allowed is None:
+            raise DmlRepoError(f"Unsupported lifecycle transition target: {lifecycle}")
+        conflict: CasItemConflict | None = None
+        for _ in range(3):
+            record = self.read_execution_record(execution_id)
+            current = record["lifecycle"]
+            if current == lifecycle:
+                if requested_by is not None and record["cancellation_requested_by"] != requested_by:
+                    record["cancellation_requested_by"] = requested_by
+                    record["updated_at"] = int(time.time())
+                    try:
+                        self.update_execution_record(record)
+                    except CasItemConflict as exc:
+                        conflict = exc
+                        logger.warning(
+                            "CAS conflict when updating cancellation provenance for %s, retrying...",
+                            execution_id,
+                        )
+                        continue
+                return record
+            if current not in allowed:
+                msg = f"Execution {execution_id} cannot transition from {current} to {lifecycle}"
+                raise DmlRepoError(msg)
+            record["lifecycle"] = lifecycle
+            record["updated_at"] = int(time.time())
+            if requested_by is not None:
+                record["cancellation_requested_by"] = requested_by
+            try:
+                self.update_execution_record(record)
+            except CasItemConflict as exc:
+                conflict = exc
+                logger.warning("CAS conflict when marking execution %s as %s, retrying...", execution_id, lifecycle)
+                continue
+            return record
+        assert conflict is not None
+        raise conflict
 
     def _set_cancel_ready(self, execution_id: str) -> None:
         record = self.read_execution_record(execution_id)
-        if record["lifecycle"] not in ("cancel-pending", "cancel-ready"):
+        if record["lifecycle"] not in ("cancel-requested", "cancel-ready"):
             msg = f"Execution {execution_id} is not pending cancellation and cannot be marked cancel-ready"
             raise DmlRepoError(msg)
         if record["lifecycle"] != "cancel-ready":
@@ -678,61 +786,91 @@ class ExecutionState:
 
     def set_canceled(self, execution_id: str) -> None:
         record = self.read_execution_record(execution_id)
-        if record["lifecycle"] not in ("cancel-ready", "canceled"):
-            raise DmlRepoError(f"Execution {execution_id} is not ready for cancellation and cannot be marked canceled")
+        if record["lifecycle"] not in ("cancel-requested", "cancel-ready", "canceled"):
+            logger.warning(
+                "Execution %s is not cancelling and cannot be marked canceled. Current lifecycle: %s",
+                execution_id,
+                record["lifecycle"],
+            )
+            raise DmlRepoError(f"Execution {execution_id} is not cancelling and cannot be marked canceled")
         if record["lifecycle"] != "canceled":
+            logger.info("Setting execution %s to canceled", execution_id)
             self._mark_execution_lifecycle(execution_id, "canceled")
 
     def _invoke_cancel_adapter(self, execution_id: str, requested_by: str | None, db: DmlDB) -> str:
         record = self.read_execution_record(execution_id)
         if record["cache_key"] is None:
             return "inactive"
-        active = cast(dict | None, self._remote.get_active(record["cache_key"], raw=True))
-        if active is None:
+        target = cast(dict | None, self._remote.get_cancel_target(execution_id, raw=True))
+        if target is None:
             return "inactive"
         with db.tx() as txn:
-            argv = self._remote._materialize_manifest(cast(dict, active), txn, expected_root_ns="node-argv")
+            argv = self._remote._materialize_manifest(target, txn, expected_root_ns="node-argv")
             argv_datum = txn.get(txn.get(argv).datum_ref(txn))
             runnable = txn.get(argv_datum.value(txn)[0]).value(txn)
-        adapter_envelope = AdapterEnvelope(
+        adapter_request = AdapterCancelRequest(
+            operation="cancel",
             cache_key=record["cache_key"],
             execution_id=execution_id,
+            argv_ptr=target["ref"]["to"],
             remote={"root": self.root_uri},
             runnable=asdict(runnable),
             state=self.read_launch_state(execution_id),
             scratch_uri=self.adapter_scratch(execution_id),
-            cancel_requested_by=requested_by,
+            requested_by=requested_by or record["cancellation_requested_by"],
+        )
+        logger.info(
+            "Invoking adapter for cancellation of execution %s with request: %s", execution_id, adapter_request
         )
         try:
-            resp = self._call_adapter(adapter_envelope)
+            resp = cast(AdapterCancelResponse, self._call_adapter(adapter_request))
         except Exception as exc:
             logger.error(f"Adapter call failed for cancellation of execution {execution_id}: {exc}")
             raise DmlRepoError(f"Adapter call failed for cancellation of execution {execution_id}") from exc
-        return "cancelled" if resp["lifecycle"] == "cancelled" else "inactive"
+        if resp["status"] == "cancelled":
+            logger.info("Adapter call for cancellation of execution %s returned lifecycle 'cancelled'", execution_id)
+        else:
+            logger.warning(
+                "Adapter call for cancellation of execution %s returned status %s, expected 'cancelled'",
+                execution_id,
+                resp["status"],
+            )
+        return "cancelled" if resp["status"] == "cancelled" else "inactive"
 
-    def _plan_cancel(self, execution_id: str, requested_by: str) -> None:
-        record, state = self._state_for_execution(execution_id)
-        locked = False
-        if record["cache_key"] is not None:
-            while not state.lock():
-                time.sleep(0.1)
-            locked = True
-        try:
-            record = state.read_execution_record(execution_id)
-            if state.list_execution_callers(execution_id):
-                return
-            if record["lifecycle"] not in ("pending", "running", "cancel-pending", "cancel-ready"):
-                return
-            if record["lifecycle"] != "cancel-pending":
-                state._mark_execution_lifecycle(execution_id, "cancel-pending", requested_by=requested_by)
+    def _plan_cancel(self, execution_ids: Sequence[str], requested_by: str) -> None:
+        """Run Phase 1: revoke active ownership without calling adapters."""
+        pending, seen = set(execution_ids), set()
+        while pending:
+            execution_id = pending.pop()
+            if execution_id in seen:
+                continue
+            seen.add(execution_id)
+            try:
+                record, state = self._state_for_execution(execution_id)
+            except DmlRepoError:
+                continue
+            locked = False
+            if record["cache_key"] is not None:
+                while not state.lock():
+                    time.sleep(0.1)
+                locked = True
+            try:
                 record = state.read_execution_record(execution_id)
-            for spawned_id in list(record["spawned_execution_ids"]):
-                state.delete_execution_dependency(caller_execution_id=execution_id, callee_execution_id=spawned_id)
-                if not state.list_execution_callers(spawned_id):
-                    self._plan_cancel(spawned_id, execution_id)
-        finally:
-            if locked:
-                state.unlock()
+                if state.list_execution_callers(execution_id):
+                    continue
+                if record["lifecycle"] not in ("pending", "running", "cancel-requested", "cancel-ready"):
+                    continue
+                if record["lifecycle"] != "cancel-ready":
+                    state._mark_execution_lifecycle(execution_id, "cancel-requested", requested_by=requested_by)
+                    record = state.read_execution_record(execution_id)
+                if record["cache_key"] is not None:
+                    state._remote.move_active_to_cancel_target(record["cache_key"], execution_id)
+                for spawned_id in record["spawned_execution_ids"]:
+                    state.delete_execution_dependency(caller_execution_id=execution_id, callee_execution_id=spawned_id)
+                    pending.add(spawned_id)
+            finally:
+                if locked:
+                    state.unlock()
 
     def _run_cancel_driver(
         self,
@@ -740,9 +878,8 @@ class ExecutionState:
         requested_by: str | None,
         db: DmlDB,
         *,
-        timeout_seconds: float = 5.0,
+        timeout_seconds: float = CANCEL_READY_TIMEOUT_SECONDS,
     ) -> dict[str, list[dict[str, str | None]]]:
-        self._set_local_index_lifecycle(execution_id, "inactive", db)
         plan: dict[str, list[dict[str, str | None]]] = {
             "active-callers": [],
             "inactive": [],
@@ -750,61 +887,38 @@ class ExecutionState:
             "timeout": [],
             "error": [],
         }
-        deadline = time.time() + timeout_seconds
         record = self.read_execution_record(execution_id)
-        drive_set = set()
-        for spawned_id in record["spawned_execution_ids"]:
+        if record["lifecycle"] == "cancel-ready":
+            if time.time() - record["updated_at"] >= timeout_seconds:
+                response = self._invoke_cancel_adapter(execution_id, requested_by, db)
+                if response in ("cancelled", "inactive"):
+                    self.set_canceled(execution_id)
+                    self._remote.delete_cancel_target(execution_id)
+                    plan[response].append({"cache_key": record["cache_key"], "execution_id": execution_id})
+            return plan
+        if record["lifecycle"] != "cancel-requested":
+            return plan
+        waiting = False
+        for spawned_id in list(record["spawned_execution_ids"]):
             try:
-                if self.read_execution_record(spawned_id)["lifecycle"] == "cancel-pending":
-                    drive_set.add(spawned_id)
+                spawned_record = self.read_execution_record(spawned_id)
             except DmlRepoError:
                 continue
-        while drive_set and time.time() < deadline:
-            progressed = False
-            for spawned_id in list(drive_set):
+            if spawned_record["lifecycle"] == "cancel-requested":
+                waiting = True
+                continue
+            if spawned_record["lifecycle"] == "cancel-ready":
                 try:
-                    spawned_record, spawned_state = self._state_for_execution(spawned_id)
-                except DmlRepoError:
-                    drive_set.remove(spawned_id)
-                    continue
-                locked = False
-                if spawned_record["cache_key"] is not None:
-                    while not spawned_state.lock():
-                        time.sleep(0.1)
-                    locked = True
-                try:
-                    spawned_record = spawned_state.read_execution_record(spawned_id)
-                    if spawned_record["lifecycle"] == "cancel-ready":
-                        resp = spawned_state._invoke_cancel_adapter(spawned_id, requested_by, db)
-                        plan[resp].append(
-                            {"cache_key": spawned_record["cache_key"], "execution_id": spawned_id}
-                        )
-                        drive_set.remove(spawned_id)
-                        progressed = True
-                    elif spawned_record["lifecycle"] != "cancel-pending":
-                        plan["inactive"].append(
-                            {"cache_key": spawned_record["cache_key"], "execution_id": spawned_id}
-                        )
-                        drive_set.remove(spawned_id)
-                        progressed = True
-                except Exception as exc:
-                    logger.error(f"Error cancelling spawned execution {spawned_id}: {exc}")
-                    plan["error"].append({"cache_key": spawned_record.get("cache_key"), "execution_id": spawned_id})
-                    drive_set.remove(spawned_id)
-                    progressed = True
-                finally:
-                    if locked:
-                        spawned_state.unlock()
-            if not progressed:
-                time.sleep(0.1)
-        for spawned_id in sorted(drive_set):
-            try:
-                cache_key = self.read_execution_record(spawned_id)["cache_key"]
-            except DmlRepoError:
-                cache_key = None
-            plan["timeout"].append({"cache_key": cache_key, "execution_id": spawned_id})
-        self._set_cancel_ready(execution_id)
-        self._set_local_index_lifecycle(execution_id, "canceled", db)
+                    spawned_state = self._state_for_execution(spawned_id)[1]
+                    response = spawned_state._invoke_cancel_adapter(spawned_id, requested_by, db)
+                    if response in ("cancelled", "inactive"):
+                        spawned_state.set_canceled(spawned_id)
+                        spawned_state._remote.delete_cancel_target(spawned_id)
+                    plan[response].append({"cache_key": spawned_record["cache_key"], "execution_id": spawned_id})
+                except Exception:
+                    plan["error"].append({"cache_key": spawned_record["cache_key"], "execution_id": spawned_id})
+        if not waiting and self.read_execution_record(execution_id)["lifecycle"] == "cancel-requested":
+            self._set_cancel_ready(execution_id)
         return plan
 
     def cancel(
@@ -816,13 +930,12 @@ class ExecutionState:
         mode: Literal["full", "drive"] = "full",
     ) -> dict[str, list[dict[str, str | None]]]:
         record = self.read_execution_record(execution_id)
-        if record["lifecycle"] not in ("pending", "running", "cancel-pending", "cancel-ready", "canceled"):
+        if record["lifecycle"] not in ("pending", "running", "cancel-requested", "cancel-ready", "canceled"):
             raise DmlRepoError(f"Execution {execution_id} is not active and cannot be cancelled")
+        effective_requested_by = requested_by or record["cancellation_requested_by"]
         if mode == "full":
             if requested_by is None:
                 raise DmlRepoError("requested_by is required for full cancellation")
-            self._plan_cancel(execution_id, requested_by)
-        plan = self._run_cancel_driver(execution_id, requested_by, db)
-        if mode == "full":
-            self.set_canceled(execution_id)
-        return plan
+            self._plan_cancel([execution_id], requested_by)
+            return {"active-callers": [], "inactive": [], "cancelled": [], "timeout": [], "error": []}
+        return self._run_cancel_driver(execution_id, effective_requested_by, db)
