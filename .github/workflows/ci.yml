@@ -43,7 +43,7 @@ jobs:
       - name: Run examples
         # FIXME: we have to skip on macos because of moto timeouts.
         if: matrix.os != 'macos-latest'
-        run: ./examples/run-all-examples.sh
+        run: bash ./examples/run-all-examples.sh
   sanitize:
     runs-on: ubuntu-latest
     steps:
