@@ -137,7 +137,7 @@ class AdapterCancelRequest(TypedDict):
     argv_ptr: str
     remote: RemotePayload
     runnable: dict
-    state: dict | None
+    state: dict
     scratch_uri: str
     requested_by: str | None
 
@@ -818,7 +818,7 @@ class ExecutionState:
             argv_ptr=target["ref"]["to"],
             remote={"root": self.root_uri},
             runnable=asdict(runnable),
-            state=self.read_launch_state(execution_id),
+            state=self.read_launch_state(execution_id) or {},
             scratch_uri=self.adapter_scratch(execution_id),
             requested_by=requested_by or record["cancellation_requested_by"],
         )
