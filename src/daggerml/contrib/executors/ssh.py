@@ -70,6 +70,7 @@ class SshExecutor(ExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
         cancel_requested_by: str | None,
+        argv_ptr: str | None = None,
     ) -> dict[str, Any]:
         return self._send_nested(
             cache_key=cache_key,
@@ -79,6 +80,7 @@ class SshExecutor(ExecutorBase):
             scratch_uri=scratch_uri,
             state=state,
             cancel_requested_by=cancel_requested_by,
+            argv_ptr=argv_ptr,
         )
 
     @classmethod
@@ -92,6 +94,7 @@ class SshExecutor(ExecutorBase):
         scratch_uri: str,
         state: dict[str, Any] | None,
         cancel_requested_by: str | None,
+        argv_ptr: str | None = None,
     ) -> dict[str, Any]:
         sub = runnable.get("sub")
         if sub is None:
@@ -103,18 +106,19 @@ class SshExecutor(ExecutorBase):
             kw["host"],
             cls._remote_command(env_files=kw["env_files"], adapter=sub["adapter"]),
         ]
-        payload = json.dumps(
-            {
-                "operation": "cancel" if cancel_requested_by is not None else "invoke",
-                "runnable": sub,
-                "cache_key": cache_key,
-                "execution_id": execution_id,
-                "remote": remote,
-                "scratch_uri": scratch_uri,
-                "state": state,
-                "requested_by": cancel_requested_by,
-            }
-        )
+        payload = {
+            "operation": "cancel" if cancel_requested_by is not None else "invoke",
+            "runnable": sub,
+            "cache_key": cache_key,
+            "execution_id": execution_id,
+            "remote": remote,
+            "scratch_uri": scratch_uri,
+            "state": state,
+            "requested_by": cancel_requested_by,
+        }
+        if cancel_requested_by is not None:
+            payload["argv_ptr"] = argv_ptr
+        payload = json.dumps(payload)
         logger.debug(
             "ssh executor launch host=%s flags=%s env_files=%s adapter=%s cache_key=%s execution_id=%s has_state=%s",
             kw["host"],

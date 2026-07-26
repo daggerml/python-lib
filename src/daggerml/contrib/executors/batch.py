@@ -244,8 +244,9 @@ class BatchExecutor(LambdaExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
         cancel_requested_by: str | None,
+        argv_ptr: str | None = None,
     ) -> dict[str, Any]:
-        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ptr
         client = self._client()
         job_id = state.get("job_id")
         job_definition = state.get("job_definition")

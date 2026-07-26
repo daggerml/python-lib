@@ -54,7 +54,7 @@ class ExecutorBase:
         """
 
     def cancel(
-        self, cache_key, execution_id, runnable, state, remote, scratch_uri, cancel_requested_by
+        self, cache_key, execution_id, runnable, state, remote, scratch_uri, cancel_requested_by, argv_ptr=None
     ) -> dict[str, Any]:
         raise NotImplementedError("This executor does not support cancellation")
 
@@ -87,6 +87,7 @@ class ExecutorBase:
                 remote=remote,
                 scratch_uri=scratch_uri,
                 cancel_requested_by=requested_by,
+                argv_ptr=argv_ptr,
             )
         if state is None:
             return executor.start(

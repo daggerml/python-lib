@@ -209,8 +209,9 @@ class ScriptExecutor(ExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
         cancel_requested_by: str | None,
+        argv_ptr: str | None = None,
     ) -> AdapterCancelResponse:
-        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ptr
         if not isinstance(state, dict):
             return {"status": "cancelled", "error": None}
         pid = state.get("pid")

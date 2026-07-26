@@ -254,8 +254,9 @@ class DockerExecutor(ExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
         cancel_requested_by: str | None,
+        argv_ptr: str | None = None,
     ) -> dict[str, Any]:
-        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ptr
         docker_bin = shutil.which("docker")
         if docker_bin is None:
             return {"status": "cancelled", "error": None}
