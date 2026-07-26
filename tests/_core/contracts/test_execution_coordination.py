@@ -594,17 +594,20 @@ def test_finish_execution_rejects_cancel_lifecycle() -> None:
         state.finish_execution("exec", "dag:done", db=None)
 
 
-def test_finish_execution_logs_transport_failure(caplog, capsys) -> None:
+def test_finish_execution_retries_conflict_and_observes_cancellation() -> None:
     state = _state()
     state.create_execution_record(_record("exec"))
+    update = state.update_execution_record
 
-    with patch.object(state._remote, "put_transport", create=True, side_effect=RuntimeError("transport unavailable")):
-        with pytest.raises(RuntimeError, match="transport unavailable"):
+    def concurrent_cancel(record):
+        canceled = state.read_execution_record("exec")
+        canceled["lifecycle"] = "cancel-requested"
+        update(canceled)
+        raise CasItemConflict("execution state")
+
+    with patch.object(state, "update_execution_record", side_effect=concurrent_cancel):
+        with pytest.raises(CancellationError):
             state.finish_execution("exec", "dag:done", db=None)
-
-    assert "Failed to finalize execution exec" in caplog.text
-    assert "transport unavailable" in caplog.text
-    assert "Failed to finalize execution exec" in capsys.readouterr().err
 
 
 def test_cancel_drive_uses_stored_cancellation_requester() -> None:

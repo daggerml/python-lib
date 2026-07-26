@@ -35,9 +35,7 @@ import json
 import logging
 import shutil
 import subprocess
-import sys
 import time
-import traceback
 from dataclasses import InitVar, asdict, dataclass, field
 from random import random
 from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, TypedDict, cast
@@ -622,21 +620,19 @@ class ExecutionState:
         return dag
 
     def finish_execution(self, execution_id: str, dag: Ref, db) -> None:
-        try:
+        def mark_finished() -> None:
             record = self.read_execution_record(execution_id)
-            if record is None:
-                raise DmlRepoError(f"No execution record found for execution_id: {execution_id}")
             if self._is_cancel_lifecycle(record["lifecycle"]):
                 msg = f"Execution {execution_id} status: {record['lifecycle']} cannot be finalized"
                 raise CancellationError(msg, lifecycle=record["lifecycle"])
             record.update({"lifecycle": "succeeded", "updated_at": int(time.time())})
             self.update_execution_record(record)
-            self._remote.put_transport(execution_id, dag, db)
-        except Exception:
-            logger.exception("Failed to finalize execution %s", execution_id)
-            print(f"Failed to finalize execution {execution_id}", file=sys.stderr)
-            traceback.print_exc()
-            raise
+
+        try:
+            mark_finished()
+        except CasItemConflict:
+            mark_finished()
+        self._remote.put_transport(execution_id, dag, db)
 
     def delete_execution_dependency(self, *, caller_execution_id: str, callee_execution_id: str) -> None:
         self._delete(self._key_for_edge(callee_execution_id, caller_execution_id))

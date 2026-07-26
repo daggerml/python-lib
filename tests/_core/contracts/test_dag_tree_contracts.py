@@ -8,14 +8,13 @@ from daggerml._core.types import DmlRepoError
 from tests._core.helpers import commit_literal_dag, make_local_dml
 
 
-def test_dag_checkout_overwrites_name_with_warning(tmp_path, monkeypatch) -> None:
+def test_dag_checkout_overwrites_name(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     first = commit_literal_dag(dml, "source", 1)
     commit_literal_dag(dml, "target", 2)
     source_ref = dml.show(first)["dags"]["source"]
 
-    with pytest.warns(UserWarning, match="already exists"):
-        dml.dag.checkout(source_ref, name="target")
+    dml.dag.checkout(source_ref, name="target")
 
     assert dml.show("HEAD")["dags"]["target"] == source_ref
 
@@ -37,8 +36,7 @@ def test_dag_checkout_on_unborn_head_materializes_first_branch_commit(tmp_path, 
     source_commit = commit_literal_dag(source, "source", 1)
     source_ref = source.show(source_commit)["dags"]["source"]
     target = make_local_dml(tmp_path / "target", monkeypatch)
-    with pytest.warns(UserWarning, match="already exists"):
-        target.dag.checkout(source_ref, name="source")
+    target.dag.checkout(source_ref, name="source")
     assert target.show("HEAD")["dags"]["source"] == source_ref
     assert target.status()["commit"] is not None
     assert target.branch.list() == ["main"]

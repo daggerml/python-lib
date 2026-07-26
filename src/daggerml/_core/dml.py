@@ -414,7 +414,6 @@ class _RuntimeNamespace:
         """Start a function call in a runtime index."""
         return _index_ops(self._dml).start_fn(index, argv, name=name, db=self._dml._db)
 
-    @_retry_runtime_mutation
     def commit(
         self,
         index: Annotated[Ref, "Runtime index to commit."],
