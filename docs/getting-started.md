@@ -1,30 +1,31 @@
-# Getting Started
+# Get started
 
-Use this page to get a local DaggerML repo running.
-
-## Install
-
-DaggerML requires Python 3.10+.
-
-Install `daggerml` in whichever Python environment you want to use:
+DaggerML requires Python 3.10 or later. Install it, create a project with the CLI, then author a first DAG in Python.
 
 ```bash
-pip install "daggerml"
-```
-
-## Initialize A Local Repo
-
-`dml init` initializes an existing directory, so create one first:
-
-```bash
-mkdir demo && cd demo
+pip install daggerml
+mkdir research-demo
+cd research-demo
 dml init
+dml status
 ```
 
-That creates `./demo/.dml/` with the local database and config.
+`dml init` creates `.dml/` in the current directory. Create `first_dag.py`:
 
-## Next Steps
+```python
+import daggerml as dml
 
-- Read [reference/cli.md](reference/cli.md) for the generated command surface.
-- Read [reference/python-api.md](reference/python-api.md) for the Python entrypoints: `Dml`, `new()`, and `load()`.
-- Read [concepts/dags-and-nodes.md](concepts/dags-and-nodes.md) and [concepts/commits-and-history.md](concepts/commits-and-history.md) for the model behind what you just created.
+with dml.new("first-result", message="record a first result") as dag:
+    inputs = dag.put({"samples": [2, 3, 5]}, name="inputs")
+    dag.commit(inputs)
+```
+
+Run it from the initialized project, then inspect the recorded result and history:
+
+```bash
+python first_dag.py
+dml show
+dml log
+```
+
+Continue with [DAGs, nodes, and results](use/concepts/dags-nodes-results.md), then [author a DAG](use/guides/author-a-dag.md). Use `dml --help` and [the CLI reference](use/reference/cli.md) for generated command details.

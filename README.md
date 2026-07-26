@@ -1,8 +1,6 @@
 # daggerml [![PyPI - Version](https://img.shields.io/pypi/v/daggerml.svg)](https://pypi.org/project/daggerml) [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/daggerml.svg)](https://pypi.org/project/daggerml)
 
-DaggerML Python library for creating and managing DAGs (Directed Acyclic Graphs) for machine learning workflows.
-
-## Getting started
+DaggerML makes research computations durable, inspectable, cacheable DAGs. It records the inputs, functions, results, execution boundaries, and provenance behind a research result.
 
 ## Installation
 
@@ -12,52 +10,42 @@ Install [`daggerml`](https://github.com/daggerml/python-lib) in whichever [virtu
 pip install daggerml
 ```
 
-For the CLI functionality, you have two options:
+Install the CLI with the library:
 
-**Option 1: Install CLI with daggerml (recommended for most users)**
 ```bash
 pip install daggerml[cli]
 ```
 
-**Option 2: Install CLI separately with pipx (keeps dependencies isolated)**
+Or install the CLI separately with pipx:
+
 ```bash
 pipx install daggerml-cli
 ```
 
-## Setting up a repo
-
-Now we create a repo using the commandline.
+## Start a project
 
 ```bash
-dml config user ${EMAIL}
-dml repo create ${REPO_NAME}
-dml config repo ${REPO_NAME}
+mkdir research-demo && cd research-demo
+dml init
 ```
 
-Now we can create dags or whatever we want using this repo.
+Then author a DAG in Python:
 
 ```python
-from daggerml import Dml
+from daggerml import new
 
-with Dml().new("test", "this dag is a test") as dag:
-  dag.result = 42
-```
-
-Now we can list repos, dags, etc.
-
-```bash
-dml dag list
-```
-
-## Clean up
-
-```bash
-dml repo delete ${REPO_NAME}
+with new("first-result") as dag:
+    result = dag.put(42, name="answer")
+    dag.commit(result)
 ```
 
 ## Docs
 
-For more info, check out the docs at [daggerml.com](https://daggerml.com).
+- [Why DaggerML?](docs/why-daggerml.md)
+- [Get started](docs/getting-started.md)
+- [Use DaggerML](docs/use/README.md)
+- [Extend DaggerML](docs/extend/README.md)
+- [Develop DaggerML](docs/develop/README.md)
 
 ## Contributing
 

@@ -10,22 +10,18 @@ When a concept is not listed here, treat it as unresolved rather than guessing f
 
 | concept | authority | scope |
 | --- | --- | --- |
-| Public API behavior | `docs/reference/python-api.md`, `docs/concepts/dags-and-nodes.md`, `docs/reference/errors.md` | Public Python API semantics, default-runtime helpers, node-wrapper selection, DAG-call staging behavior, and user-visible API errors. |
-| CLI behavior | `docs/reference/cli.md` | User-visible CLI commands, arguments, and CLI semantics. |
-| Execution and runtime behavior | `docs/reference/configuration.md`, `docs/concepts/execution.md`, `docs/architecture/remote-protocol.md` | Runtime configuration, execution flow, adapter-boundary payloads, and execution lifecycle semantics. |
-| Cache publication and cache identity | `docs/concepts/execution.md`, `docs/architecture/ops-layer.md`, `docs/architecture/remote-protocol.md` | Runtime cache publication behavior, argv-derived cache identity, and the remote records that preserve execution state. |
-| Storage and object persistence | `docs/concepts/storage.md`, `docs/concepts/refs-and-namespaces.md`, `docs/architecture/storage-internals.md`, `docs/guides/store-and-load-external-data.md` | Storage model, reference handling, GC-adjacent storage behavior, and external data persistence semantics. |
-| Commit and DAG semantics | `docs/concepts/commits-and-history.md`, `docs/concepts/dags-and-nodes.md`, `docs/architecture/ops-layer.md` | Commit objects, DAG model semantics, and the operation-layer responsibilities that create and read them. |
-| Remote sync and protocol | `docs/concepts/remotes.md`, `docs/architecture/remote-protocol.md`, `docs/architecture/ops-layer.md` | Remote lifecycle, remote schemas, sync protocol semantics, and remote operations behavior. |
-| Codec encoding and import/export behavior | `docs/concepts/codecs-and-values.md` | Codec registry behavior, encoding rules, and import/export semantics. |
-| Contrib API surface | `docs/contrib/reference/python-api.md` | `daggerml.contrib.api` decorators, delayed actions, and execution helpers. |
-| Contrib literal codecs and dataframe serialization | `docs/contrib/reference/s3-and-codecs.md` | Contrib-owned codec behavior and dataframe serialization semantics. |
-| Contrib prebuilt funks | `docs/contrib/reference/python-api.md` | Contrib-owned prebuilt function contracts. |
-| Contrib testing helpers | `docs/contrib/reference/python-api.md` | Testing helpers intended for author-code unit tests. |
-| Contrib runtime lifecycle | `docs/contrib/concepts/runtime.md`, `docs/contrib/architecture/execution-flow.md`, `docs/contrib/architecture/supervisor-and-state.md` | Supervisor launch, executor start/poll/cleanup, `ExecutionState` transitions, adapter/executor pairing, and deployment-specific execution-graph behavior. |
-| Contrib plugin packaging and discovery | `docs/contrib/reference/runtime-surfaces.md` | Adapter and executor registry contracts, plugin packaging, and discovery behavior. |
-| Contrib runtime diagnostics and status surfaces | `docs/contrib/reference/runtime-surfaces.md` | Contrib runtime status and diagnostics APIs and registration visibility. |
-| Contrib S3 utility behavior | `docs/contrib/reference/s3-and-codecs.md` | `S3Store`, S3 URI normalization, content-addressed S3 object helpers, JSON helpers, tar helpers, and extraction safety rules. |
+| Public API behavior | `docs/use/reference/python-authoring.md`, `docs/use/concepts/dags-nodes-results.md`, `docs/use/reference/errors.md` | Public Python authoring semantics, node wrappers, DAG-call staging behavior, and user-visible API errors. |
+| CLI behavior | `docs/use/reference/cli.md` | User-visible CLI commands, arguments, and CLI semantics. |
+| Execution and runtime behavior | `docs/use/reference/configuration.md`, `docs/use/concepts/funks-execution-cache.md`, `docs/develop/architecture/execution-and-runtime-state.md` | Runtime configuration, execution flow, cache behavior, and lifecycle semantics. |
+| Cache publication and cache identity | `docs/use/concepts/funks-execution-cache.md`, `docs/develop/architecture/execution-and-runtime-state.md`, `docs/develop/architecture/remotes-and-sync.md` | Runtime cache publication behavior, cache identity, and remote execution state. |
+| Storage and object persistence | `docs/use/concepts/artifacts-data-codecs.md`, `docs/glossary.md`, `docs/develop/architecture/dag-storage-and-types.md`, `docs/use/guides/artifacts.md` | Storage model, references, GC-adjacent behavior, and external data persistence. |
+| Commit and DAG semantics | `docs/use/concepts/history-remotes.md`, `docs/use/concepts/dags-nodes-results.md`, `docs/develop/architecture/dag-storage-and-types.md` | Commit objects, DAG model semantics, and repository operations. |
+| Remote sync and protocol | `docs/use/concepts/history-remotes.md`, `docs/develop/architecture/remotes-and-sync.md` | Remote lifecycle, sync protocol semantics, and remote operations behavior. |
+| Codec encoding and import/export behavior | `docs/extend/reference/codec-contracts.md`, `docs/use/concepts/artifacts-data-codecs.md` | Codec registry behavior, encoding rules, and import/export semantics. |
+| Extension authoring API | `docs/use/guides/author-funks.md`, `docs/extend/concepts/extension-model.md` | `daggerml.contrib.api` decorators, delayed actions, and execution helpers. |
+| Extension runtime lifecycle | `docs/extend/reference/adapter-operations.md`, `docs/extend/reference/executor-lifecycle.md`, `docs/develop/architecture/execution-and-runtime-state.md` | Adapter/executor pairing, execution-state transitions, and deployment-specific execution behavior. |
+| Extension plugin packaging and discovery | `docs/extend/reference/plugin-api.md` | Adapter, executor, and codec plugin packaging and discovery behavior. |
+| Extension S3 utility behavior | `docs/use/guides/artifacts.md`, `docs/extend/reference/codec-contracts.md` | `S3Store`, artifact URI behavior, and dataframe serialization. |
 
 ## Handoffs
 

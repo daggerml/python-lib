@@ -1,0 +1,7 @@
+# Funks, execution, and cache
+
+A funk is a DaggerML-packaged `Runnable`. Adding one to a DAG gives DaggerML the information it needs to run it. The current authoring tooling packages Python functions with `@api.funkify`, but a funk is not inherently tied to Python. Calling a funk from a DAG records DaggerML data for the computation and creates a result node. Its execution produces another DAG, so inputs, result, and failure can all be inspected later.
+
+For a non-builtin funk, DaggerML first checks the cache identity derived from the staged runnable and normalized DaggerML data. A cache hit reuses the completed DAG; a miss invokes the configured execution boundary. Distributed execution and cache coordination require `remote.root`.
+
+Use [author funks](../guides/author-funks.md) for the current Python authoring pattern and [refresh cached work](../guides/refresh-cache.md) when intentionally recomputing a result.
