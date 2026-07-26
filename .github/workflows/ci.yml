@@ -43,23 +43,7 @@ jobs:
       - name: Run examples
         # FIXME: we have to skip on macos because of moto timeouts.
         if: matrix.os != 'macos-latest'
-        run: |
-          set -euo pipefail
-          moto_dir="${RUNNER_TEMP}/moto-example-env"
-          cleanup() {
-            uv run python examples/moto_server_env.py down --moto-dir "$moto_dir"
-          }
-          trap cleanup EXIT
-
-          envfile="$(uv run python examples/moto_server_env.py up --moto-dir "$moto_dir")"
-          # shellcheck disable=SC1090
-          source "$envfile"
-
-          for f in examples/*.sh; do
-            [[ -x "$f" ]] || continue
-            echo "Running $f"
-            uv run "$f"
-          done
+        run: ./examples/run-all-examples.sh
   sanitize:
     runs-on: ubuntu-latest
     steps:

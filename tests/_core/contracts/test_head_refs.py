@@ -48,15 +48,35 @@ def test_accepted_project_uris_parse_and_stringify(uri: str) -> None:
     assert parsed.ensure_project().owner == parsed.owner
 
 
-@pytest.mark.parametrize("value", ["", ".", "..", "main//x", "main/../x", "UPPER", "main\\x"])
-def test_invalid_ref_names_are_rejected(value: str) -> None:
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("", "expected a non-empty string"),
+        (".", "reserved path segment"),
+        ("..", "reserved path segment"),
+        ("main//x", "empty or reserved path segment"),
+        ("main/../x", "empty or reserved path segment"),
+        ("UPPER", "must start with a lowercase letter or digit"),
+        ("main\\x", "contains"),
+    ],
+)
+def test_invalid_ref_names_describe_the_violation(value: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
         _validate_ref_name("branch", value)
 
 
-@pytest.mark.parametrize("value", ["", "owner/project", "UPPER", "-bad", "bad space"])
-def test_invalid_project_segments_are_rejected(value: str) -> None:
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("", "expected a non-empty string"),
+        ("owner/project", "single segment"),
+        ("UPPER", "must start with a lowercase letter or digit"),
+        ("-bad", "must start with a lowercase letter or digit"),
+        ("bad space", "contains invalid characters"),
+    ],
+)
+def test_invalid_project_segments_describe_the_violation(value: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
         _validate_segment("owner", value)
 
 

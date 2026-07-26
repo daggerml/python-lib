@@ -47,8 +47,10 @@ dml status | jq .
 log "Running example: 00-hello_world.py"
 python "${examples_dir}/00-hello_world.py"
 
-log "Listing DML refs after running all examples:"
-dml push
+branch="push-load-$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
+log "Publishing example branch ${branch}:"
+dml branch create "${branch}"
+dml push --revision "#${branch}"
 
 log "Cleaning up first project to test fresh init with existing remote"
 cd .. && rm -rf "${project0}"
@@ -60,8 +62,8 @@ rm -rf "${scratch_dir}/${project1}" || true
 mkdir "${scratch_dir}/${project1}"
 cd "${scratch_dir}/${project1}"
 dml --remote-project "dml://${dml_user}/${project1}" init | jq .
-dml fetch "dml://${dml_user}/${project0}"
-remote_dag_ref="$(dml show --revision "dml://${dml_user}/${project0}#main" | jq -r '.dags["examples/00-hello-world"]')"
+dml fetch "dml://${dml_user}/${project0}#${branch}"
+remote_dag_ref="$(dml show --revision "dml://${dml_user}/${project0}#${branch}" | jq -r '.dags["examples/00-hello-world"]')"
 dml dag checkout "${remote_dag_ref}" "examples/00-hello-world"
 
 log "Running example: 01b-load_fn.py"

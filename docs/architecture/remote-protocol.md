@@ -22,7 +22,7 @@ The remote protocol revolves around two small JSON object families:
 - manifests, which name a root object plus the closure needed to materialize it
 - refs, which publish a manifest under a discoverable path such as a branch, tag, cache key, or DAG id
 
-In practice, refs also carry just enough metadata for the runtime to preserve direct DAG relationships and execution provenance. Cache refs record the execution id that published them, branch refs distinguish mutable heads from immutable tags, and per-DAG refs let nested DAG boundaries stay visible instead of collapsing into one giant closure.
+In practice, refs also carry just enough metadata for the runtime to preserve direct DAG relationships and execution provenance. Cache refs record the execution id that published them, branch refs distinguish fast-forward-protected heads from create-only tags, and per-DAG refs let nested DAG boundaries stay visible instead of collapsing into one giant closure.
 
 ## Push in plain terms
 
@@ -54,9 +54,12 @@ The same remote machinery supports two different user-facing stories.
 
 Project sync uses canonical `dml://owner/project#branch` and `@tag` URIs. `Remote` validates the URI pieces with `uri.py`, maps them onto `refs/projects/...`, and then enforces branch or tag semantics:
 
-- branch refs can be updated conditionally,
-- non-fast-forward branch pushes are rejected unless `force` is set,
-- tag refs are immutable once created.
+- an ordinary branch push reads and materializes the remote tip into the local object database without moving local pointers,
+- a branch update is accepted only when that remote tip is an ancestor of the candidate commit,
+- an absent branch ref is published with `If-None-Match`, while an existing branch ref is replaced with `If-Match` using the observed ETag,
+- a changed ref therefore causes the push to fail rather than overwrite a concurrent update,
+- `force=True` explicitly skips the remote-tip and conditional-write checks and overwrites a branch or tag,
+- non-forced tag publication is create-only.
 
 ### Cache sync
 

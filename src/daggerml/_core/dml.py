@@ -1168,6 +1168,7 @@ class Dml:
         revision: Annotated[Ref | str, "Revision to push. Defaults to the current HEAD."] = "HEAD",
         *,
         delete: Annotated[bool, "Delete the selected remote branch or tag instead of publishing it."] = False,
+        force: Annotated[bool, "Overwrite a remote branch or tag without publication checks."] = False,
     ) -> None:
         """Push or delete a branch or tag on the configured remote project."""
         if self._config.remote.project is None:
@@ -1225,7 +1226,7 @@ class Dml:
             remote.delete_ref(uri.owner, uri.project, kind=kind, name=name)
             return
         assert commit_ref is not None
-        remote.put_ref(commit_ref, uri.owner, uri.project, kind=kind, name=name, db=self._db)
+        remote.put_ref(commit_ref, uri.owner, uri.project, kind=kind, name=name, db=self._db, force=force)
 
     @property
     def branch(self) -> Annotated[_BranchNamespace, "Local branch lifecycle commands."]:

@@ -5,7 +5,7 @@ import pytest
 from moto import mock_aws
 
 from daggerml._core.remote import Remote
-from daggerml._core.types import ArgvNode, Commit, Dag, DmlDB, ListDatum, LiteralNode, ScalarDatum, Tree
+from daggerml._core.types import ArgvNode, Commit, Dag, DmlDB, DmlRepoError, ListDatum, LiteralNode, ScalarDatum, Tree
 
 
 def make_db(path):
@@ -173,3 +173,44 @@ def test_deleting_ref_moves_original_payload_to_tombstone(tmp_path):
         tombstones = list(remote._store._iter(remote._store._key_for("refs/tombstone/")))
         assert len(tombstones) == 1
         assert json.dumps(json.loads(remote._store._get(tombstones[0])), sort_keys=True) == original
+
+
+def test_non_forced_branch_push_ref_rejects_create_and_update_races(tmp_path, monkeypatch):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=2, client=client)
+        db = make_db(tmp_path / "db")
+        with db.tx() as txn:
+            tree = txn.put(Tree(dags={}))
+            base = txn.put(Commit(tree=tree, parents=[], author="alice", message="base"))
+            candidate = txn.put(Commit(tree=tree, parents=[base], author="alice", message="candidate"))
+            racer = txn.put(Commit(tree=tree, parents=[base], author="bob", message="racer"))
+
+        ref_path = remote._ref_key("acme", "demo", "branch", "main")
+        original_put_cas = remote._put_cas
+
+        def race_create(ref, path, ref_db, **kwargs):
+            if path == ref_path and kwargs.get("exists_ok") is False:
+                original_put_cas(racer, ref_path, ref_db)
+            return original_put_cas(ref, path, ref_db, **kwargs)
+
+        monkeypatch.setattr(remote, "_put_cas", race_create)
+        with pytest.raises(DmlRepoError, match="updated concurrently"):
+            remote.put_ref(candidate, "acme", "demo", "branch", "main", db)
+        assert remote.get_ref("acme", "demo", "branch", "main", db) == racer
+
+        monkeypatch.setattr(remote, "_put_cas", original_put_cas)
+        remote.put_ref(base, "acme", "demo", "branch", "other", db)
+        update_path = remote._ref_key("acme", "demo", "branch", "other")
+
+        def race_update(ref, path, ref_db, **kwargs):
+            if isinstance(path, str):
+                return original_put_cas(ref, path, ref_db, **kwargs)
+            original_put_cas(racer, update_path, ref_db)
+            return original_put_cas(ref, path, ref_db, **kwargs)
+
+        monkeypatch.setattr(remote, "_put_cas", race_update)
+        with pytest.raises(DmlRepoError, match="updated concurrently"):
+            remote.put_ref(candidate, "acme", "demo", "branch", "other", db)
+        assert remote.get_ref("acme", "demo", "branch", "other", db) == racer

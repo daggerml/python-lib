@@ -21,9 +21,10 @@ from dataclasses import InitVar, dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional, overload
 from urllib.parse import quote, unquote
 
+from daggerml._core.commit import CommitOps
 from daggerml._core.db import Ref
-from daggerml._core.s3_cas import CasItemConflict, S3Remote
-from daggerml._core.types import NAMESPACES, Dag, DmlBase, DmlDB, TxnWithValid
+from daggerml._core.s3_cas import CasItem, CasItemConflict, S3Remote
+from daggerml._core.types import NAMESPACES, Dag, DmlBase, DmlDB, DmlRepoError, TxnWithValid
 from daggerml._core.uri import ProjectUri
 from daggerml._core.util import uuid7
 
@@ -197,14 +198,15 @@ class Remote:
         t1 = time.time()
         logger.info(f"Uploaded {len(objects)} objects in {t1 - t0:.2f} seconds")
 
-    def _put_cas(self, ref: Ref, ref_path: str | None, db: DmlDB, exists_ok: bool = True, meta=None) -> None:
+    def _put_cas(self, ref: Ref, ref_path: str | CasItem | None, db: DmlDB, exists_ok: bool = True, meta=None) -> None:
         objs = self._collect_local_objects(ref, db)
         uploads = self._plan_upload(objs)
         if uploads:
             self._upload_objects(uploads)
         if ref_path is not None:
+            ref_key = ref_path if isinstance(ref_path, CasItem) else self._store._key_for(ref_path)
             self._store._put_js(
-                self._store._key_for(ref_path),
+                ref_key,
                 self._build_ref_payload(ref, meta),
                 overwrite=exists_ok,
             )
@@ -286,6 +288,17 @@ class Remote:
 
     def _read_ref(self, ref_path: str):
         return json.loads(self._store._get(self._store._key_for(ref_path)))
+
+    def _get_ref_snapshot(self, ref_path: str, db: DmlDB, *, expected_ns: str) -> tuple[Ref, CasItem] | None:
+        try:
+            item = self._store._get(self._store._key_for(ref_path), cas=True)
+        except self._store.client.exceptions.NoSuchKey:
+            return None
+        manifest = json.loads(item.data)
+        self._validate_ref_payload(manifest, expected_root_ns=expected_ns)
+        with db.tx() as txn:
+            ref = self._materialize_manifest(manifest, txn, expected_root_ns=expected_ns)
+        return ref, item
 
     def _raw_ref_view(self, payload: dict) -> dict:
         if "meta" in payload:
@@ -399,10 +412,38 @@ class Remote:
         return self._del(self._cache_key(cache_key))
 
     def put_ref(
-        self, commit: Ref, owner: str, project: str, kind: Literal["tag", "branch"], name: str, db: DmlDB
+        self,
+        commit: Ref,
+        owner: str,
+        project: str,
+        kind: Literal["tag", "branch"],
+        name: str,
+        db: DmlDB,
+        *,
+        force: bool = False,
     ) -> str:
+        """Publish a project ref, protecting non-forced branch updates."""
         ref_path = self._ref_key(owner, project, kind, name)
-        self._put_cas(commit, ref_path, db, exists_ok=kind == "branch")
+        if force:
+            self._put_cas(commit, ref_path, db)
+            return ref_path
+        if kind == "tag":
+            try:
+                self._put_cas(commit, ref_path, db, exists_ok=False)
+            except CasItemConflict as exc:
+                raise DmlRepoError(f"Remote tag already exists: {name}") from exc
+            return ref_path
+        snapshot = self._get_ref_snapshot(ref_path, db, expected_ns="commit")
+        try:
+            if snapshot is None:
+                self._put_cas(commit, ref_path, db, exists_ok=False)
+            else:
+                remote_commit, ref_item = snapshot
+                if not CommitOps().is_ancestor(remote_commit, commit, db=db):
+                    raise DmlRepoError("Cannot push non-fast-forward branch update; pull and merge or push with force")
+                self._put_cas(commit, ref_item, db)
+        except CasItemConflict as exc:
+            raise DmlRepoError("Remote branch was updated concurrently; fetch and retry") from exc
         return ref_path
 
     @overload

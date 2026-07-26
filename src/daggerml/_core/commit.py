@@ -6,7 +6,6 @@ It includes functionality for merging commits, reverting changes, checking out D
 
 import logging
 from typing import Optional, TypedDict, cast
-from warnings import warn
 
 from daggerml._core.db import Ref
 from daggerml._core.types import Commit, DmlDB, DmlRepoError, Tree, TxnWithValid
@@ -101,6 +100,11 @@ class CommitOps:
             seen.add(current)
             stack.extend(txn.get(current).parents)
         return False
+
+    def is_ancestor(self, ancestor: Ref, descendant: Ref, *, db: DmlDB) -> bool:
+        """Return whether ``ancestor`` is reachable from ``descendant``."""
+        with db.tx() as txn:
+            return self._is_ancestor(ancestor, descendant, txn=txn)
 
     def _reachable(self, start: Ref, *, txn: TxnWithValid) -> set[Ref]:
         stack = [start]
@@ -300,7 +304,7 @@ class CommitOps:
                 parents = [commit]
             tree.dags[name] = dag
             if name in tree.dags:
-                warn(f"DAG name '{name}' already exists in commit; it will be overwritten", UserWarning, stacklevel=2)
+                logger.warning(f"DAG name '{name}' already exists in commit; it will be overwritten")
             new_commit = txn.put(
                 Commit(
                     parents=parents,

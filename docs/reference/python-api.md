@@ -42,7 +42,7 @@ Top-level methods:
 - `checkout(revision)`
 - `fetch(project_uri)`
 - `pull(ff_only=True)`
-- `push(revision="HEAD", *, delete=False)`
+- `push(revision="HEAD", *, delete=False, force=False)`: publish a branch only when it fast-forwards the remote tip by default; set `force=True` to explicitly overwrite a branch or tag. Non-forced tag publication is create-only.
 - `merge(revision, ff_only=True)`
 - `revert(revision, message=None)`
 
@@ -84,6 +84,7 @@ dml.branch.create("feature", "HEAD~1")
 dml.tag.create("v1")
 dml.fetch("dml://alice/demo#main")
 dml.push("@v1")
+dml.push("@v1", force=True)  # Explicitly replace an existing remote tag.
 dml.push("#feature", delete=True)
 ```
 

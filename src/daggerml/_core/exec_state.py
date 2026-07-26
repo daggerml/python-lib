@@ -39,6 +39,7 @@ import sys
 import time
 import traceback
 from dataclasses import InitVar, asdict, dataclass, field
+from random import random
 from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, TypedDict, cast
 from uuid import uuid4
 
@@ -61,8 +62,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 LOCK_TTL: float = 300.0
-COORDINATION_CAS_ATTEMPTS = 5
+COORDINATION_CAS_ATTEMPTS = 10
 COORDINATION_CAS_BACKOFF_SECONDS = 0.01
+COORDINATION_CAS_MAX_BACKOFF_SECONDS = 1.0
 EXECUTION_LIFECYCLES = Literal[
     "pending", "running", "succeeded", "failed", "cancel-requested", "cancel-ready", "canceled"
 ]
@@ -128,6 +130,7 @@ class AdapterInvokeRequest(TypedDict):
     runnable: dict
     state: dict | None
     scratch_uri: str
+
 
 class AdapterCancelRequest(TypedDict):
     operation: Literal["cancel"]
@@ -432,7 +435,8 @@ class ExecutionState:
         raise BadExecutionStatusError(msg, lifecycle=lifecycle)
 
     def _add_spawned_execution(self, caller_id: str, callee_id: str) -> None:
-        for attempt in range(COORDINATION_CAS_ATTEMPTS):
+        sleep_time = COORDINATION_CAS_BACKOFF_SECONDS
+        for _ in range(COORDINATION_CAS_ATTEMPTS):
             caller_record = self.read_execution_record(caller_id)
             if caller_record is None:
                 raise DmlRepoError(f"No execution record found for caller execution_id: {caller_id}")
@@ -445,14 +449,16 @@ class ExecutionState:
             except CasItemConflict:
                 # Registration is the launch fence: never invoke an untracked child.
                 logger.warning("CAS conflict when registering child execution for %s; retrying...", caller_id)
-                time.sleep(COORDINATION_CAS_BACKOFF_SECONDS * (2**attempt))
+                time.sleep(sleep_time)
+                sleep_time = min(sleep_time * 2, COORDINATION_CAS_MAX_BACKOFF_SECONDS) + 0.01 * random()
         raise DmlRepoError(
             f"Failed to register child execution {callee_id} for {caller_id} after "
             f"{COORDINATION_CAS_ATTEMPTS} CAS attempts"
         )
 
     def _complete_spawned_execution(self, caller_id: str, callee_id: str) -> None:
-        for attempt in range(COORDINATION_CAS_ATTEMPTS):
+        sleep_time = COORDINATION_CAS_BACKOFF_SECONDS
+        for _ in range(COORDINATION_CAS_ATTEMPTS):
             caller_record = self.read_execution_record(caller_id)
             if caller_record is None:
                 raise DmlRepoError(f"No execution record found for caller execution_id: {caller_id}")
@@ -466,7 +472,8 @@ class ExecutionState:
             except CasItemConflict:
                 # Keep terminal coordination state intact until this lineage update succeeds.
                 logger.warning("CAS conflict when completing child execution for %s; retrying...", caller_id)
-                time.sleep(COORDINATION_CAS_BACKOFF_SECONDS * (2**attempt))
+                time.sleep(sleep_time)
+                sleep_time = min(sleep_time * 2, COORDINATION_CAS_MAX_BACKOFF_SECONDS) + 0.01 * random()
         raise DmlRepoError(
             f"Failed to record completed child execution {callee_id} for {caller_id} after "
             f"{COORDINATION_CAS_ATTEMPTS} CAS attempts"
@@ -819,9 +826,7 @@ class ExecutionState:
             scratch_uri=self.adapter_scratch(execution_id),
             requested_by=requested_by or record["cancellation_requested_by"],
         )
-        logger.info(
-            "Invoking adapter for cancellation of execution %s with request: %s", execution_id, adapter_request
-        )
+        logger.info("Invoking adapter for cancellation of execution %s with request: %s", execution_id, adapter_request)
         try:
             resp = cast(AdapterCancelResponse, self._call_adapter(adapter_request))
         except Exception as exc:

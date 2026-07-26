@@ -16,23 +16,34 @@ _HEAD_ATTACHED_PREFIX = "ref: refs/local/heads/"
 
 
 def _validate_segment(label: str, value: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"Invalid {label}: {value!r}")
-    if "/" in value or value[0] not in "abcdefghijklmnopqrstuvwxyz0123456789":
-        raise ValueError(f"Invalid {label}: {value!r}")
+    allowed = "lowercase letters, digits, '.', '_', and '-'"
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {label}: expected a string, got a {type(value).__name__}.")
+    if not value:
+        raise ValueError(f"Invalid {label}: expected a non-empty string.")
+    if "/" in value:
+        raise ValueError(f"Invalid {label}: {value!r} contains '/'; expected a single segment.")
+    if value[0] not in "abcdefghijklmnopqrstuvwxyz0123456789":
+        raise ValueError(f"Invalid {label}: {value!r} must start with a lowercase letter or digit.")
     if any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789._-" for ch in value):
-        raise ValueError(f"Invalid {label}: {value!r}")
+        raise ValueError(f"Invalid {label}: {value!r} contains invalid characters. Use only {allowed}.")
     return value
 
 
 def _validate_ref_name(label: str, value: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"Invalid {label}: must be a non-empty string")
-    if value in {".", ".."} or "\\" in value:
-        raise ValueError(f"Invalid {label}: {value!r}")
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {label}: expected a string, got a {type(value).__name__}.")
+    if not value:
+        raise ValueError(f"Invalid {label}: expected a non-empty string.")
+    if "\\" in value:
+        raise ValueError(f"Invalid {label}: {value!r} contains '\\'.")
+    if value in {".", ".."}:
+        raise ValueError(f"Invalid {label}: {value!r} is a reserved path segment.")
     parts = value.split("/")
     if any(part in {"", ".", ".."} for part in parts):
-        raise ValueError(f"Invalid {label}: {value!r}")
+        raise ValueError(
+            f"Invalid {label}: {value!r} contains an empty or reserved path segment."
+        )
     for part in parts:
         _validate_segment(f"{label} segment", part)
     return value

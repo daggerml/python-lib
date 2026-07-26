@@ -52,9 +52,12 @@ Use the first form to discover projects for one owner and the second to list tha
 ## Sync history
 
 ```bash
-dml --project-home ./demo-repo fetch origin --branch main
-dml --project-home ./demo-repo pull origin alice@example.com
-dml --project-home ./demo-repo push --branch main --create
+dml --project-home ./demo-repo fetch dml://alice/demo#main
+dml --project-home ./demo-repo pull
+dml --project-home ./demo-repo push
+
+# Intentionally replace a remote branch or tag ref.
+dml --project-home ./demo-repo push --revision @v1 --force
 ```
 
 Python equivalents:
@@ -62,11 +65,19 @@ Python equivalents:
 ```python
 from daggerml import Dml
 
-dml = Dml(project_home="./demo-repo", remote_root="s3://bucket/prefix", user="alice@example.com")
+dml = Dml(
+    project_home="./demo-repo",
+    remote_root="s3://bucket/prefix",
+    remote_project="dml://alice/demo",
+    user="alice@example.com",
+)
 
-dml.fetch("origin", branch="main")
-dml.pull("origin", user="alice@example.com")
-dml.push(branch="main", create=True)
+dml.fetch("dml://alice/demo#main")
+dml.pull()
+dml.push()
+
+# A normal tag push is create-only; force explicitly replaces it.
+dml.push("@v1", force=True)
 ```
 
 ## When to use each command
