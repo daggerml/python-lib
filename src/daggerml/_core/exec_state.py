@@ -938,5 +938,4 @@ class ExecutionState:
             if requested_by is None:
                 raise DmlRepoError("requested_by is required for full cancellation")
             self._plan_cancel([execution_id], requested_by)
-            return {"active-callers": [], "inactive": [], "cancelled": [], "timeout": [], "error": []}
         return self._run_cancel_driver(execution_id, effective_requested_by, db)
