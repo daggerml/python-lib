@@ -29,7 +29,7 @@ cd "${project_home}"
 dml init > /dev/null
 
 log "Running wait_fn.py in the background"
-python "${examples_dir}/wait_fn.py" &
+python "${examples_dir}/python/wait_fn.py" &
 wait_pid=$!
 
 log "Waiting for the runtime to start and show the execution graph"

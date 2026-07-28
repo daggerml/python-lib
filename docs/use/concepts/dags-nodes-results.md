@@ -5,13 +5,13 @@ A DAG is the stored record of one computation. It contains nodes for values, imp
 Use `dag.put(value, name=...)` to stage a value, `dag.call(funk, ...)` to record a function call, and `dag.commit(node)` to make a result durable. Named nodes are convenient labels, not copies of data.
 
 ```python
-from daggerml import load, new
+import daggerml as dml
 
-with new("summary") as dag:
+with dml.new("summary") as dag:
     values = dag.put([2, 3, 5], name="values")
     dag.commit(values)
 
-assert load("summary").result.value() == [2, 3, 5]
+assert dml.load("summary").result.value() == [2, 3, 5]
 ```
 
 Nodes materialize with `.value()`. Committed nested lists and dictionaries may return read-only projections; those also support `.value()` and `.context()`.

@@ -31,7 +31,7 @@ EXCLUDE_PATTERNS = (
     "*.pyc",
     "tests/*",
 )
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _docker_run_flags() -> list[str]:
@@ -60,7 +60,8 @@ def _docker_run_flags() -> list[str]:
     return flags
 
 
-@api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
+# note `api.ref` is used to reference nodes at time of insert.
+@api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))  # Point: A
 @api.funkify
 def download_dataset(dag):
     from sklearn.datasets import load_iris  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -68,7 +69,7 @@ def download_dataset(dag):
     return load_iris(as_frame=True).frame.dropna()
 
 
-@api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))
+@api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))  # Point: B
 @api.funkify
 def predict_target(dag, dataset, params):
     import pandas as pd  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -87,7 +88,7 @@ def predict_target(dag, dataset, params):
     return {"train": train_r2, "test": test_r2}
 
 
-def main() -> None:
+def main(dag: dml.Dag) -> None:
     flags = _docker_run_flags()
     try:
         import pandas  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -95,22 +96,22 @@ def main() -> None:
         raise RuntimeError("pandas should not be installed in the local environment for this example to work")
     except ModuleNotFoundError:
         pass
-    dag = dml.new(name="examples/01-docker-dataset")
-    dag.dkr_build = docker_build
     s3 = S3Store()
     print("Creating Docker build context from repo root, excluding patterns:", EXCLUDE_PATTERNS)
     dkr_ctx = s3.tar(str(REPO_ROOT), excludes=EXCLUDE_PATTERNS, symlinks="ignore")
-    dag.put(flags, name="dkr-flags")
+    dag.put(flags, name="dkr-flags")  # Point: C
     print("Building Docker image (this may take a moment)...")
     t0 = time()
-    dag.dkr_build(dkr_ctx, ["-f", "./examples/dkr-ctx/Dockerfile"], name="image")
+    dag.dkr_build = docker_build
+    dag.dkr_build(dkr_ctx, ["-f", "./examples/dkr-ctx/Dockerfile"], name="image")  # Point: D
+    print(dag.image)
     t1 = time()
     dag.download = download_dataset
     print("Loading dataset within Docker...")
     dataset = dag.download(name="dataset")
     print("Training model and generating predictions within Docker...")
-    dag.predict_fn = predict_target
-    predictions = dag.predict_fn(
+    dag.predict_fn = predict_target  # Point: E -- this would fail if points C, D were not executed first
+    predictions = dag.predict_fn(  # Point: F
         dataset,
         {"max_iter": 200, "solver": "saga", "penalty": "elasticnet", "l1_ratio": 0.2},
         name="predictions",
@@ -123,4 +124,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    with dml.new(name="examples/01-docker-dataset") as dag:
+        main(dag)

@@ -55,12 +55,12 @@ log "DML repo initialized. Current status:"
 dml status | jq .
 
 log "Running example: 00-hello_world.py"
-python "${examples_dir}/00-hello_world.py"
+python "${examples_dir}/python/00-hello_world.py"
 
 log "Running example: 01-docker_dataset.py"
-python "${examples_dir}/01-docker_dataset.py"
+python "${examples_dir}/python/01-docker_dataset.py"
 
 log "Running example: 02-ssh_docker_dataset.py"
-python "${examples_dir}/02-ssh_docker_dataset.py"
+python "${examples_dir}/python/02-ssh_docker_dataset.py"
 
 log "All examples completed successfully."

@@ -12,7 +12,7 @@ from daggerml.api import DmlRepoError
 from daggerml.contrib.executors.script import ScriptExecutor
 
 
-def test_contrib_script_001__script_kwargs_capture_fn_name_and_require_first_dag_parameter():
+def test_contrib_script_001__script_kwargs_capture_fn_name_and_require_parameter():
     def fn(dag, x):
         return x.value()
 
@@ -20,10 +20,10 @@ def test_contrib_script_001__script_kwargs_capture_fn_name_and_require_first_dag
     assert kwargs == {"prepop": {}, "fn_name": "fn"}
     assert "def fn" in script
 
-    def bad(x, dag):
-        return x
+    def bad():
+        return None
 
-    with pytest.raises(DmlRepoError, match="first 'dag' parameter"):
+    with pytest.raises(DmlRepoError, match="at least one parameter"):
         ScriptExecutor._script_kwargs({"fn": bad})
 
 

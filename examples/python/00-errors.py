@@ -17,7 +17,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        print("Dag raised an exception as expected.")
+    main()

@@ -28,7 +28,22 @@ mkdir -p "${DML_CONFIG_HOME}"
 cd "${project_home}"
 dml init > /dev/null
 
-python "${examples_dir}/00-errors.py"
+log "Running Python-only examples"
+log "Running 00-hello_world.py"
+python "${examples_dir}/python/00-hello_world.py"
+log "Running 01b-load_fn.py"
+python "${examples_dir}/python/01b-load_fn.py"
+log "Running wait_fn.py"
+python "${examples_dir}/python/wait_fn.py"
+log "Running 03-dagclass.py"
+python "${examples_dir}/python/03-dagclass.py"
+
+log "Running 00-errors.py; failure is expected"
+if python "${examples_dir}/python/00-errors.py"; then
+  log "00-errors.py unexpectedly succeeded" 2>/dev/null
+  exit 1
+fi
+log "00-errors.py exited with a failure status as expected"
 
 dml show | jq . -C
 tmpdag=$(dml show | jq -r '.dags["examples/00-errors"]')

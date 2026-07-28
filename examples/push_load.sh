@@ -45,7 +45,7 @@ log "DML repo initialized. Current status"
 dml status | jq .
 
 log "Running example: 00-hello_world.py"
-python "${examples_dir}/00-hello_world.py"
+python "${examples_dir}/python/00-hello_world.py"
 
 branch="push-load-$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
 log "Publishing example branch ${branch}:"
@@ -67,6 +67,6 @@ remote_dag_ref="$(dml show --revision "dml://${dml_user}/${project0}#${branch}" 
 dml dag checkout "${remote_dag_ref}" "examples/00-hello-world"
 
 log "Running example: 01b-load_fn.py"
-python "${examples_dir}/01b-load_fn.py"
+python "${examples_dir}/python/01b-load_fn.py"
 
 log "All examples completed successfully."

@@ -12,9 +12,9 @@ dml show
 For a committed failed DAG, inspect its result and provenance in Python:
 
 ```python
-from daggerml import load
+import daggerml as dml
 
-result = load("failed-analysis").result
+result = dml.load("failed-analysis").result
 print(result.value())
 print(result.context())
 ```

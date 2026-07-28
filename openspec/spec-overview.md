@@ -18,7 +18,7 @@ When a concept is not listed here, treat it as unresolved rather than guessing f
 | Commit and DAG semantics | `docs/use/concepts/history-remotes.md`, `docs/use/concepts/dags-nodes-results.md`, `docs/develop/architecture/dag-storage-and-types.md` | Commit objects, DAG model semantics, and repository operations. |
 | Remote sync and protocol | `docs/use/concepts/history-remotes.md`, `docs/develop/architecture/remotes-and-sync.md` | Remote lifecycle, sync protocol semantics, and remote operations behavior. |
 | Codec encoding and import/export behavior | `docs/extend/reference/codec-contracts.md`, `docs/use/concepts/artifacts-data-codecs.md` | Codec registry behavior, encoding rules, and import/export semantics. |
-| Extension authoring API | `docs/use/guides/author-funks.md`, `docs/extend/concepts/extension-model.md` | `daggerml.contrib.api` decorators, delayed actions, and execution helpers. |
+| Extension authoring API | `docs/use/guides/author-a-dag.md`, `docs/extend/concepts/extension-model.md` | `daggerml.contrib.api` decorators, delayed actions, and execution helpers. |
 | Extension runtime lifecycle | `docs/extend/reference/adapter-operations.md`, `docs/extend/reference/executor-lifecycle.md`, `docs/develop/architecture/execution-and-runtime-state.md` | Adapter/executor pairing, execution-state transitions, and deployment-specific execution behavior. |
 | Extension plugin packaging and discovery | `docs/extend/reference/plugin-api.md` | Adapter, executor, and codec plugin packaging and discovery behavior. |
 | Extension S3 utility behavior | `docs/use/guides/artifacts.md`, `docs/extend/reference/codec-contracts.md` | `S3Store`, artifact URI behavior, and dataframe serialization. |

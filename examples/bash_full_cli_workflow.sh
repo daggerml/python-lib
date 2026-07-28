@@ -55,7 +55,7 @@ dml status | jq .
 dml rev-parse HEAD | jq .
 
 log "Running example: 00-hello_world.py"
-python "${examples_dir}/00-hello_world.py"
+python "${examples_dir}/python/00-hello_world.py"
 
 log "Inspecting committed history and DAG state after 00-hello_world.py"
 dml status | jq '.branches'
@@ -165,7 +165,7 @@ dml branch delete "${renamed_rebase_branch}"
 dml status | jq .
 
 log "Running example: 01b-load_fn.py"
-python "${examples_dir}/01b-load_fn.py"
+python "${examples_dir}/python/01b-load_fn.py"
 
 log "Inspecting fetched and pulled history from the second project"
 dml status | jq '.branches'

@@ -1,7 +1,6 @@
 # Research guides
 
 - [Author a DAG](author-a-dag.md)
-- [Author funks](author-funks.md)
 - [Run Docker workloads](docker-workloads.md)
 - [Run work remotely](remote-execution.md)
 - [Manage artifacts](artifacts.md)

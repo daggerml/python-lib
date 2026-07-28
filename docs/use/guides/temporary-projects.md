@@ -1,12 +1,12 @@
 # Use a temporary project
 
-`temporary()` creates an initialized, isolated DaggerML project in a temporary directory. Its state is removed when the context exits, making it useful for experiments and tests.
+`dml.temporary()` creates an initialized, isolated DaggerML project in a temporary directory. Its state is removed when the context exits, making it useful for experiments and tests.
 
 ```python
-from daggerml import new, temporary
+import daggerml as dml
 
-with temporary() as dml:
-    with new("scratch", dml=dml) as dag:
+with dml.temporary() as runtime:
+    with dml.new("scratch", dml=runtime) as dag:
         result = dag.put("ephemeral")
         dag.commit(result)
 ```

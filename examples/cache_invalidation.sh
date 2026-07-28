@@ -21,7 +21,7 @@ cleanup() {
 trap cleanup EXIT
 
 run_hello_world() {
-  python "${examples_dir}/00-hello_world.py" > /dev/null
+  python "${examples_dir}/python/00-hello_world.py" > /dev/null
   dag_id=$(dml show | jq '.dags["examples/00-hello-world"]' -r)
   node_id=$(dml dag describe "${dag_id}" | jq .names.greeting -r)
   dml dag get-node "${node_id}" | jq '.[1]' -r

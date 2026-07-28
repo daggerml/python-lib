@@ -55,8 +55,8 @@ class ScriptExecutor(ExecutorBase):
         extra_objs = list(kwargs.get("extra_objs", []))
         post_lines = list(kwargs.get("post_lines", []))
         params = list(inspect.signature(fn).parameters.values())
-        if not params or params[0].name != "dag":
-            raise DmlRepoError("script fn must include first 'dag' parameter")
+        if not params:
+            raise DmlRepoError("script fn must include at least one parameter")
         script = cls._render_script(fn, extra_objs=extra_objs, post_lines=post_lines)
         return {"prepop": prepop, "fn_name": fn.__name__}, script
 

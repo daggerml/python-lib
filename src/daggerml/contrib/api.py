@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
-import linecache
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from functools import wraps
 from pathlib import Path
 from textwrap import dedent
@@ -32,7 +31,7 @@ def _iter_dagclass_members(instance):
         yield name, members[name]
 
 
-class _DagclassAnalyzer(ast.NodeVisitor):
+class _DagclassAnalyzer:
     def __init__(self, *, member_names: set[str], method_names: set[str]):
         self.member_names = member_names
         self.method_names = method_names
@@ -44,205 +43,76 @@ class _DagclassAnalyzer(ast.NodeVisitor):
             self._dep_set.add(name)
             self.dependencies.append(name)
 
-    def _unsupported(self, msg: str) -> None:
-        raise DmlRepoError(msg)
-
-    def _read_self_name(self, name: str, assigned: set[str]) -> None:
+    def _read_self_name(self, name: str, defined: set[str]) -> None:
         if name not in self.member_names:
             raise DmlRepoError(f"Unknown dagclass member reference: self.{name}")
-        if name not in assigned:
+        if name not in defined:
             self._add_dependency(name)
 
-    def _assign_self_name(self, name: str) -> None:
+    def _define_self_name(self, name: str, defined: set[str]) -> set[str]:
         if name not in self.member_names:
             raise DmlRepoError(f"Unknown dagclass member assignment: self.{name}")
         if name in self.method_names:
             raise DmlRepoError(f"Cannot assign to compiled dagclass method: self.{name}")
+        return defined | {name}
 
-    def _visit_expr(self, node: ast.AST, assigned: set[str]) -> None:
+    def _scan_children(self, node: ast.AST, defined: set[str]) -> set[str]:
+        for child in ast.iter_child_nodes(node):
+            defined = self._scan(child, defined)
+        return defined
+
+    def _scan_target(self, target: ast.AST, defined: set[str]) -> set[str]:
+        if isinstance(target, ast.Attribute):
+            if isinstance(target.value, ast.Name) and target.value.id == "self":
+                return self._define_self_name(target.attr, defined)
+            return self._scan_children(target, defined)
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                defined = self._scan_target(item, defined)
+        return defined
+
+    def _scan_block(self, statements: list[ast.stmt], defined: set[str]) -> set[str]:
+        for statement in statements:
+            defined = self._scan(statement, defined)
+        return defined
+
+    def _scan(self, node: ast.AST, defined: set[str]) -> set[str]:
         if isinstance(node, ast.Attribute):
             if isinstance(node.value, ast.Name) and node.value.id == "self":
                 if isinstance(node.ctx, ast.Load):
-                    self._read_self_name(node.attr, assigned)
-                    return
-                if isinstance(node.ctx, ast.Del):
-                    self._unsupported("dagclass methods do not support del self.<name>")
-                    return
-            self._visit_expr(node.value, assigned)
-            return
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id in {"getattr", "setattr", "hasattr"}:
-                if node.args and isinstance(node.args[0], ast.Name) and node.args[0].id == "self":
-                    self._unsupported(f"dagclass methods do not support {node.func.id}(self, ...)")
-            self._visit_expr(node.func, assigned)
-            for arg in node.args:
-                self._visit_expr(arg, assigned)
-            for kw in node.keywords:
-                if kw.value is not None:
-                    self._visit_expr(kw.value, assigned)
-            return
-        if isinstance(node, ast.Subscript):
-            self._visit_expr(node.value, assigned)
-            self._visit_expr(node.slice, assigned)
-            return
-        if isinstance(
-            node,
-            (
-                ast.ListComp,
-                ast.SetComp,
-                ast.DictComp,
-                ast.GeneratorExp,
-                ast.Lambda,
-                ast.Yield,
-                ast.YieldFrom,
-                ast.Await,
-            ),
-        ):
-            self._unsupported("dagclass methods do not support dynamic or deferred self-capturing constructs")
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, ast.expr):
-                self._visit_expr(child, assigned)
-
-    def _assign_target(self, target: ast.AST) -> set[str]:
-        names: set[str] = set()
-        if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) and target.value.id == "self":
-            self._assign_self_name(target.attr)
-            names.add(target.attr)
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for elt in target.elts:
-                names.update(self._assign_target(elt))
-        elif isinstance(target, ast.Subscript):
-            if isinstance(target.value, ast.Name) and target.value.id == "self":
-                return names
-            self._visit_expr(target.value, set())
-            self._visit_expr(target.slice, set())
-        return names
-
-    def _visit_stmt_list(self, stmts: list[ast.stmt], assigned_in: set[str]) -> set[str]:
-        assigned = set(assigned_in)
-        for stmt in stmts:
-            assigned = self._visit_stmt(stmt, assigned)
-        return assigned
-
-    def _visit_stmt(self, stmt: ast.stmt, assigned: set[str]) -> set[str]:
-        if isinstance(stmt, ast.Return):
-            if stmt.value is not None:
-                self._visit_expr(stmt.value, assigned)
-            return set(assigned)
-        if isinstance(stmt, ast.Expr):
-            self._visit_expr(stmt.value, assigned)
-            return set(assigned)
-        if isinstance(stmt, ast.Assign):
-            self._visit_expr(stmt.value, assigned)
-            out = set(assigned)
-            for target in stmt.targets:
-                out.update(self._assign_target(target))
-            return out
-        if isinstance(stmt, ast.AnnAssign):
-            if stmt.value is not None:
-                self._visit_expr(stmt.value, assigned)
-            out = set(assigned)
-            out.update(self._assign_target(stmt.target))
-            return out
-        if isinstance(stmt, ast.AugAssign):
+                    self._read_self_name(node.attr, defined)
+                return defined
+        if isinstance(node, ast.Assign):
+            defined = self._scan(node.value, defined)
+            for target in node.targets:
+                defined = self._scan_target(target, defined)
+            return defined
+        if isinstance(node, ast.AnnAssign):
+            if node.value is not None:
+                defined = self._scan(node.value, defined)
+            return self._scan_target(node.target, defined)
+        if isinstance(node, ast.AugAssign):
             if (
-                isinstance(stmt.target, ast.Attribute)
-                and isinstance(stmt.target.value, ast.Name)
-                and stmt.target.value.id == "self"
+                isinstance(node.target, ast.Attribute)
+                and isinstance(node.target.value, ast.Name)
+                and node.target.value.id == "self"
             ):
-                self._read_self_name(stmt.target.attr, assigned)
-            self._visit_expr(stmt.target, assigned)
-            self._visit_expr(stmt.value, assigned)
-            out = set(assigned)
-            out.update(self._assign_target(stmt.target))
-            return out
-        if isinstance(stmt, ast.If):
-            self._visit_expr(stmt.test, assigned)
-            body_out = self._visit_stmt_list(stmt.body, set(assigned))
-            orelse_out = self._visit_stmt_list(stmt.orelse, set(assigned))
-            return body_out & orelse_out
-        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
-            if isinstance(stmt, ast.For):
-                self._visit_expr(stmt.iter, assigned)
-                self._assign_target(stmt.target)
-            elif isinstance(stmt, ast.AsyncFor):
-                self._unsupported("dagclass methods do not support async for")
-            else:
-                self._visit_expr(stmt.test, assigned)
-            self._visit_stmt_list(stmt.body, set(assigned))
-            orelse_out = self._visit_stmt_list(stmt.orelse, set(assigned))
-            return set(assigned) & orelse_out
-        if isinstance(stmt, (ast.With, ast.AsyncWith)):
-            if isinstance(stmt, ast.AsyncWith):
-                self._unsupported("dagclass methods do not support async with")
-            for item in stmt.items:
-                self._visit_expr(item.context_expr, assigned)
-                if item.optional_vars is not None:
-                    self._assign_target(item.optional_vars)
-            return self._visit_stmt_list(stmt.body, set(assigned))
-        if isinstance(stmt, ast.Delete):
-            for target in stmt.targets:
-                if (
-                    isinstance(target, ast.Attribute)
-                    and isinstance(target.value, ast.Name)
-                    and target.value.id == "self"
-                ):
-                    self._unsupported("dagclass methods do not support del self.<name>")
-            return set(assigned)
-        if isinstance(
-            stmt,
-            (
-                ast.FunctionDef,
-                ast.AsyncFunctionDef,
-                ast.ClassDef,
-                ast.Try,
-                ast.TryStar,
-                ast.Raise,
-                ast.Match,
-                ast.Assert,
-                ast.Global,
-                ast.Nonlocal,
-            ),
-        ):
-            self._unsupported(f"dagclass methods do not support statement type: {type(stmt).__name__}")
-        return set(assigned)
+                self._read_self_name(node.target.attr, defined)
+            defined = self._scan(node.value, defined)
+            return self._scan_target(node.target, defined)
+        if isinstance(node, ast.If):
+            defined = self._scan(node.test, defined)
+            body = self._scan_block(node.body, set(defined))
+            orelse = self._scan_block(node.orelse, set(defined))
+            return body & orelse
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+            self._scan_children(node, set(defined))
+            return defined
+        return self._scan_children(node, defined)
 
     def analyze(self, fn: ast.FunctionDef) -> list[str]:
-        self._visit_stmt_list(fn.body, set())
+        self._scan_block(fn.body, set())
         return list(self.dependencies)
-
-
-def _make_self_helper_class() -> ast.ClassDef:
-    return cast(
-        ast.ClassDef,
-        ast.parse(
-            "class _DagclassSelf:\n"
-            "    def __getitem__(self, key):\n"
-            "        return getattr(self, key)\n"
-            "    def __setitem__(self, key, value):\n"
-            "        setattr(self, key, value)\n"
-        ).body[0],
-    )
-
-
-def _load_self_attr(name: str) -> ast.Assign:
-    return ast.Assign(
-        targets=[ast.Attribute(value=ast.Name(id="self", ctx=ast.Load()), attr=name, ctx=ast.Store())],
-        value=ast.Subscript(
-            value=ast.Name(id="dag", ctx=ast.Load()),
-            slice=ast.Constant(value=name),
-            ctx=ast.Load(),
-        ),
-    )
-
-
-def _function_from_source(source: str, fn_name: str):
-    filename = f"<dagclass:{fn_name}:{abs(hash(source))}>"
-    lines = [line + "\n" for line in source.splitlines()]
-    linecache.cache[filename] = (len(source), None, lines, filename)
-    namespace: dict[str, Any] = {}
-    exec(compile(source, filename, "exec"), namespace, namespace)
-    return namespace[fn_name]
 
 
 def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_names: set[str], method_names: set[str]):
@@ -250,7 +120,6 @@ def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_name
         source = dedent(inspect.getsource(method))
     except (OSError, TypeError) as e:
         raise DmlRepoError(f"Failed to inspect dagclass method source for {cls.__name__}.{method_name}: {e}") from e
-
     module = ast.parse(source)
     if len(module.body) != 1 or not isinstance(module.body[0], ast.FunctionDef):
         raise DmlRepoError(f"dagclass method source for {cls.__name__}.{method_name} must be a single function")
@@ -259,40 +128,9 @@ def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_name
         raise DmlRepoError(f"dagclass method {cls.__name__}.{method_name} has unsupported decorators")
     if not fn.args.args or fn.args.args[0].arg != "self":
         raise DmlRepoError(f"dagclass method {cls.__name__}.{method_name} must declare self as first parameter")
-
     analyzer = _DagclassAnalyzer(member_names=member_names, method_names=method_names)
     dependencies = analyzer.analyze(fn)
-
-    compiled_fn = ast.FunctionDef(
-        name=method_name,
-        args=ast.arguments(
-            posonlyargs=[],
-            args=[ast.arg(arg="dag", annotation=None), *fn.args.args[1:]],
-            vararg=fn.args.vararg,
-            kwonlyargs=fn.args.kwonlyargs,
-            kw_defaults=fn.args.kw_defaults,
-            kwarg=fn.args.kwarg,
-            defaults=fn.args.defaults,
-        ),
-        body=[
-            _make_self_helper_class(),
-            ast.Assign(
-                targets=[ast.Name(id="self", ctx=ast.Store())],
-                value=ast.Call(func=ast.Name(id="_DagclassSelf", ctx=ast.Load()), args=[], keywords=[]),
-            ),
-            *[_load_self_attr(name) for name in dependencies],
-            *fn.body,
-        ],
-        decorator_list=[],
-        returns=fn.returns,
-        type_comment=fn.type_comment,
-    )
-    ast.fix_missing_locations(compiled_fn)
-    compiled_source = ast.unparse(compiled_fn) + "\n"
-    compiled_callable = _function_from_source(compiled_source, method_name)
-    delayed = funkify(
-        compiled_callable, uri="script", adapter="local", prepop={name: ref(name) for name in dependencies}
-    )
+    delayed = funkify(method, uri="script", adapter="local", prepop={name: ref(name) for name in dependencies})
     return delayed, dependencies
 
 
@@ -356,12 +194,35 @@ def _toposort_members(member_deps: dict[str, set[str]], order_hint: list[str]) -
     return ordered
 
 
+def _embed_dagclass_member(value, members: dict[str, Any], visiting: set[str]):
+    if isinstance(value, DelayedRef):
+        if value.name not in members:
+            return value
+        if value.name in visiting:
+            raise DmlRepoError(f"dagclass member dependency cycle detected at: {value.name}")
+        return _embed_dagclass_member(members[value.name], members, visiting | {value.name})
+    if isinstance(value, DelayedRunnable):
+        return replace(
+            value,
+            sub=_embed_dagclass_member(value.sub, members, visiting),
+            kwargs={key: _embed_dagclass_member(item, members, visiting) for key, item in value.kwargs.items()},
+        )
+    if isinstance(value, dict):
+        return {key: _embed_dagclass_member(item, members, visiting) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_embed_dagclass_member(item, members, visiting) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_embed_dagclass_member(item, members, visiting) for item in value)
+    return value
+
+
 def _bind_dagclass_value(value):
     if getattr(value.__class__, "__dagclass__", False):
         entrypoint = getattr(value.__class__, "__dagclass_entrypoint__", "main")
         if not hasattr(value, entrypoint):
             raise DmlRepoError(f"Dagclass instance missing configured entrypoint: {entrypoint}")
-        return getattr(value, entrypoint)
+        members = value.__dagclass_members__
+        return _embed_dagclass_member(members[entrypoint], members, {entrypoint})
     return value
 
 

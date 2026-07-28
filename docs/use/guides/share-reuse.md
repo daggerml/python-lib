@@ -17,4 +17,4 @@ dml fetch dml://alice/research#main
 dml clone dml://alice/research#main --project-home colleague-copy
 ```
 
-Reuse committed work in Python with `load("dag-name")` or import it into new work with `dag.require("dag-name")`. A normal push fast-forwards branches and creates tags; use `--force` only when intentionally replacing a remote ref.
+Reuse committed work in Python with `dml.load("dag-name")` or import it into new work with `dag.require("dag-name")`. A normal push fast-forwards branches and creates tags; use `--force` only when intentionally replacing a remote ref.
