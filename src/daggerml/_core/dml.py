@@ -5,12 +5,7 @@ from dataclasses import asdict, dataclass
 from functools import wraps
 from pathlib import Path
 from time import time
-from typing import Annotated, Any, Literal, Mapping, TypedDict, cast, overload
-
-try:
-    from typing import NotRequired
-except ImportError:
-    from typing_extensions import NotRequired
+from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict, cast, overload
 
 import boto3
 from botocore.config import Config as BotoConfig

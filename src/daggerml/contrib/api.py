@@ -6,17 +6,12 @@ from dataclasses import dataclass, fields, is_dataclass, replace
 from functools import wraps
 from pathlib import Path
 from textwrap import dedent
-from typing import Any, Callable, Protocol, TypeAlias, TypeVar, cast, overload
+from typing import Any, Callable, Protocol, TypeAlias, TypeVar, cast, dataclass_transform, overload
 
 from daggerml import Runnable
 from daggerml import api as core_api
 from daggerml.api import DmlRepoError
 from daggerml.contrib.codecs import DelayedLoad, DelayedRef, DelayedRunnable
-
-try:
-    from typing import dataclass_transform
-except ImportError:
-    from typing_extensions import dataclass_transform
 
 _DAGCLASS_CALL_NODE_NAME = "<dagclass-call>"
 _DAGCLASS_RESERVED_NAMES = {"dag", "dml", "argv", "call", "put", "commit"}

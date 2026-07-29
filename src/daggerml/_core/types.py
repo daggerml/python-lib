@@ -20,13 +20,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Self, Union, cast, dataclass_transform
 from uuid import uuid4
-
-try:
-    from typing import Self, dataclass_transform
-except ImportError:
-    from typing_extensions import Self, dataclass_transform
 
 from daggerml._core.db import DmlDb as RawDmlDB
 from daggerml._core.db import DmlDbKeyNotFoundError, Ref

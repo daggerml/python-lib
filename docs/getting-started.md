@@ -1,6 +1,6 @@
 # Get started
 
-DaggerML requires Python 3.10 or later. Install it, create a project with the CLI, then author a first DAG in Python.
+DaggerML requires Python 3.11 or later. Install it, create a project with the CLI, then author a first DAG in Python.
 
 ```bash
 pip install daggerml

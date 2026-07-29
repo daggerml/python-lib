@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python 3.10 or newer.
+- Python 3.11 or newer.
 - [uv](https://docs.astral.sh/uv/) for the repository's development commands.
 - A C/C++ build toolchain and CMake, because the package builds a Cython-backed
   LMDB extension.
