@@ -12,12 +12,12 @@ jobs:
   test:
     strategy:
       matrix:
-        py: ["3.11", "3.12", "3.13", "3.14"]
+        py: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-latest, macos-latest]
         exclude:
           # Only test the latest stable Python on macOS to keep CI fast
-          # - os: macos-latest
-          #   py: "3.11"
+          - os: macos-latest
+            py: "3.11"
           - os: macos-latest
             py: "3.12"
           - os: macos-latest

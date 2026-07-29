@@ -594,6 +594,21 @@ def test_finish_execution_rejects_cancel_lifecycle() -> None:
         state.finish_execution("exec", "dag:done", db=None)
 
 
+def test_finish_execution_does_not_mark_success_when_transport_upload_fails() -> None:
+    state = _state()
+    state.create_execution_record(_record("exec"))
+
+    def fail_upload(*args, **kwargs):
+        raise OSError("S3 unavailable")
+
+    state._remote.put_transport = fail_upload
+
+    with pytest.raises(OSError, match="S3 unavailable"):
+        state.finish_execution("exec", "dag:done", db=None)
+
+    assert state.read_execution_record("exec")["lifecycle"] == "running"
+
+
 def test_finish_execution_retries_conflict_and_observes_cancellation() -> None:
     state = _state()
     state.create_execution_record(_record("exec"))

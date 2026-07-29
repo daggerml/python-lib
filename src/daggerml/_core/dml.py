@@ -5,7 +5,12 @@ from dataclasses import asdict, dataclass
 from functools import wraps
 from pathlib import Path
 from time import time
-from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict, cast, overload
+from typing import Annotated, Any, Literal, Mapping, TypedDict, cast, overload
+
+try:
+    from typing import NotRequired
+except ImportError:
+    from typing_extensions import NotRequired
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -123,7 +128,7 @@ def _render_execution_graph(graph: ExecutionGraph) -> None:
         from rich.tree import Tree
     except ImportError as exc:
         raise DmlRepoError(
-            "rich is required for visual describe_graph output; install daggerml[visual] or pip install rich"
+            "rich is required for rendered describe_graph output; install daggerml[terminal] or pip install rich"
         ) from exc
 
     now = int(time())

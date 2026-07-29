@@ -69,10 +69,6 @@ requests and appreciate your help in improving this project.
   uv run --dev --all-extras pytest -m core .
   uv run --dev --all-extras pytest -m "not core" .
   ```
-- We mark tests that require `daggerml-cli` to be installed with `@pytest.mark.needs_dml`. You can exclude those tests with:
-  ```
-  uv run --dev --all-extras pytest -m "not needs_dml" .
-  ```
 - Run all tests locally before submitting a pull request:
 - Ensure your code passes all tests and does not decrease code coverage.
 - If your changes introduce new dependencies, please update `pyproject.toml`, but we prefer to keep the dependencies to a minimum.

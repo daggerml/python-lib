@@ -10,6 +10,12 @@ Install [`daggerml`](https://github.com/daggerml/python-lib) in whichever [virtu
 pip install daggerml
 ```
 
+Install terminal rendering support:
+
+```bash
+pip install "daggerml[terminal]"
+```
+
 Install the CLI with the library:
 
 ```bash

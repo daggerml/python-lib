@@ -353,6 +353,7 @@ class IndexOps:
                         created=now(),
                     )
                 )
-            txn.delete(index)
         self.exec_state().finish_execution(index.id(), dag_ref, db)
+        with db.tx() as txn:
+            txn.delete(index)
         return dag_ref, commit_ref

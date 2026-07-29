@@ -628,11 +628,11 @@ class ExecutionState:
             record.update({"lifecycle": "succeeded", "updated_at": int(time.time())})
             self.update_execution_record(record)
 
+        self._remote.put_transport(execution_id, dag, db)
         try:
             mark_finished()
         except CasItemConflict:
             mark_finished()
-        self._remote.put_transport(execution_id, dag, db)
 
     def delete_execution_dependency(self, *, caller_execution_id: str, callee_execution_id: str) -> None:
         self._delete(self._key_for_edge(callee_execution_id, caller_execution_id))

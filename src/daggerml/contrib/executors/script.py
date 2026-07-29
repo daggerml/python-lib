@@ -12,7 +12,6 @@ import subprocess
 import sys
 import tempfile
 import traceback
-from contextlib import chdir
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -23,6 +22,21 @@ from daggerml._core import AdapterCancelResponse, AdapterInvokeResponse
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store
+
+try:
+    from contextlib import chdir  # pyright: ignore[reportAssignmentType]
+except ImportError:
+    from contextlib import contextmanager
+
+    @contextmanager
+    def chdir(path):
+        cwd = os.getcwd()
+        os.chdir(path)
+        try:
+            yield
+        finally:
+            os.chdir(cwd)
+
 
 logger = logging.getLogger(__name__)
 

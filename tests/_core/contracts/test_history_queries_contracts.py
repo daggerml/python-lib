@@ -234,6 +234,13 @@ def test_runtime_describe_graph_visual_renders_and_returns_none(tmp_path, monkey
     assert rendered["graph"]["nodes"][index.id()]["execution_id"] == index.id()
 
 
+def test_runtime_describe_graph_visual_requires_terminal_extra(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "rich", None)
+
+    with pytest.raises(DmlRepoError, match=r"daggerml\[terminal\]"):
+        dml_mod._render_execution_graph({"roots": [], "nodes": {}})
+
+
 def test_runtime_describe_graph_visual_renderer_shows_stack_metadata_and_edges(monkeypatch, capsys) -> None:
     fake_rich = ModuleType("rich")
     fake_rich.box = type("Box", (), {"SIMPLE_HEAD": "simple", "ROUNDED": "rounded"})

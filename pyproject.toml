@@ -31,12 +31,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-viz = [
+terminal = [
   "rich",
-]
-table = [
-  "tabulate",
-  "asciidag",
 ]
 
 [project.scripts]

@@ -233,6 +233,7 @@ class FakeExecutionRemote:
         self.active: dict[str, dict[str, Any]] = {}
         self.cancel_targets: dict[str, dict[str, Any]] = {}
         self.cache: dict[str, Ref] = {}
+        self.transport: dict[str, Ref] = {}
 
     def get_cache(self, cache_key: str, db=None):
         return self.cache.get(cache_key)
@@ -266,4 +267,7 @@ class FakeExecutionRemote:
         return None
 
     def delete_transport(self, active_id: str) -> None:
-        return None
+        self.transport.pop(active_id, None)
+
+    def put_transport(self, execution_id: str, dag: Ref, db=None) -> None:
+        self.transport[execution_id] = dag

@@ -1,6 +1,11 @@
 """Read-only queries on DAGs."""
 
-from typing import NotRequired, TypedDict, cast
+from typing import TypedDict, cast
+
+try:
+    from typing import NotRequired
+except ImportError:
+    from typing_extensions import NotRequired
 
 from daggerml._core.db import Ref
 from daggerml._core.types import Dag, DmlDB, DmlRepoError, FnNode, ImportNode, TxnWithValid
