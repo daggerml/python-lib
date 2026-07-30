@@ -104,7 +104,7 @@ def main(dag: dml.Dag) -> None:
     t0 = time()
     dag.dkr_build = docker_build
     dag.dkr_build(dkr_ctx, ["-f", "./examples/dkr-ctx/Dockerfile"], name="image")  # Point: D
-    print(dag.image)
+    print(f"{dag.image = }")
     t1 = time()
     dag.download = download_dataset
     print("Loading dataset within Docker...")
