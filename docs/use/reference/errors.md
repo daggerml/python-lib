@@ -1,6 +1,6 @@
 # Error reference
 
-`daggerml.Error` stores `message`, `origin`, `type`, and `stack`; it can be a committed DAG result. `DmlRepoError`, a subclass of `Error`, covers most project, configuration, runtime, and execution failures.
+`daggerml.Error` stores `message`, `origin`, `type`, and `stack`; it records a failed DAG terminal state. `DmlRepoError`, a subclass of `Error`, covers most project, configuration, runtime, and execution failures. See [Errors](../concepts/errors.md) for error capture, function failures, inspection, and provenance.
 
 | Message or condition | Action |
 | --- | --- |

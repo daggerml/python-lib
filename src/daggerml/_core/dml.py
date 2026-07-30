@@ -19,7 +19,7 @@ from daggerml._core.head import Head
 from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItemConflict
-from daggerml._core.types import DmlDB, DmlRepoError, Error
+from daggerml._core.types import DmlDB, DmlRepoError, Error, TxnWithValid
 from daggerml._core.uri import ProjectUri
 
 
@@ -536,15 +536,24 @@ class _DagNamespace:
         node: Annotated[Ref, "Node ref to materialize."],
         *,
         recursive: Annotated[bool, "Recursively unroll collection values."] = False,
-    ) -> Any:
+    ) -> Any | Error:
         """Return the stored value for a node."""
         db = self._dml._db
         with db.tx(readonly=True) as txn:
             node_obj = txn.get(node)
-            datum = txn.get(node_obj.datum_ref(txn))
+            datum_ref, error_ref = node_obj.datum_ref(txn)
+            if error_ref is not None:
+                return txn.get(error_ref)
+            assert datum_ref is not None
+            datum = txn.get(datum_ref)
             if recursive:
                 return datum.unroll(txn)
             return datum.value(txn)
+
+    def get_error(self, error: Annotated[Ref, "Error ref to materialize."]) -> Error:
+        """Return the stored error for an error ref."""
+        with self._dml._db.tx(readonly=True) as txn:
+            return txn.get(TxnWithValid.require(error, "error"))
 
     def get_argv(self, dag: Annotated[Ref, "Committed DAG ref to inspect."]) -> Ref:
         """Return the argv node for a function DAG."""

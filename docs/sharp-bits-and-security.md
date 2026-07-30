@@ -8,58 +8,85 @@ A `Dml` instance without a configured `remote.root` supports read-only inspectio
 
 ### Editable dependency changes do not affect a funk cache key
 
-The cache key for a script funk includes the rendered function source and normalized DaggerML inputs. It does not include the implementation of modules imported by that function. This matters when an imported module comes from an editable installation.
+The cache key for a script funk includes the rendered function source and normalized DaggerML inputs. It does not include the implementation of modules imported by that function. This matters when an imported module comes from an editable or updated installation.
 
 For example, suppose the editable `foo` package initially contains:
 
 ```python
 # foo/bar.py
-def normalize(value):
-    return value.lower()
+def mean(vals):
+    return sum(vals) / len(vals)
+
+def variance(vals):
+    return sum([(x - mean(vals)) ** 2 for x in vals]) / len(vals)
 ```
 
 An author creates this funk:
 
 ```python
 @api.funkify
-def normalize_text(dag, value):
-    from foo.bar import normalize
+def compute_stats(dag, numbers):
+    from foo.bar import variance
 
-    return dag.put(normalize(value.value()))
+    return variance(numbers.value())
 ```
 
-After that funk has completed for a given input, changing `foo.bar.normalize()` to return `value.upper()` does not change the rendered `normalize_text` source or its cache key. Calling `normalize_text` with the same input would therefore reuse the completed DAG containing the lowercase result.
+and executes
+```python
+dag.call(compute_stats, [1, 2, 3]).value() == 2/3
+```
+
+The author later realizes that this is the formula for the population variance and not the sample variance! He or she fixes the error and reruns the analysis:
+```python
+# foo/bar.py
+def mean(vals):
+    return sum(vals) / len(vals)
+
+def variance(vals):
+    return sum([(x - mean(vals)) ** 2 for x in vals]) / (len(vals) - 1)
+```
+
+An author creates this funk:
+
+```python
+@api.funkify
+def compute_stats(dag, numbers):
+    from foo.bar import variance
+
+    return variance(numbers.value())
+```
+
+and executes
+
+```python
+dag.call(compute_stats, [1, 2, 3]).value() == 2/3
+dag.call(compute_stats, [2, 1, 3]).value() == 2/2
+```
+
+The old result is still being used in the cache! This is because we never included the implementation of `variance` was never included in the cache key. You can invalidate the cache for that item, or you can include the implementation *in* the funk itself.
 To include an inspectable helper's source in the rendered script and cache identity, pass it through `extra_objs`:
 
 ```python
-from foo.bar import normalize
+from foo.bar import mean, variance
 
-@api.funkify(extra_objs=(normalize,))
-def normalize_text(dag, value):
-    return dag.put(normalize(value.value()))
+@api.funkify(extra_objs=(mean,variance))
+def compute_stats(dag, value):
+    return variance(value.value())
 ```
 
-Do not expect edits to an editable dependency to invalidate a funk cache. Invalidate the cache or make the dependency change part of the staged runnable before recomputing.
-
-### Error nodes cannot be traversed in Python
-
-A failed function call remains a named node in its parent DAG, but loading that node in Python immediately re-raises its stored error. For example, `dag["err-val"]` raises, so `dag["err-val"].context().intermediate_node` cannot be used to inspect values in the failed function DAG.
-
-Use the CLI to resolve the failed node and find its function DAG reference. First use `dml show` to find the parent DAG reference, then inspect the named node:
-
-```bash
-dml dag get-node-by-name PARENT_DAG_REF err-val
-dml dag describe-node ERROR_NODE_REF
-```
-
-`describe-node` reports the function DAG reference. Construct that DAG explicitly in Python to inspect its named nodes:
+Note that we must include both `mean` and `variance`. One can include other things like `import numpy as np` via `extra_lines`:
 
 ```python
-error_dag = dml.Dag(dml=dag.dml, ref=error_dag_ref)
-print(error_dag.intermediate_node.value())
-```
+# foo/bar.py
+import numpy as np
 
-This limitation will be addressed in a future release.
+def variance(vals):
+    return np.variance(vals)
+
+@api.funkify(extra_objs=(variance,), extra_lines=["import numpy as np"])
+def compute_stats(dag, value):
+    return variance(value.value())
+```
 
 ## Known security holes
 

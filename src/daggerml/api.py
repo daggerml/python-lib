@@ -124,6 +124,8 @@ def _make_node(dag: "Dag", ref: Ref) -> "Node":
         A Node instance representing the reference in the DAG.
     """
     node_value = dag.dml.dag.get_node(ref)
+    if isinstance(node_value, Error):
+        raise NodeError(node_value, node_ref=ref, dag=dag)
     info: dict[str, Any] = {"data_type": type(node_value).__name__.lower()}
     # Determine node type based on value and populate info
     if isinstance(node_value, list):
@@ -595,6 +597,28 @@ class Dag:
         raise CancellationError(f"DAG execution cancelled with mode '{mode}'")
 
 
+class NodeError(Error):
+    """A stored error enriched with the node that produced it."""
+
+    def __init__(self, error: Error, *, node_ref: Ref, dag: Dag):
+        super().__init__(message=error.message, origin=error.origin, type=error.type, stack=list(error.stack))
+        self.node_ref = node_ref
+        self.dag = dag
+
+    def context(self) -> Dag:
+        """Return the function DAG that recorded this node's failure."""
+        dag = self.dag
+        node_ref = self.node_ref
+        while True:
+            info = dag.dml.dag.describe_node(node_ref)
+            if info["type"] == "FnNode":
+                return Dag(dml=dag.dml, ref=info["dag"])
+            if info["type"] != "ImportNode":
+                raise DmlRepoError(f"Node {node_ref} does not resolve to a failed function call")
+            dag = Dag(dml=dag.dml, ref=info["dag"])
+            node_ref = info["node"]
+
+
 @dataclass(frozen=True)
 class Node:  # noqa: F811
     """
@@ -684,7 +708,10 @@ class Node:  # noqa: F811
         Any
             The actual value represented by this node
         """
-        return self.dag.dml.dag.get_node(self.ref, recursive=True)
+        value = self.dag.dml.dag.get_node(self.ref, recursive=True)
+        if isinstance(value, Error):
+            raise NodeError(value, node_ref=self.ref, dag=self.dag)
+        return value
 
     def __call__(self, *args, name=None, sleep=None, timeout=-1, **kw) -> "Node":
         raise TypeError(f"Node of type '{self.type}' is not callable")
@@ -1119,7 +1146,7 @@ def apply_codec(value: Any, *, dag: Dag) -> Any:
 
 
 def apply_codecs(value: Any, *, dag: Dag) -> Any:
-    while not isinstance(value, (*get_args(Scalar), *get_args(Collection), Error, Ref)):
+    while not isinstance(value, (*get_args(Scalar), *get_args(Collection), Ref)):
         value = apply_codec(value, dag=dag)
     if isinstance(value, list):
         return [apply_codecs(v, dag=dag) for v in value]

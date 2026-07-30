@@ -173,7 +173,13 @@ class IndexOps:
         return imp_node
 
     def _run_builtin(self, argv_node_refs: list[Ref], dag, txn) -> Ref:
-        argv_refs = [txn.get(x).datum_ref(txn) for x in argv_node_refs]
+        argv_refs = []
+        for node_ref in argv_node_refs:
+            datum_ref, error_ref = txn.get(node_ref).datum_ref(txn)
+            if error_ref is not None:
+                raise txn.get(error_ref)
+            assert datum_ref is not None
+            argv_refs.append(datum_ref)
         runnable = txn.get(argv_refs[0]).value(txn)
         # TODO: Builtins should decide what to extract from the DB instead of
         # materializing the full argv here. For values[1:3], get only needs an
@@ -284,7 +290,11 @@ class IndexOps:
             if not set(argv).issubset(set(ctx.dag.nodes)):
                 raise DmlRepoError("All argv nodes must be part of current DAG.")
             # Keep the runnable read narrow so we do not unroll argv values early.
-            runnable = txn.get(txn.get(argv[0]).datum_ref(txn)).value(txn)
+            runnable_ref, error_ref = txn.get(argv[0]).datum_ref(txn)
+            if error_ref is not None:
+                raise RuntimeError("Cannot start function with error in argv: " + str(txn.get(error_ref)))
+            assert runnable_ref is not None
+            runnable = txn.get(runnable_ref).value(txn)
             if not isinstance(runnable, Runnable):
                 raise DmlRepoError("First argv node must resolve to a Runnable datum.")
             if runnable.adapter == "":
@@ -292,7 +302,14 @@ class IndexOps:
                 return self._update_dag(index, resp, name, ctx, txn)
             # adapter-backed function call.
             # Step 0: construct argv node and compute cache key
-            argv_node = ArgvNode(value=txn.put(ListDatum([txn.get(x).datum_ref(txn) for x in argv])))
+            argv_refs = []
+            for node_ref in argv:
+                datum_ref, error_ref = txn.get(node_ref).datum_ref(txn)
+                if error_ref is not None:
+                    raise RuntimeError("Cannot start function with error in argv: " + str(txn.get(error_ref)))
+                assert datum_ref is not None
+                argv_refs.append(datum_ref)
+            argv_node = ArgvNode(value=txn.put(ListDatum(argv_refs)))
             cache_key = argv_node.cache_key(txn)
             argv_node_ref = txn.put(argv_node)
         state = self.exec_state(cache_key=cache_key)
@@ -311,10 +328,6 @@ class IndexOps:
             node = txn.put(FnNode(argv=argv, dag=resp))
             ctx.dag.nodes = sorted({*ctx.dag.nodes, node})
             self._update_dag(index, node, name, ctx, txn)
-        if hydrated.error is not None:
-            with db.tx() as txn:
-                err = txn.get(hydrated.error)
-                raise err
         return node
 
     def commit(

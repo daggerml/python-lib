@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Optional, Self, Union, cast, dataclass_transform
+from typing import Any, Optional, Self, TypeAlias, Union, cast, dataclass_transform
 from uuid import uuid4
 
 from daggerml._core.db import DmlDb as RawDmlDB
@@ -440,7 +440,7 @@ class Error(DmlBase, Exception):
                 raise TypeError(f"{self.__class__.__name__}.stack frame must be a dict")
 
     @classmethod
-    def from_ex(cls, exc) -> Self:
+    def from_ex(cls, exc) -> "Error":
         """Create Error from Python exception.
 
         Parameters
@@ -453,6 +453,8 @@ class Error(DmlBase, Exception):
         Error
             Error object with extracted stack trace.
         """
+        if isinstance(exc, Error):
+            return Error(message=exc.message, origin=exc.origin, type=exc.type, stack=list(exc.stack))
         tb = traceback.extract_tb(exc.__traceback__)
         stack = [
             {
@@ -509,6 +511,9 @@ class DmlPointerConflictError(DmlRepoError):
         self.current_commit = current_commit
 
 
+GetDatumRefType: TypeAlias = tuple[Ref, None] | tuple[None, Ref]
+
+
 class Node(DmlBase):
     """Base class for computational nodes in a DAG.
 
@@ -542,7 +547,7 @@ class Node(DmlBase):
         # ensure instances have a concrete _ns so BaseOps.put works without `to=`
         cls._ns = concrete_ns
 
-    def datum_ref(self, txn: "TxnWithValid") -> Ref:
+    def datum_ref(self, txn: "TxnWithValid") -> GetDatumRefType:
         raise NotImplementedError("Subclasses must implement datum_ref method")
 
 
@@ -561,7 +566,7 @@ class LiteralNode(Node):
     def _validate(self) -> None:
         require_ref(self.value, expected_ns=["datum"], context=f"{self.__class__.__name__}.value")
 
-    def datum_ref(self, txn: "TxnWithValid") -> Ref:
+    def datum_ref(self, txn: "TxnWithValid") -> GetDatumRefType:
         """Get the Datum reference for this node's value.
 
         Parameters
@@ -574,13 +579,17 @@ class LiteralNode(Node):
         Ref
             The Datum reference for this node's value.
         """
-        return self.value
+        return self.value, None
 
 
 @dataclass
 class ArgvNode(LiteralNode):
     def cache_key(self, txn: "TxnWithValid") -> str:
-        return self.datum_ref(txn).id()
+        datum_ref, error_ref = self.datum_ref(txn)
+        if error_ref is not None:
+            raise txn.get(error_ref)
+        assert datum_ref is not None
+        return datum_ref.id()
 
 
 @dataclass
@@ -602,7 +611,7 @@ class ImportNode(Node):
         require_ref(self.dag, expected_ns=["dag"], context=f"{self.__class__.__name__}.dag")
         require_ref(self.node, expected_ns=["node"], context=f"{self.__class__.__name__}.node")
 
-    def datum_ref(self, txn: "TxnWithValid") -> Ref:
+    def datum_ref(self, txn: "TxnWithValid") -> GetDatumRefType:
         """Get the value from the imported node.
 
         Returns
@@ -643,7 +652,7 @@ class FnNode(Node):
         for a in self.argv:
             require_ref(a, expected_ns=["node"], context=f"{self.__class__.__name__}.argv")
 
-    def datum_ref(self, txn: "TxnWithValid") -> Ref:
+    def datum_ref(self, txn: "TxnWithValid") -> GetDatumRefType:
         """Get the value from the function call node.
 
         Returns
@@ -658,7 +667,7 @@ class FnNode(Node):
         """
         dag = txn.get(self.dag)
         if dag.error is not None:
-            raise txn.get(dag.error)
+            return None, dag.error
         if dag.result is None:
             raise DmlRepoError("DAG has no result node")
         node = txn.get(dag.result)
@@ -748,7 +757,11 @@ class Dag(DmlBase):
         if self.argv is None:
             raise DmlRepoError("Cannot compute cache key for DAG without argv.")
         argv_node = txn.get(self.argv)
-        return argv_node.datum_ref(txn).id()
+        datum_ref, error_ref = argv_node.datum_ref(txn)
+        if error_ref is not None:
+            raise txn.get(error_ref)
+        assert datum_ref is not None
+        return datum_ref.id()
 
 
 @_register_dml_obj
@@ -866,6 +879,7 @@ class TxnWithValid:
     def put(self, obj, *, to: Ref | None = None, ns: str | None = None, no_overwrite: bool = False) -> Ref:
         if isinstance(obj, Ref):
             raise TypeError("Cannot put a bare Ref")
+        obj = Error.from_ex(obj) if isinstance(obj, Error) else obj
         if isinstance(obj, DmlBase):
             obj._validate()
             ns = getattr(obj, "_ns", None) if (ns is None and to is None) else ns

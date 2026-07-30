@@ -809,7 +809,9 @@ class ExecutionState:
             return "inactive"
         with db.tx() as txn:
             argv = self._remote._materialize_manifest(target, txn, expected_root_ns="node-argv")
-            argv_datum = txn.get(txn.get(argv).datum_ref(txn))
+            datum_ref, _ = txn.get(argv).datum_ref(txn)
+            assert datum_ref is not None
+            argv_datum = txn.get(datum_ref)
             runnable = txn.get(argv_datum.value(txn)[0]).value(txn)
         adapter_request = AdapterCancelRequest(
             operation="cancel",

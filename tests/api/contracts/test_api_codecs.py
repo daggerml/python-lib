@@ -130,7 +130,7 @@ def test_api_codec_009__apply_codec_error_semantics(dag, monkeypatch):
         api.apply_codec("raw", dag=dag)
 
 
-def test_api_codec_010__apply_codecs_normalizes_uri_runnable_and_errors(dag):
+def test_api_codec_010__apply_codecs_normalizes_uri_and_runnable(dag):
     runnable = Runnable(
         target=Uri(CustomSequence(("dml", "://", "target"))),
         adapter="local",
@@ -144,7 +144,8 @@ def test_api_codec_010__apply_codecs_normalizes_uri_runnable_and_errors(dag):
     assert encoded.sub == {"nested": ["x"]}
 
     err = Error("boom", origin="test", type="RuntimeError")
-    assert api.apply_codecs(err, dag=dag) is err
+    with pytest.raises(api.CodecError, match="No codec found for value of type Error"):
+        api.apply_codecs(err, dag=dag)
 
 
 def test_api_codec_011__node_codec_reuses_same_index_ref(dag, refs):

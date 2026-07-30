@@ -1,6 +1,6 @@
 """Read-only queries on DAGs."""
 
-from typing import NotRequired, TypedDict, cast
+from typing import Literal, TypedDict, cast
 
 from daggerml._core.db import Ref
 from daggerml._core.types import Dag, DmlDB, DmlRepoError, FnNode, ImportNode, TxnWithValid
@@ -16,12 +16,27 @@ class DagDescription(TypedDict):
     cache_key: str | None
 
 
-class NodeDescriptionPayload(TypedDict):
+class _NodeDescription(TypedDict):
     id: Ref
-    type: str
-    dag: NotRequired[Ref]
-    argv: NotRequired[list[Ref]]
-    node: NotRequired[Ref]
+
+
+class LiteralNodeDescription(_NodeDescription):
+    type: Literal["LiteralNode", "ArgvNode"]
+
+
+class ImportNodeDescription(_NodeDescription):
+    type: Literal["ImportNode"]
+    dag: Ref
+    node: Ref
+
+
+class FnNodeDescription(_NodeDescription):
+    type: Literal["FnNode"]
+    dag: Ref
+    argv: list[Ref]
+
+
+NodeDescriptionPayload = LiteralNodeDescription | ImportNodeDescription | FnNodeDescription
 
 
 class DagOps:
@@ -44,12 +59,11 @@ class DagOps:
     def describe_node(self, node_ref: Ref, *, db: DmlDB) -> NodeDescriptionPayload:
         with db.tx(readonly=True) as txn:
             node = txn.get(txn.require(node_ref, "node"))
-        resp = {"id": node_ref, "type": type(node).__name__}
         if isinstance(node, ImportNode):
-            resp.update({"dag": node.dag, "node": node.node})
-        elif isinstance(node, FnNode):
-            resp.update({"dag": node.dag, "argv": node.argv})
-        return cast(NodeDescriptionPayload, resp)
+            return {"id": node_ref, "type": "ImportNode", "dag": node.dag, "node": node.node}
+        if isinstance(node, FnNode):
+            return {"id": node_ref, "type": "FnNode", "dag": node.dag, "argv": node.argv}
+        return cast(LiteralNodeDescription, {"id": node_ref, "type": type(node).__name__})
 
     def get_node(self, dag_ref: Ref, name: str, *, db: DmlDB) -> Ref:
         with db.tx(readonly=True) as txn:

@@ -15,3 +15,5 @@ assert dml.load("summary").result.value() == [2, 3, 5]
 ```
 
 Nodes materialize with `.value()`. Committed nested lists and dictionaries may return read-only projections; those also support `.value()` and `.context()`.
+
+Failed function calls retain their named node and terminal error ref. High-level access to a failed node raises `NodeError`; use its `.context()` to inspect the failed function DAG, or use `dml.dag.get_node(node_ref)` and `dml.dag.get_error(error_ref)` for low-level error inspection.
