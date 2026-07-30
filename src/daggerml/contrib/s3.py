@@ -11,19 +11,14 @@ from pathlib import Path
 from typing import Any, Iterable, Literal, cast
 from urllib.parse import urlparse
 
-import boto3
-
 from daggerml import Node, Uri, get_default_dml
 from daggerml.api import DmlRepoError
+from daggerml.util import get_client
 
 
 def is_s3_uri(value: str) -> bool:
     p = urlparse(value)
     return p.scheme == "s3" and bool(p.netloc) and bool(p.path and p.path != "/")
-
-
-def _boto3_client(service: str):
-    return boto3.client(service)
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -73,7 +68,7 @@ class S3Store:
             prefix = ""
         object.__setattr__(self, "bucket", bucket)
         object.__setattr__(self, "prefix", prefix.strip("/"))
-        object.__setattr__(self, "client", self.client or _boto3_client("s3"))
+        object.__setattr__(self, "client", self.client or get_client("s3"))
 
     @classmethod
     def from_remote_root(cls, remote_root: str) -> "S3Store":

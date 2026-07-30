@@ -7,9 +7,6 @@ from pathlib import Path
 from time import time
 from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict, cast, overload
 
-import boto3
-from botocore.config import Config as BotoConfig
-
 from daggerml._core.commit import CommitDescription, CommitDiffPayload, CommitFullDescription, CommitOps
 from daggerml._core.config import Config, flatten_dict
 from daggerml._core.dag import DagDescription, DagOps, NodeDescriptionPayload
@@ -21,6 +18,7 @@ from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItemConflict
 from daggerml._core.types import DmlDB, DmlRepoError, Error, TxnWithValid
 from daggerml._core.uri import ProjectUri
+from daggerml.util import get_client
 
 
 def _format_graph_age(seconds: int | float | None) -> str:
@@ -59,8 +57,7 @@ def _require_remote_root(dml: "Dml") -> str:
 
 
 def _require_s3_client(dml: "Dml"):
-    config = BotoConfig(max_pool_connections=dml._config.remote.fetch_workers)
-    return boto3.client("s3", config=config)
+    return get_client("s3", max_pool_connections=dml._config.remote.fetch_workers)
 
 
 def _remote_ops(dml: "Dml") -> Remote:

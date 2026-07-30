@@ -27,11 +27,9 @@ _CLOUDWATCH_MAX_BATCH_COUNT = 10_000
 
 
 def _create_logs_client() -> Any:
-    import boto3
+    from daggerml.util import get_client
 
-    endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
-    kwargs = {"endpoint_url": endpoint_url} if endpoint_url else {}
-    return boto3.client("logs", **kwargs)
+    return get_client("logs")
 
 
 def _resource_already_exists(exc: Exception) -> bool:

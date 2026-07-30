@@ -10,8 +10,6 @@ from typing import Any
 from urllib.parse import urlparse
 from warnings import warn
 
-import boto3
-
 from daggerml import Runnable
 from daggerml._core.exec_state import AdapterCancelResponse, AdapterInvokeResponse
 from daggerml.api import DmlRepoError, _entry_points
@@ -52,7 +50,7 @@ class AdapterBase:
             parsed = urlparse(output_path)
             bucket = parsed.netloc
             key = parsed.path.lstrip("/")
-            boto3.client("s3").put_object(
+            get_client("s3").put_object(
                 Bucket=bucket,
                 Key=key,
                 Body=data.encode("utf-8"),

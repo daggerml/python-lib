@@ -19,12 +19,15 @@ def current_time_millis():
 
 @dataclass
 class BackoffWithJitter:
-    min: int = 10
+    min: int = 100
     max: int = 10000
-    k: int = 3
+    k: int = 2
     state: int = 0
 
     def __call__(self):
+        if self.state == 0:
+            self.state = randint(self.min, self.min * 2)
+            return self.state
         self.state = min(self.max, randint(self.min, max(self.min, self.state) * self.k))
         return self.state
 
@@ -71,7 +74,17 @@ def _get_region_from_metadata():
     return
 
 
-def get_client(name, region=None, default_region="us-east-1"):
+def get_client(
+    name,
+    region=None,
+    default_region="us-east-1",
+    *,
+    connection_timeout=5,
+    read_timeout=60,
+    max_attempts=5,
+    retry_mode="adaptive",
+    max_pool_connections=20,
+):
     """
     Creates a robust boto3 client, determining the AWS region in the following order:
         1. Explicit argument
@@ -88,6 +101,16 @@ def get_client(name, region=None, default_region="us-east-1"):
         The AWS region to use.
     default_region : str, default="us-east-1"
         The fallback AWS region.
+    connection_timeout : int | float, default=5
+        The connection timeout in seconds.
+    read_timeout : int | float, default=60
+        The read timeout in seconds.
+    max_attempts : int, default=5
+        The maximum number of retry attempts for retriable AWS requests.
+    retry_mode : str, default="adaptive"
+        The botocore retry mode.
+    max_pool_connections : int, default=20
+        The maximum number of pooled HTTP connections.
 
     Returns
     -------
@@ -112,8 +135,9 @@ def get_client(name, region=None, default_region="us-east-1"):
         region = default_region
     config = Config(
         region_name=region,
-        connect_timeout=5,
-        retries={"max_attempts": 5, "mode": "adaptive"},
-        max_pool_connections=20,
+        connect_timeout=connection_timeout,
+        read_timeout=read_timeout,
+        retries={"max_attempts": max_attempts, "mode": retry_mode},
+        max_pool_connections=max_pool_connections,
     )
     return boto3.client(name, config=config)

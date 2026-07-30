@@ -5,8 +5,6 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
-import boto3
-
 from daggerml import Runnable, Uri
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors.lambda_ import LambdaExecutorBase
@@ -16,8 +14,24 @@ PENDING_BATCH_STATUSES = {"SUBMITTED", "PENDING", "RUNNABLE", "STARTING", "RUNNI
 DEFAULT_VCPU = 1
 DEFAULT_MEMORY = 16 * 1024
 DEFAULT_GPU = 0
+_BATCH_CONNECTION_TIMEOUT = 60
+_BATCH_READ_TIMEOUT = 60
+_BATCH_START_MAX_ATTEMPTS = 100
+_BATCH_POLL_MAX_ATTEMPTS = 25
+_BATCH_MAX_POOL_CONNECTIONS = 100
 
 _ADAPTER_IO_NAME = "lambda:batch"
+
+
+def _batch_client(name: str, *, max_attempts: int = _BATCH_POLL_MAX_ATTEMPTS):
+    return get_client(
+        name,
+        connection_timeout=_BATCH_CONNECTION_TIMEOUT,
+        read_timeout=_BATCH_READ_TIMEOUT,
+        max_attempts=max_attempts,
+        retry_mode="adaptive",
+        max_pool_connections=_BATCH_MAX_POOL_CONNECTIONS,
+    )
 
 
 def _scratch_uri(scratch_uri: str, filename: str) -> str:
@@ -31,7 +45,7 @@ def _scratch_uri(scratch_uri: str, filename: str) -> str:
 def _write_scratch_json(uri: str, payload: Any, *, raw: bool) -> None:
     parsed = urlparse(uri)
     data = payload if raw else json.dumps(payload)
-    boto3.client("s3").put_object(
+    _batch_client("s3", max_attempts=_BATCH_START_MAX_ATTEMPTS).put_object(
         Bucket=parsed.netloc,
         Key=parsed.path.lstrip("/"),
         Body=data.encode("utf-8"),
@@ -42,7 +56,7 @@ def _write_scratch_json(uri: str, payload: Any, *, raw: bool) -> None:
 def _read_scratch_output(uri: str) -> str | None:
     parsed = urlparse(uri)
     try:
-        response = boto3.client("s3").get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))
+        response = _batch_client("s3").get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))
     except Exception as exc:
         code = getattr(exc, "response", {}).get("Error", {}).get("Code")
         if code in {"404", "NoSuchKey", "NotFound"}:
@@ -94,8 +108,8 @@ class BatchExecutor(LambdaExecutorBase):
         )
 
     @staticmethod
-    def _client():
-        return get_client("batch")
+    def _client(*, max_attempts: int = _BATCH_POLL_MAX_ATTEMPTS):
+        return _batch_client("batch", max_attempts=max_attempts)
 
     @classmethod
     def _resource_requirements(cls, kwargs: dict[str, Any]) -> tuple[list[dict[str, str]], str]:
@@ -138,7 +152,7 @@ class BatchExecutor(LambdaExecutorBase):
             }
         )
         _write_scratch_json(input_uri, payload, raw=True)
-        client = self._client()
+        client = self._client(max_attempts=_BATCH_START_MAX_ATTEMPTS)
         kwargs = runnable.get("kwargs", {})
         reqs, job_queue = self._resource_requirements(kwargs)
         image = self._image_uri(kwargs.get("image"))

@@ -104,7 +104,7 @@ def test_contrib_adapter_003__cli_supports_s3_input_and_output(monkeypatch):
             writes.update(kwargs)
 
     monkeypatch.setattr("daggerml.contrib.adapters.S3Store", lambda: FakeStore())
-    monkeypatch.setattr("daggerml.contrib.adapters.boto3.client", lambda service: FakeClient())
+    monkeypatch.setattr("daggerml.contrib.adapters.get_client", lambda service: FakeClient())
 
     assert RecordingAdapter.cli(["-i", "s3://bucket/input.json", "-o", "s3://bucket/output.json"]) == 0
     assert calls == [payload]

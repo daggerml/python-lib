@@ -9,12 +9,11 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
-import boto3
-
 from daggerml import Runnable, Uri
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store, is_s3_uri
+from daggerml.util import get_client
 
 
 def _scratch_uri(scratch_uri: str, filename: str) -> str:
@@ -28,7 +27,7 @@ def _scratch_uri(scratch_uri: str, filename: str) -> str:
 def _write_scratch_json(uri: str, payload: Any, *, raw: bool) -> None:
     parsed = urlparse(uri)
     data = payload if raw else json.dumps(payload)
-    boto3.client("s3").put_object(
+    get_client("s3").put_object(
         Bucket=parsed.netloc,
         Key=parsed.path.lstrip("/"),
         Body=data.encode("utf-8"),
@@ -39,7 +38,7 @@ def _write_scratch_json(uri: str, payload: Any, *, raw: bool) -> None:
 def _read_scratch_output(uri: str) -> str | None:
     parsed = urlparse(uri)
     try:
-        response = boto3.client("s3").get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))
+        response = get_client("s3").get_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))
     except Exception as exc:
         code = getattr(exc, "response", {}).get("Error", {}).get("Code")
         if code in {"404", "NoSuchKey", "NotFound"}:
