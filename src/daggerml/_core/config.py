@@ -51,7 +51,7 @@ _DEFAULTS: dict[str, callable | str | None | int] = {
     "config_home": global_config_home,
     "db_path": None,
     "project_home": Path.cwd,
-    "default.db_map_size_headroom": 1024 * 1024,
+    "default.db_map_size_headroom": 50 * 1024**2,  # 50 MiB
     "default.db_map_size_max": 10 * 1024**3,  # 10 GiB
     "default.branch_name": "main",
     "remote.prune_age_seconds": 24 * 3600,

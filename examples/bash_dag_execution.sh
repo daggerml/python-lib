@@ -5,32 +5,9 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=examples/example_helpers.sh
 source "${repo_root}/examples/example_helpers.sh"
-example_name="$(basename "${BASH_SOURCE[0]}" .sh)"
-scratch_dir="${repo_root}/ignore/examples/${example_name}"
 dag_name="examples/bash-dag-execution"
-project_home="${scratch_dir}/project"
-export DML_CONFIG_HOME="${scratch_dir}/dml_config"
-
-cleanup() {
-  if [[ "${KEEP_EXAMPLE_SCRATCH:-0}" == "1" ]]; then
-    log "Keeping scratch directory: ${scratch_dir}"
-    return
-  fi
-  rm -rf "${scratch_dir}"
-}
-trap cleanup EXIT
 
 require_env DML_REMOTE_ROOT
-
-log "Setting up DML repo in ${scratch_dir}"
-rm -rf "${scratch_dir}"
-mkdir -p "${project_home}"
-mkdir -p "${DML_CONFIG_HOME}"
-
-
-cd "${project_home}"
-log "Initializing DML repo"
-dml init | jq . -C
 
 log "Creating runtime and getting index_id"
 index_id="$(dml runtime create)"

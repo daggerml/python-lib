@@ -8,6 +8,7 @@ executes the Docker-backed funks over SSH.
 
 from __future__ import annotations
 
+import argparse
 import getpass
 import json
 import os
@@ -182,10 +183,10 @@ def predict_target(dag, dataset, params):
     return {"train": train_r2, "test": test_r2}
 
 
-def main() -> None:
+def main(dag_name: str, docker_dag_name: str) -> None:
     _require_local_tools()
-    dag = dml.new(name="examples/02-ssh-docker-dataset")
-    loaded_dag = dml.load("examples/01-docker-dataset")
+    dag = dml.new(name=dag_name)
+    loaded_dag = dml.load(docker_dag_name)
     dag.image = loaded_dag.image
     dag.dataset = loaded_dag.dataset
     dag.put(loaded_dag["dkr-flags"], name="dkr-flags")
@@ -199,4 +200,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dag_name")
+    parser.add_argument("docker_dag_name")
+    args = parser.parse_args()
+    main(args.dag_name, args.docker_dag_name)

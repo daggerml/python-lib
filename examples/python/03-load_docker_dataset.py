@@ -7,15 +7,16 @@ execution, remote cache publication, and S3-backed artifact exchange between
 DAG nodes.
 """
 
+import argparse
 import json
 
 import daggerml as dml
 
 
-def main() -> None:
-    dag = dml.new(name="examples/03-load-docker-dataset")
+def main(dag_name: str, docker_dag_name: str) -> None:
+    dag = dml.new(name=dag_name)
     print("Training model and generating predictions within Docker...")
-    loaded_dag = dml.load("examples/01-docker-dataset")
+    loaded_dag = dml.load(docker_dag_name)
     dag.predict_fn = loaded_dag.predict_fn
     dag.dataset = loaded_dag.dataset
     predictions = dag.predict_fn(
@@ -30,4 +31,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dag_name")
+    parser.add_argument("docker_dag_name")
+    args = parser.parse_args()
+    main(args.dag_name, args.docker_dag_name)

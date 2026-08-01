@@ -9,6 +9,7 @@ DAG nodes.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -88,7 +89,7 @@ def predict_target(dag, dataset, params):
     return {"train": train_r2, "test": test_r2}
 
 
-def main(dag: dml.Dag) -> None:
+def run(dag: dml.Dag) -> None:
     flags = _docker_run_flags()
     try:
         import pandas  # pyright:ignore[reportMissingImports] # noqa:F401
@@ -124,5 +125,7 @@ def main(dag: dml.Dag) -> None:
 
 
 if __name__ == "__main__":
-    with dml.new(name="examples/01-docker-dataset") as dag:
-        main(dag)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dag_name")
+    with dml.new(name=parser.parse_args().dag_name) as dag:
+        run(dag)

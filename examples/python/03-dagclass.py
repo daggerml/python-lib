@@ -7,6 +7,8 @@ without accepting each nested funk as an explicit argument.
 
 from __future__ import annotations
 
+import argparse
+
 import daggerml as dml
 from daggerml.contrib import api
 
@@ -61,10 +63,12 @@ class MultiDatasetSummary:
         return {name: self.summarizer(raw) for name, raw in raw_dict.items()}
 
 
-def main() -> None:
-    api.run(MultiDatasetSummary(), {"a": ["2", "4", "8"], "b": ["1", "3", "5"]}, name="examples/dagclass")
-    print(dml.load("examples/dagclass").result.value())
+def main(dag_name: str) -> None:
+    api.run(MultiDatasetSummary(), {"a": ["2", "4", "8"], "b": ["1", "3", "5"]}, name=dag_name)
+    print(dml.load(dag_name).result.value())
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dag_name")
+    main(parser.parse_args().dag_name)

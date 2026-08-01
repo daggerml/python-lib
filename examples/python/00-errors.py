@@ -1,3 +1,5 @@
+import argparse
+
 import daggerml as dml
 from daggerml.contrib import api
 
@@ -7,8 +9,8 @@ def err(dag, arg):
     return 1 / arg.value()
 
 
-def main() -> None:
-    dag = dml.new(name="examples/00-errors")
+def main(dag_name: str) -> None:
+    dag = dml.new(name=dag_name)
     with dag:
         # dag.error_instance = dml.Error("This is an error instance", origin="example", type="example-error")
         dag.err_fn = err
@@ -17,4 +19,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("dag_name")
+    main(parser.parse_args().dag_name)

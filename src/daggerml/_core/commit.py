@@ -310,7 +310,7 @@ class CommitOps:
                     parents=parents,
                     tree=txn.put(tree),
                     author=user,
-                    message=f"Checkout DAG '{dag}' as '{name}'",
+                    message=f"Checkout DAG '{dag.to}' as '{name}'",
                     created=now(),
                 )
             )

@@ -7,40 +7,24 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 examples_dir="${repo_root}/examples"
 # shellcheck source=examples/example_helpers.sh
 source "${examples_dir}/example_helpers.sh"
-ignore_dir="${repo_root}/ignore"
-example_name="$(basename "${BASH_SOURCE[0]}" .sh)"
-scratch_dir="${ignore_dir}/examples/${example_name}"
-export DML_CONFIG_HOME="${scratch_dir}/dml_config"
-
-cleanup() {
-  if [[ "${KEEP_EXAMPLE_SCRATCH:-0}" == "1" ]]; then
-    log "Keeping scratch directory: ${scratch_dir}"
-    return
-  fi
-  rm -rf "${scratch_dir}"
-}
-trap cleanup EXIT
 
 require_env DML_REMOTE_ROOT
+require_env DML_EXAMPLE_PROJECT_HOME
+require_env DML_EXAMPLE_SCRATCH
 
-log "Setting up DML repo in ${ignore_dir}"
-mkdir -p "${ignore_dir}/examples"
-rm -rf "${scratch_dir}"
-mkdir -p "${scratch_dir}"
-mkdir -p "${DML_CONFIG_HOME}"
-printf '*\n' > "${ignore_dir}/.gitignore"
 dml_user="cool-guy"
 dml config set user "${dml_user}" --scope global
+work_dir="${DML_EXAMPLE_SCRATCH}/work"
+dag_namespace="examples/bash-full-cli-workflow"
+hello_dag_name="${dag_namespace}/hello-world"
 
 log "Using remote env: ${AWS_ENDPOINT_URL}"
 log "Remote root: ${DML_REMOTE_ROOT}"
-cd "${scratch_dir}"
 
 project0="project-0"
 log "Initializing DML repo in ${project0}"
-rm -rf "${scratch_dir}/${project0}" || true
-mkdir "${scratch_dir}/${project0}"
-cd "${scratch_dir}/${project0}"
+mkdir -p "${work_dir}/${project0}"
+cd "${work_dir}/${project0}"
 dml --remote-project "dml://${dml_user}/${project0}" init | jq .
 
 log "Configuring and inspecting CLI-visible settings"
@@ -55,14 +39,14 @@ dml status | jq .
 dml rev-parse HEAD | jq .
 
 log "Running example: 00-hello_world.py"
-python "${examples_dir}/python/00-hello_world.py"
+python "${examples_dir}/python/00-hello_world.py" "${hello_dag_name}"
 
 log "Inspecting committed history and DAG state after 00-hello_world.py"
 dml status | jq '.branches'
 dml log --revision HEAD --limit 10 | jq .
 dml show --revision HEAD | jq .
-hello_dag_ref="$(dml show --revision HEAD | jq -r '.dags["examples/00-hello-world"]')"
-dml dag delete examples/00-hello-world
+hello_dag_ref="$(dml show --revision HEAD | jq -r --arg dag_name "${hello_dag_name}" '.dags[$dag_name]')"
+dml dag delete "${hello_dag_name}"
 dml diff --revision HEAD --relative-to HEAD~1 | jq .
 dml show --revision HEAD | jq .
 greeting_ref="$(dml dag get-node-by-name "${hello_dag_ref}" greeting)"
@@ -118,23 +102,15 @@ dml admin remote list-projects | jq .
 dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
 dml admin remote gc | jq .
 
-log "Cleaning up first project to test fresh init with existing remote"
-cd .. && rm -rf "${project0}"
-
-## Second "project"
-project1="project-1"
-log "Initializing DML repo in ${project1}"
-rm -rf "${scratch_dir}/${project1}" || true
-mkdir "${scratch_dir}/${project1}"
-cd "${scratch_dir}/${project1}"
-dml --remote-project "dml://${dml_user}/${project1}" init | jq .
+log "Fetching into the runner-managed repository"
+cd "${DML_EXAMPLE_PROJECT_HOME}"
 dml fetch "dml://${dml_user}/${project0}" | jq .
 dml rev-parse "dml://${dml_user}/${project0}#main" | jq .
 dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
 dml branch move main "dml://${dml_user}/${project0}#main"
 remote_hello_dag_ref="${hello_dag_ref}"
-log "Checking out remote DAG ref ${remote_hello_dag_ref} into examples/00-hello-world-copy"
-dml dag checkout "${remote_hello_dag_ref}" examples/00-hello-world-copy
+log "Checking out remote DAG ref ${remote_hello_dag_ref} into ${dag_namespace}/hello-world-copy"
+dml dag checkout "${remote_hello_dag_ref}" "${dag_namespace}/hello-world-copy"
 dml status | jq .
 dml revert HEAD | jq .
 merge_demo_branch="merge-demo"
@@ -142,7 +118,7 @@ dml branch create "${merge_demo_branch}"
 dml checkout "${merge_demo_branch}" | jq .
 merge_demo_idx="$(dml runtime create)"
 merge_demo_ref="$(printf '%s\n' '["scalar","merge-demo"]' | dml runtime put-literal "${merge_demo_idx}" - --name merge-demo)"
-dml runtime commit "${merge_demo_idx}" "${merge_demo_ref}" --message "Add merge demo DAG" --name examples/merge-demo
+dml runtime commit "${merge_demo_idx}" "${merge_demo_ref}" --message "Add merge demo DAG" --name "${dag_namespace}/merge-demo"
 dml checkout main | jq .
 dml merge "${merge_demo_branch}" | jq .
 rebase_demo_branch="rebase-demo"
@@ -159,20 +135,20 @@ tag_name="cli-demo-tag"
 dml tag create "${tag_name}"
 dml tag list | jq .
 dml tag delete "${tag_name}"
-dml dag checkout "${remote_hello_dag_ref}" examples/00-hello-world
-dml dag delete examples/merge-demo
+dml dag checkout "${remote_hello_dag_ref}" "${hello_dag_name}"
+dml dag delete "${dag_namespace}/merge-demo"
 dml branch delete "${renamed_rebase_branch}"
 dml status | jq .
 
 log "Running example: 01b-load_fn.py"
-python "${examples_dir}/python/01b-load_fn.py"
+python "${examples_dir}/python/01b-load_fn.py" "${dag_namespace}/load-fn" "${hello_dag_name}"
 
 log "Inspecting fetched and pulled history from the second project"
 dml status | jq '.branches'
 dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
 dml log --revision HEAD --limit 10 | jq .
 dml show --revision HEAD | jq .
-load_fn_dag_ref="$(dml show --revision HEAD | jq -r '.dags["examples/01b-load-fn"]')"
+load_fn_dag_ref="$(dml show --revision HEAD | jq -r --arg dag_name "${dag_namespace}/load-fn" '.dags[$dag_name]')"
 dml dag describe "${load_fn_dag_ref}" | jq .
 old_result_ref="$(dml dag get-node-by-name "${load_fn_dag_ref}" old_result)"
 dml dag get-node "${old_result_ref}" | jq .
