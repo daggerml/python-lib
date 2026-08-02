@@ -38,10 +38,9 @@ class ScriptExecutor(ExecutorBase):
     def resolve_runnable(cls, uri, kwargs, sub):
         if sub is not None:
             raise DmlRepoError("script executor does not accept sub runnable")
-        resolved_kwargs, script = cls._script_kwargs(dict(kwargs))
-        script_uri = S3Store().put(data=script.encode("utf-8"), suffix=".py")
-        resolved_kwargs["script_uri"] = script_uri.uri
-        return Runnable(target=Uri("script"), kwargs=resolved_kwargs, sub=sub, adapter="dml-local-adapter")
+        resolved_kw, script = cls._script_kwargs(dict(kwargs))
+        resolved_kw["script_uri"] = S3Store().put(data=script.encode("utf-8"), suffix=".py")
+        return Runnable(target=Uri("script"), kwargs=resolved_kw, sub=sub, adapter="dml-local-adapter")
 
     @classmethod
     def _script_kwargs(cls, kwargs: dict) -> tuple[dict, str]:
@@ -71,7 +70,7 @@ class ScriptExecutor(ExecutorBase):
                 raise DmlRepoError(f"Failed to serialize object source: {e}") from e
         if post_lines:
             chunks.extend(post_lines)
-        script = "\n".join(["\n\n".join(chunks), "\n"])
+        script = "\n\n".join(chunks)
         try:
             mod = ast.parse(script)
         except SyntaxError as e:

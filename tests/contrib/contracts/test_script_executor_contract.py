@@ -50,7 +50,7 @@ def test_contrib_script_003__resolve_runnable_rejects_sub_and_writes_script_to_s
         return 1
 
     runnable = ScriptExecutor.resolve_runnable("script", {"fn": fn}, None)
-    assert runnable.kwargs["script_uri"] == "s3://bucket/script.py"
+    assert runnable.kwargs["script_uri"] == Uri("s3://bucket/script.py")
     assert runnable.kwargs["fn_name"] == "fn"
     assert seen["suffix"] == ".py"
 
@@ -94,14 +94,17 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
     (success_dir / "result.json").write_text(
         json.dumps({"status": "succeeded", "error": None, "state": None, "dag_id": "a" * 64})
     )
-    assert ScriptExecutor().poll(
-        cache_key="ck",
-        execution_id="exec",
-        runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
-        state=dict(success_state),
-        remote={"root": "s3://bucket/root"},
-        scratch_uri="s3://bucket/scratch",
-    )["status"] == "succeeded"
+    assert (
+        ScriptExecutor().poll(
+            cache_key="ck",
+            execution_id="exec",
+            runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
+            state=dict(success_state),
+            remote={"root": "s3://bucket/root"},
+            scratch_uri="s3://bucket/scratch",
+        )["status"]
+        == "succeeded"
+    )
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -113,14 +116,17 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
         "stderr_path": str(bad_dir / "stderr.log"),
     }
     (bad_dir / "result.json").write_text("not-json")
-    assert ScriptExecutor().poll(
-        cache_key="ck",
-        execution_id="exec",
-        runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
-        state=bad_state,
-        remote={"root": "s3://bucket/root"},
-        scratch_uri="s3://bucket/scratch",
-    )["status"] == "failed"
+    assert (
+        ScriptExecutor().poll(
+            cache_key="ck",
+            execution_id="exec",
+            runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
+            state=bad_state,
+            remote={"root": "s3://bucket/root"},
+            scratch_uri="s3://bucket/scratch",
+        )["status"]
+        == "failed"
+    )
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
@@ -131,14 +137,17 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
         "stdout_path": str(empty_dir / "stdout.log"),
         "stderr_path": str(empty_dir / "stderr.log"),
     }
-    assert "without result" in ScriptExecutor().poll(
-        cache_key="ck",
-        execution_id="exec",
-        runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
-        state=empty_state,
-        remote={"root": "s3://bucket/root"},
-        scratch_uri="s3://bucket/scratch",
-    )["error"]
+    assert (
+        "without result"
+        in ScriptExecutor().poll(
+            cache_key="ck",
+            execution_id="exec",
+            runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
+            state=empty_state,
+            remote={"root": "s3://bucket/root"},
+            scratch_uri="s3://bucket/scratch",
+        )["error"]
+    )
 
 
 def test_script_worker_dag_creation_uses_cache_key_and_execution_id(monkeypatch, tmp_path):
