@@ -10,5 +10,6 @@
 | Detached checkout cannot commit | Attach `HEAD` with `dml checkout BRANCH`. |
 | Function timeout | Inspect the runtime graph and execution boundary before retrying. |
 | Codec staging failure | Convert the value to a supported type or provide a codec. |
+| Local database map is full at its configured maximum | Increase `default.db_map_size_max` if the filesystem and address space permit it, or garbage-collect unreachable local history. |
 
 CLI parse errors exit 2. `Ctrl+C` exits 130. Other CLI failures are printed on standard error. Use `Dag` as a context manager when you want an uncaught Python exception committed as an inspectable `Error` result.

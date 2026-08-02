@@ -951,8 +951,13 @@ class DmlDB:
         )
         self._tx = None
 
+    def write_with_growth(self, fn: Callable[[TxnWithValid], Any], *, create_if_missing: bool = False) -> Any:
+        return self._db.write_with_growth(
+            lambda txn: fn(TxnWithValid(txn)), create_if_missing=create_if_missing
+        )
+
     def call_with_resize(self, fn: Callable[[TxnWithValid], Any]) -> Any:
-        return self._db.call_with_resize(lambda txn: fn(TxnWithValid(txn)))
+        return self.write_with_growth(fn)
 
     @contextmanager
     def tx(self, *, readonly: bool = False, create_if_missing: bool = False):
@@ -962,16 +967,15 @@ class DmlDB:
             yield TxnWithValid(txn)
 
     def gc(self, refs: list[Ref]) -> dict[str, int]:
-        stats = {}
-
-        def collect(txn: TxnWithValid) -> None:
+        def collect(txn: TxnWithValid) -> dict[str, int]:
+            stats: dict[str, int] = {}
             roots = [*refs, *(ref for ref, _ in txn.iter("index"))]
             for ref in txn.list_orphans(roots):
                 txn.delete(ref)
                 stats[ref.ns()] = stats.get(ref.ns(), 0) + 1
+            return stats
 
-        self.call_with_resize(collect)
-        return stats
+        return self.write_with_growth(collect)
 
     def exists(self) -> bool:
         """Check if the database exists on disk."""
@@ -979,11 +983,13 @@ class DmlDB:
 
     def init(self) -> Ref:
         """Initialize the database on disk if it doesn't exist."""
-        with self.tx(create_if_missing=True) as txn:
+
+        def initialize(txn: TxnWithValid) -> Ref:
             tree = txn.put(Tree(dags={}))
             return txn.put(Commit(tree=tree, parents=[], author="dml", message="Initial commit"))
 
+        return self.write_with_growth(initialize, create_if_missing=True)
+
     def ensure_exists(self) -> None:
         """Create the backing database without seeding repository history."""
-        with self.tx(create_if_missing=True):
-            pass
+        self.write_with_growth(lambda _txn: None, create_if_missing=True)

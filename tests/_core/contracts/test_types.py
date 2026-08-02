@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -7,7 +10,7 @@ import pytest
 from hypothesis import given, settings
 
 from daggerml._core.db import DmlDb as RawDmlDB
-from daggerml._core.db import DmlDbRegistryFullError, Ref
+from daggerml._core.db import DmlDbBusyError, DmlDbInvalidPathError, DmlDbMapFullError, DmlDbRegistryFullError, Ref
 from daggerml._core.types import (
     NAMESPACES,
     Commit,
@@ -126,6 +129,142 @@ def test_call_with_resize_wraps_typed_transaction(tmp_path) -> None:
     assert obj.parents == [commit]
     assert obj.tree == base_commit.tree
     assert obj.dag == dag
+
+
+def test_raw_db_write_with_growth_retries_until_commit(tmp_path) -> None:
+    db = RawDmlDB(str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=64 * 1024, max_map_size=2 * 1024**2)
+    with db.tx(map_size=64 * 1024, create_if_missing=True):
+        pass
+    attempts = 0
+
+    def write(txn):
+        nonlocal attempts
+        attempts += 1
+        return txn.put("x" * (200 * 1024), ns="datum-scalar")
+
+    ref = db.write_with_growth(write)
+
+    assert attempts > 1
+    with db.tx(readonly=True) as txn:
+        assert txn.get(ref) == "x" * (200 * 1024)
+
+
+def test_raw_db_write_with_growth_retries_map_full_from_commit(tmp_path) -> None:
+    class CommitMapFullDb(RawDmlDB):
+        commit_map_fulls = 0
+
+        @contextmanager
+        def tx(self, *args, **kwargs):
+            try:
+                with super().tx(*args, **kwargs) as txn:
+                    yield txn
+            except DmlDbMapFullError as exc:
+                if str(exc).endswith("dml_db_txn_close"):
+                    self.commit_map_fulls += 1
+                raise
+
+    db = CommitMapFullDb(
+        str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=64 * 1024, max_map_size=2 * 1024**2
+    )
+    with db.tx(map_size=256 * 1024, create_if_missing=True):
+        pass
+    seed_values = [f"seed-{i}-{'x' * 1024}" for i in range(20)]
+    retry_values = [f"retry-{i}-{'x' * 1024}" for i in range(10)]
+    for offset in range(0, len(seed_values), 10):
+        with db.tx(readonly=False) as txn:
+            for value in seed_values[offset : offset + 10]:
+                txn.put(value, ns="datum-scalar")
+    attempts = 0
+
+    def write(txn):
+        nonlocal attempts
+        attempts += 1
+        return [txn.put(value, ns="datum-scalar") for value in retry_values]
+
+    refs = db.write_with_growth(write)
+
+    assert attempts == 2
+    assert db.commit_map_fulls == 1
+    with db.tx(readonly=True) as txn:
+        assert {value for _, value in txn.iter("datum-scalar")} == set(seed_values + retry_values)
+        assert [txn.get(ref) for ref in refs] == retry_values
+
+
+def test_raw_db_write_with_growth_reports_capacity_limit(tmp_path) -> None:
+    db = RawDmlDB(str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=64 * 1024, max_map_size=64 * 1024)
+
+    with pytest.raises(DmlDbMapFullError, match=r"configured maximum is 65536 bytes"):
+        db.write_with_growth(lambda txn: txn.put("x" * (200 * 1024), ns="datum-scalar"), create_if_missing=True)
+
+
+def test_raw_db_explicit_resize_waits_for_active_lease(tmp_path) -> None:
+    db = RawDmlDB(
+        str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=64 * 1024**2
+    )
+    with db.tx(create_if_missing=True):
+        pass
+
+    started = threading.Event()
+    completed = threading.Event()
+
+    def resize() -> None:
+        started.set()
+        db.resize()
+        completed.set()
+
+    with db.tx(readonly=True):
+        worker = threading.Thread(target=resize)
+        worker.start()
+        assert started.wait(timeout=1)
+        time.sleep(0.05)
+        assert not completed.is_set()
+
+    worker.join(timeout=1)
+    assert completed.is_set()
+    with db.tx(readonly=True):
+        pass
+
+
+def test_raw_db_explicit_resize_rejects_calling_transaction_owner(tmp_path) -> None:
+    db = RawDmlDB(
+        str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=64 * 1024**2
+    )
+    with db.tx(create_if_missing=True):
+        pass
+
+    with db.tx(readonly=True):
+        with pytest.raises(DmlDbBusyError):
+            db.resize()
+
+
+def test_raw_db_open_recovers_after_failed_resize(tmp_path) -> None:
+    path = tmp_path / "db"
+    db = RawDmlDB(str(path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=8 * 1024**2)
+
+    with pytest.raises(DmlDbInvalidPathError):
+        db.resize()
+
+    path.mkdir()
+    with db.tx(create_if_missing=True):
+        pass
+
+
+def test_raw_db_open_with_map_size_does_not_resize_active_environment(tmp_path) -> None:
+    db = RawDmlDB(str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=8 * 1024**2)
+    with db.tx(create_if_missing=True):
+        pass
+
+    completed = threading.Event()
+
+    def open_with_map_size() -> None:
+        with db.tx(readonly=True, map_size=2 * 1024**2):
+            completed.set()
+
+    with db.tx(readonly=True):
+        worker = threading.Thread(target=open_with_map_size)
+        worker.start()
+        worker.join(timeout=1)
+        assert completed.is_set()
 
 
 def test_get_ctx_loads_dag_from_index_but_not_from_commit(tmp_path) -> None:

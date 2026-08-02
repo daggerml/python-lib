@@ -52,6 +52,86 @@ def test_cache_roundtrip(tmp_path):
         assert commit.tree == tree
 
 
+def test_manifest_fetch_precedes_replayable_local_write(tmp_path, monkeypatch):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=2, client=client)
+        source_db = make_db(tmp_path / "source-db")
+        target_db = make_db(tmp_path / "target-db")
+        with source_db.tx() as txn:
+            argv_value = txn.put(ListDatum([]))
+            argv = txn.put(ArgvNode(value=argv_value))
+            value = txn.put(ScalarDatum("done"))
+            result = txn.put(LiteralNode(value=value))
+            dag_ref = txn.put(Dag(nodes=[argv, result], names={"result": result}, result=result, argv=argv))
+        cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
+
+        in_local_write = False
+        original_get = remote._store._get
+        original_write = target_db.write_with_growth
+
+        def guarded_get(*args, **kwargs):
+            assert not in_local_write
+            return original_get(*args, **kwargs)
+
+        def write_with_tracking(fn):
+            nonlocal in_local_write
+            in_local_write = True
+            try:
+                return original_write(fn)
+            finally:
+                in_local_write = False
+
+        monkeypatch.setattr(remote._store, "_get", guarded_get)
+        monkeypatch.setattr(target_db, "write_with_growth", write_with_tracking)
+
+        assert remote.get_cache(cache_key, target_db) == dag_ref
+
+
+def test_remote_materialization_skips_cas_fetch_for_local_root(tmp_path, monkeypatch):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=2, client=client)
+        target_db = make_db(tmp_path / "target-db")
+        with target_db.tx() as txn:
+            root_ref = txn.put(ScalarDatum("local"))
+
+        def fail_unexpected_cas_fetch(*args, **kwargs):
+            raise AssertionError("local root should not fetch remote CAS objects")
+
+        monkeypatch.setattr(remote._store, "_get", fail_unexpected_cas_fetch)
+
+        assert remote.materialize_manifest(
+            {"ref": {"to": root_ref.to}, "created": 0, "metadata": {}}, target_db
+        ) == root_ref
+
+
+@pytest.mark.slow
+def test_remote_materialization_grows_map_for_large_dag_payload(tmp_path):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=2, client=client)
+        source_db = make_db(tmp_path / "source-db")
+        target_db = make_db(tmp_path / "target-db")
+
+        def write_large_dag(txn):
+            argv_value = txn.put(ListDatum([]))
+            argv = txn.put(ArgvNode(value=argv_value))
+            nodes = [argv]
+            for i in range(12):
+                value = txn.put(ScalarDatum(f"{i:05d}" + "x" * (900 * 1024 - 5)))
+                nodes.append(txn.put(LiteralNode(value=value)))
+            return txn.put(Dag(nodes=nodes, names={}, result=nodes[-1], argv=argv))
+
+        dag_ref = source_db.write_with_growth(write_large_dag)
+        cache_key = remote.put_cache(dag_ref, "exec-large", source_db)
+
+        assert remote.get_cache(cache_key, target_db) == dag_ref
+
+
 def test_remote_ref_payloads_use_typed_roots(tmp_path):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")

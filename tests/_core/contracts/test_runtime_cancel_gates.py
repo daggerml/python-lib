@@ -123,7 +123,7 @@ def test_execution_aware_create_activates_pending_execution(tmp_path) -> None:
     argv_ref = _put_argv_node(db)
     _put_reserved_execution(state, "exec", lifecycle="pending")
     ops._remote.get_active = lambda cache_key, raw=False: {"meta": {"execution_id": "exec"}}
-    ops._remote._materialize_manifest = lambda manifest, txn, expected_root_ns: argv_ref
+    ops._remote.materialize_manifest = lambda manifest, db, expected_root_ns: argv_ref
 
     index = ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
 
@@ -136,10 +136,8 @@ def test_execution_aware_create_rejects_non_pending_activation_states(tmp_path, 
     db = make_db(tmp_path)
     state = NoopExecutionState()
     ops = local_index_ops(state)
-    argv_ref = _put_argv_node(db)
     _put_reserved_execution(state, "exec", lifecycle=lifecycle)
     ops._remote.get_active = lambda cache_key, raw=False: {"meta": {"execution_id": "exec"}}
-    ops._remote._materialize_manifest = lambda manifest, txn, expected_root_ns: argv_ref
 
     with pytest.raises(BadExecutionStatusError):
         ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
@@ -149,9 +147,7 @@ def test_execution_aware_create_rejects_missing_execution_record(tmp_path) -> No
     db = make_db(tmp_path)
     state = NoopExecutionState()
     ops = local_index_ops(state)
-    argv_ref = _put_argv_node(db)
     ops._remote.get_active = lambda cache_key, raw=False: {"meta": {"execution_id": "exec"}}
-    ops._remote._materialize_manifest = lambda manifest, txn, expected_root_ns: argv_ref
 
     with pytest.raises(DmlRepoError):
         ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
@@ -161,10 +157,8 @@ def test_execution_aware_create_drives_cancel_requested_before_raising(tmp_path)
     db = make_db(tmp_path)
     state = NoopExecutionState()
     ops = local_index_ops(state)
-    argv_ref = _put_argv_node(db)
     _put_reserved_execution(state, "exec", lifecycle="cancel-requested")
     ops._remote.get_active = lambda cache_key, raw=False: {"meta": {"execution_id": "exec"}}
-    ops._remote._materialize_manifest = lambda manifest, txn, expected_root_ns: argv_ref
 
     with pytest.raises(CanceledExecutionError):
         ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
@@ -177,10 +171,8 @@ def test_execution_aware_create_raises_on_terminal_cancel_without_drive(tmp_path
     db = make_db(tmp_path)
     state = NoopExecutionState()
     ops = local_index_ops(state)
-    argv_ref = _put_argv_node(db)
     _put_reserved_execution(state, "exec", lifecycle=lifecycle)
     ops._remote.get_active = lambda cache_key, raw=False: {"meta": {"execution_id": "exec"}}
-    ops._remote._materialize_manifest = lambda manifest, txn, expected_root_ns: argv_ref
 
     with pytest.raises(CanceledExecutionError):
         ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)

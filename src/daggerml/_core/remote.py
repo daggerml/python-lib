@@ -170,7 +170,7 @@ class Remote:
         objects: dict[str, str] = {}
         visited: set[Ref] = set()
         pending = [root_ref]
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             while pending:
                 ref = pending.pop()
                 if ref in visited:
@@ -250,41 +250,66 @@ class Remote:
             return
         raise ValueError(f"Unsupported object type in remote object graph: {type(obj)!r}")
 
-    def _get_cas(self, ref: Ref, deps: set[Ref], txn: TxnWithValid) -> Ref:
-        if not txn.exists(ref):
-            raw = self._store._get(self._cas_key(ref.id()))
-            obj = self._load_cas_object(ref, raw)
-            local_ref = txn.put(obj)
-            if local_ref != ref:
-                raise ValueError(f"Remote CAS object identity mismatch: expected {ref}, got {local_ref}")
-            self._collect_direct_refs(obj, deps)
-            return local_ref
-        return ref
-
-    def _materialize_manifest(
+    def _fetch_manifest_objects(
         self,
         manifest: dict,
-        txn: TxnWithValid,
+        db: DmlDB,
         *,
         expected_root_ns: str | None = None,
         required_metadata: tuple[str, ...] = (),
-    ) -> Ref:
+    ) -> tuple[Ref, list[tuple[Ref, DmlBase]]]:
+        """Fetch the manifest closure before replayable local materialization."""
         root_ref = self._validate_ref_payload(
             manifest,
             expected_root_ns=expected_root_ns,
             required_metadata=required_metadata,
         )
-        pending = {root_ref}
-        visited: set[Ref] = set()
-        while pending:
-            ref = pending.pop()
-            if ref in visited:
-                continue
-            visited.add(ref)
-            deps: set[Ref] = set()
-            self._get_cas(ref, deps, txn)
-            pending.update(deps - visited)
-        return root_ref
+        objects: list[tuple[Ref, DmlBase]] = []
+        with db.tx(readonly=True) as txn:
+            pending = {root_ref}
+            visited: set[Ref] = set()
+            while pending:
+                ref = pending.pop()
+                if ref in visited:
+                    continue
+                visited.add(ref)
+                if txn.exists(ref):
+                    continue
+                obj = self._load_cas_object(ref, self._store._get(self._cas_key(ref.id())))
+                # Retain fetched objects across write retries. Locally present
+                # objects are intentionally not traversed; see sharp bits.
+                objects.append((ref, obj))
+                deps: set[Ref] = set()
+                self._collect_direct_refs(obj, deps)
+                pending.update(deps - visited)
+        return root_ref, objects
+
+    def materialize_manifest(
+        self,
+        manifest: dict,
+        db: DmlDB,
+        *,
+        expected_root_ns: str | None = None,
+        required_metadata: tuple[str, ...] = (),
+    ) -> Ref:
+        """Materialize already-fetched remote objects with a replayable local write."""
+        root_ref, objects = self._fetch_manifest_objects(
+            manifest,
+            db,
+            expected_root_ns=expected_root_ns,
+            required_metadata=required_metadata,
+        )
+
+        def write_objects(txn: TxnWithValid) -> Ref:
+            for ref, obj in objects:
+                if txn.exists(ref):
+                    continue
+                local_ref = txn.put(obj)
+                if local_ref != ref:
+                    raise ValueError(f"Remote CAS object identity mismatch: expected {ref}, got {local_ref}")
+            return root_ref
+
+        return db.write_with_growth(write_objects)
 
     def _read_ref(self, ref_path: str):
         return json.loads(self._store._get(self._store._key_for(ref_path)))
@@ -296,8 +321,7 @@ class Remote:
             return None
         manifest = json.loads(item.data)
         self._validate_ref_payload(manifest, expected_root_ns=expected_ns)
-        with db.tx() as txn:
-            ref = self._materialize_manifest(manifest, txn, expected_root_ns=expected_ns)
+        ref = self.materialize_manifest(manifest, db, expected_root_ns=expected_ns)
         return ref, item
 
     def _raw_ref_view(self, payload: dict) -> dict:
@@ -342,14 +366,12 @@ class Remote:
         if raw:
             return self._raw_ref_view(manifest)
         assert db is not None, "DmlDB instance required to materialize manifest"
-        # FIXME: Consider using `call_w_resize` for this write transaction.
-        with db.tx() as txn:
-            return self._materialize_manifest(
-                manifest,
-                txn,
-                expected_root_ns=expected_ns,
-                required_metadata=required_metadata,
-            )
+        return self.materialize_manifest(
+            manifest,
+            db,
+            expected_root_ns=expected_ns,
+            required_metadata=required_metadata,
+        )
 
     def _del(self, ref_path: str) -> bool:
         full_key = self._store._key_for(ref_path)
@@ -380,7 +402,7 @@ class Remote:
         return live_oids
 
     def put_cache(self, dag_ref: Ref, execution_id: str, db: DmlDB) -> str:
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             dag: Dag = txn.get(dag_ref)
             cache_key = dag.cache_key(txn)
         ref_path = self._cache_key(cache_key)

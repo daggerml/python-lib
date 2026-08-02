@@ -9,6 +9,7 @@ This module wraps the underlying C library (dml_db) that handles:
 - Transaction handling
 """
 import logging
+import os
 import sys
 from contextlib import contextmanager
 from libc.stdlib cimport malloc, free, calloc
@@ -109,6 +110,7 @@ cdef extern from "dml_db.h":
     int DML_DB_ERR_INTERNAL
     int DML_DB_ERR_ENV_REOPENED
     int DML_DB_ERR_REGISTRY_FULL
+    int DML_DB_ERR_MAP_SIZE_MAX
 
     ctypedef struct DmlObjCollection:
         char *keys
@@ -129,7 +131,15 @@ cdef extern from "dml_db.h":
         DmlDbHandle **out_handle,
     ) nogil
     int dml_db_txn_close(DmlDbHandle **p_handle, const int commit) nogil
-    int dml_db_get_size(const char *path, size_t *out_size) nogil
+    int dml_db_resize(
+        const char *path,
+        const char *const *namespaces,
+        size_t namespace_count,
+        const int create_if_missing,
+        size_t headroom,
+        size_t max_map_size,
+        size_t *out_current_map_size,
+    ) nogil
 
     int dml_db_put(
         DmlDbHandle **p_txn,
@@ -885,16 +895,26 @@ cdef class DmlDb:
         self.map_size_headroom = <size_t>map_size_headroom
         self.max_map_size = <size_t>max_map_size
 
-    def get_size(self) -> int:
-        cdef const char *path_c = PyUnicode_AsUTF8(self.path)
-        cdef size_t size = 0
+    def resize(self, bint create_if_missing=False) -> None:
         cdef int rc
+        cdef size_t current_map_size = 0
 
-        if path_c == NULL:
-            raise ValueError("Cannot unicode")
-        rc = dml_db_get_size(path_c, &size)
-        raise_if_error(rc, "dml_db_get_size")
-        return size
+        with nogil:
+            rc = dml_db_resize(
+                self._path_c,
+                self._namespaces_c,
+                self._namespace_count,
+                1 if create_if_missing else 0,
+                self.map_size_headroom,
+                self.max_map_size,
+                &current_map_size,
+            )
+        if rc == DML_DB_ERR_MAP_SIZE_MAX:
+            raise DmlDbMapFullError(
+                f"database map is full at {current_map_size} bytes for {self.path}; "
+                f"configured maximum is {self.max_map_size} bytes"
+            )
+        raise_if_error(rc, "dml_db_resize")
 
     cdef DmlDbHandle* _txn_open(self, bint readonly, bint create_if_missing, size_t map_size) except NULL:
         cdef DmlDbHandle *handle = NULL
@@ -932,6 +952,10 @@ cdef class DmlDb:
         cdef int rc = 0
         cdef int success = 1
         cdef size_t map_size_value = 0 if map_size is None else <size_t>map_size
+        if map_size is None and create_if_missing and not os.path.exists(os.path.join(self.path, "data.mdb")):
+            map_size_value = self.map_size_headroom
+            if map_size_value > self.max_map_size:
+                map_size_value = self.max_map_size
         cdef DmlDbTxn txn = DmlDbTxn(
             self,
             readonly=readonly,
@@ -951,18 +975,19 @@ cdef class DmlDb:
         if success:
             raise_if_error(rc, "dml_db_txn_close")
 
-    def call_with_resize(self, fn):
-        cdef size_t map_size
+    def write_with_growth(self, fn, bint create_if_missing=False):
+        while True:
+            try:
+                with self.tx(
+                    readonly=False,
+                    create_if_missing=create_if_missing,
+                ) as txn:
+                    return fn(txn)
+            except DmlDbMapFullError:
+                self.resize(create_if_missing=create_if_missing)
 
-        try:
-            with self.tx(readonly=False) as txn:
-                return fn(txn)
-        except DmlDbMapFullError:
-            map_size = <size_t>self.get_size() + self.map_size_headroom
-            if map_size > self.max_map_size:
-                map_size = self.max_map_size
-            with self.tx(readonly=False, map_size=map_size) as txn:
-                return fn(txn)
+    def call_with_resize(self, fn, bint create_if_missing=False):
+        return self.write_with_growth(fn, create_if_missing=create_if_missing)
 
 cdef class DmlDbTxn:
     """Daggerml database transaction handle."""

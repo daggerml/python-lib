@@ -27,14 +27,13 @@ This document describes the current C implementation under `/c`.
 - `DML_DB_ITER_LIMIT`
 - `DmlDbHandle`
 - `DmlObjCollection`
-- DB error codes `DML_DB_OK` through `DML_DB_ERR_ENV_REOPENED`
+- DB error codes `DML_DB_OK` through `DML_DB_ERR_MAP_SIZE_MAX`
 
 ### Public API
 
-- `int dml_db_get_size(const char *path, size_t *out_size)` (computes the current LMDB path size on disk)
-- `int dml_db_open(const char *path, const char *const *namespaces, size_t namespace_count, const int create_if_missing, size_t map_size, DmlDbHandle **out_handle)` (`map_size == 0` leaves the environment map size unchanged)
-- `int dml_db_resize(DmlDbHandle **p_handle, size_t map_size)`
-- `int dml_db_close(DmlDbHandle **p_handle)`
+- `int dml_db_txn_open(const char *path, const char *const *namespaces, size_t namespace_count, const int readonly, const int create_if_missing, size_t map_size, DmlDbHandle **out_handle)` (`map_size` applies only when opening an unleased environment)
+- `int dml_db_txn_close(DmlDbHandle **p_handle, const int commit)`
+- `int dml_db_resize(const char *path, const char *const *namespaces, size_t namespace_count, const int create_if_missing, size_t headroom, size_t max_map_size, size_t *out_current_map_size)` (reads LMDB's current map size, grows it by up to `headroom`, and returns `DML_DB_ERR_MAP_SIZE_MAX` when it cannot grow)
 - `int dml_db_put(DmlDbHandle **p_handle, const char *ns, size_t ns_len, const char *key, size_t key_len, const DmlValue *value, int no_overwrite, int raw, DmlValue **out_ref)`
 - `int dml_db_get(DmlDbHandle **p_handle, const char *ns, size_t ns_len, const char *key, size_t key_len, int raw, DmlValue **out_value)`
 - `int dml_db_del(DmlDbHandle **p_handle, const char *ns, size_t ns_len, const char *key, size_t key_len)`
@@ -66,9 +65,9 @@ This document describes the current C implementation under `/c`.
 
 ### Exported functions
 
-- `int dml_db_open(...)`
+- `int dml_db_txn_open(...)`
 - `int dml_db_resize(...)`
-- `int dml_db_close(...)`
+- `int dml_db_txn_close(...)`
 - `int dml_db_put(...)`
 - `int dml_db_get(...)`
 - `int dml_db_del(...)`

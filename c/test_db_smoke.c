@@ -70,7 +70,6 @@ int main(void) {
     const char *ref_id = NULL;
     size_t ref_ns_len = 0;
     size_t ref_id_len = 0;
-    size_t db_size = 0;
     int rc = 0;
     int exit_code = 1;
 
@@ -79,19 +78,9 @@ int main(void) {
         return 1;
     }
 
-    rc = dml_db_get_size(tmpdir, &db_size);
+    rc = dml_db_txn_open(tmpdir, namespaces, 1, 0, 1, 0, &db);
     if (rc != 0) {
-        fprintf(stderr, "dml_db_get_size(empty) failed: %d\n", rc);
-        goto cleanup;
-    }
-    if (db_size != 0) {
-        fprintf(stderr, "expected empty db size, got: %zu\n", db_size);
-        goto cleanup;
-    }
-
-    rc = dml_db_open(tmpdir, namespaces, 1, 1, 0, 0, &db);
-    if (rc != 0) {
-        fprintf(stderr, "dml_db_open(write) failed: %d\n", rc);
+        fprintf(stderr, "dml_db_txn_open(write) failed: %d\n", rc);
         goto cleanup;
     }
 
@@ -129,25 +118,15 @@ int main(void) {
     dml_value_free(output);
     output = NULL;
 
-    rc = dml_db_close(&db, 1);
+    rc = dml_db_txn_close(&db, 1);
     if (rc != 0) {
-        fprintf(stderr, "dml_db_close(commit) failed: %d\n", rc);
+        fprintf(stderr, "dml_db_txn_close(commit) failed: %d\n", rc);
         goto cleanup;
     }
 
-    rc = dml_db_get_size(tmpdir, &db_size);
+    rc = dml_db_txn_open(tmpdir, namespaces, 1, 1, 0, 0, &db);
     if (rc != 0) {
-        fprintf(stderr, "dml_db_get_size(populated) failed: %d\n", rc);
-        goto cleanup;
-    }
-    if (db_size == 0) {
-        fprintf(stderr, "expected populated db size to be non-zero\n");
-        goto cleanup;
-    }
-
-    rc = dml_db_open(tmpdir, namespaces, 1, 0, 0, 1, &db);
-    if (rc != 0) {
-        fprintf(stderr, "dml_db_open(read) failed: %d\n", rc);
+        fprintf(stderr, "dml_db_txn_open(read) failed: %d\n", rc);
         goto cleanup;
     }
 
@@ -175,10 +154,10 @@ cleanup:
         dml_value_free(input);
     }
     if (db != NULL) {
-        int close_rc = dml_db_close(&db, 0);
+        int close_rc = dml_db_txn_close(&db, 0);
 
         if (close_rc != 0 && exit_code == 0) {
-            fprintf(stderr, "dml_db_close(cleanup) failed: %d\n", close_rc);
+            fprintf(stderr, "dml_db_txn_close(cleanup) failed: %d\n", close_rc);
             exit_code = 1;
         }
     }

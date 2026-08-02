@@ -1,25 +1,4 @@
-## Purpose
-Define process-local LMDB environment registry, leasing, resizing, and capacity behavior.
-
-## Requirements
-
-### Requirement: Canonical-path registry deduplicates same-process DB access
-The DB layer SHALL canonicalize each requested DB path and use a process-local registry so all callers targeting the same canonical path reuse the same registry slot.
-
-#### Scenario: Same-path callers reuse one slot
-- **WHEN** two DB handles are opened in the same process for paths that canonicalize to the same on-disk DB location
-- **THEN** the DB layer assigns both handles to the same registry slot
-
-#### Scenario: Different paths use different slots
-- **WHEN** two DB handles are opened in the same process for paths that canonicalize to different on-disk DB locations
-- **THEN** the DB layer assigns them to different registry slots
-
-### Requirement: Registry invalidates inherited state on PID change
-The DB layer SHALL store the active PID on the registry and clear all registry slots before further env acquisition when the PID does not match the current process.
-
-#### Scenario: Child process clears inherited registry state
-- **WHEN** a process fork occurs and the child attempts to acquire a DB env through the inherited registry
-- **THEN** the child clears the inherited registry state and continues with a fresh registry PID
+## MODIFIED Requirements
 
 ### Requirement: Environments are leased per active operation
 The DB layer SHALL treat LMDB environments as leased resources for active transactions and other short-lived env users, incrementing a slot refcount on acquisition and decrementing it on release. During an explicit resize for a canonical path, new acquisitions for that slot SHALL wait until the resize succeeds or fails; existing leases SHALL remain valid until their holders release them.
@@ -52,7 +31,7 @@ The DB layer SHALL recover from map-full conditions for growth-aware writes by c
 
 #### Scenario: Map-full retries after explicit resize
 - **WHEN** a growth-aware write fails because the current env map is full
-- **THEN** the DB layer reopens the env at a larger map size before retrying the write
+- **THEN** the DB layer SHALL reopen the env at a larger map size before retrying the write
 
 #### Scenario: Ordinary transaction open does not trigger resize
 - **WHEN** a caller opens a transaction with a map size while an environment for the canonical path is already open
@@ -64,10 +43,3 @@ The DB layer SHALL recover transaction acquisition when LMDB reports that anothe
 #### Scenario: Reader observes external map resize
 - **WHEN** a transaction acquisition observes LMDB's map-resized condition after another process grows the same database
 - **THEN** the DB layer SHALL reopen the local environment at the current backing map size and yield a working transaction if the reopen succeeds
-
-### Requirement: Registry capacity is bounded and explicit
-The DB layer SHALL enforce a fixed maximum number of distinct canonical DB paths in the registry at one time and fail with a dedicated registry-capacity error when no slot is available.
-
-#### Scenario: Registry-full returns a dedicated error
-- **WHEN** a caller opens a DB handle for a new canonical path and all registry slots are already occupied by different paths
-- **THEN** the DB layer fails with a dedicated registry-capacity error

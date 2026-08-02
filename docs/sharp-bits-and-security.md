@@ -88,6 +88,10 @@ def compute_stats(dag, value):
     return variance(value.value())
 ```
 
+### Do not run administrative work while pulling
+
+Do not run `dml admin` commands concurrently with `dml pull` or other remote synchronization against the same local repository. In particular, local garbage collection can remove an object while a pull is materializing a remote object graph, leaving the materialized graph with a missing dependency. Run administrative work only after synchronization has completed.
+
 ## Known security holes
 
 ### Runnable adapters can launch arbitrary local executables
@@ -115,6 +119,12 @@ Do not create tarballs with symlink or hardlink members for use with `S3Store.un
 DaggerML uses hash-derived names for stored artifacts and other managed objects, but it does not recompute and compare those hashes when it reads them. Overwriting a known object or ref can therefore replace the data DaggerML uses without a hash mismatch being detected. This includes script source: overwritten script bytes can later be executed by a script worker.
 
 Never manually overwrite DaggerML-managed objects or refs. Humans and automated agents must use DaggerML tooling to write and update them.
+
+### Remote CAS dependencies are traversed before identity verification
+
+When materializing a remote CAS object graph, DaggerML decodes each downloaded object and follows its references before verifying that the object's content produces the requested local object ref. The later local materialization rejects an identity mismatch, so the corrupt object is not persisted, but it may already have caused additional remote object requests. A remote store that can serve arbitrary bytes under known CAS keys can therefore cause unnecessary dependency traversal and remote-read work before rejection.
+
+Treat a configured remote object store as trusted for availability and object integrity. Limit its credentials and request budget accordingly.
 
 ### SSH flags can run commands on the local execution host
 

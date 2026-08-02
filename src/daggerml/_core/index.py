@@ -94,10 +94,29 @@ class IndexOps:
         exec_id = execution_id or uuid7().hex
         if execution_id is not None:
             record = state.require_mutation(exec_id, db, mode="activation")
-        # FIXME: Consider using `call_w_resize` for this write transaction.
-        with db.tx() as txn:
+            argv_manifest = self._remote.get_active(cast(str, cache_key), raw=True)
+            if argv_manifest is None:
+                raise DmlRepoError(f"No active execution payload found for cache key: {cache_key}")
+            argv = self._remote.materialize_manifest(cast(dict, argv_manifest), db, expected_root_ns="node-argv")
+        else:
             argv = None
-            nodes: list[Ref] = []
+            # Create initial execution record for non-execution-aware roots.
+            now_ts = int(time.time())
+            state.create_execution_record(
+                {
+                    "execution_id": exec_id,
+                    "cache_key": cache_key,
+                    "lifecycle": "running",
+                    "updated_at": now_ts,
+                    "created_at": now_ts,
+                    "spawned_execution_ids": [],
+                    "child_execution_ids": [],
+                    "cancellation_requested_by": None,
+                }
+            )
+
+        def create_index(txn) -> Ref:
+            nodes: list[Ref] = [argv] if argv is not None else []
             parents: list[Ref] = []
             if commit is None:
                 base_tree = txn.put(Tree(dags={}))
@@ -105,34 +124,9 @@ class IndexOps:
                 base_commit: Commit = txn.get(commit)
                 base_tree = base_commit.tree
                 parents = [commit]
-            if execution_id is not None:
-                argv_manifest = self._remote.get_active(cast(str, cache_key), raw=True)
-                if argv_manifest is None:
-                    raise DmlRepoError(f"No active execution payload found for cache key: {cache_key}")
-                argv = self._remote._materialize_manifest(
-                    cast(dict, argv_manifest),
-                    txn,
-                    expected_root_ns="node-argv",
-                )
-                nodes.append(argv)
-            # Create initial execution record for non-execution-aware roots.
-            if execution_id is None:
-                now_ts = int(time.time())
-                state.create_execution_record(
-                    {
-                        "execution_id": exec_id,
-                        "cache_key": cache_key,
-                        "lifecycle": "running",
-                        "updated_at": now_ts,
-                        "created_at": now_ts,
-                        "spawned_execution_ids": [],
-                        "child_execution_ids": [],
-                        "cancellation_requested_by": None,
-                    }
-                )
             # create db state
             dag_ref = txn.put(Dag(nodes=nodes, names={}, argv=argv))
-            index = txn.put(
+            return txn.put(
                 Index(
                     parents=parents,
                     tree=base_tree,
@@ -142,6 +136,8 @@ class IndexOps:
                 ),
                 to=Ref(f"index:{exec_id}"),
             )
+
+        index = db.write_with_growth(create_index)
         if execution_id is not None:
             record.update({"lifecycle": "running", "updated_at": int(time.time())})
             state.update_execution_record(record)
@@ -150,7 +146,8 @@ class IndexOps:
     def put_import(self, index: Ref, dag: Ref, node: Optional[Ref], name: Optional[str] = None, *, db: DmlDB) -> Ref:
         """Import a node from another DAG into the current index DAG."""
         self._require_mutation(index, db)
-        with db.tx() as txn:
+
+        def put_import(txn) -> Ref:
             ctx = txn.get_ctx(index)
             index_obj = cast(Index, ctx.commit)
             if index_obj.dag == dag:
@@ -170,7 +167,9 @@ class IndexOps:
                 ctx.dag.names[name] = imp_node
             index_obj.dag = txn.put(ctx.dag)
             txn.put(index_obj, to=index)
-        return imp_node
+            return imp_node
+
+        return db.write_with_growth(put_import)
 
     def _run_builtin(self, argv_node_refs: list[Ref], dag, txn) -> Ref:
         argv_refs = []
@@ -252,16 +251,18 @@ class IndexOps:
         return result_ref
 
     def put_literal(self, index: Ref, value: Any, name: Optional[str] = None, *, db: DmlDB) -> Ref:
-        # FIXME: Consider using `call_w_resize` for this write transaction.
         self._require_mutation(index, db)
-        with db.tx() as txn:
+
+        def put_literal(txn) -> Ref:
             ctx = txn.get_ctx(index)
             node_ref = self._put_literal(value, ctx.dag, txn)
             return self._update_dag(index, node_ref, name, ctx, txn)
 
+        return db.write_with_growth(put_literal)
+
     def get_argv(self, index: Ref, *, db: DmlDB) -> Ref:
         """Return the argv node for an index (raises if missing)."""
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             ctx = txn.get_ctx(index)
             if ctx.dag is None or ctx.dag.argv is None:
                 raise DmlRepoError("Only function dags have argv nodes.")
@@ -269,7 +270,7 @@ class IndexOps:
 
     def get_node(self, index: Ref, name: str, *, db: DmlDB) -> Ref:
         """Return a named node from an index's DAG."""
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             ctx = txn.get_ctx(index)
             if name not in ctx.dag.names:
                 raise DmlRepoError(f"Node '{name}' not found in DAG")
@@ -278,14 +279,17 @@ class IndexOps:
     def set_node_name(self, index: Ref, name: str, node_ref: Ref, *, db: DmlDB) -> Ref:
         """Set or replace a node name in the index DAG."""
         self._require_mutation(index, db)
-        with db.tx() as txn:
+
+        def set_node_name(txn) -> Ref:
             ctx = txn.get_ctx(index)
             return self._update_dag(index, node_ref, name, ctx, txn)
 
+        return db.write_with_growth(set_node_name)
+
     def start_fn(self, index: Ref, argv: list[Ref], name: Optional[str] = None, *, db: DmlDB) -> Optional[Ref]:
-        # FIXME: Consider using `call_w_resize` for this write transaction.
         self._require_mutation(index, db)
-        with db.tx() as txn:
+
+        def prepare(txn) -> tuple[Runnable, Ref, str] | Ref:
             ctx = txn.get_ctx(index)
             if not set(argv).issubset(set(ctx.dag.nodes)):
                 raise DmlRepoError("All argv nodes must be part of current DAG.")
@@ -300,8 +304,6 @@ class IndexOps:
             if runnable.adapter == "":
                 resp = self._run_builtin(argv, ctx.dag, txn)
                 return self._update_dag(index, resp, name, ctx, txn)
-            # adapter-backed function call.
-            # Step 0: construct argv node and compute cache key
             argv_refs = []
             for node_ref in argv:
                 datum_ref, error_ref = txn.get(node_ref).datum_ref(txn)
@@ -312,14 +314,20 @@ class IndexOps:
             argv_node = ArgvNode(value=txn.put(ListDatum(argv_refs)))
             cache_key = argv_node.cache_key(txn)
             argv_node_ref = txn.put(argv_node)
+            return runnable, argv_node_ref, cache_key
+
+        prepared = db.write_with_growth(prepare)
+        if isinstance(prepared, Ref):
+            return prepared
+        runnable, argv_node_ref, cache_key = prepared
         state = self.exec_state(cache_key=cache_key)
         resp = state.get_or_start_fn(index, runnable, argv_node_ref, db)
         if resp is None:
             # execution is still running, caller should poll for completion and then import the result node when done.
             return None
-        # FIXME: Consider using `call_w_resize` for this write transaction.
         self._require_mutation(index, db)
-        with db.tx() as txn:
+
+        def attach_result(txn) -> Ref:
             # add FnNode pointing to this dag
             hydrated = txn.get(resp)
             if not hydrated.is_finished():
@@ -328,7 +336,9 @@ class IndexOps:
             node = txn.put(FnNode(argv=argv, dag=resp))
             ctx.dag.nodes = sorted({*ctx.dag.nodes, node})
             self._update_dag(index, node, name, ctx, txn)
-        return node
+            return node
+
+        return db.write_with_growth(attach_result)
 
     def commit(
         self,
@@ -340,9 +350,10 @@ class IndexOps:
         *,
         db: DmlDB,
     ) -> tuple[Ref, Ref | None]:
-        # FIXME: Consider using `call_w_resize` for this write transaction.
         self._require_mutation(index, db)
-        with db.tx() as txn:
+        created = now()
+
+        def commit_index(txn) -> tuple[Ref, Ref | None]:
             ctx = txn.get_ctx(index)
             index_obj = cast(Index, ctx.commit)
             if ctx.dag is None:
@@ -363,10 +374,16 @@ class IndexOps:
                         tree=txn.put(ctx.tree),
                         author=author,
                         message=message or "",
-                        created=now(),
+                        created=created,
                     )
                 )
+            return dag_ref, commit_ref
+
+        dag_ref, commit_ref = db.write_with_growth(commit_index)
         self.exec_state().finish_execution(index.id(), dag_ref, db)
-        with db.tx() as txn:
+
+        def delete_index(txn) -> None:
             txn.delete(index)
+
+        db.write_with_growth(delete_index)
         return dag_ref, commit_ref

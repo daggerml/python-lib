@@ -103,7 +103,7 @@ class CommitOps:
 
     def is_ancestor(self, ancestor: Ref, descendant: Ref, *, db: DmlDB) -> bool:
         """Return whether ``ancestor`` is reachable from ``descendant``."""
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             return self._is_ancestor(ancestor, descendant, txn=txn)
 
     def _reachable(self, start: Ref, *, txn: TxnWithValid) -> set[Ref]:
@@ -125,7 +125,7 @@ class CommitOps:
         # If relative_to is omitted, show the changes introduced by commit
         # relative to its first parent.
         result: CommitDiffPayload = {"added": {}, "removed": {}, "modified": {}}
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             c1_obj: Commit = txn.get(commit)
             if relative_to is None:
                 if c1_obj.parents:
@@ -153,13 +153,13 @@ class CommitOps:
         return result
 
     def show(self, commit: Ref, *, db: DmlDB) -> CommitFullDescription:
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             desc = self._describe(commit, txn)
         diff = self.diff(commit, db=db)
         return {**desc, "diff": diff}
 
     def get_ancestor(self, commit: Ref, n: int, *, db: DmlDB) -> Ref | None:
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             current = commit
             for _ in range(n):
                 commit_obj: Commit = txn.get(current)
@@ -177,7 +177,9 @@ class CommitOps:
             return commit2
         if commit2 is None:
             return commit1
-        with db.tx() as txn:
+        created = now()
+
+        def merge_commits(txn: TxnWithValid) -> Ref:
             base_tree = None
             try:
                 c0 = self._merge_base(commit1, commit2, txn=txn)
@@ -220,12 +222,16 @@ class CommitOps:
                     tree=merged_tree,
                     author=user,
                     message=f"Merge {commit1.id()[:8]} into {commit2.id()[:8]}",
-                    created=now(),
+                    created=created,
                 )
             )
 
+        return db.write_with_growth(merge_commits)
+
     def revert(self, target_commit: Ref, base_commit: Ref, user: str, message: str | None = None, *, db: DmlDB) -> Ref:
-        with db.tx() as txn:
+        created = now()
+
+        def revert_commit(txn: TxnWithValid) -> Ref:
             if not self._is_ancestor(target_commit, base_commit, txn=txn):
                 raise DmlRepoError(f"Commit {target_commit.id()[:8]} is not an ancestor of {base_commit.id()[:8]}")
             target = txn.get(target_commit)
@@ -257,13 +263,17 @@ class CommitOps:
                     tree=new_tree,
                     author=user,
                     message=message or f"Revert {target_commit.id()[:8]}",
-                    created=now(),
+                    created=created,
                 )
             )
             return new_commit
 
+        return db.write_with_growth(revert_commit)
+
     def rebase(self, source, target, user: str, *, db: DmlDB):
-        with db.tx() as txn:
+        created = now()
+
+        def rebase_commits(txn: TxnWithValid):
             c0 = self._merge_base(source, target, txn=txn)
             if c0 == source:
                 return target
@@ -284,16 +294,20 @@ class CommitOps:
                         tree=new_tree,
                         author=user,
                         message=commit.message,
-                        created=now(),
+                        created=created,
                     )
                 )
             return rebased_parent
+
+        return db.write_with_growth(rebase_commits)
 
     ############################################################
     ################ DAG CHECKOUT AND MANAGEMENT ##############$
     ############################################################
     def checkout_dag(self, commit: Ref | None, dag: Ref, name: str, user: str, db: DmlDB) -> Ref:
-        with db.tx() as txn:
+        created = now()
+
+        def checkout(txn: TxnWithValid) -> Ref:
             if dag.ns() != "dag":
                 raise DmlRepoError(f"Input '{dag.to}' is not a DAG ref")
             if commit is None:
@@ -311,13 +325,15 @@ class CommitOps:
                     tree=txn.put(tree),
                     author=user,
                     message=f"Checkout DAG '{dag.to}' as '{name}'",
-                    created=now(),
+                    created=created,
                 )
             )
-        return new_commit
+            return new_commit
+
+        return db.write_with_growth(checkout)
 
     def delete_dag(self, commit: Ref, name: str, user: str, *, db: DmlDB) -> Ref:
-        with db.tx() as txn:
+        def delete(txn: TxnWithValid) -> Ref:
             ctx = txn.get_ctx(commit)
             if name not in ctx.tree.dags:
                 raise DmlRepoError(f"DAG '{name}' not found in branch commit tree")
@@ -327,10 +343,12 @@ class CommitOps:
             ctx.commit.parents = [commit]
             ctx.commit.message = f"Delete DAG '{name}'"
             new_commit_ref = txn.put(ctx.commit)
-        return new_commit_ref
+            return new_commit_ref
+
+        return db.write_with_growth(delete)
 
     def get_dag(self, commit: Ref, name: str, *, db: DmlDB) -> Optional[Ref]:
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             commit_obj = txn.get(commit)
             tree = txn.get(commit_obj.tree)
         if name not in tree.dags:
@@ -357,7 +375,7 @@ class CommitOps:
     def log(self, commit: Ref, *, limit: int = 100, db: DmlDB) -> list[CommitDescription]:
         to_walk = [commit]
         out = []
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             while to_walk and len(out) < limit:
                 current = to_walk.pop(0)
                 commit_obj: Commit = txn.get(current)
@@ -366,11 +384,11 @@ class CommitOps:
         return out
 
     def describe(self, commit: Ref, *, db: DmlDB) -> CommitDescription:
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             return self._describe(commit, txn)
 
     def ahead_behind(self, local: Ref, upstream: Ref, *, db: DmlDB) -> tuple[int, int]:
-        with db.tx() as txn:
+        with db.tx(readonly=True) as txn:
             local_reachable = self._reachable(local, txn=txn)
             upstream_reachable = self._reachable(upstream, txn=txn)
         return len(local_reachable - upstream_reachable), len(upstream_reachable - local_reachable)

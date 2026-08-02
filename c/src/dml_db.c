@@ -7,9 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
 #include <sys/types.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -20,6 +18,9 @@
 #include "../include/dml_msgpack.h"
 
 #define DML_DB_REGISTRY_SIZE 10
+#define DML_DB_RESIZE_MARKER_KEY "__daggerml_map_size__"
+
+typedef struct DmlDbHandle DmlDbHandle;
 
 typedef struct {
     char *path;
@@ -27,8 +28,11 @@ typedef struct {
     MDB_dbi *dbis;
     char **namespaces;
     size_t namespace_count;
-    size_t env_map_size;
     uint64_t env_refcount;
+    pthread_cond_t resize_cond;
+    bool resize_cond_initialized;
+    bool resizing;
+    DmlDbHandle *handles;
 } DmlDbRegistryEntry;
 
 typedef struct {
@@ -44,6 +48,7 @@ struct DmlDbHandle {
     pthread_t owner_thread;
     pid_t owner_pid;
     bool readonly;
+    DmlDbHandle *next;
 };
 
 typedef struct {
@@ -189,8 +194,8 @@ static void dml_db_close_env(DmlDbRegistryEntry *entry) {
     }
     free(entry->dbis);
     entry->dbis = NULL;
-    entry->env_map_size = 0;
     entry->env_refcount = 0;
+    entry->handles = NULL;
 }
 
 static void dml_db_clear_slot(DmlDbRegistryEntry *entry) {
@@ -200,6 +205,7 @@ static void dml_db_clear_slot(DmlDbRegistryEntry *entry) {
     free(entry->path);
     entry->path = NULL;
     entry->namespace_count = 0;
+    entry->resizing = false;
 }
 
 static void dml_db_reset_registry_locked(void) {
@@ -263,6 +269,12 @@ static int dml_db_assign_slot_locked(
     if (free_slot == DML_DB_REGISTRY_SIZE) {
         return DML_DB_ERR_REGISTRY_FULL;
     }
+    if (!dml_db_registry.entries[free_slot].resize_cond_initialized) {
+        if (pthread_cond_init(&dml_db_registry.entries[free_slot].resize_cond, NULL) != 0) {
+            return DML_DB_ERR_BUSY;
+        }
+        dml_db_registry.entries[free_slot].resize_cond_initialized = true;
+    }
     dml_db_registry.entries[free_slot].path = strdup(path);
     if (dml_db_registry.entries[free_slot].path == NULL) {
         return DML_DB_ERR_NOMEM;
@@ -291,9 +303,6 @@ static int dml_db_open_env_locked(DmlDbRegistryEntry *entry, int create_if_missi
     if (entry->env != NULL) {
         entry->env_refcount += 1;
         return 0;
-    }
-    if (open_map_size == 0) {
-        open_map_size = entry->env_map_size;
     }
     rc = mdb_env_create(&env);
     if (rc != MDB_SUCCESS) {
@@ -344,7 +353,6 @@ static int dml_db_open_env_locked(DmlDbRegistryEntry *entry, int create_if_missi
     }
     entry->env = env;
     entry->dbis = dbis;
-    entry->env_map_size = open_map_size;
     entry->env_refcount = 1;
     return 0;
 }
@@ -361,68 +369,170 @@ static void dml_db_release_env_locked(size_t slot) {
     }
     entry->env_refcount -= 1;
     if (entry->env_refcount == 0) {
-        dml_db_clear_slot(entry);
+        if (entry->resizing) {
+            dml_db_close_env(entry);
+            pthread_cond_broadcast(&entry->resize_cond);
+        } else {
+            dml_db_clear_slot(entry);
+        }
     }
 }
 
-int dml_db_get_size(const char *path, size_t *out_size) {
-    struct stat st;
-    size_t total = 0;
+static int dml_db_wait_for_resize_locked(DmlDbRegistryEntry *entry) {
+    int rc;
 
-    if (path == NULL || out_size == NULL) {
-        return DML_DB_ERR_INPUT_INVALID;
-    }
-    if (stat(path, &st) != 0) {
-        if (errno == ENOENT) {
-            *out_size = 0;
-            return 0;
+    while (entry->resizing) {
+        rc = pthread_cond_wait(&entry->resize_cond, &dml_db_registry.mu);
+        if (rc != 0) {
+            return DML_DB_ERR_BUSY;
         }
-        return dml_map_lmdb_rc(errno);
     }
-    if (S_ISDIR(st.st_mode)) {
-        DIR *dir = opendir(path);
-        struct dirent *entry;
-
-        if (dir == NULL) {
-            return dml_map_lmdb_rc(errno);
-        }
-        while ((entry = readdir(dir)) != NULL) {
-            char *child_path = NULL;
-            struct stat child_st;
-            size_t path_len;
-            size_t name_len;
-
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-                continue;
-            }
-            path_len = strlen(path);
-            name_len = strlen(entry->d_name);
-            child_path = (char *)malloc(path_len + 1 + name_len + 1);
-            if (child_path == NULL) {
-                closedir(dir);
-                return DML_DB_ERR_NOMEM;
-            }
-            memcpy(child_path, path, path_len);
-            child_path[path_len] = '/';
-            memcpy(child_path + path_len + 1, entry->d_name, name_len + 1);
-            if (stat(child_path, &child_st) != 0) {
-                int stat_errno = errno;
-
-                free(child_path);
-                closedir(dir);
-                return dml_map_lmdb_rc(stat_errno);
-            }
-            free(child_path);
-            if (S_ISREG(child_st.st_mode)) {
-                total += (size_t)child_st.st_size;
-            }
-        }
-        closedir(dir);
-    } else if (S_ISREG(st.st_mode)) {
-        total += (size_t)st.st_size;
-    }
-    *out_size = total;
     return 0;
+}
+
+static int dml_db_reopen_slot_locked(size_t slot, int create_if_missing) {
+    DmlDbRegistryEntry *entry = &dml_db_registry.entries[slot];
+    int rc;
+
+    rc = dml_db_wait_for_resize_locked(entry);
+    if (rc != 0) {
+        return rc;
+    }
+    for (DmlDbHandle *handle = entry->handles; handle != NULL; handle = handle->next) {
+        if (pthread_equal(handle->owner_thread, pthread_self())) {
+            return DML_DB_ERR_BUSY;
+        }
+    }
+    entry->resizing = true;
+    while (entry->env_refcount != 0) {
+        rc = pthread_cond_wait(&entry->resize_cond, &dml_db_registry.mu);
+        if (rc != 0) {
+            entry->resizing = false;
+            pthread_cond_broadcast(&entry->resize_cond);
+            return DML_DB_ERR_BUSY;
+        }
+    }
+    dml_db_close_env(entry);
+    rc = dml_db_open_env_locked(entry, create_if_missing, 0);
+    if (rc == 0) {
+        dml_db_close_env(entry);
+    }
+    entry->resizing = false;
+    pthread_cond_broadcast(&entry->resize_cond);
+    return rc;
+}
+
+static int dml_db_persist_map_size(
+    const char *path,
+    int create_if_missing,
+    size_t target_map_size
+) {
+    MDB_env *env = NULL;
+    MDB_txn *txn = NULL;
+    MDB_dbi dbi;
+    MDB_val key;
+    MDB_val value;
+    int rc;
+
+    rc = mdb_env_create(&env);
+    if (rc != MDB_SUCCESS) {
+        return dml_map_lmdb_rc(rc);
+    }
+    rc = mdb_env_set_mapsize(env, target_map_size);
+    if (rc == MDB_SUCCESS) {
+        rc = mdb_env_open(env, path, create_if_missing ? MDB_CREATE : 0, 0664);
+    }
+    if (rc == MDB_SUCCESS) {
+        rc = mdb_txn_begin(env, NULL, 0, &txn);
+    }
+    if (rc == MDB_SUCCESS) {
+        rc = mdb_dbi_open(txn, NULL, 0, &dbi);
+    }
+    if (rc == MDB_SUCCESS) {
+        key.mv_data = DML_DB_RESIZE_MARKER_KEY;
+        key.mv_size = sizeof(DML_DB_RESIZE_MARKER_KEY) - 1;
+        value.mv_data = &target_map_size;
+        value.mv_size = sizeof(target_map_size);
+        rc = mdb_put(txn, dbi, &key, &value, 0);
+    }
+    if (txn != NULL) {
+        if (rc == MDB_SUCCESS) {
+            rc = mdb_txn_commit(txn);
+        } else {
+            mdb_txn_abort(txn);
+        }
+    }
+    if (env != NULL) {
+        mdb_env_close(env);
+    }
+    return rc == MDB_SUCCESS ? 0 : dml_map_lmdb_rc(rc);
+}
+
+static int dml_db_grow_slot_locked(
+    size_t slot,
+    int create_if_missing,
+    size_t headroom,
+    size_t max_map_size,
+    size_t *out_current_map_size
+) {
+    DmlDbRegistryEntry *entry = &dml_db_registry.entries[slot];
+    MDB_env *env = NULL;
+    MDB_envinfo info;
+    size_t target_map_size;
+    int rc;
+
+    rc = dml_db_wait_for_resize_locked(entry);
+    if (rc != 0) {
+        return rc;
+    }
+    for (DmlDbHandle *handle = entry->handles; handle != NULL; handle = handle->next) {
+        if (pthread_equal(handle->owner_thread, pthread_self())) {
+            return DML_DB_ERR_BUSY;
+        }
+    }
+    entry->resizing = true;
+    while (entry->env_refcount != 0) {
+        rc = pthread_cond_wait(&entry->resize_cond, &dml_db_registry.mu);
+        if (rc != 0) {
+            entry->resizing = false;
+            pthread_cond_broadcast(&entry->resize_cond);
+            return DML_DB_ERR_BUSY;
+        }
+    }
+    dml_db_close_env(entry);
+    rc = mdb_env_create(&env);
+    if (rc == MDB_SUCCESS) {
+        rc = mdb_env_open(env, entry->path, create_if_missing ? MDB_CREATE : 0, 0664);
+    }
+    if (rc == MDB_SUCCESS) {
+        rc = mdb_env_info(env, &info);
+    }
+    if (rc == MDB_SUCCESS) {
+        *out_current_map_size = info.me_mapsize;
+        if (info.me_mapsize >= max_map_size) {
+            rc = DML_DB_ERR_MAP_SIZE_MAX;
+        } else {
+            target_map_size = info.me_mapsize + headroom;
+            if (target_map_size < info.me_mapsize || target_map_size > max_map_size) {
+                target_map_size = max_map_size;
+            }
+        }
+    }
+    if (env != NULL) {
+        mdb_env_close(env);
+    }
+    if (rc != MDB_SUCCESS && rc != DML_DB_ERR_MAP_SIZE_MAX) {
+        entry->resizing = false;
+        pthread_cond_broadcast(&entry->resize_cond);
+        return dml_map_lmdb_rc(rc);
+    }
+    if (rc == MDB_SUCCESS) {
+        /* LMDB persists map-size changes when a write transaction commits. */
+        rc = dml_db_persist_map_size(entry->path, create_if_missing, target_map_size);
+    }
+    entry->resizing = false;
+    pthread_cond_broadcast(&entry->resize_cond);
+    return rc;
 }
 
 static void dml_dump_list_free(DmlDumpList *list) {
@@ -587,6 +697,7 @@ int dml_db_txn_open(
     MDB_txn *txn = NULL;
     size_t slot = DML_DB_REGISTRY_SIZE;
     int rc;
+    int map_resized_retry = 0;
 
     if (path == NULL || out_handle == NULL) {
         return DML_DB_ERR_INPUT_INVALID;
@@ -611,36 +722,105 @@ int dml_db_txn_open(
         return rc;
     }
     entry = &dml_db_registry.entries[slot];
+    rc = dml_db_wait_for_resize_locked(entry);
+    if (rc != 0) {
+        pthread_mutex_unlock(&dml_db_registry.mu);
+        free(canonical_path);
+        return rc;
+    }
+retry_txn_begin:
     rc = dml_db_open_env_locked(entry, create_if_missing, map_size);
     if (rc != 0) {
         pthread_mutex_unlock(&dml_db_registry.mu);
         free(canonical_path);
         return rc;
     }
+    rc = mdb_txn_begin(entry->env, NULL, readonly ? MDB_RDONLY : 0, &txn);
+    if (rc == MDB_MAP_RESIZED && !map_resized_retry) {
+        /* Keep the slot intact while the recovery helper installs its resize gate. */
+        entry->env_refcount -= 1;
+        rc = dml_db_reopen_slot_locked(slot, create_if_missing);
+        if (rc != 0) {
+            pthread_mutex_unlock(&dml_db_registry.mu);
+            free(canonical_path);
+            return rc;
+        }
+        map_resized_retry = 1;
+        goto retry_txn_begin;
+    }
+    if (rc != MDB_SUCCESS) {
+        dml_db_release_env_locked(slot);
+        pthread_mutex_unlock(&dml_db_registry.mu);
+        free(canonical_path);
+        return dml_map_lmdb_rc(rc);
+    }
     handle = (DmlDbHandle *)calloc(1, sizeof(DmlDbHandle));
     if (handle == NULL) {
+        mdb_txn_abort(txn);
         dml_db_release_env_locked(slot);
         pthread_mutex_unlock(&dml_db_registry.mu);
         free(canonical_path);
         return DML_DB_ERR_NOMEM;
     }
-    rc = mdb_txn_begin(entry->env, NULL, readonly ? MDB_RDONLY : 0, &txn);
-    if (rc != MDB_SUCCESS) {
-        dml_db_release_env_locked(slot);
-        pthread_mutex_unlock(&dml_db_registry.mu);
-        free(canonical_path);
-        free(handle);
-        return dml_map_lmdb_rc(rc);
-    }
-    pthread_mutex_unlock(&dml_db_registry.mu);
     handle->slot = slot;
     handle->path = canonical_path;
     handle->txn = txn;
     handle->owner_thread = pthread_self();
     handle->owner_pid = getpid();
     handle->readonly = readonly ? true : false;
+    handle->next = entry->handles;
+    entry->handles = handle;
     *out_handle = handle;
+    pthread_mutex_unlock(&dml_db_registry.mu);
     return 0;
+}
+
+int dml_db_resize(
+    const char *path,
+    const char *const *namespaces,
+    size_t namespace_count,
+    const int create_if_missing,
+    size_t headroom,
+    size_t max_map_size,
+    size_t *out_current_map_size
+) {
+    char *canonical_path = NULL;
+    DmlDbRegistryEntry *entry = NULL;
+    size_t slot;
+    int rc;
+
+    if (
+        path == NULL || namespaces == NULL || namespace_count == 0 || headroom == 0 ||
+        max_map_size == 0 || out_current_map_size == NULL
+    ) {
+        return DML_DB_ERR_INPUT_INVALID;
+    }
+    rc = dml_db_canonicalize_path(path, &canonical_path);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = pthread_mutex_lock(&dml_db_registry.mu);
+    if (rc != 0) {
+        free(canonical_path);
+        return DML_DB_ERR_BUSY;
+    }
+    rc = dml_db_assign_slot_locked(canonical_path, namespaces, namespace_count, &slot);
+    if (rc == 0) {
+        entry = &dml_db_registry.entries[slot];
+        rc = dml_db_grow_slot_locked(
+            slot,
+            create_if_missing,
+            headroom,
+            max_map_size,
+            out_current_map_size
+        );
+        if (rc != 0 && entry->env_refcount == 0 && entry->env == NULL && !entry->resizing) {
+            dml_db_clear_slot(entry);
+        }
+    }
+    pthread_mutex_unlock(&dml_db_registry.mu);
+    free(canonical_path);
+    return rc;
 }
 
 int dml_db_txn_close(DmlDbHandle **p_handle, const int commit) {
@@ -662,6 +842,17 @@ int dml_db_txn_close(DmlDbHandle **p_handle, const int commit) {
         handle->txn = NULL;
     }
     pthread_mutex_lock(&dml_db_registry.mu);
+    if (handle->slot < DML_DB_REGISTRY_SIZE && dml_db_registry.pid == getpid()) {
+        DmlDbRegistryEntry *entry = &dml_db_registry.entries[handle->slot];
+        DmlDbHandle **link = &entry->handles;
+
+        while (*link != NULL && *link != handle) {
+            link = &(*link)->next;
+        }
+        if (*link == handle) {
+            *link = handle->next;
+        }
+    }
     dml_db_release_env_locked(handle->slot);
     pthread_mutex_unlock(&dml_db_registry.mu);
     free(handle->path);

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 
+from daggerml._core.db import DmlDb as RawDmlDB
 from daggerml._core.db import DmlDbForkedTxnError, Ref
-from daggerml._core.types import ScalarDatum
+from daggerml._core.types import NAMESPACES, ScalarDatum
 from tests._core.helpers import make_db, run_parallel
 
 
@@ -98,3 +100,55 @@ def test_db_forked_child_inherited_transaction_remains_invalid(tmp_path) -> None
 
     assert os.WIFEXITED(status), f"child did not exit cleanly: {status}"
     assert os.WEXITSTATUS(status) == 0, child_message.decode("utf-8", errors="replace")
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires os.fork")
+def test_db_adopts_map_resized_by_another_process(tmp_path) -> None:
+    path = tmp_path / "db"
+    path.mkdir()
+    db = RawDmlDB(str(path), namespaces=sorted(NAMESPACES), map_size_headroom=2 * 1024**2, max_map_size=32 * 1024**2)
+    with db.tx(create_if_missing=True):
+        pass
+    read_fd, write_fd = os.pipe()
+
+    with db.tx(readonly=True):
+        pid = os.fork()
+        if pid == 0:
+            os.close(read_fd)
+            try:
+                child_db = RawDmlDB(
+                    str(path), namespaces=sorted(NAMESPACES), map_size_headroom=2 * 1024**2, max_map_size=32 * 1024**2
+                )
+
+                def grow(txn):
+                    for i in range(12):
+                        txn.put(f"{i:05d}" + "x" * (900 * 1024 - 5), ns="datum-scalar")
+
+                child_db.write_with_growth(grow)
+                os.write(write_fd, b"ok")
+                os._exit(0)
+            except BaseException as exc:
+                os.write(write_fd, repr(exc).encode("utf-8", errors="replace"))
+                os._exit(1)
+
+        os.close(write_fd)
+        child_message = os.read(read_fd, 4096)
+        _child_pid, status = os.waitpid(pid, 0)
+        assert os.WIFEXITED(status), f"child did not exit cleanly: {status}"
+        assert os.WEXITSTATUS(status) == 0, child_message.decode("utf-8", errors="replace")
+
+        acquired = threading.Event()
+
+        def open_after_resize() -> None:
+            with db.tx(readonly=True):
+                acquired.set()
+
+        worker = threading.Thread(target=open_after_resize)
+        worker.start()
+        worker.join(timeout=0.1)
+        assert not acquired.is_set()
+
+    worker.join(timeout=5)
+    os.close(read_fd)
+    assert acquired.is_set()

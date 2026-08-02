@@ -11,7 +11,7 @@ import daggerml._core.exec_state as exec_state_mod
 from daggerml._core.db import Ref
 from daggerml._core.exec_state import CancellationError, ExecutionState
 from daggerml._core.s3_cas import CasItemConflict
-from daggerml._core.types import BadExecutionStatusError, CanceledExecutionError, DmlRepoError, Runnable, Uri
+from daggerml._core.types import BadExecutionStatusError, CanceledExecutionError, DmlDB, DmlRepoError, Runnable, Uri
 from daggerml.contrib.adapters import LocalAdapter
 from tests._core.helpers import FakeCasStore, FakeExecutionRemote, run_parallel
 
@@ -252,6 +252,39 @@ def test_get_or_start_fn_replaces_stale_active_pointer_missing_record() -> None:
     active_id = active["meta"]["execution_id"]
     assert active_id != "stale"
     assert state.read_execution_record(active_id)["lifecycle"] == "pending"
+
+
+def test_get_or_start_fn_persists_adapter_error_with_growth_aware_write(tmp_path) -> None:
+    path = tmp_path / "db"
+    path.mkdir()
+    db = DmlDB(str(path), 1024 * 1024, 64 * 1024 * 1024)
+    db.init()
+    state = _state()
+    state.create_execution_record(_record("caller"))
+    calls = 0
+    original_write = db.write_with_growth
+
+    def write_with_tracking(fn):
+        nonlocal calls
+        calls += 1
+        return original_write(fn)
+
+    with patch.object(db, "write_with_growth", side_effect=write_with_tracking), patch.object(
+        state,
+        "_call_adapter",
+        return_value={"status": "failed", "error": "adapter failed", "state": None, "dag_id": None},
+    ):
+        dag_ref = state.get_or_start_fn(
+            Ref("index:caller"),
+            Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter"),
+            Ref("node-argv:argv"),
+            db,
+        )
+
+    assert calls == 1
+    assert dag_ref is not None
+    with db.tx(readonly=True) as txn:
+        assert txn.get(txn.get(dag_ref).error).message == "adapter failed"
 
 
 def test_get_or_start_fn_rolls_back_fresh_launch_when_registration_fails() -> None:

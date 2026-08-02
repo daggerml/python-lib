@@ -17,6 +17,7 @@ dml config set user "${dml_user}" --scope global
 work_dir="${DML_EXAMPLE_SCRATCH}/work"
 dag_namespace="examples/bash-full-cli-workflow"
 hello_dag_name="${dag_namespace}/hello-world"
+example_branch="example-bash-full-cli-workflow"
 
 log "Using remote env: ${AWS_ENDPOINT_URL}"
 log "Remote root: ${DML_REMOTE_ROOT}"
@@ -107,7 +108,8 @@ cd "${DML_EXAMPLE_PROJECT_HOME}"
 dml fetch "dml://${dml_user}/${project0}" | jq .
 dml rev-parse "dml://${dml_user}/${project0}#main" | jq .
 dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
-dml branch move main "dml://${dml_user}/${project0}#main"
+dml branch move "${example_branch}" "dml://${dml_user}/${project0}#main"
+dml checkout "${example_branch}" | jq .
 remote_hello_dag_ref="${hello_dag_ref}"
 log "Checking out remote DAG ref ${remote_hello_dag_ref} into ${dag_namespace}/hello-world-copy"
 dml dag checkout "${remote_hello_dag_ref}" "${dag_namespace}/hello-world-copy"
@@ -119,14 +121,14 @@ dml checkout "${merge_demo_branch}" | jq .
 merge_demo_idx="$(dml runtime create)"
 merge_demo_ref="$(printf '%s\n' '["scalar","merge-demo"]' | dml runtime put-literal "${merge_demo_idx}" - --name merge-demo)"
 dml runtime commit "${merge_demo_idx}" "${merge_demo_ref}" --message "Add merge demo DAG" --name "${dag_namespace}/merge-demo"
-dml checkout main | jq .
+dml checkout "${example_branch}" | jq .
 dml merge "${merge_demo_branch}" | jq .
 rebase_demo_branch="rebase-demo"
 renamed_rebase_branch="rebase-demo-renamed"
 dml branch create "${rebase_demo_branch}" --revision "dml://${dml_user}/${project0}#main"
 dml checkout "${rebase_demo_branch}" | jq .
-dml rebase main | jq .
-dml checkout main | jq .
+dml rebase "${example_branch}" | jq .
+dml checkout "${example_branch}" | jq .
 dml branch rename "${rebase_demo_branch}" "${renamed_rebase_branch}"
 dml branch list | jq .
 dml config set remote.project "dml://${dml_user}/${project0}"

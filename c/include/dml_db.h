@@ -38,11 +38,9 @@ enum {
     DML_DB_ERR_LMDB = -18,
     DML_DB_ERR_INTERNAL = -19,
     DML_DB_ERR_ENV_REOPENED = -20,
-    DML_DB_ERR_REGISTRY_FULL = -21
+    DML_DB_ERR_REGISTRY_FULL = -21,
+    DML_DB_ERR_MAP_SIZE_MAX = -22
 };
-
-// Compute the current on-disk size of the LMDB path.
-int dml_db_get_size(const char *path, size_t *out_size);
 
 int dml_db_txn_open(
     const char *path,
@@ -54,6 +52,15 @@ int dml_db_txn_open(
     DmlDbHandle **out_handle
 );
 int dml_db_txn_close(DmlDbHandle **p_handle, const int commit);
+int dml_db_resize(
+    const char *path,
+    const char *const *namespaces,
+    size_t namespace_count,
+    const int create_if_missing,
+    size_t headroom,
+    size_t max_map_size,
+    size_t *out_current_map_size
+);
 
 int dml_db_put(
     DmlDbHandle **p_handle,

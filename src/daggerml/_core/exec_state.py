@@ -607,9 +607,12 @@ class ExecutionState:
                         self.update_execution_record(record)
                     logger.error(f"Execution {active_id} failed with error: {resp['error']}")
                     error_msg = resp["error"] or "Unknown error"
-                    with db.tx() as txn:
+
+                    def persist_adapter_error(txn):
                         error = txn.put(Error(error_msg, "fn-call", "adapter-error"))
-                        dag = txn.put(Dag(nodes=[argv_node], names={}, argv=argv_node, error=error))
+                        return txn.put(Dag(nodes=[argv_node], names={}, argv=argv_node, error=error))
+
+                    dag = db.write_with_growth(persist_adapter_error)
                 self._complete_spawned_execution(caller_id=index.id(), callee_id=active_id)
                 if has_transport:
                     self._remote.delete_transport(active_id)
@@ -807,8 +810,8 @@ class ExecutionState:
         target = cast(dict | None, self._remote.get_cancel_target(execution_id, raw=True))
         if target is None:
             return "inactive"
-        with db.tx() as txn:
-            argv = self._remote._materialize_manifest(target, txn, expected_root_ns="node-argv")
+        argv = self._remote.materialize_manifest(target, db, expected_root_ns="node-argv")
+        with db.tx(readonly=True) as txn:
             datum_ref, _ = txn.get(argv).datum_ref(txn)
             assert datum_ref is not None
             argv_datum = txn.get(datum_ref)
