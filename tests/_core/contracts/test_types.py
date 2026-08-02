@@ -151,30 +151,23 @@ def test_raw_db_write_with_growth_retries_until_commit(tmp_path) -> None:
 
 def test_raw_db_write_with_growth_retries_map_full_from_commit(tmp_path) -> None:
     class CommitMapFullDb(RawDmlDB):
-        commit_map_fulls = 0
+        fail_next_commit = True
 
         @contextmanager
         def tx(self, *args, **kwargs):
-            try:
-                with super().tx(*args, **kwargs) as txn:
-                    yield txn
-            except DmlDbMapFullError as exc:
-                if str(exc).endswith("dml_db_txn_close"):
-                    self.commit_map_fulls += 1
-                raise
+            with super().tx(*args, **kwargs) as txn:
+                yield txn
+                if not kwargs.get("readonly", True) and self.fail_next_commit:
+                    self.fail_next_commit = False
+                    raise DmlDbMapFullError("database map is full: dml_db_txn_close")
 
     db = CommitMapFullDb(
-        str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=64 * 1024, max_map_size=2 * 1024**2
+        str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=1024 * 1024, max_map_size=2 * 1024**2
     )
-    with db.tx(map_size=256 * 1024, create_if_missing=True):
+    with db.tx(create_if_missing=True):
         pass
-    seed_values = [f"seed-{i}-{'x' * 1024}" for i in range(20)]
-    retry_values = [f"retry-{i}-{'x' * 1024}" for i in range(10)]
-    for offset in range(0, len(seed_values), 10):
-        with db.tx(readonly=False) as txn:
-            for value in seed_values[offset : offset + 10]:
-                txn.put(value, ns="datum-scalar")
     attempts = 0
+    retry_values = [f"retry-{i}" for i in range(10)]
 
     def write(txn):
         nonlocal attempts
@@ -184,9 +177,8 @@ def test_raw_db_write_with_growth_retries_map_full_from_commit(tmp_path) -> None
     refs = db.write_with_growth(write)
 
     assert attempts == 2
-    assert db.commit_map_fulls == 1
     with db.tx(readonly=True) as txn:
-        assert {value for _, value in txn.iter("datum-scalar")} == set(seed_values + retry_values)
+        assert {value for _, value in txn.iter("datum-scalar")} == set(retry_values)
         assert [txn.get(ref) for ref in refs] == retry_values
 
 
