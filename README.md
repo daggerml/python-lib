@@ -16,18 +16,6 @@ Install terminal rendering support:
 pip install "daggerml[terminal]"
 ```
 
-Install the CLI with the library:
-
-```bash
-pip install daggerml[cli]
-```
-
-Or install the CLI separately with pipx:
-
-```bash
-pipx install daggerml-cli
-```
-
 ## Start a project
 
 ```bash
@@ -38,9 +26,9 @@ dml init
 Then author a DAG in Python:
 
 ```python
-from daggerml import new
+import daggerml as dml
 
-with new("first-result") as dag:
+with dml.new("first-result") as dag:
     result = dag.put(42, name="answer")
     dag.commit(result)
 ```
