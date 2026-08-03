@@ -314,6 +314,7 @@ class MethodCLI:
         self.parser = PrettyArgumentParser(
             prog=prog or self._kebab(cls.__name__),
             formatter_class=PrettyHelpFormatter,
+            allow_abbrev=False,
         )
         self.parser.add_argument(
             "-v",
@@ -357,8 +358,10 @@ class MethodCLI:
         method_args: list[Any] = []
         sig = inspect.signature(method)
         for name, param in sig.parameters.items():
-            if (
-                param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
+            if param.kind is param.POSITIONAL_ONLY and name in method_kwargs:
+                method_args.append(method_kwargs.pop(name))
+            elif (
+                param.kind is param.POSITIONAL_OR_KEYWORD
                 and param.default is inspect._empty
                 and name in method_kwargs
             ):
@@ -470,6 +473,7 @@ class MethodCLI:
             "help": spec.help,
             "description": spec.description,
             "formatter_class": PrettyHelpFormatter,
+            "allow_abbrev": False,
             "category": spec.category,
         }
 
@@ -530,6 +534,7 @@ class MethodCLI:
             has_default = param.default is not inspect._empty
             default = None if not has_default else param.default
             dest = f"{dest_prefix}{name}"
+            positional_only = param.kind is param.POSITIONAL_ONLY
             if param.kind is param.VAR_POSITIONAL:
                 converter, extra = self._converter_for_type(typ)
                 kwargs = {"nargs": "*", "help": help_text, **extra}
@@ -553,6 +558,7 @@ class MethodCLI:
                     has_default=has_default,
                     default=default,
                     required_as_options=required_as_options,
+                    positional_only=positional_only,
                 )
                 continue
             converter, extra = self._converter_for_type(typ)
@@ -566,6 +572,7 @@ class MethodCLI:
                 has_default=has_default,
                 default=default,
                 required_as_options=required_as_options,
+                positional_only=positional_only,
             )
 
     def _add_scalar_arg(
@@ -580,7 +587,14 @@ class MethodCLI:
         has_default: bool,
         default: Any,
         required_as_options: bool,
+        positional_only: bool,
     ) -> None:
+        if positional_only:
+            kwargs = {"help": help_text, "nargs": "?", "default": default, **extra}
+            if converter is not None:
+                kwargs["type"] = converter
+            parser_or_group.add_argument(name, **kwargs)
+            return
         if has_default:
             kwargs: dict[str, Any] = {
                 "dest": dest,

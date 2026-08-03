@@ -47,6 +47,28 @@ def test_remote_project_must_be_strict_bare_project(tmp_path, project: str) -> N
         Config.resolve({"project_home": str(tmp_path), "remote.project": project})
 
 
+def test_legacy_remote_project_is_migrated_to_origin_on_read(tmp_path) -> None:
+    config_path = tmp_path / ".dml" / "config.json"
+    config_path.parent.mkdir()
+    config_path.write_text(json.dumps({"remote": {"project": "dml://acme/demo"}}), encoding="utf-8")
+
+    config = Config.resolve({"project_home": str(tmp_path)})
+
+    assert config.remote.remotes == {"origin": "dml://acme/demo"}
+    assert config.remote.project == "dml://acme/demo"
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {"remote": {"remotes": {"origin": "dml://acme/demo"}}}
+
+
+def test_remote_remotes_validate_names_and_write_normalized_config(tmp_path) -> None:
+    config = Config.init(tmp_path)
+
+    config.update("remote.remotes", {"research": "dml://acme/research"}, scope="local")
+
+    assert Config.resolve({"project_home": str(tmp_path)}).remote.remotes == {"research": "dml://acme/research"}
+    with pytest.raises(ValueError, match="without '/'"):
+        config.update("remote.remotes", {"bad/name": "dml://acme/research"}, scope="local")
+
+
 @pytest.mark.parametrize("root", ["s3://bucket", "s3://bucket/prefix/"])
 def test_remote_root_accepts_s3_bucket_or_prefix(root: str) -> None:
     assert validate_remote_root(root) == root.rstrip("/")

@@ -6,8 +6,8 @@ Run `dml --help` for the generated command surface. Global project options inclu
 | --- | --- |
 | Project | `init`, `clone`, `status`, `config show`, `config set` |
 | History | `log`, `show`, `diff`, `checkout`, `merge`, `rebase`, `revert`, `rev-parse` |
-| Refs | `branch list|create|move|rename|delete`, `tag list|create|delete` |
-| Sync | `fetch PROJECT_REF`, `pull`, `push` |
+| Refs | `branch list|create|move|rename|delete|set-upstream`, `tag list|create|delete` |
+| Sync | `remote add|list|delete`, `fetch [REMOTE]`, `pull`, `push` |
 | Runtimes | `runtime list|describe|describe-graph|cancel` |
 | Remote cache | `admin remote get-cache`, `admin remote invalidate-cache` |
 | Cleanup | `admin gc`, `admin remote gc` |

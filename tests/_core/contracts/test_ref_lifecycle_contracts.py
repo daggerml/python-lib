@@ -15,7 +15,7 @@ def test_branch_namespace_supports_create_move_rename_and_delete(tmp_path, monke
     head.create_remote_ref("acme", "demo", "feature", remote_tip)
 
     assert dml.branch.list() == ["main"]
-    assert dml.branch.create("feature", "dml://acme/demo#feature") == "feature"
+    assert dml.branch.create("feature", revision="dml://acme/demo#feature") == "feature"
     assert head.get_local_ref("feature") == remote_tip
 
     assert dml.branch.move("feature", "HEAD~1") == "feature"
@@ -60,8 +60,9 @@ def test_tag_namespace_supports_create_list_and_delete(tmp_path, monkeypatch) ->
     assert dml.tag.list() == []
 
 
-def test_rev_parse_rejects_named_remote_shorthand(tmp_path, monkeypatch) -> None:
+def test_rev_parse_resolves_named_remote_shorthand(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
+    commit = commit_literal_dag(dml, "train", 1)
+    Head(str(tmp_path)).create_remote_tracking_ref("origin", "main", commit)
 
-    with pytest.raises(DmlRepoError, match="Unsupported named-remote selector: origin/main"):
-        dml.rev_parse("origin/main")
+    assert dml.rev_parse("origin/main")["commit"] == commit

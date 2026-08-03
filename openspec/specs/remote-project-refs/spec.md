@@ -223,43 +223,23 @@ The system SHALL support `post-init` shell hooks from global DML config that run
 - **THEN** the process environment includes `DML_HOOK`, `DML_PROJECT_HOME`, `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, and `DML_CONFIG_HOME`, and does not include `DML_BRANCH`
 
 ### Requirement: DML URIs track fetched remote refs
-The system SHALL track fetched remote branches and tags locally by canonical normalized DML URI.
+The system SHALL track fetched remote branches and tags locally by configured remote name and branch or tag name. A remote-tracking selector SHALL use `<remote-name>/<branch-name>` for branches and `<remote-name>@<tag-name>` for tags.
 
 #### Scenario: Store fetched branch tracking ref
-- **WHEN** `dml fetch dml://alice/tools#main` succeeds
-- **THEN** local storage tracks `dml://alice/tools#main` as pointing to the resolved commit
+- **WHEN** `dml fetch origin` fetches remote branch `main`
+- **THEN** local storage tracks it as `origin/main` pointing to the resolved commit
 
 #### Scenario: Store fetched tag tracking ref
-- **WHEN** `dml fetch dml://alice/tools@v1.0` succeeds
-- **THEN** local storage tracks `dml://alice/tools@v1.0` as pointing to the resolved commit
+- **WHEN** `dml fetch origin` fetches remote tag `v1.0`
+- **THEN** local storage tracks it as `origin@v1.0` pointing to the resolved commit
 
 #### Scenario: Tracking ref stores commit pointer
 - **WHEN** a fetched remote ref is persisted locally
 - **THEN** the persisted tracking ref contains the resolved commit pointer
 
-#### Scenario: Canonical URI head is stored
-- **WHEN** a remote fetch resolves project `alice/tools` branch `main`
-- **THEN** the local tracking ref is stored under canonical URI `dml://alice/tools#main`
-
-#### Scenario: Derived expression is not stored as URI head
-- **WHEN** a remote operation resolves a derived expression such as `HEAD~2`
-- **THEN** the system stores only the canonical project branch or tag URI for any tracking head it writes
-
-#### Scenario: URI tracking ref length is validated
-- **WHEN** a command would create a tracking ref whose canonical DML URI exceeds 64 bytes
-- **THEN** the command fails without writing the tracking ref
-
-#### Scenario: Overlong URI is rejected directly
-- **WHEN** a canonical DML URI exceeds 64 bytes
-- **THEN** the system rejects it and does not hash or rewrite it into an alternate tracking key
-
-#### Scenario: URI tracking ref characters are validated explicitly
-- **WHEN** a command would create a DML URI tracking ref
-- **THEN** the system validates the canonical URI as a DML project URI before writing the tracking ref
-
-#### Scenario: User-facing DML URI resolves to local tracking ref
-- **WHEN** a user-facing command receives `dml://alice/tools#main`
-- **THEN** the command resolves it locally through the tracking ref for `dml://alice/tools#main`
+#### Scenario: Remote tracking selector resolves locally
+- **WHEN** a user-facing command receives `origin/main`
+- **THEN** the command resolves it locally through the tracking ref for `origin/main`
 
 ### Requirement: Remote operations parse DML URIs
 The system SHALL parse and canonicalize DML revision URIs through one centralized shared revision URI parser/stringifier boundary before deriving remote project ref paths.
@@ -283,31 +263,39 @@ The system SHALL default project owner to the configured current user when proje
 - **WHEN** the configured user is `alice` and project `demo` is created without an explicit owner
 - **THEN** the project URI is `dml://alice/demo`
 
-### Requirement: Fetch updates remote-tracking head
-The system SHALL fetch a remote project branch by reading its branch head ref, materializing the referenced commit closure locally, and updating a local remote-tracking head.
+### Requirement: Fetch updates remote-tracking heads
+The system SHALL fetch all branch and tag refs for a configured named remote, materialize each referenced commit closure locally, and update the corresponding local remote-tracking refs. `fetch` SHALL accept at most one optional remote name and SHALL default to `origin`. A branch- or tag-qualified DML project URI SHALL instead fetch only that addressed ref and update its URI-keyed tracking ref.
 
-#### Scenario: Fetch origin main
-- **WHEN** `dml fetch origin main` succeeds
-- **THEN** local storage contains the fetched commit closure and tracks `dml://alice/demo#main` as pointing to the fetched commit
+#### Scenario: Fetch default origin
+- **WHEN** `dml fetch` succeeds and `origin` has branches `main` and `feature` plus tag `v1`
+- **THEN** local tracking refs for `origin/main`, `origin/feature`, and `origin@v1` are updated
 
-#### Scenario: Fetch explicit project URI
-- **WHEN** `dml fetch dml://alice/tools#main` succeeds
-- **THEN** local storage contains the fetched commit closure and tracks `dml://alice/tools#main` as pointing to the fetched commit
+#### Scenario: Fetch selected remote
+- **WHEN** `dml fetch research` succeeds
+- **THEN** it updates tracking refs for every branch and tag in remote `research` without updating other remotes
 
-#### Scenario: Fetch explicit project tag URI
-- **WHEN** `dml fetch dml://alice/tools@v1.0` succeeds
-- **THEN** local storage contains the fetched commit closure and tracks `dml://alice/tools@v1.0` as pointing to the fetched commit
+#### Scenario: Unknown remote fails
+- **WHEN** `dml fetch unknown` is requested
+- **THEN** the command fails without changing local tracking refs
 
-### Requirement: Pull fetches and merges
-The system SHALL implement branch pull as fetch followed by merge of the fetched remote-tracking head into the current branch.
+#### Scenario: Fetch explicit project ref
+- **WHEN** `dml fetch dml://alice/research#main` succeeds
+- **THEN** local storage updates the URI-keyed tracking ref for `dml://alice/research#main` without requiring a configured named remote
 
-#### Scenario: Pull origin main
-- **WHEN** `dml pull origin main` succeeds while the current branch is `main`
-- **THEN** local tracking ref `dml://alice/demo#main` is updated and local branch `main` advances to the merge result or fetched commit when already fast-forwardable
+### Requirement: Pull fetches and merges the configured upstream
+The system SHALL implement branch pull as fetching the current attached branch's configured upstream remote followed by merge of that upstream tracking ref into the current branch. Pull SHALL accept no positional remote or branch argument.
 
-#### Scenario: Pull different branch fails
-- **WHEN** the current branch is `feature` and the user runs `dml pull origin main`
-- **THEN** pull fails without merging or advancing the current branch
+#### Scenario: Pull configured upstream
+- **WHEN** current local branch `feature` tracks `origin/main` and `dml pull` succeeds
+- **THEN** `origin/main` is refreshed and `feature` advances to the merge result or fetched commit when fast-forwardable
+
+#### Scenario: Pull untracked branch fails
+- **WHEN** the current attached branch has no configured upstream
+- **THEN** `dml pull` fails without fetching or advancing the branch
+
+#### Scenario: Pull remote argument is rejected
+- **WHEN** a user supplies a positional argument to `dml pull`
+- **THEN** command parsing rejects the invocation
 
 ### Requirement: Push uses conditional publication and fast-forward safety
 The system SHALL expose a keyword-only `force` option on `Dml.push()` that defaults to `False`. For a non-forced branch push, the system SHALL read and materialize an existing remote branch tip without modifying local heads or working state, require that tip to be an ancestor of the candidate commit, and conditionally replace the branch ref using the observed ETag. If the remote branch is absent, the system SHALL create it only if it remains absent. A forced branch or tag push SHALL overwrite the ref without reading, ancestry validation, or conditional-write checks.
@@ -340,17 +328,13 @@ The system SHALL expose a keyword-only `force` option on `Dml.push()` that defau
 - **WHEN** force is requested for a branch or tag push
 - **THEN** push overwrites the remote ref with the local commit without remote-tip validation or conditional-write checks
 
-### Requirement: Project sync commands require configured local project URI
-The system SHALL require configured local `remote.project` before resolving default project-addressed remote refs for push, pull, fetch, or checkout flows.
+### Requirement: Project sync requires a configured named remote
+The system SHALL require a configured named remote before default project-addressed synchronization. `origin` SHALL be the default named remote for `fetch` and for first publication of an untracked branch.
 
-#### Scenario: Push without configured project URI
-- **WHEN** a repository has `remote.root` but no `remote.project` and push is requested
-- **THEN** push fails with a descriptive error stating that `remote.project` is required for project sync
+#### Scenario: Default sync without origin
+- **WHEN** a repository has remote storage but no remote named `origin` and default fetch or first branch publication is requested
+- **THEN** the operation fails with a descriptive error stating that `origin` is required
 
-#### Scenario: Pull without configured project URI
-- **WHEN** a repository has `remote.root` but no `remote.project` and pull or fetch-by-project is requested
-- **THEN** the operation fails with a descriptive error stating that `remote.project` is required for project sync
-
-#### Scenario: Checkout on init requires configured project URI
-- **WHEN** init resolves `remote.root` but not `remote.project`
-- **THEN** init does not attempt project-addressed fetch or checkout
+#### Scenario: Named upstream does not require origin
+- **WHEN** the current branch tracks `research/main` and remote `research` is configured
+- **THEN** pull and push use `research` without requiring `origin`

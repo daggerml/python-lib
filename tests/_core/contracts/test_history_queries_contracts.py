@@ -21,6 +21,7 @@ def test_status_reports_attached_head_branch_list_and_live_indexes(tmp_path, mon
         "branch": "main",
         "commit": None,
         "branches": [],
+        "upstream": None,
         "num_indexes": 1,
         "ahead": None,
         "behind": None,
@@ -38,6 +39,7 @@ def test_status_reports_detached_head_without_changing_branch_list(tmp_path, mon
         "branch": None,
         "commit": commit,
         "branches": ["main"],
+        "upstream": None,
         "num_indexes": 0,
         "ahead": None,
         "behind": None,
@@ -53,7 +55,8 @@ def test_status_reports_ahead_and_behind_relative_to_fetched_remote_branch(tmp_p
     from daggerml._core.head import Head
 
     head = Head(str(tmp_path))
-    head.create_remote_ref("acme", "demo", "main", base)
+    head.create_remote_tracking_ref("origin", "main", base)
+    head.set_upstream("main", "origin", "main")
 
     status = dml.status()
 
@@ -74,7 +77,8 @@ def test_status_reports_diverged_counts_against_fetched_remote_branch(tmp_path, 
     dml.checkout("main")
     remote_tip = commit_literal_dag(dml, "remote-only", 3, message="remote-only")
 
-    head.create_remote_ref("acme", "demo", "feature", remote_tip)
+    head.create_remote_tracking_ref("origin", "feature", remote_tip)
+    head.set_upstream("feature", "origin", "feature")
     dml.checkout("feature")
 
     status = dml.status()

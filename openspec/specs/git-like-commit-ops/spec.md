@@ -73,7 +73,7 @@ The system SHALL support checking out one DAG from a resolved revision into the 
 - **THEN** DAG checkout creates a new commit with the target name pointing to the checked-out DAG ref
 
 ### Requirement: Revision resolution
-The system SHALL resolve revision values used by git-like commands to concrete local commit refs without performing network fetches. `HEAD` and ancestry expressions based on `HEAD` SHALL resolve through the repository's `.dml/HEAD` file.
+The system SHALL resolve revision values used by git-like commands to concrete local commit refs without performing network fetches. `HEAD` and ancestry expressions based on `HEAD` SHALL resolve through the repository's `.dml/HEAD` file. A remote-tracking branch selector SHALL use `<remote-name>/<branch-name>`.
 
 #### Scenario: Resolve branch shorthand
 - **WHEN** a command receives `main` as a revision
@@ -81,19 +81,7 @@ The system SHALL resolve revision values used by git-like commands to concrete l
 
 #### Scenario: Resolve remote-tracking branch shorthand
 - **WHEN** a command receives `origin/main` as a revision
-- **THEN** the system resolves it through the configured remote URI to local tracking ref `dml://<owner>/<project>#main`
-
-#### Scenario: Resolve fetched DML branch URI
-- **WHEN** a command receives `dml://alice/tools#main` as a revision and that tracking ref exists locally
-- **THEN** the system resolves it to the commit stored for that tracking ref
-
-#### Scenario: Resolve fetched DML tag URI
-- **WHEN** a command receives `dml://alice/tools@v1.0` as a revision and that tracking ref exists locally
-- **THEN** the system resolves it to the commit stored for that tracking ref
-
-#### Scenario: Unfetched DML URI is not fetched implicitly
-- **WHEN** a command receives `dml://alice/tools#main` as a revision and no matching local tracking ref exists
-- **THEN** the command fails without contacting the remote
+- **THEN** the system resolves it through the local tracking ref for remote `origin` branch `main`
 
 #### Scenario: Resolve first-parent ancestry from HEAD file
 - **WHEN** a command receives `HEAD~2` as a revision
@@ -123,23 +111,24 @@ The system SHALL support checking out repository state from a resolved revision 
 - **THEN** the system may create the new detached commit but does not advance any branch head and does not rewrite `.dml/HEAD`
 
 ### Requirement: Mutable project workflows require an attached branch
-The system SHALL require `.dml/HEAD` to be attached to a local branch before default project workflows mutate branch history or publish a branch tip.
+The system SHALL require `.dml/HEAD` to be attached to a local branch before default project workflows mutate branch history or publish a branch tip. Default push SHALL use the current branch's configured upstream. If the current branch is untracked, default push SHALL publish to `origin/<local-branch>` and record that upstream only after publication succeeds.
 
-#### Scenario: Push uses attached HEAD branch by default
-- **WHEN** `.dml/HEAD` is attached to local branch `foo` and the user runs project push without an explicit branch override
-- **THEN** the system pushes local branch `foo` to remote branch URI `dml://<owner>/<project>#foo`
+#### Scenario: Push uses configured upstream
+- **WHEN** `.dml/HEAD` is attached to local branch `foo` tracking `research/main` and the user runs push
+- **THEN** the system pushes local branch `foo` to remote branch `research/main`
 
-#### Scenario: Pull requires attached HEAD
-- **WHEN** `.dml/HEAD` is detached and the user runs project pull without an explicit mutable branch target
-- **THEN** the command fails instead of selecting a branch from config or environment
+#### Scenario: First push establishes origin upstream
+- **WHEN** attached local branch `foo` has no upstream and the user runs push successfully
+- **THEN** the system publishes to `origin/foo`
+- **AND** configures `foo` to track `origin/foo`
 
-#### Scenario: Merge requires attached HEAD when defaulting destination
-- **WHEN** `.dml/HEAD` is detached and the user runs a merge workflow that would otherwise target the current branch
-- **THEN** the command fails because the current checkout is not a mutable branch target
+#### Scenario: Failed first push leaves branch untracked
+- **WHEN** attached local branch `foo` has no upstream and publication to `origin/foo` fails
+- **THEN** `foo` remains untracked
 
-#### Scenario: Checkout unresolved remote URI fails locally
-- **WHEN** `dml checkout dml://alice/tools#main` is requested and no local tracking ref exists for that URI
-- **THEN** checkout fails without implicit fetch and reports that the revision cannot be resolved locally
+#### Scenario: Push requires attached HEAD
+- **WHEN** `.dml/HEAD` is detached and the user runs push
+- **THEN** the command fails
 
 ### Requirement: DAG removal remains explicit
 The system SHALL remove DAG names from the current branch tree only through an explicit DAG removal command, not through DAG checkout of an absent source.
@@ -203,23 +192,24 @@ The system SHALL provide repository inspection workflows for `show`, `log`, and 
 - **WHEN** a user runs `dml diff dml://alice/demo#main HEAD`
 - **THEN** the system resolves both revisions from local state only
 
-### Requirement: Branch creation and listing expose git-like branch inspection workflows
-The system SHALL support creating a local branch from the current HEAD commit when one exists, and SHALL preserve git-like unborn-branch behavior when the current attached branch has no commit yet. Local branch listing SHALL continue to report only materialized local branch refs.
+### Requirement: Branch creation and listing expose tracked remote workflows
+The system SHALL support `branch create [--remote REMOTE] [--revision REV] NAME`. `REMOTE` SHALL default to `origin`; the created local branch SHALL track `REMOTE/NAME`. When revision is omitted and `REMOTE/NAME` exists remotely, creation SHALL fetch that branch and initialize the local branch at its tip. Otherwise, omitted revision SHALL retain current-HEAD and unborn-branch behavior. An explicit revision SHALL always take precedence over a matching remote branch.
 
-#### Scenario: Branch remote lists tracked refs
-- **WHEN** a user runs `dml branch --remote`
-- **THEN** the system returns the set of locally tracked remote branch selectors
+#### Scenario: Existing remote branch initializes new local branch
+- **WHEN** `dml branch create feature` is invoked and remote `origin` has branch `feature`
+- **THEN** the system fetches `origin/feature`, creates local `feature` at that commit, and configures it to track `origin/feature`
 
-#### Scenario: Branch create copies the current head commit without moving HEAD
-- **WHEN** a caller invokes `dml.branch("feature")` while HEAD is attached to `main`
-- **AND** `main` resolves to a concrete commit
-- **THEN** the system creates local branch `feature` at the current HEAD commit
-- **AND** HEAD remains attached to `main`
+#### Scenario: Selected remote initializes new local branch
+- **WHEN** `dml branch create --remote research feature` is invoked and remote `research` has branch `feature`
+- **THEN** the system creates local `feature` at the fetched `research/feature` commit and configures that upstream
 
-#### Scenario: Branch create repoints unborn attached HEAD
-- **WHEN** a caller invokes `dml.branch("feature")` while HEAD is attached to unborn branch `main`
-- **THEN** the system rewrites `.dml/HEAD` to attach to `feature`
-- **AND** it does not create `.dml/refs/local/heads/feature`
+#### Scenario: Explicit revision overrides remote tip
+- **WHEN** `dml branch create --revision HEAD~1 feature` is invoked and `origin/feature` exists
+- **THEN** local `feature` points to `HEAD~1` and tracks `origin/feature`
+
+#### Scenario: Missing remote branch uses current head
+- **WHEN** `dml branch create feature` is invoked, `origin/feature` does not exist, and HEAD resolves to a concrete commit
+- **THEN** local `feature` points to the current HEAD commit and tracks `origin/feature`
 
 #### Scenario: Branch list omits unborn current branch
 - **WHEN** HEAD is attached to unborn branch `main`
@@ -234,17 +224,20 @@ The system SHALL materialize the current branch ref when the first history-produ
 - **THEN** the system writes `.dml/refs/local/heads/main` pointing to `commit:abc123`
 - **AND** HEAD remains attached to `main`
 
-### Requirement: Repository status reports current DAG map and live indexes
-The system SHALL provide a repository status workflow that reports the current HEAD state, local branches, the DAG map for the current revision, and live indexes.
+### Requirement: Repository status reports upstream synchronization
+The system SHALL report the current branch's configured upstream and ahead/behind counts relative to its local remote-tracking ref when available.
 
-#### Scenario: Status reports attached head
-- **WHEN** HEAD is attached to branch `main` and a user runs `dml status`
-- **THEN** the response reports attached head state for `main`
-- **AND** includes the DAG map for the commit selected by that head
+#### Scenario: Status reports configured upstream
+- **WHEN** attached branch `feature` tracks `origin/main`
+- **THEN** status identifies `origin/main` as its upstream
 
-#### Scenario: Status reports detached head
-- **WHEN** HEAD is detached and a user runs `dml status`
-- **THEN** the response reports detached head state and the current commit
+#### Scenario: Status reports synchronization counts
+- **WHEN** the upstream tracking ref exists and current branch differs from it
+- **THEN** status reports the computed ahead and behind counts
+
+#### Scenario: Status reports unavailable upstream counts
+- **WHEN** the current branch has no upstream or its upstream has not been fetched
+- **THEN** status reports unavailable ahead and behind counts without inferring an upstream by local branch name
 
 ### Requirement: Show returns commit delta over DAG namespace
 The system SHALL compute commit-introduced change for `dml show` as DAG-map additions, removals, and updates between the selected commit tree and its base tree.

@@ -12,11 +12,11 @@ organize research history.
 Tree tags are part of the current v0 persisted tree format. Repositories whose
 stored trees predate required tag data are not compatible with this format.
 
-An S3 remote has two roles. `remote.root` provides remote storage, cache coordination, and remote-backed execution. `remote.project` identifies a project for `fetch`, `pull`, and `push`. Configure them with `dml config set`.
+An S3 remote has two roles. `remote.root` provides remote storage, cache coordination, and remote-backed execution. Named project remotes identify projects for history synchronization. Branches record one upstream such as `origin/main`; `pull` and `push` use that upstream, while `fetch [REMOTE]` refreshes local tracking refs for one remote.
 
 ```bash
 dml config set remote.root s3://bucket/research
-dml config set remote.project dml://alice/research
+dml remote add origin dml://alice/research
 dml push
 ```
 

@@ -1,4 +1,4 @@
-## ADDED Requirements
+## MODIFIED Requirements
 
 ### Requirement: Dml clone bootstraps a local repo from a remote project ref
 The system SHALL expose `Dml.clone(...)` as a bootstrap workflow that initializes a local repo, records the cloned project as named remote `origin`, fetches the selected remote project ref, and sets local HEAD to that cloned ref. A cloned branch SHALL track `origin/<branch>`.

@@ -20,7 +20,7 @@ def _seed_remote_project(tmp_path, monkeypatch):
     feature_commit = commit_literal_dag(source, "eval", 2)
     source.push()
     source.tag.create("v1")
-    source.push("@v1")
+    source.push(revision="@v1")
     return remote_root, remote_project, main_commit, feature_commit
 
 
@@ -44,8 +44,9 @@ def test_clone_bare_project_uses_default_branch_name(tmp_path, monkeypatch, remo
     assert status["branch"] == "feature"
     assert status["commit"] == feature_commit
     assert target.config.get("remote.project") == remote_project
-    assert head.get_remote_ref("acme", "demo", "feature") == feature_commit
+    assert head.get_remote_tracking_ref("origin", "feature") == feature_commit
     assert head.get_local_ref("feature") == feature_commit
+    assert head.get_upstream("feature") == {"remote": "origin", "merge": "feature"}
 
 
 def test_clone_branch_uri_attaches_head_to_the_cloned_branch(tmp_path, monkeypatch, remote_env, s3_bucket) -> None:
@@ -62,8 +63,9 @@ def test_clone_branch_uri_attaches_head_to_the_cloned_branch(tmp_path, monkeypat
     assert status["branch"] == "main"
     assert status["commit"] == main_commit
     assert target.config.get("remote.project") == remote_project
-    assert head.get_remote_ref("acme", "demo", "main") == main_commit
+    assert head.get_remote_tracking_ref("origin", "main") == main_commit
     assert head.get_local_ref("main") == main_commit
+    assert head.get_upstream("main") == {"remote": "origin", "merge": "main"}
 
 
 def test_clone_tag_uri_detaches_head_at_the_fetched_commit(tmp_path, monkeypatch, remote_env, s3_bucket) -> None:
@@ -80,5 +82,5 @@ def test_clone_tag_uri_detaches_head_at_the_fetched_commit(tmp_path, monkeypatch
     assert status["branch"] is None
     assert status["commit"] == feature_commit
     assert target.config.get("remote.project") == remote_project
-    assert head.get_remote_ref("acme", "demo", "v1", kind="tag") == feature_commit
+    assert head.get_remote_tracking_ref("origin", "v1", kind="tag") == feature_commit
     assert head.list_local_refs() == []

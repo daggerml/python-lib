@@ -138,3 +138,32 @@ def test_remote_branch_refs_round_trip_update_and_duplicate_rejection(tmp_path) 
 
     head.delete_remote_ref("acme", "demo", "main")
     assert head.list_remote_refs("acme", "demo") == []
+
+
+def test_branch_upstream_lifecycle_follows_branch_rename_and_delete(tmp_path) -> None:
+    head = Head(str(tmp_path))
+    commit = Ref("commit:" + "7" * 64)
+    head.create_local_ref("feature", commit)
+
+    assert head.get_upstream("feature") is None
+    assert head.set_upstream("feature", "origin", "main") == {"remote": "origin", "merge": "main"}
+    head.rename_local_ref("feature", "review")
+    assert head.get_upstream("feature") is None
+    assert head.get_upstream("review") == {"remote": "origin", "merge": "main"}
+
+    head.delete_local_ref("review")
+    assert head.get_upstream("review") is None
+
+
+def test_named_remote_tracking_refs_migrate_legacy_origin_and_enumerate_gc_roots(tmp_path) -> None:
+    head = Head(str(tmp_path))
+    branch = Ref("commit:" + "8" * 64)
+    tag = Ref("commit:" + "9" * 64)
+    head.create_remote_ref("acme", "demo", "main", branch)
+    head.create_remote_ref("acme", "demo", "v1", tag, kind="tag")
+
+    head.migrate_legacy_remote_refs("origin", "acme", "demo")
+
+    assert head.get_remote_tracking_ref("origin", "main") == branch
+    assert head.list_remote_tracking_refs("origin", kind="tag") == ["v1"]
+    assert set(head.iter_all_remote_tracking_refs()) == {branch, tag}

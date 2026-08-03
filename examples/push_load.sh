@@ -37,8 +37,9 @@ dml push --revision "#${branch}"
 
 log "Fetching into the runner-managed repository"
 cd "${DML_EXAMPLE_PROJECT_HOME}"
-dml fetch "dml://${dml_user}/${project0}#${branch}"
-remote_dag_ref="$(dml show --revision "dml://${dml_user}/${project0}#${branch}" | jq -r --arg dag_name "${hello_dag_name}" '.dags[$dag_name]')"
+dml remote add project-0 "dml://${dml_user}/${project0}"
+dml fetch project-0
+remote_dag_ref="$(dml show --revision "project-0/${branch}" | jq -r --arg dag_name "${hello_dag_name}" '.dags[$dag_name]')"
 dml dag checkout "${remote_dag_ref}" "${hello_dag_name}"
 
 log "Running example: 01b-load_fn.py"

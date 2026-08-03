@@ -9,7 +9,7 @@ from tests._core.helpers import commit_literal_dag, make_local_dml
 pytestmark = pytest.mark.slow
 
 
-def test_push_uses_attached_branch_by_default_and_rejects_unsupported_revision(
+def test_push_uses_attached_branch_upstream_and_fetches_named_tracking_refs(
     tmp_path,
     monkeypatch,
     remote_env,
@@ -31,11 +31,9 @@ def test_push_uses_attached_branch_by_default_and_rejects_unsupported_revision(
         remote_root=remote_root,
         remote_project=remote_project,
     )
-    target.fetch(remote_project)
-    assert Head(str(tmp_path / "target")).get_remote_ref("acme", "demo", "main") == commit
-
-    with pytest.raises(DmlRepoError, match="Unsupported revision for push: HEAD~1"):
-        source.push("HEAD~1")
+    target.fetch()
+    assert Head(str(tmp_path / "target")).get_remote_tracking_ref("origin", "main") == commit
+    assert source.status()["upstream"] == "origin/main"
 
 
 def test_fetch_updates_local_remote_tracking_refs(tmp_path, monkeypatch, remote_env, s3_bucket) -> None:
@@ -55,50 +53,29 @@ def test_fetch_updates_local_remote_tracking_refs(tmp_path, monkeypatch, remote_
         remote_root=remote_root,
         remote_project=remote_project,
     )
-    target.fetch(remote_project)
+    target.fetch()
     target_head = Head(str(target_home))
-    assert target_head.get_remote_ref("acme", "demo", "main") == first
+    assert target_head.get_remote_tracking_ref("origin", "main") == first
 
     second = commit_literal_dag(source, "eval", 2)
     source.push()
 
-    target.fetch(remote_project)
-    assert target_head.get_remote_ref("acme", "demo", "main") == second
+    target.fetch()
+    assert target_head.get_remote_tracking_ref("origin", "main") == second
 
 
-def test_push_delete_removes_remote_branch_and_tag_refs(tmp_path, monkeypatch, remote_env, s3_bucket) -> None:
+def test_fetch_explicit_uri_updates_uri_tracking_ref(tmp_path, monkeypatch, remote_env, s3_bucket) -> None:
     del remote_env, s3_bucket
     remote_root = f"s3://test-bucket/test-prefix/{tmp_path.name}"
     remote_project = "dml://acme/demo"
-
     source = make_local_dml(tmp_path / "source", monkeypatch, remote_root=remote_root, remote_project=remote_project)
-    commit_literal_dag(source, "train", 1)
-    source.branch.create("feature")
-    source.tag.create("v1")
+    commit = commit_literal_dag(source, "train", 1)
+    source.push()
 
-    source.push("feature")
-    source.push("@v1")
+    target = make_local_dml(tmp_path / "target", monkeypatch, remote_root=remote_root)
+    target.fetch(f"{remote_project}#main")
 
-    target = make_local_dml(
-        tmp_path / "target",
-        monkeypatch,
-        user="reviewer",
-        remote_root=remote_root,
-        remote_project=remote_project,
-    )
-    target.fetch("#feature")
-    target.fetch("@v1")
-    target_head = Head(str(tmp_path / "target"))
-    assert target_head.list_remote_refs("acme", "demo") == ["feature"]
-    assert target_head.list_remote_refs("acme", "demo", kind="tag") == ["v1"]
-
-    source.push("#feature", delete=True)
-    source.push("dml://acme/demo@v1", delete=True)
-
-    with pytest.raises(DmlRepoError, match="Remote branch ref not found"):
-        target.fetch("#feature")
-    with pytest.raises(DmlRepoError, match="Remote tag ref not found"):
-        target.fetch("@v1")
+    assert Head(str(tmp_path / "target")).get_remote_ref("acme", "demo", "main") == commit
 
 
 def test_pull_fast_forwards_attached_branch_and_rejects_detached_head(
@@ -123,8 +100,9 @@ def test_pull_fast_forwards_attached_branch_and_rejects_detached_head(
         remote_root=remote_root,
         remote_project=remote_project,
     )
-    target.fetch(remote_project)
+    target.fetch()
     Head(str(target_home)).update_local_ref("main", base)
+    Head(str(target_home)).set_upstream("main", "origin", "main")
 
     commit = commit_literal_dag(source, "eval", 2)
     source.push()
@@ -153,7 +131,7 @@ def test_push_rejects_divergence_without_moving_local_refs_and_force_overwrites(
 
     target_home = tmp_path / "target"
     target = make_local_dml(target_home, monkeypatch, remote_root=remote_root, remote_project=remote_project)
-    target.fetch(remote_project)
+    target.fetch()
     target_head = Head(str(target_home))
     target_head.update_local_ref("main", base)
 
@@ -165,30 +143,11 @@ def test_push_rejects_divergence_without_moving_local_refs_and_force_overwrites(
         target.push()
 
     assert target.status()["commit"] == local_tip
-    assert target_head.get_remote_ref("acme", "demo", "main") == base
+    assert target_head.get_remote_tracking_ref("origin", "main") == base
 
-    source.fetch(remote_project)
-    assert Head(str(tmp_path / "source")).get_remote_ref("acme", "demo", "main") == remote_tip
+    source.fetch()
+    assert Head(str(tmp_path / "source")).get_remote_tracking_ref("origin", "main") == remote_tip
 
     target.push(force=True)
-    source.fetch(remote_project)
-    assert Head(str(tmp_path / "source")).get_remote_ref("acme", "demo", "main") == local_tip
-
-
-def test_force_push_overwrites_an_existing_tag(tmp_path, monkeypatch, remote_env, s3_bucket) -> None:
-    del remote_env, s3_bucket
-    remote_root = f"s3://test-bucket/test-prefix/{tmp_path.name}"
-    remote_project = "dml://acme/demo"
-    source = make_local_dml(tmp_path / "source", monkeypatch, remote_root=remote_root, remote_project=remote_project)
-    commit_literal_dag(source, "train", 1)
-    source.tag.create("v1")
-    source.push("@v1")
-    with pytest.raises(DmlRepoError, match="Remote tag already exists: v1"):
-        source.push("@v1")
-
-    updated = commit_literal_dag(source, "eval", 2)
-    Head(str(tmp_path / "source")).update_local_ref("v1", updated, kind="tag")
-    source.push("@v1", force=True)
-    source.fetch("@v1")
-
-    assert Head(str(tmp_path / "source")).get_remote_ref("acme", "demo", "v1", kind="tag") == updated
+    source.fetch()
+    assert Head(str(tmp_path / "source")).get_remote_tracking_ref("origin", "main") == local_tip

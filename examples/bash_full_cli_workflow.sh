@@ -105,11 +105,13 @@ dml admin remote gc | jq .
 
 log "Fetching into the runner-managed repository"
 cd "${DML_EXAMPLE_PROJECT_HOME}"
-dml fetch "dml://${dml_user}/${project0}" | jq .
-dml rev-parse "dml://${dml_user}/${project0}#main" | jq .
+dml remote add project-0 "dml://${dml_user}/${project0}"
+dml fetch project-0
+dml rev-parse "project-0/main" | jq .
 dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
-dml branch move "${example_branch}" "dml://${dml_user}/${project0}#main"
+dml branch create --remote project-0 --revision "project-0/main" "${example_branch}"
 dml checkout "${example_branch}" | jq .
+dml branch set-upstream project-0/main
 remote_hello_dag_ref="${hello_dag_ref}"
 log "Checking out remote DAG ref ${remote_hello_dag_ref} into ${dag_namespace}/hello-world-copy"
 dml dag checkout "${remote_hello_dag_ref}" "${dag_namespace}/hello-world-copy"
@@ -125,13 +127,12 @@ dml checkout "${example_branch}" | jq .
 dml merge "${merge_demo_branch}" | jq .
 rebase_demo_branch="rebase-demo"
 renamed_rebase_branch="rebase-demo-renamed"
-dml branch create "${rebase_demo_branch}" --revision "dml://${dml_user}/${project0}#main"
+dml branch create --remote project-0 --revision "project-0/main" "${rebase_demo_branch}"
 dml checkout "${rebase_demo_branch}" | jq .
 dml rebase "${example_branch}" | jq .
 dml checkout "${example_branch}" | jq .
 dml branch rename "${rebase_demo_branch}" "${renamed_rebase_branch}"
 dml branch list | jq .
-dml config set remote.project "dml://${dml_user}/${project0}"
 dml pull | jq .
 tag_name="cli-demo-tag"
 dml tag create "${tag_name}"
@@ -140,6 +141,8 @@ dml tag delete "${tag_name}"
 dml dag checkout "${remote_hello_dag_ref}" "${hello_dag_name}"
 dml dag delete "${dag_namespace}/merge-demo"
 dml branch delete "${renamed_rebase_branch}"
+dml remote add disposable "dml://${dml_user}/${project0}"
+dml remote delete disposable
 dml status | jq .
 
 log "Running example: 01b-load_fn.py"

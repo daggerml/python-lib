@@ -39,8 +39,8 @@ def test_contrib_int_005__decorated_local_funk_runs_through_full_pipeline(tmp_pa
 
     Dml.init(str(target_home), user="reviewer", remote_root=remote_root, remote_project=remote_project)
     target_dml = Dml(str(target_home), remote_root=remote_root, user="reviewer")
-    target_dml.fetch(remote_project)
-    fetched_dag = target_dml.show(revision=f"{remote_project}#main")["dags"]["contrib-local-runtime"]
+    target_dml.fetch()
+    fetched_dag = target_dml.show(revision="origin/main")["dags"]["contrib-local-runtime"]
     target_dml.dag.checkout(fetched_dag, name="contrib-local-runtime")
 
     loaded = api.load("contrib-local-runtime", dml=target_dml)
