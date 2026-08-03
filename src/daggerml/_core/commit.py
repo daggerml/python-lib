@@ -18,6 +18,7 @@ class CommitDescription(TypedDict):
     id: Ref
     parents: list[Ref]
     dags: dict[str, Ref]
+    tags: dict[str, list[str]]
     author: str
     message: str
     created: str
@@ -34,6 +35,10 @@ class CommitFullDescription(CommitDescription):
 
 
 class CommitOps:
+    @staticmethod
+    def _entries(tree: Tree) -> dict[str, tuple[Ref, list[str]]]:
+        return {name: (dag, tree.tags.get(name, [])) for name, dag in tree.dags.items()}
+
     def _topo_sort(self, *xs, txn: TxnWithValid):
         xs = list(xs)
         result = []
@@ -65,8 +70,8 @@ class CommitOps:
         return path
 
     def _diff(self, t1: Ref, t2: Ref, *, txn: TxnWithValid) -> dict:
-        d1 = txn.get(t1).dags
-        d2 = txn.get(t2).dags
+        d1 = self._entries(txn.get(t1))
+        d2 = self._entries(txn.get(t2))
         result = {"add": {}, "rem": {}}
         for k in set(d1.keys()).union(d2.keys()):
             if k not in d2:
@@ -81,12 +86,18 @@ class CommitOps:
     def _patch(self, tree: Ref, *diffs, txn: TxnWithValid) -> Ref:
         tree_obj: Tree = txn.get(tree)
         dags = dict(tree_obj.dags)
+        tags = dict(tree_obj.tags)
         for diff in diffs:
             for k, _v in diff["rem"].items():
                 dags.pop(k, None)
-            for k, v in diff["add"].items():
-                dags[k] = v
-        return txn.put(Tree(dags))
+                tags.pop(k, None)
+            for k, (dag, dag_tags) in diff["add"].items():
+                dags[k] = dag
+                if dag_tags:
+                    tags[k] = dag_tags
+                else:
+                    tags.pop(k, None)
+        return txn.put(Tree(dags=dags, tags=tags))
 
     def _is_ancestor(self, ancestor: Ref, descendant: Ref, *, txn: TxnWithValid) -> bool:
         stack = [descendant]
@@ -185,7 +196,7 @@ class CommitOps:
                 c0 = self._merge_base(commit1, commit2, txn=txn)
             except DmlRepoError:
                 c0 = None
-                base_tree = txn.put(Tree(dags={}))
+                base_tree = txn.put(Tree(dags={}, tags={}))
             if c0 == commit1:
                 return commit2
             if c0 == commit2:
@@ -241,22 +252,31 @@ class CommitOps:
             after_tree = txn.get(target.tree)
             current_tree = txn.get(txn.get(base_commit).tree)
             dags = dict(current_tree.dags)
+            tags = dict(current_tree.tags)
             conflicts = []
-            for name in set(before_tree.dags) | set(after_tree.dags):
-                before_ref = before_tree.dags.get(name)
-                after_ref = after_tree.dags.get(name)
-                if before_ref == after_ref:
+            before_entries = self._entries(before_tree)
+            after_entries = self._entries(after_tree)
+            current_entries = self._entries(current_tree)
+            for name in set(before_entries) | set(after_entries):
+                before_entry = before_entries.get(name)
+                after_entry = after_entries.get(name)
+                if before_entry == after_entry:
                     continue
-                if dags.get(name) != after_ref:
+                if current_entries.get(name) != after_entry:
                     conflicts.append(name)
                     continue
-                if before_ref is None:
+                if before_entry is None:
                     dags.pop(name, None)
+                    tags.pop(name, None)
                 else:
-                    dags[name] = before_ref
+                    dags[name], before_tags = before_entry
+                    if before_tags:
+                        tags[name] = before_tags
+                    else:
+                        tags.pop(name, None)
             if conflicts:
                 raise DmlRepoError(f"Revert conflicts: {sorted(set(conflicts))}")
-            new_tree = txn.put(Tree(dags=dags))
+            new_tree = txn.put(Tree(dags=dags, tags=tags))
             new_commit = txn.put(
                 Commit(
                     parents=[base_commit],
@@ -283,9 +303,22 @@ class CommitOps:
             for commit_ref in self._linear_path(c0, source, txn=txn):
                 commit: Commit = txn.get(commit_ref)
                 old_parent = commit.parents[0]
+                old_tree = txn.get(old_parent).tree
+                target_tree = txn.get(rebased_parent).tree
+                diff = self._diff(old_tree, commit.tree, txn=txn)
+                old_entries = self._entries(txn.get(old_tree))
+                target_entries = self._entries(txn.get(target_tree))
+                conflicts = {
+                    name
+                    for name in set(diff["add"]) | set(diff["rem"])
+                    if target_entries.get(name) != old_entries.get(name)
+                    and target_entries.get(name) != diff["add"].get(name)
+                }
+                if conflicts:
+                    raise DmlRepoError(f"Rebase conflicts: {sorted(conflicts)}")
                 new_tree = self._patch(
-                    txn.get(rebased_parent).tree,
-                    self._diff(txn.get(old_parent).tree, commit.tree, txn=txn),
+                    target_tree,
+                    diff,
                     txn=txn,
                 )
                 rebased_parent = txn.put(
@@ -311,14 +344,15 @@ class CommitOps:
             if dag.ns() != "dag":
                 raise DmlRepoError(f"Input '{dag.to}' is not a DAG ref")
             if commit is None:
-                tree = Tree(dags={name: dag})
+                tree = Tree(dags={name: dag}, tags={})
                 parents = []
             else:
                 tree = cast(Tree, txn.get(txn.get(commit).tree))
                 parents = [commit]
-            tree.dags[name] = dag
             if name in tree.dags:
                 logger.warning(f"DAG name '{name}' already exists in commit; it will be overwritten")
+            tree.dags[name] = dag
+            tree.tags.pop(name, None)
             new_commit = txn.put(
                 Commit(
                     parents=parents,
@@ -338,6 +372,7 @@ class CommitOps:
             if name not in ctx.tree.dags:
                 raise DmlRepoError(f"DAG '{name}' not found in branch commit tree")
             ctx.tree.dags = {k: v for k, v in ctx.tree.dags.items() if k != name}
+            ctx.tree.tags = {k: v for k, v in ctx.tree.tags.items() if k != name}
             ctx.commit.tree = txn.put(ctx.tree)
             ctx.commit.author = user
             ctx.commit.parents = [commit]
@@ -346,6 +381,45 @@ class CommitOps:
             return new_commit_ref
 
         return db.write_with_growth(delete)
+
+    def _update_dag_tag(self, commit: Ref, name: str, tag: str, user: str, *, add: bool, db: DmlDB) -> Ref:
+        action = "Add" if add else "Remove"
+        created = now()
+
+        def update(txn: TxnWithValid) -> Ref:
+            ctx = txn.get_ctx(commit)
+            if name not in ctx.tree.dags:
+                raise DmlRepoError(f"DAG '{name}' not found in branch commit tree")
+            tags = list(ctx.tree.tags.get(name, []))
+            if add:
+                if tag in tags:
+                    return commit
+                tags.append(tag)
+            else:
+                if tag not in tags:
+                    return commit
+                tags.remove(tag)
+            if tags:
+                ctx.tree.tags[name] = tags
+            else:
+                ctx.tree.tags.pop(name, None)
+            return txn.put(
+                Commit(
+                    parents=[commit],
+                    tree=txn.put(ctx.tree),
+                    author=user,
+                    message=f"{action} tag '{tag}' for DAG '{name}'",
+                    created=created,
+                )
+            )
+
+        return db.write_with_growth(update)
+
+    def add_dag_tag(self, commit: Ref, name: str, tag: str, user: str, *, db: DmlDB) -> Ref:
+        return self._update_dag_tag(commit, name, tag, user, add=True, db=db)
+
+    def remove_dag_tag(self, commit: Ref, name: str, tag: str, user: str, *, db: DmlDB) -> Ref:
+        return self._update_dag_tag(commit, name, tag, user, add=False, db=db)
 
     def get_dag(self, commit: Ref, name: str, *, db: DmlDB) -> Optional[Ref]:
         with db.tx(readonly=True) as txn:
@@ -366,6 +440,7 @@ class CommitOps:
                 "id": commit.id(),
                 "parents": ctx.commit.parents,
                 "dags": ctx.tree.dags,
+                "tags": ctx.tree.tags,
                 "author": ctx.commit.author,
                 "message": ctx.commit.message,
                 "created": ctx.commit.created,

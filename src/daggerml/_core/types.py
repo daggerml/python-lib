@@ -766,7 +766,7 @@ class Dag(DmlBase):
 
 @_register_dml_obj
 class Tree(DmlBase):
-    """Named collection of DAGs.
+    """Named collection of DAGs and their opaque tags.
 
     A tree organizes multiple DAGs by name, typically representing
     different computations or workflow branches.
@@ -778,6 +778,7 @@ class Tree(DmlBase):
     """
 
     dags: dict[str, Ref]  # -> dag
+    tags: dict[str, list[str]]
 
     def _validate(self) -> None:
         if not isinstance(self.dags, dict):
@@ -786,6 +787,17 @@ class Tree(DmlBase):
             if not isinstance(k, str):
                 raise TypeError(f"{self.__class__.__name__}.dags keys must be strings")
             require_ref(v, expected_ns=["dag"], context=f"{self.__class__.__name__}.dags[{k!r}]")
+        if not isinstance(self.tags, dict):
+            raise TypeError("tags must be a dict of str->list[str]")
+        for name, tags in self.tags.items():
+            if not isinstance(name, str):
+                raise TypeError(f"{self.__class__.__name__}.tags keys must be strings")
+            if name not in self.dags:
+                raise TypeError(f"{self.__class__.__name__}.tags[{name!r}] requires a named DAG")
+            if not isinstance(tags, list):
+                raise TypeError(f"{self.__class__.__name__}.tags[{name!r}] must be a list of strings")
+            if not all(isinstance(tag, str) for tag in tags):
+                raise TypeError(f"{self.__class__.__name__}.tags[{name!r}] must be a list of strings")
 
 
 @_register_dml_obj
@@ -985,7 +997,7 @@ class DmlDB:
         """Initialize the database on disk if it doesn't exist."""
 
         def initialize(txn: TxnWithValid) -> Ref:
-            tree = txn.put(Tree(dags={}))
+            tree = txn.put(Tree(dags={}, tags={}))
             return txn.put(Commit(tree=tree, parents=[], author="dml", message="Initial commit"))
 
         return self.write_with_growth(initialize, create_if_missing=True)

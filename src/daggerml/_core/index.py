@@ -119,7 +119,7 @@ class IndexOps:
             nodes: list[Ref] = [argv] if argv is not None else []
             parents: list[Ref] = []
             if commit is None:
-                base_tree = txn.put(Tree(dags={}))
+                base_tree = txn.put(Tree(dags={}, tags={}))
             else:
                 base_commit: Commit = txn.get(commit)
                 base_tree = base_commit.tree

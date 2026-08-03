@@ -30,7 +30,7 @@ def test_cache_roundtrip(tmp_path):
             value = txn.put(ScalarDatum("done"))
             result = txn.put(LiteralNode(value=value))
             dag_ref = txn.put(Dag(nodes=[argv_node, result], names={"result": result}, result=result, argv=argv_node))
-            tree = txn.put(Tree(dags={"main": dag_ref}))
+            tree = txn.put(Tree(dags={"main": dag_ref}, tags={}))
             commit_ref = txn.put(Commit(parents=[], tree=tree, author="alice", message="snapshot"))
 
         cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
@@ -145,7 +145,7 @@ def test_remote_ref_payloads_use_typed_roots(tmp_path):
             value = txn.put(ScalarDatum("done"))
             result = txn.put(LiteralNode(value=value))
             dag_ref = txn.put(Dag(nodes=[argv_node, result], names={"result": result}, result=result, argv=argv_node))
-            tree = txn.put(Tree(dags={"main": dag_ref}))
+            tree = txn.put(Tree(dags={"main": dag_ref}, tags={}))
             commit_ref = txn.put(Commit(parents=[], tree=tree, author="alice", message="snapshot"))
 
         cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
@@ -262,7 +262,7 @@ def test_non_forced_branch_push_ref_rejects_create_and_update_races(tmp_path, mo
         remote = Remote("s3://bucket/root", n_workers=2, client=client)
         db = make_db(tmp_path / "db")
         with db.tx() as txn:
-            tree = txn.put(Tree(dags={}))
+            tree = txn.put(Tree(dags={}, tags={}))
             base = txn.put(Commit(tree=tree, parents=[], author="alice", message="base"))
             candidate = txn.put(Commit(tree=tree, parents=[base], author="alice", message="candidate"))
             racer = txn.put(Commit(tree=tree, parents=[base], author="bob", message="racer"))

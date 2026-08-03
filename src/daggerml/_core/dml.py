@@ -600,6 +600,44 @@ class _DagNamespace:
             )
             head.update_local_ref(head_info["branch"], new_commit)
 
+    def add_tag(self, dag: Annotated[str, "Named DAG to tag."], tag: Annotated[str, "Opaque tag to add."]) -> Ref:
+        """Add an opaque tag to a named DAG on the current branch."""
+        head = _head_ops(self._dml)
+        with head.lock():
+            head_info = head.get_head()
+            if not head_info["branch"]:
+                raise DmlRepoError("Cannot add DAG tag when HEAD is detached")
+            new_commit = CommitOps().add_dag_tag(
+                _require_resolved_commit(head_info["commit"], "HEAD"),
+                dag,
+                tag,
+                user=self._dml._config.user,
+                db=self._dml._db,
+            )
+            head.update_local_ref(head_info["branch"], new_commit)
+        return new_commit
+
+    def remove_tag(
+        self,
+        dag: Annotated[str, "Named DAG to untag."],
+        tag: Annotated[str, "Opaque tag to remove."],
+    ) -> Ref:
+        """Remove an opaque tag from a named DAG on the current branch."""
+        head = _head_ops(self._dml)
+        with head.lock():
+            head_info = head.get_head()
+            if not head_info["branch"]:
+                raise DmlRepoError("Cannot remove DAG tag when HEAD is detached")
+            new_commit = CommitOps().remove_dag_tag(
+                _require_resolved_commit(head_info["commit"], "HEAD"),
+                dag,
+                tag,
+                user=self._dml._config.user,
+                db=self._dml._db,
+            )
+            head.update_local_ref(head_info["branch"], new_commit)
+        return new_commit
+
 
 @dataclass(frozen=True)
 class _BranchNamespace:

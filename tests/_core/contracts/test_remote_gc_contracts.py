@@ -21,7 +21,7 @@ def test_remote_gc_001__reachable_objects_include_nested_objects_for_liveness(tm
         scalar = txn.put(ScalarDatum("done"))
         result = txn.put(LiteralNode(value=scalar))
         dag_ref = txn.put(Dag(nodes=[result], names={"result": result}, result=result))
-        tree_ref = txn.put(Tree(dags={"main": dag_ref}))
+        tree_ref = txn.put(Tree(dags={"main": dag_ref}, tags={}))
         commit_ref = txn.put(
             Commit(
                 parents=[],

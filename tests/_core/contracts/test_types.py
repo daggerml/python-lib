@@ -263,8 +263,8 @@ def test_get_ctx_loads_dag_from_index_but_not_from_commit(tmp_path) -> None:
     db = make_db(tmp_path)
     with db.tx(create_if_missing=True) as txn:
         dag_ref = txn.put(Dag(nodes=[], names={}))
-        committed_tree = txn.put(Tree(dags={}))
-        staged_tree = txn.put(Tree(dags={"staged": dag_ref}))
+        committed_tree = txn.put(Tree(dags={}, tags={}))
+        staged_tree = txn.put(Tree(dags={"staged": dag_ref}, tags={}))
         commit_ref = txn.put(Commit(parents=[], tree=committed_tree, author="a", message="m"))
         index_ref = txn.put(Index(parents=[commit_ref], tree=staged_tree, author="b", message="", dag=dag_ref))
 

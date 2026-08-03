@@ -13,7 +13,8 @@ a particular object family.
   values and computation within a DAG.
 - `Dag` contains nodes, names, and exactly one terminal result or error when
   finished.
-- `Tree` maps names to DAG refs; `Commit` snapshots a tree and history parents.
+- `Tree` maps names to DAG refs and can attach opaque string-tag lists to those
+  named entries; `Commit` snapshots a tree and history parents.
 - `Error` is persisted data, so failed work remains inspectable in the graph.
 
 `DmlDB` provides typed transactions over the Cython extension in `db.pyx`,
@@ -26,3 +27,9 @@ Object identity and reachability depend on the explicit ref graph. Local
 garbage collection starts from live pointers and removes unreachable objects;
 changes to object shape, namespace registration, or references must preserve
 that invariant.
+
+Tree tags are classification metadata rather than a new object type. A tag such
+as `research.v0` has no repository-defined meaning; users or external tools can
+interpret it as a schema convention. Tags are required in persisted tree data,
+so repositories written before this field was added are not compatible with the
+current v0 storage format.
