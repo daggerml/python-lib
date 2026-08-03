@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 from functools import wraps
+from importlib import resources
 from pathlib import Path
 from time import time
 from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict, cast, overload
@@ -894,6 +895,10 @@ class _AdminNamespace:
         resp = self._dml._db.gc(sorted(refs))
         t2 = time()
         return {"gc-time": int(t2 - t1), "ref-enumeration-time": int(t1 - t0), "deleted": resp}
+
+    def agent_skill(self) -> str:
+        """Print the bundled coding-agent skill as portable Markdown."""
+        return resources.files("daggerml").joinpath("SKILL.md").read_text(encoding="utf-8").removesuffix("\n")
 
 
 class StatusPayload(TypedDict):

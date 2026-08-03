@@ -38,8 +38,10 @@ def test_cli_namespace_help_003__nested_help_lists_commands_before_namespaces() 
 
     assert "commands:" in admin_help
     assert "namespaces:" in admin_help
-    assert "gc         Garbage-collect unreachable local objects." in admin_help
-    assert "remote     Remote cache, refs, and GC commands." in admin_help
+    assert "gc" in admin_help
+    assert "Garbage-collect unreachable local objects." in admin_help
+    assert "remote" in admin_help
+    assert "Remote cache, refs, and GC commands." in admin_help
     assert admin_help.index("commands:") < admin_help.index("namespaces:")
 
 
