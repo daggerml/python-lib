@@ -862,6 +862,20 @@ class Index(Commit):
         require_ref(self.dag, expected_ns=["dag"], context=f"{self.__class__.__name__}.dag")
 
 
+@_register_dml_obj
+class FrozenIndex(Commit):
+    """A user runtime preserved for inspection before authoring continues."""
+
+    dag: Ref = field(kw_only=True)
+    frozen_message: Optional[str] = field(default=None, kw_only=True)
+
+    def _validate(self) -> None:
+        super()._validate()
+        require_ref(self.dag, expected_ns=["dag"], context=f"{self.__class__.__name__}.dag")
+        if self.frozen_message is not None and not isinstance(self.frozen_message, str):
+            raise TypeError(f"{self.__class__.__name__}.frozen_message must be a string or None")
+
+
 def _cleanup_opposite_entry(db: "TxnWithValid", ref: Ref, *, opposite_ns: str, noun: str) -> None:
     opposite_ref = Ref(f"{opposite_ns}:{ref.id()}")
     if db.exists(opposite_ref):
@@ -934,9 +948,9 @@ class TxnWithValid:
         dag = None
         commit: Commit
         tree: Tree
-        if ref.ns() == "index":
+        if ref.ns() in ("index", "frozenindex"):
             commit = self.get(ref)
-            dag = self.get(cast(Index, commit).dag)
+            dag = self.get(cast(Index | FrozenIndex, commit).dag)
             tree = self.get(commit.tree)
         else:
             commit = self.get(self.require(ref, "commit"))
@@ -981,7 +995,7 @@ class DmlDB:
     def gc(self, refs: list[Ref]) -> dict[str, int]:
         def collect(txn: TxnWithValid) -> dict[str, int]:
             stats: dict[str, int] = {}
-            roots = [*refs, *(ref for ref, _ in txn.iter("index"))]
+            roots = [*refs, *(ref for ref, _ in txn.iter("index")), *(ref for ref, _ in txn.iter("frozenindex"))]
             for ref in txn.list_orphans(roots):
                 txn.delete(ref)
                 stats[ref.ns()] = stats.get(ref.ns(), 0) + 1

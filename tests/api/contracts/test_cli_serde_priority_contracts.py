@@ -176,3 +176,29 @@ def test_cli_sp_011__dml_describe_graph_raw_path_still_emits_json(tmp_path: Path
     payload = json.loads(capsys.readouterr().out)
     assert payload["roots"] == [index.id()]
     assert payload["nodes"][index.id()]["execution_id"] == index.id()
+
+
+def test_cli_sp_012__runtime_freeze_and_unfreeze_emit_replacement_refs(tmp_path: Path, monkeypatch, capsys) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    index = dml.runtime.create()
+    cli = MethodCLI(Dml, prog="dml")
+
+    assert (
+        cli.run(
+            [
+                "--project-home",
+                str(tmp_path),
+                "runtime",
+                "freeze",
+                str(index.to),
+                "--message",
+                "Review implementation",
+            ]
+        )
+        == 0
+    )
+    frozen_ref = capsys.readouterr().out.strip()
+    assert frozen_ref == f"frozenindex:{index.id()}"
+
+    assert cli.run(["--project-home", str(tmp_path), "runtime", "unfreeze", frozen_ref]) == 0
+    assert capsys.readouterr().out == f"{index.to}\n"

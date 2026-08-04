@@ -5,6 +5,12 @@ starts from a parent commit (or an empty tree), accumulates literals, imports,
 function calls, names, results, and errors, then commits a finished DAG and,
 when named, a new repository commit.
 
+A user runtime can transition between active and frozen local representations.
+Both retain the same runtime/execution ID and partial DAG ref; frozen state is
+not an execution-record lifecycle state. This permits intermediate-DAG
+inspection without making the DAG terminal or interrupting cancellation and
+invalidation lineage.
+
 For a runnable computation, `IndexOps` first builds argument nodes. Built-in
 operations run against the local typed graph. Adapter-backed runnables create an
 `ArgvNode`; its normalized DaggerML datum identity is the cache key. The core then asks

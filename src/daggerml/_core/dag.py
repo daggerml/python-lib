@@ -68,8 +68,6 @@ class DagOps:
     def get_node(self, dag_ref: Ref, name: str, *, db: DmlDB) -> Ref:
         with db.tx(readonly=True) as txn:
             dag: Dag = txn.get(TxnWithValid.require(dag_ref, "dag"))
-            if not dag.is_finished():
-                raise DmlRepoError("Cannot get node from unfinished DAG")
             if name not in dag.names:
                 raise DmlRepoError(f"Node '{name}' not found in DAG")
             return dag.names[name]

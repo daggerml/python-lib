@@ -34,6 +34,7 @@ from daggerml._core.types import (
     DmlRepoError,
     Error,
     FnNode,
+    FrozenIndex,
     ImportNode,
     Index,
     ListDatum,
@@ -142,6 +143,58 @@ class IndexOps:
             record.update({"lifecycle": "running", "updated_at": int(time.time())})
             state.update_execution_record(record)
         return index
+
+    def freeze(self, index: Ref, message: str | None, *, db: DmlDB) -> Ref:
+        """Replace a user runtime index with its frozen representation."""
+        self._require_mutation(index, db)
+
+        def freeze_index(txn) -> Ref:
+            idx = txn.get(index)
+            if not isinstance(idx, Index):
+                raise DmlRepoError(f"Runtime is not an active index: {index}")
+            dag: Dag = txn.get(idx.dag)
+            if dag.argv is not None:
+                raise DmlRepoError("Cannot freeze an execution-aware function runtime")
+            frozen = txn.put(
+                FrozenIndex(
+                    parents=idx.parents,
+                    tree=idx.tree,
+                    author=idx.author,
+                    message=idx.message,
+                    created=idx.created,
+                    dag=idx.dag,
+                    frozen_message=message,
+                ),
+                to=Ref(f"frozenindex:{index.id()}"),
+            )
+            txn.delete(index)
+            return frozen
+
+        return db.write_with_growth(freeze_index)
+
+    def unfreeze(self, index: Ref, *, db: DmlDB) -> Ref:
+        """Replace a frozen runtime index with its active representation."""
+        self._require_mutation(index, db)
+
+        def unfreeze_index(txn) -> Ref:
+            frozen = txn.get(index)
+            if not isinstance(frozen, FrozenIndex):
+                raise DmlRepoError(f"Runtime is not a frozen index: {index}")
+            active = txn.put(
+                Index(
+                    parents=frozen.parents,
+                    tree=frozen.tree,
+                    author=frozen.author,
+                    message=frozen.message,
+                    created=frozen.created,
+                    dag=frozen.dag,
+                ),
+                to=Ref(f"index:{index.id()}"),
+            )
+            txn.delete(index)
+            return active
+
+        return db.write_with_growth(unfreeze_index)
 
     def put_import(self, index: Ref, dag: Ref, node: Optional[Ref], name: Optional[str] = None, *, db: DmlDB) -> Ref:
         """Import a node from another DAG into the current index DAG."""

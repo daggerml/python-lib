@@ -17,6 +17,7 @@ from daggerml._core.types import (
     Dag,
     DictDatum,
     Error,
+    FrozenIndex,
     Index,
     ListDatum,
     LiteralNode,
@@ -56,6 +57,7 @@ def test_namespaces_are_registered_for_persisted_shapes() -> None:
     assert NAMESPACES["node-literal"].__name__ == "LiteralNode"
     assert NAMESPACES["dag"] is Dag
     assert NAMESPACES["error"] is Error
+    assert NAMESPACES["frozenindex"] is FrozenIndex
 
 
 def test_require_ref_enforces_namespace_hierarchy() -> None:
@@ -302,6 +304,15 @@ def test_index_validation_requires_commit_shape_and_dag(tmp_path) -> None:
             message="",
             dag=Ref("commit:not-a-dag"),
         )._validate()
+
+    FrozenIndex(
+        parents=[commit_ref],
+        tree=base_commit.tree,
+        author="user",
+        message="",
+        dag=Ref("dag:ok"),
+        frozen_message="Review output",
+    )._validate()
 
 
 def test_raw_db_tx_accepts_larger_map_size_on_reopen(tmp_path) -> None:

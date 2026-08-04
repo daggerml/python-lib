@@ -17,7 +17,7 @@ from daggerml._core.head import Head
 from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItemConflict
-from daggerml._core.types import DmlDB, DmlRepoError, Error, TxnWithValid
+from daggerml._core.types import DmlDB, DmlRepoError, Error, FrozenIndex, Index, TxnWithValid
 from daggerml._core.uri import ProjectUri
 from daggerml.util import get_client
 
@@ -313,6 +313,8 @@ class RuntimeDescribe(TypedDict):
     message: str
     created: str
     dag: Ref
+    state: Literal["active", "frozen"]
+    frozen_message: str | None
 
 
 class RuntimeListPayload(TypedDict):
@@ -323,6 +325,8 @@ class RuntimeListPayload(TypedDict):
     message: str
     created: str
     dag: Ref
+    state: Literal["active", "frozen"]
+    frozen_message: str | None
 
 
 RuntimeCancelSummary = TypedDict(
@@ -445,11 +449,28 @@ class _RuntimeNamespace:
                 hops.write_detached_head(commit_ref)
         return dag_ref
 
+    @_retry_runtime_mutation
+    def freeze(
+        self,
+        index: Annotated[Ref, "Active user runtime index to freeze."],
+        *,
+        message: Annotated[str | None, "Optional reason shown while the runtime is frozen."] = None,
+    ) -> Ref:
+        """Freeze a user runtime for later inspection or resumption."""
+        return _index_ops(self._dml).freeze(index, message, db=self._dml._db)
+
+    @_retry_runtime_mutation
+    def unfreeze(self, index: Annotated[Ref, "Frozen runtime index to reactivate."]) -> Ref:
+        """Reactivate a frozen runtime index."""
+        return _index_ops(self._dml).unfreeze(index, db=self._dml._db)
+
     def describe(self, index: Annotated[Ref, "Runtime index to inspect."]) -> RuntimeDescribe:
         """Describe one runtime index."""
         db = self._dml._db
         with db.tx(readonly=True) as txn:
             idx = txn.get(index)
+            if not isinstance(idx, (Index, FrozenIndex)):
+                raise DmlRepoError(f"Runtime is not an index: {index}")
             return {
                 "id": index,
                 "parents": idx.parents,
@@ -458,17 +479,22 @@ class _RuntimeNamespace:
                 "message": idx.message,
                 "created": idx.created,
                 "dag": idx.dag,
+                "state": "frozen" if isinstance(idx, FrozenIndex) else "active",
+                "frozen_message": idx.frozen_message if isinstance(idx, FrozenIndex) else None,
             }
 
     def list(self) -> list[RuntimeListPayload]:
         """List open runtime indexes in reverse creation order."""
         objs: list[RuntimeListPayload] = []
         with self._dml._db.tx(readonly=True) as txn:
-            try:
-                index_items = list(txn.iter("index"))
-            except DmlDbKeyNotFoundError:
-                index_items = []
+            index_items = []
+            for namespace in ("index", "frozenindex"):
+                try:
+                    index_items.extend(txn.iter(namespace))
+                except DmlDbKeyNotFoundError:
+                    pass
             for x, obj in index_items:
+                assert isinstance(obj, (Index, FrozenIndex))
                 objs.append(
                     {
                         "id": x,
@@ -478,6 +504,8 @@ class _RuntimeNamespace:
                         "message": obj.message,
                         "created": obj.created,
                         "dag": obj.dag,
+                        "state": "frozen" if isinstance(obj, FrozenIndex) else "active",
+                        "frozen_message": obj.frozen_message if isinstance(obj, FrozenIndex) else None,
                     }
                 )
         return sorted(objs, key=lambda x: x["created"], reverse=True)
@@ -1097,10 +1125,12 @@ class Dml:
                 if head_info["commit"] is not None:
                     ahead, behind = CommitOps().ahead_behind(head_info["commit"], upstream_ref, db=self._db)
         with self._db.tx(readonly=True) as txn:
-            try:
-                num_indexes = sum(1 for _ in txn.iter("index"))
-            except DmlDbKeyNotFoundError:
-                num_indexes = 0
+            num_indexes = 0
+            for namespace in ("index", "frozenindex"):
+                try:
+                    num_indexes += sum(1 for _ in txn.iter(namespace))
+                except DmlDbKeyNotFoundError:
+                    pass
         return {
             "mode": head_info["mode"],
             "branch": head_info["branch"],
