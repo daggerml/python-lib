@@ -65,6 +65,7 @@ def _docker_run_flags() -> list[str]:
 @api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))  # Point: A
 @api.funkify
 def download_dataset(dag):
+    print("download_dataset: loading Iris dataset")
     from sklearn.datasets import load_iris  # pyright:ignore[reportMissingImports] # noqa:F401
 
     return load_iris(as_frame=True).frame.dropna()
@@ -73,6 +74,7 @@ def download_dataset(dag):
 @api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))  # Point: B
 @api.funkify
 def predict_target(dag, dataset, params):
+    print("predict_target: training Iris classifier")
     import pandas as pd  # pyright:ignore[reportMissingImports] # noqa:F401
     from sklearn.linear_model import LogisticRegression  # pyright:ignore[reportMissingImports] # noqa:F401
     from sklearn.metrics import r2_score  # pyright:ignore[reportMissingImports] # noqa:F401

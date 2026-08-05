@@ -15,11 +15,13 @@ from daggerml.contrib import api
 
 @api.funkify
 def parse_numbers(dag, raw):
+    print("parse_numbers: parsing inputs")
     return [int(value) for value in raw.value()]
 
 
 @api.funkify
 def normalize(dag, values):
+    print("normalize: scaling values")
     values = values.value()
     largest = max(values)
     return [value / largest for value in values]
@@ -27,12 +29,14 @@ def normalize(dag, values):
 
 @api.funkify
 def summarize(dag, values):
+    print("summarize: aggregating values")
     values = values.value()
     return {"count": len(values), "total": sum(values)}
 
 
 @api.funkify
 def same_as(self, a, b):
+    print("same_as: comparing values")
     return a.value() == b.value()
 
 
@@ -44,6 +48,7 @@ class DatasetSummary:
     same_as_fn = same_as
 
     def same_as(self, a, b):
+        print("same_as: comparing values")
         return a.value() == b.value()
 
     def preprocess(self, raw):

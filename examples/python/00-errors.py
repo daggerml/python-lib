@@ -6,6 +6,7 @@ from daggerml.contrib import api
 
 @api.funkify
 def err(dag, arg):
+    print("err: intentionally dividing by the provided argument")
     return 1 / arg.value()
 
 

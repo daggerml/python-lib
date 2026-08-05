@@ -346,6 +346,12 @@ class Dag:
             raise DmlRepoError("No active index")
         return self.token
 
+    def _read_dag_ref(self) -> Ref:
+        """Return the completed or partial DAG backing this wrapper's reads."""
+        if self.ref is not None:
+            return self.ref
+        return cast(Ref, self.dml.runtime.describe(self._require_index_ref())["dag"])
+
     def _put_literal(self, value: Any, *, name: Optional[str] = None) -> Ref:
         index_id = self._require_index_ref()
         value = apply_codecs(value, dag=self)
@@ -371,10 +377,7 @@ class Dag:
         yield from self.keys()
 
     def _get_named_node(self, name: str) -> "Node":
-        if self.ref is None:
-            node_ref = self.dml.runtime.get_node(self._require_index_ref(), name)
-            return _make_node(self, node_ref)
-        node_ref = self.dml.dag.describe(self.ref)["names"].get(name)
+        node_ref = self.dml.dag.describe(self._read_dag_ref())["names"].get(name)
         if node_ref is None:
             raise DmlRepoError(f"Node '{name}' not found in DAG")
         return _make_node(self, node_ref)
@@ -409,21 +412,18 @@ class Dag:
 
     def keys(self) -> list[str]:
         """Get the list of all node names in the dag"""
-        dag = self.ref or self.dml.runtime.describe(self._require_index_ref())["dag"]
-        names_dict = self.dml.dag.describe(dag)["names"]
+        names_dict = self.dml.dag.describe(self._read_dag_ref())["names"]
         return sorted(names_dict.keys())
 
     def values(self) -> list["Node"]:
         """Get the list of all nodes in the dag"""
-        dag = self.ref or self.dml.runtime.describe(self._require_index_ref())["dag"]
-        names_dict = self.dml.dag.describe(dag)["names"]
+        names_dict = self.dml.dag.describe(self._read_dag_ref())["names"]
         return [_make_node(self, ref) for ref in names_dict.values()]
 
     @property
     def argv(self) -> "ListNode":
         "Access the dag's argv node"
-        dag = self.ref or self.dml.runtime.describe(self._require_index_ref())["dag"]
-        argv_ref = self.dml.dag.describe(dag)["argv"]
+        argv_ref = self.dml.dag.describe(self._read_dag_ref())["argv"]
         if not isinstance(argv_ref, Ref):
             raise DmlRepoError(f"'{self.__class__.__name__}' dag has no argv")
         return cast(ListNode, _make_node(self, argv_ref))
@@ -579,6 +579,19 @@ class Dag:
             value = value.ref
         self.ref = self.dml.runtime.commit(self._require_index_ref(), value, message=self.message, name=self.name)
         self.token = None  # Clear the working index since it's now committed
+
+    def freeze(self, message: str | None = None) -> "Dag":
+        """Freeze this uncommitted DAG's runtime index for read-only inspection."""
+        freeze_message = f"dag: {self.name}"
+        if message:
+            freeze_message = f"{freeze_message}\n{message}"
+        self.token = self.dml.runtime.freeze(self._require_index_ref(), message=freeze_message)
+        return self
+
+    def unfreeze(self) -> "Dag":
+        """Unfreeze this uncommitted DAG's runtime index."""
+        self.token = self.dml.runtime.unfreeze(self._require_index_ref())
+        return self
 
     def cancel(self, mode: Literal["full", "drive"] = "full"):
         """Cancel the DAG's execution.

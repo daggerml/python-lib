@@ -167,6 +167,7 @@ def ssh_server(dag):
 @api.funkify(uri="docker", image=api.ref("image"), flags=api.ref("dkr-flags"))  # run in docker
 @api.funkify  # defaults to: run in a python subprocess
 def predict_target(dag, dataset, params):
+    print("predict_target: training Iris classifier over SSH")
     import pandas as pd  # pyright:ignore[reportMissingImports] # noqa:F401
     from sklearn.metrics import r2_score  # pyright:ignore[reportMissingImports] # noqa:F401
     from sklearn.model_selection import train_test_split  # pyright:ignore[reportMissingImports] # noqa:F401
