@@ -2,8 +2,7 @@
 
 ## Purpose
 
-TBD: Update Purpose after archive.
-
+Define the `Dag.freeze()` / `Dag.unfreeze()` lifecycle helpers and the read-only projection behavior for frozen runtime indexes.
 ## Requirements
 
 ### Requirement: Dag can freeze and unfreeze a user runtime index

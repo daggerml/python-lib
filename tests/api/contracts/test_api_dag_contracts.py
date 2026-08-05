@@ -259,8 +259,7 @@ def test_api_dag_024__frozen_index_remains_uncommitted_and_does_not_auto_unfreez
     dag.token = frozen
 
     with pytest.raises(DmlRepoError, match="Cannot access result of an uncommitted DAG"):
-        value = dag.result
-        assert value is None
+        dag.result
 
     fake_dml.runtime.put_literal.side_effect = DmlRepoError("Cannot mutate a frozen index")
     with pytest.raises(DmlRepoError, match="Cannot mutate a frozen index"):
