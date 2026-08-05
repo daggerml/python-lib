@@ -15,6 +15,7 @@ from daggerml.contrib import api
 
 @api.funkify
 def hello(dag, arg, fn=None):
+    print("hello: starting delayed greeting")
     from random import Random
     from time import sleep
 

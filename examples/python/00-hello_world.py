@@ -14,6 +14,7 @@ from daggerml.contrib import api
 
 @api.funkify
 def hello(dag, arg):
+    print("hello: generating greeting")
     from uuid import uuid4
 
     arg = arg.value()
