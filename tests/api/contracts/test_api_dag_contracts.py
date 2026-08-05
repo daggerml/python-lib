@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
@@ -36,13 +36,13 @@ def test_api_dag_003__put_applies_codecs_and_wraps_ref(dag, fake_dml, refs):
     assert node.ref == refs.scalar
 
 
-def test_api_dag_004__named_access_uses_runtime_for_uncommitted_dag(dag, fake_dml, refs):
-    fake_dml.runtime.get_node.return_value = refs.dict
+def test_api_dag_004__named_access_uses_partial_dag_description_for_uncommitted_dag(dag, fake_dml, refs):
+    node = dag["a"]
 
-    node = dag["data"]
-
-    fake_dml.runtime.get_node.assert_called_once_with(refs.index, "data")
-    assert isinstance(node, api.DictNode)
+    fake_dml.runtime.describe.assert_called_once_with(refs.index)
+    fake_dml.dag.describe.assert_called_once_with(refs.dag)
+    fake_dml.runtime.get_node.assert_not_called()
+    assert isinstance(node, api.ScalarNode)
 
 
 def test_api_dag_005__named_access_uses_description_for_committed_dag(fake_dml, refs):
@@ -216,3 +216,54 @@ def test_api_dag_021__repr_uses_ref_token_or_na(fake_dml, refs):
     assert repr(api.Dag(dml=fake_dml, ref=refs.dag)) == f"Dag({refs.dag.to})"
     assert repr(api.Dag(dml=fake_dml, token=refs.index)) == f"Dag({refs.index.to})"
     assert repr(api.Dag(dml=fake_dml)) == "Dag(NA)"
+
+
+def test_api_dag_022__freeze_and_unfreeze_replace_only_token_and_return_self(dag, fake_dml, refs):
+    frozen = api.Ref("frozenindex:frozen")
+    fake_dml.runtime.freeze.return_value = frozen
+    fake_dml.runtime.unfreeze.return_value = refs.index
+    original = (dag.dml, dag.ref, dag.name, dag.message)
+
+    assert dag.freeze("checkpoint") is dag
+    fake_dml.runtime.freeze.assert_called_once_with(refs.index, message="dag: demo\ncheckpoint")
+    assert dag.token == frozen
+    assert (dag.dml, dag.ref, dag.name, dag.message) == original
+
+    assert dag.unfreeze() is dag
+    fake_dml.runtime.unfreeze.assert_called_once_with(frozen)
+    assert dag.token == refs.index
+    assert (dag.dml, dag.ref, dag.name, dag.message) == original
+
+    fake_dml.runtime.freeze.reset_mock()
+    assert dag.freeze() is dag
+    fake_dml.runtime.freeze.assert_called_once_with(refs.index, message="dag: demo")
+
+
+def test_api_dag_023__frozen_index_reads_use_partial_dag_projections(dag, fake_dml, refs):
+    frozen = api.Ref("frozenindex:frozen")
+    dag.token = frozen
+    fake_dml.runtime.describe.return_value = {"dag": refs.dag2}
+
+    assert dag["a"].ref == refs.scalar
+    assert dag.keys() == ["a", "z"]
+    assert [node.ref for node in dag.values()] == [refs.dict, refs.scalar]
+    assert dag.argv.ref == refs.argv
+
+    assert fake_dml.runtime.describe.call_args_list == [call(frozen)] * 4
+    assert fake_dml.dag.describe.call_args_list == [call(refs.dag2)] * 4
+    fake_dml.runtime.get_node.assert_not_called()
+
+
+def test_api_dag_024__frozen_index_remains_uncommitted_and_does_not_auto_unfreeze(dag, fake_dml, refs):
+    frozen = api.Ref("frozenindex:frozen")
+    dag.token = frozen
+
+    with pytest.raises(DmlRepoError, match="Cannot access result of an uncommitted DAG"):
+        value = dag.result
+        assert value is None
+
+    fake_dml.runtime.put_literal.side_effect = DmlRepoError("Cannot mutate a frozen index")
+    with pytest.raises(DmlRepoError, match="Cannot mutate a frozen index"):
+        dag.put(42)
+    fake_dml.runtime.put_literal.assert_called_with(frozen, 42, name=None)
+    fake_dml.runtime.unfreeze.assert_not_called()
