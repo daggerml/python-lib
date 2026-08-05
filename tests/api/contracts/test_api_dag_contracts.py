@@ -100,14 +100,11 @@ def test_api_dag_011__argv_and_result_require_refs(dag, fake_dml, refs):
 
     fake_dml.dag.describe.return_value = {"names": {}, "argv": None, "result": None}
     with pytest.raises(DmlRepoError, match="dag has no argv"):
-        value = dag.argv
-        assert value is None
+        _ = dag.argv
     with pytest.raises(DmlRepoError, match="Cannot access result of an uncommitted DAG"):
-        value = dag.result
-        assert value is None
+        _ = dag.result
     with pytest.raises(DmlRepoError, match="dag has not been committed yet"):
-        value = committed.result
-        assert value is None
+        _ = committed.result
 
 
 def test_api_dag_012__require_imports_result_and_named_nodes(dag, fake_dml, refs):
@@ -208,8 +205,7 @@ def test_api_dag_019__context_manager_rejects_committed_dag(fake_dml, refs):
 
 def test_api_dag_020__private_missing_attribute_raises_attribute_error(dag):
     with pytest.raises(AttributeError, match="_missing"):
-        value = dag._missing
-        assert value is None
+        _ = dag._missing
 
 
 def test_api_dag_021__repr_uses_ref_token_or_na(fake_dml, refs):
@@ -259,7 +255,7 @@ def test_api_dag_024__frozen_index_remains_uncommitted_and_does_not_auto_unfreez
     dag.token = frozen
 
     with pytest.raises(DmlRepoError, match="Cannot access result of an uncommitted DAG"):
-        dag.result
+        _ = dag.result
 
     fake_dml.runtime.put_literal.side_effect = DmlRepoError("Cannot mutate a frozen index")
     with pytest.raises(DmlRepoError, match="Cannot mutate a frozen index"):
