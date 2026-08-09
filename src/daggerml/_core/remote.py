@@ -1,17 +1,4 @@
-"""Remote operations for CAS, refs, and cache backed by S3.
-
-This module owns the `dml/` remote prefix in the S3 bucket, which has the following structure:
-dml/
-  dml.json  # Remote descriptor file with protocol version and layout information
-  cas/sha256/aa/bb/oid  # CAS objects sharded by first 4 hex chars of OID
-  refs/  # Ref objects for branches, tags, and DAGs
-    projects/<owner>/<project>/heads/<branch>.json
-    projects/<owner>/<project>/tags/<tag>.json
-    cache/<cache_key>.json  # cache entries by key
-    active/<cache_key>.json  # active DAGs for running executions
-    transport/<execution_id>.json  # transport DAGs for running executions
-    tombstone/<uuid>.json  # tombstones for deleted refs, with deletion timestamp in meta
-"""
+"""Remote operations for CAS, direct project refs, and cache backed by S3."""
 
 import json
 import logging
@@ -25,7 +12,6 @@ from daggerml._core.commit import CommitOps
 from daggerml._core.db import Ref
 from daggerml._core.s3_cas import CasItem, CasItemConflict, S3Remote
 from daggerml._core.types import NAMESPACES, Dag, DmlBase, DmlDB, DmlRepoError, TxnWithValid
-from daggerml._core.uri import ProjectUri
 from daggerml._core.util import uuid7
 
 if TYPE_CHECKING:
@@ -38,6 +24,14 @@ _SERDE_SCALAR = "scalar"
 _SERDE_LIST = "list"
 _SERDE_DICT = "dict"
 _SERDE_REF = "ref"
+_REMOTE_DESCRIPTOR = {
+    "schema": 1,
+    "hash": "sha256",
+    "layout": "one-project-cas+refs",
+    "refs_prefix": "refs",
+    "io_prefix": "io",
+    "cas_prefix": "cas/sha256",
+}
 
 
 def _encode_cas_value(obj: Any) -> list[Any]:
@@ -99,20 +93,21 @@ class Remote:
 
     def _ensure_remote_descriptor(self) -> None:
         descriptor_key = self._store._key_for("dml.json")
-        expected_descriptor = {
-            "schema": 0,
-            "hash": "sha256",
-            "layout": "cas+refs",
-            "refs_prefix": "refs",
-            "io_prefix": "io",
-            "cas_prefix": "cas/sha256",
-        }
         try:
             descriptor = json.loads(self._store._get(descriptor_key))
-            if descriptor != expected_descriptor:
-                raise RuntimeError("Invalid remote descriptor")
-        except self._store.client.exceptions.NoSuchKey:
-            self._store._put_js(descriptor_key, expected_descriptor)
+            if descriptor != _REMOTE_DESCRIPTOR:
+                raise DmlRepoError("Unsupported remote descriptor; migrate this remote root before use")
+        except self._store.client.exceptions.NoSuchKey as exc:
+            if any(self._store._iter(self._store._key_for(""))):
+                raise DmlRepoError("Remote root is not empty and has no supported descriptor") from exc
+            try:
+                self._store._put_js(descriptor_key, _REMOTE_DESCRIPTOR, overwrite=False)
+            except CasItemConflict as conflict:
+                descriptor = json.loads(self._store._get(descriptor_key))
+                if descriptor != _REMOTE_DESCRIPTOR:
+                    raise DmlRepoError(
+                        "Unsupported remote descriptor; migrate this remote root before use"
+                    ) from conflict
 
     def _cas_key(self, oid: str) -> str:
         aa = oid[:2]
@@ -211,9 +206,9 @@ class Remote:
                 overwrite=exists_ok,
             )
 
-    def _ref_key(self, owner: str, project: str, kind: Literal["tag", "branch"], name: str) -> str:
+    def _ref_key(self, kind: Literal["tag", "branch"], name: str) -> str:
         kind_dir = "tags" if kind == "tag" else "heads"
-        return f"refs/projects/{owner}/{quote(project, safe='')}/{kind_dir}/{quote(name, safe='')}.json"
+        return f"refs/{kind_dir}/{quote(name, safe='')}.json"
 
     def _cache_key(self, cache_key: str) -> str:
         return f"refs/cache/{cache_key}.json"
@@ -436,16 +431,14 @@ class Remote:
     def put_ref(
         self,
         commit: Ref,
-        owner: str,
-        project: str,
         kind: Literal["tag", "branch"],
         name: str,
         db: DmlDB,
         *,
         force: bool = False,
     ) -> str:
-        """Publish a project ref, protecting non-forced branch updates."""
-        ref_path = self._ref_key(owner, project, kind, name)
+        """Publish a direct project ref, protecting non-forced branch updates."""
+        ref_path = self._ref_key(kind, name)
         if force:
             self._put_cas(commit, ref_path, db)
             return ref_path
@@ -471,8 +464,6 @@ class Remote:
     @overload
     def get_ref(
         self,
-        owner: str,
-        project: str,
         kind: Literal["tag", "branch"],
         name: str,
         db: DmlDB,
@@ -481,8 +472,6 @@ class Remote:
     @overload
     def get_ref(
         self,
-        owner: str,
-        project: str,
         kind: Literal["tag", "branch"],
         name: str,
         db: None = None,
@@ -490,46 +479,27 @@ class Remote:
     ) -> dict | None: ...
     def get_ref(
         self,
-        owner: str,
-        project: str,
         kind: Literal["tag", "branch"],
         name: str,
         db: DmlDB | None = None,
         raw: bool = False,
     ) -> Ref | dict | None:
         if raw:
-            return self._get_path(self._ref_key(owner, project, kind, name), expected_ns="commit", raw=True)
+            return self._get_path(self._ref_key(kind, name), expected_ns="commit", raw=True)
         assert db is not None, "DmlDB instance required when raw=False"
-        return self._get_path(self._ref_key(owner, project, kind, name), db, expected_ns="commit", raw=False)
+        return self._get_path(self._ref_key(kind, name), db, expected_ns="commit", raw=False)
 
-    def delete_ref(self, owner: str, project: str, kind: Literal["tag", "branch"], name: str) -> bool:
-        return self._del(self._ref_key(owner, project, kind, name))
+    def delete_ref(self, kind: Literal["tag", "branch"], name: str) -> bool:
+        return self._del(self._ref_key(kind, name))
 
-    def list_projects(self, owner: str | None = None) -> list[ProjectUri]:
-        prefix = "refs/projects/"
-        out = []
-        if owner is None:
-            # List owners first, then recurse into each owner's project prefixes.
-            for owner_prefix in self._store._iter(self._store._key_for(prefix), keys=False):
-                owner_part = owner_prefix[len(self._store._key_for(prefix)) : -1]
-                out.extend(self.list_projects(owner=owner_part))
-            return out
-        prefix += f"{owner}/"
-        for project_prefix in self._store._iter(self._store._key_for(prefix), keys=False):
-            project_part = unquote(project_prefix[len(self._store._key_for(prefix)) : -1])
-            out.append(ProjectUri(owner, project_part))
-        return out
-
-    def list_refs(self, uri: ProjectUri, kind: Literal["tag", "branch"] = "branch") -> list[ProjectUri]:
-        uri = uri.ensure_project(strict=True)
+    def list_refs(self, kind: Literal["tag", "branch"] = "branch") -> list[str]:
         kind_dir = "tags" if kind == "tag" else "heads"
-        project_key = "tag" if kind == "tag" else "branch"
-        prefix = f"refs/projects/{uri.owner}/{quote(uri.project, safe='')}/{kind_dir}/"
-        uris = []
+        prefix = f"refs/{kind_dir}/"
+        names = []
         for key in self._store._iter(self._store._key_for(prefix)):
             name = unquote(key[len(self._store._key_for(prefix)) :][:-5])
-            uris.append(ProjectUri(uri.owner, uri.project, **{project_key: name}))
-        return uris
+            names.append(name)
+        return sorted(names)
 
     def put_active(self, cache_key: str, execution_id: str, argv: Ref, db: DmlDB) -> None:
         ref_path = self._active_key(cache_key)

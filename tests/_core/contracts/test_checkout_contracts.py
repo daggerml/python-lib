@@ -29,7 +29,7 @@ def test_checkout_commit_tag_and_remote_tracking_detach_head(tmp_path, monkeypat
     second = commit_literal_dag(dml, "eval", 2)
     head = Head(str(tmp_path))
     head.create_local_ref("release", first, kind="tag")
-    head.create_remote_ref("acme", "demo", "main", first)
+    head.create_remote_tracking_ref("main", first)
 
     assert dml.checkout("HEAD~1")["commit"] == first
     assert dml.status()["mode"] == "detached"
@@ -37,7 +37,7 @@ def test_checkout_commit_tag_and_remote_tracking_detach_head(tmp_path, monkeypat
     assert dml.checkout("@release")["commit"] == first
     assert dml.status()["mode"] == "detached"
 
-    status = dml.checkout("dml://acme/demo#main")
+    status = dml.checkout("main", remote=True)
 
     assert status == {
         "mode": "detached",

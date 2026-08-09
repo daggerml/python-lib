@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from daggerml._core.db import Ref
 from daggerml._core.head import _validate_ref_name
-from daggerml._core.uri import ProjectUri
 
 
 @dataclass(frozen=True)
@@ -12,10 +11,9 @@ class Revision:
     head: int | None = None
     name: str | None = None
     commit: Ref | None = None
-    project: ProjectUri | None = None
 
     def __post_init__(self) -> None:
-        kinds = [self.head is not None, self.name is not None, self.commit is not None, self.project is not None]
+        kinds = [self.head is not None, self.name is not None, self.commit is not None]
         if sum(kinds) != 1:
             raise ValueError("Revision must specify exactly one selector")
         if self.head is not None:
@@ -33,7 +31,7 @@ class Revision:
         if value.startswith("origin/"):
             raise ValueError(f"Unsupported named-remote selector: {value}")
         if value.startswith("dml://"):
-            return cls(project=ProjectUri.from_uri(value))
+            raise ValueError(f"Unsupported revision: {value}")
         if value == "HEAD":
             return cls(head=0)
         if value.startswith("HEAD~"):
@@ -56,7 +54,7 @@ class Revision:
             return "name"
         if self.commit is not None:
             return "commit"
-        return "project"
+        raise AssertionError("Revision selector is missing")
 
     def __str__(self) -> str:
         if self.head is not None:
@@ -67,4 +65,4 @@ class Revision:
             return self.name
         if self.commit is not None:
             return self.commit.to
-        return str(self.project)
+        raise AssertionError("Revision selector is missing")

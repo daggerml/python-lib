@@ -1,15 +1,23 @@
 ## ADDED Requirements
 
 ### Requirement: Revision resolution returns canonical commit refs
-The DML resolution layer SHALL accept supported revision selectors, including direct commit refs, commit ids, `HEAD` ancestry selectors, branch names, and supported `dml://` revision URIs, and SHALL resolve them to a canonical commit `Ref`.
+The DML resolution layer SHALL accept namespace-independent revisions including direct commit refs, commit IDs, `HEAD` ancestry, branch names, and `@tag` with every local, remote, or dependency source selection. A separate normalized source SHALL select symbolic lookup state. Exact commits SHALL resolve from the local object database independently of source. Resolution SHALL return a canonical commit `Ref` without network access or raise when the valid form cannot resolve. Only simultaneous remote and dependency selection is an invalid source combination.
 
-#### Scenario: Resolve a symbolic revision selector
-- **WHEN** a caller resolves a supported symbolic revision selector such as `HEAD`, `HEAD~1`, a branch name, or a supported `dml://` URI
-- **THEN** the resolution layer returns the corresponding commit `Ref`
+#### Scenario: Resolve a local symbolic revision
+- **WHEN** a caller resolves branch `main` with local source
+- **THEN** the resolver returns the commit from local branch refs
 
-#### Scenario: Reject an invalid revision selector
-- **WHEN** a caller resolves a revision selector that is empty, malformed, or points to an unsupported object namespace
-- **THEN** the resolution layer raises `DmlRepoError`
+#### Scenario: Resolve the same revision from remote tracking
+- **WHEN** a caller resolves branch `main` with remote source
+- **THEN** the resolver returns the commit from remote tracking refs
+
+#### Scenario: Resolve a dependency tag
+- **WHEN** a caller resolves `@v1` with dependency source `models`
+- **THEN** the resolver returns the commit from dependency `models` tracking tags
+
+#### Scenario: Reject invalid revision or source
+- **WHEN** a selector is malformed, remote and dependency arguments conflict, or the valid selector cannot resolve from available local state
+- **THEN** the resolver raises `DmlRepoError` without network access
 
 ### Requirement: DAG resolution returns canonical dag refs
 The DML resolution layer SHALL accept DAG lookup inputs only as a DAG name combined with a revision selector, and it SHALL resolve the result to a canonical dag `Ref`.

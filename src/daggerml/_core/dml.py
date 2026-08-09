@@ -18,7 +18,6 @@ from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItemConflict
 from daggerml._core.types import DmlDB, DmlRepoError, Error, FrozenIndex, Index, TxnWithValid
-from daggerml._core.uri import ProjectUri
 from daggerml.util import get_client
 
 
@@ -173,49 +172,50 @@ def _require_resolved_commit(commit: Ref | None, revision: Ref | str) -> Ref:
     return commit
 
 
-def resolve_rev(head: Head, revision: Ref | str, db: DmlDB) -> tuple[Ref | None, ProjectUri | None]:
+def _revision_source(remote: bool, dep: str | None) -> tuple[bool, str | None]:
+    if remote and dep is not None:
+        raise DmlRepoError("remote and dep cannot be selected together")
+    return remote, dep
+
+
+def resolve_rev(
+    head: Head, revision: Ref | str, db: DmlDB, *, remote: bool = False, dep: str | None = None
+) -> Ref | None:
+    remote, dep = _revision_source(remote, dep)
     if isinstance(revision, Ref):
-        return revision, None
+        return revision
     if re.match(r"^[0-9a-f]{64}$", revision):
-        return Ref(f"commit:{revision}"), None
+        return Ref(f"commit:{revision}")
     if re.match(r"^commit:[0-9a-f]{64}$", revision):
-        return Ref(revision), None
+        return Ref(revision)
     if revision.startswith("HEAD"):
         match = re.match(r"^HEAD~([0-9]+)$", revision)
+        if match is None and revision != "HEAD":
+            raise DmlRepoError(f"Invalid revision: {revision}")
         n = 0 if not match else int(match.group(1), 10)
-        current = head.get_head()["commit"]
+        if remote:
+            current = head.get_remote_tracking_ref("main")
+        elif dep is not None:
+            current = head.get_dependency_ref(dep, "main")
+        else:
+            current = head.get_head()["commit"]
         if current is None:
-            return None, None
-        return CommitOps().get_ancestor(current, n, db=db), None
-    if "/" in revision and not revision.startswith("dml://"):
-        remote, branch = revision.split("/", 1)
-        if remote in head.list_remote_tracking_remotes():
-            return head.get_remote_tracking_ref(remote, branch), None
-    if "@" in revision and not revision.startswith("dml://"):
-        remote, tag = revision.split("@", 1)
-        if remote in head.list_remote_tracking_remotes():
-            return head.get_remote_tracking_ref(remote, tag, kind="tag"), None
-    if not revision.startswith(("dml://", "#", "@")):
-        revision = f"#{revision}"  # treat it as a local branch by default
-    uri = ProjectUri.from_uri(revision)
-
-    def doit():
-        if not uri.project:
-            # local tag or branch
-            if uri.branch:
-                return head.get_local_ref(uri.branch, kind="branch")
-            if uri.tag:
-                return head.get_local_ref(uri.tag, kind="tag")
-            raise DmlRepoError(f"Invalid local revision: {revision} (no branch nor tag specified)")
-        # remote ref
-        assert uri.owner is not None and uri.project is not None
-        if uri.branch:
-            return head.get_remote_ref(uri.owner, uri.project, uri.branch, kind="branch")
-        if uri.tag:
-            return head.get_remote_ref(uri.owner, uri.project, uri.tag, kind="tag")
-        raise DmlRepoError(f"Invalid remote revision: {revision} (no branch nor tag specified)")
-
-    return doit(), uri
+            return None
+        return CommitOps().get_ancestor(current, n, db=db)
+    if revision.startswith("dml://") or revision.startswith("#"):
+        raise DmlRepoError(f"Invalid revision: {revision}")
+    kind = "tag" if revision.startswith("@") else "branch"
+    name = revision[1:] if kind == "tag" else revision
+    try:
+        if remote:
+            return head.get_remote_tracking_ref(name, kind=kind)
+        if dep is not None:
+            return head.get_dependency_ref(dep, name, kind=kind)
+        return head.get_local_ref(name, kind=kind)
+    except DmlRepoError as exc:
+        if remote or dep is not None:
+            raise DmlRepoError(f"Revision not fetched; run fetch before resolving: {revision}") from exc
+        raise
 
 
 _PYTHON_CONFIG_VAR_NAMES = {
@@ -224,7 +224,6 @@ _PYTHON_CONFIG_VAR_NAMES = {
     "db_map_size_headroom": "default.db_map_size_headroom",
     "db_map_size_max": "default.db_map_size_max",
     "default_branch_name": "default.branch_name",
-    "remote_project": "remote.project",
     "remote_root": "remote.root",
     "remote_prune_age_seconds": "remote.prune_age_seconds",
     "remote_fetch_workers": "remote.fetch_workers",
@@ -239,10 +238,8 @@ def _python_config_vars_to_canonical(**kwargs: object) -> dict[str, object]:
 
 class RemoteConfig(TypedDict):
     root: str | None
-    project: str | None
     prune_age_seconds: int
     fetch_workers: int
-    remotes: dict[str, str]
 
 
 class ConfigStatus(TypedDict):
@@ -614,23 +611,43 @@ class _DagNamespace:
 
     def checkout(
         self,
-        dag: Annotated[Ref, "Committed DAG ref to copy into the current branch."],
-        name: Annotated[str, "Name to assign to the checked out DAG."],
-    ) -> None:
-        """Copy a committed DAG into the current branch under a new name."""
+        revision: Annotated[Ref | str, "Revision containing the DAG."],
+        dag: Annotated[str, "DAG name in the selected revision."],
+        *,
+        remote: Annotated[bool, "Resolve the revision from remote tracking."] = False,
+        dep: Annotated[str | None, "Resolve the revision from a dependency."] = None,
+        name: Annotated[str | None, "Local name for the checked out DAG."] = None,
+        replace: Annotated[bool, "Allow replacing a different local DAG."] = False,
+    ) -> Ref:
+        """Copy a selected committed DAG into the current branch tree."""
         head = _head_ops(self._dml)
         with head.lock():
             head_info = head.get_head()
             if not head_info["branch"]:
                 raise DmlRepoError("Cannot checkout DAG when HEAD is detached")
+            source_commit = _require_resolved_commit(
+                resolve_rev(head, revision, db=self._dml._db, remote=remote, dep=dep), revision
+            )
+            source_dag = CommitOps().show(source_commit, db=self._dml._db)["dags"].get(dag)
+            if source_dag is None:
+                raise DmlRepoError(f"DAG not found: {dag}")
+            target_name = name or dag
+            current = (
+                CommitOps().show(head_info["commit"], db=self._dml._db)
+                if head_info["commit"] is not None
+                else {"dags": {}}
+            )
+            if not replace and target_name in current["dags"] and current["dags"][target_name] != source_dag:
+                raise DmlRepoError(f"DAG already exists: {target_name}")
             new_commit = CommitOps().checkout_dag(
                 head_info["commit"],
-                dag,
-                name=name,
+                source_dag,
+                name=target_name,
                 user=self._dml._config.user,
                 db=self._dml._db,
             )
             head.update_local_ref(head_info["branch"], new_commit)
+        return new_commit
 
     def add_tag(self, dag: Annotated[str, "Named DAG to tag."], tag: Annotated[str, "Opaque tag to add."]) -> Ref:
         """Add an opaque tag to a named DAG on the current branch."""
@@ -683,58 +700,37 @@ class _BranchNamespace:
         self,
         name: Annotated[str, "Local branch name to create."],
         *,
-        remote: Annotated[str, "Named remote to track from the new branch."] = "origin",
         revision: Annotated[Ref | str | None, "Optional revision to point the new branch at."] = None,
+        remote: Annotated[bool, "Resolve the revision from fetched remote tracking refs."] = False,
     ) -> str:
         """Create one local branch at a resolved revision."""
-        tracks_remote = remote in self._dml._config.remote.remotes
-        if not tracks_remote and remote != "origin":
-            raise DmlRepoError(f"Unknown remote: {remote}")
         head = _head_ops(self._dml)
-        if revision is None and tracks_remote:
-            self._dml.fetch(remote)
         with head.lock():
             if head.local_ref_path(name, kind="branch").exists():
                 raise DmlRepoError(f"Branch already exists: {name}")
-            if revision is None and tracks_remote:
-                try:
-                    commit_ref = head.get_remote_tracking_ref(remote, name)
-                except DmlRepoError:
-                    commit_ref, _ = resolve_rev(head, "HEAD", db=self._dml._db)
-                resolved_revision: Ref | str = "HEAD"
-            elif revision is None:
-                commit_ref, _ = resolve_rev(head, "HEAD", db=self._dml._db)
-                resolved_revision = "HEAD"
-            else:
-                commit_ref, _ = resolve_rev(head, revision, db=self._dml._db)
-                resolved_revision = revision
+            resolved_revision: Ref | str = revision or "HEAD"
+            commit_ref = resolve_rev(head, resolved_revision, db=self._dml._db, remote=remote)
             if resolved_revision == "HEAD":
                 head_info = head.get_head()
                 if commit_ref is None and head_info["mode"] == "attached":
                     head.write_attached_head(name)
-                    if tracks_remote:
-                        head.set_upstream(name, remote, name)
+                    if remote:
+                        head.set_upstream(name, name)
                     return name
             commit_ref = _require_resolved_commit(commit_ref, resolved_revision)
             created = head.create_local_ref(name, commit_ref, kind="branch")
-            if tracks_remote:
-                head.set_upstream(name, remote, name)
+            if remote:
+                head.set_upstream(name, name)
             return created
 
-    def set_upstream(self, upstream: Annotated[str, "Upstream selector in REMOTE/BRANCH form."]) -> str:
+    def set_upstream(self, upstream: Annotated[str, "Remote-root branch to track."]) -> str:
         """Set the upstream for the currently attached branch."""
-        try:
-            remote, branch = upstream.split("/", 1)
-        except ValueError as exc:
-            raise DmlRepoError(f"Invalid upstream selector: {upstream}") from exc
-        if remote not in self._dml._config.remote.remotes:
-            raise DmlRepoError(f"Unknown remote: {remote}")
         head = _head_ops(self._dml)
         with head.lock():
             current = head.get_head()["branch"]
             if current is None:
                 raise DmlRepoError("Cannot set upstream when HEAD is detached")
-            head.set_upstream(current, remote, branch)
+            head.set_upstream(current, upstream)
         return upstream
 
     def move(
@@ -743,7 +739,7 @@ class _BranchNamespace:
         revision: Annotated[Ref | str, "Revision to point the branch at."],
     ) -> str:
         """Repoint one local branch to a resolved revision."""
-        commit_ref, _ = resolve_rev(_head_ops(self._dml), revision, db=self._dml._db)
+        commit_ref = resolve_rev(_head_ops(self._dml), revision, db=self._dml._db)
         commit_ref = _require_resolved_commit(commit_ref, revision)
         return _head_ops(self._dml).update_local_ref(name, commit_ref, kind="branch")
 
@@ -782,9 +778,11 @@ class _TagNamespace:
         self,
         name: Annotated[str, "Local tag name to create."],
         revision: Annotated[Ref | str, "Revision to point the new tag at."] = "HEAD",
+        *,
+        remote: Annotated[bool, "Resolve the revision from fetched remote tracking refs."] = False,
     ) -> str:
         """Create one local tag at a resolved revision."""
-        commit_ref, _ = resolve_rev(_head_ops(self._dml), revision, db=self._dml._db)
+        commit_ref = resolve_rev(_head_ops(self._dml), revision, db=self._dml._db, remote=remote)
         commit_ref = _require_resolved_commit(commit_ref, revision)
         return _head_ops(self._dml).create_local_ref(name, commit_ref, kind="tag")
 
@@ -817,36 +815,20 @@ class _RemoteNamespace:
 
     def add(
         self,
-        name: Annotated[str, "Name for the remote project."],
-        project: Annotated[str, "Branchless DML project URI for the remote."],
+        name: Annotated[str, "Name for the import-only dependency."],
+        root: Annotated[str, "S3 root for the dependency endpoint."],
     ) -> str:
-        """Add one named remote project."""
-        remotes = dict(self._dml._config.remote.remotes)
-        if name in remotes:
-            raise DmlRepoError(f"Remote already exists: {name}")
-        remotes[name] = project
-        self._dml._config.update("remote.remotes", cast(Any, remotes), scope="local")
-        object.__setattr__(self._dml, "_config", Config.resolve(explicit=self._dml._explicit_config))
-        return name
+        """Add one import-only dependency endpoint."""
+        return _head_ops(self._dml).add_dependency(name, root)
 
     def list(self) -> dict[str, str]:
-        """List configured named remote projects."""
-        return dict(self._dml._config.remote.remotes)
+        """List configured import-only dependency endpoints."""
+        head = _head_ops(self._dml)
+        return {name: head.get_dependency_config(name)["root"] for name in head.list_dependencies()}
 
     def delete(self, name: Annotated[str, "Name of the remote to delete."]) -> None:
-        """Delete an unused named remote project."""
-        remotes = dict(self._dml._config.remote.remotes)
-        if name not in remotes:
-            raise DmlRepoError(f"Unknown remote: {name}")
-        head = _head_ops(self._dml)
-        if any(
-            (upstream := head.get_upstream(branch)) is not None and upstream["remote"] == name
-            for branch in head.list_local_refs()
-        ):
-            raise DmlRepoError(f"Cannot delete remote tracked by a local branch: {name}")
-        del remotes[name]
-        self._dml._config.update("remote.remotes", cast(Any, remotes), scope="local")
-        object.__setattr__(self._dml, "_config", Config.resolve(explicit=self._dml._explicit_config))
+        """Delete one import-only dependency endpoint and its tracking refs."""
+        _head_ops(self._dml).delete_dependency(name)
 
     def get_cache(self, cache_key: Annotated[str, "Cache key to resolve."]) -> Ref | None:
         """Return the cached DAG ref for a cache key, if present."""
@@ -862,21 +844,28 @@ class _RemoteNamespace:
         """Garbage-collect remote CAS data and tombstones."""
         return cast(GCSummary, _remote_ops(self._dml).gc())
 
-    def list_projects(
-        self, owner: Annotated[str | None, "Optional owner to filter by."] = None
-    ) -> RemoteRefListPayload:
-        """List remote projects visible under the configured remote root."""
-        return {"refs": [str(x) for x in _remote_ops(self._dml).list_projects(owner)]}
+    def list_refs(self) -> dict[str, list[str]]:
+        """List direct branch and tag refs at remote.root."""
+        remote = _remote_ops(self._dml)
+        return {"branches": remote.list_refs("branch"), "tags": remote.list_refs("tag")}
 
-    def list_refs(
-        self,
-        project_uri: Annotated[str, "Project URI whose refs should be listed."],
-        kind: Annotated[Literal["tag", "branch"], "Whether to list branches or tags."] = "branch",
-    ) -> RemoteRefListPayload:
-        """List remote branch or tag refs for one project."""
-        uri = ProjectUri.from_uri(project_uri).ensure_project()
-        # TODO: replace with proper pagination if there are many refs
-        return {"refs": [str(x) for x in _remote_ops(self._dml).list_refs(uri, kind=kind)]}
+
+@dataclass(frozen=True)
+class _DependencyNamespace:
+    _dml: "Dml"
+
+    def add(self, name: Annotated[str, "Dependency name."], root: Annotated[str, "Dependency S3 root."]) -> str:
+        """Add one import-only dependency endpoint."""
+        return _head_ops(self._dml).add_dependency(name, root)
+
+    def list(self) -> dict[str, str]:
+        """List configured import-only dependency endpoints."""
+        head = _head_ops(self._dml)
+        return {name: head.get_dependency_config(name)["root"] for name in head.list_dependencies()}
+
+    def delete(self, name: Annotated[str, "Dependency name."]) -> None:
+        """Delete one import-only dependency endpoint."""
+        _head_ops(self._dml).delete_dependency(name)
 
 
 LocalGCSummary = TypedDict(
@@ -909,16 +898,7 @@ class _AdminNamespace:
             refs.add(commit)
         refs |= {head.get_local_ref(name, kind="branch") for name in head.list_local_refs(kind="branch")}
         refs |= {head.get_local_ref(name, kind="tag") for name in head.list_local_refs(kind="tag")}
-        refs |= {
-            head.get_remote_ref(owner, project, name, kind="branch")
-            for owner, project in head.list_remote_projects()
-            for name in head.list_remote_refs(owner, project, kind="branch")
-        }
-        refs |= {
-            head.get_remote_ref(owner, project, name, kind="tag")
-            for owner, project in head.list_remote_projects()
-            for name in head.list_remote_refs(owner, project, kind="tag")
-        }
+        refs |= set(head.iter_all_remote_tracking_refs())
         t1 = time()
         resp = self._dml._db.gc(sorted(refs))
         t2 = time()
@@ -969,7 +949,6 @@ class Dml:
         db_map_size_headroom: Annotated[int | None, "Extra LMDB map size headroom in bytes."] = None,
         db_map_size_max: Annotated[int | None, "Maximum LMDB map size in bytes."] = None,
         default_branch_name: Annotated[str | None, "Default branch name for attached HEAD operations."] = None,
-        remote_project: Annotated[str | None, "Default remote project URI."] = None,
         remote_root: Annotated[str | None, "Remote storage root URI."] = None,
         remote_prune_age_seconds: Annotated[int | None, "Remote GC prune age in seconds."] = None,
         remote_fetch_workers: Annotated[int | None, "Number of concurrent remote fetch workers."] = None,
@@ -984,7 +963,6 @@ class Dml:
                 db_map_size_headroom=db_map_size_headroom,
                 db_map_size_max=db_map_size_max,
                 default_branch_name=default_branch_name,
-                remote_project=remote_project,
                 remote_root=remote_root,
                 remote_prune_age_seconds=remote_prune_age_seconds,
                 remote_fetch_workers=remote_fetch_workers,
@@ -1012,7 +990,6 @@ class Dml:
         db_map_size_headroom: Annotated[int | None, "Extra LMDB map size headroom in bytes."] = None,
         db_map_size_max: Annotated[int | None, "Maximum LMDB map size in bytes."] = None,
         default_branch_name: Annotated[str | None, "Default branch name for attached HEAD operations."] = None,
-        remote_project: Annotated[str | None, "Default remote project URI to store in config."] = None,
         remote_root: Annotated[str | None, "Remote storage root URI."] = None,
         remote_prune_age_seconds: Annotated[int | None, "Remote GC prune age in seconds."] = None,
         remote_fetch_workers: Annotated[int | None, "Number of concurrent remote fetch workers."] = None,
@@ -1021,7 +998,7 @@ class Dml:
         branch: Annotated[str | None, "Initial branch name."] = None,
     ) -> "Dml":
         """Initialize a repository with an unborn attached HEAD."""
-        config = Config.init(project_home, remote_root=remote_root, remote_project=remote_project)
+        config = Config.init(project_home, remote_root=remote_root)
         dml = cls.from_config_vars(
             _python_config_vars_to_canonical(
                 project_home=config.project_home,
@@ -1029,7 +1006,6 @@ class Dml:
                 db_map_size_headroom=db_map_size_headroom,
                 db_map_size_max=db_map_size_max,
                 default_branch_name=default_branch_name,
-                remote_project=remote_project,
                 remote_root=remote_root,
                 remote_prune_age_seconds=remote_prune_age_seconds,
                 remote_fetch_workers=remote_fetch_workers,
@@ -1050,9 +1026,10 @@ class Dml:
     @classmethod
     def clone(
         cls,
-        project_uri: Annotated[str, "Remote project, branch, or tag URI to clone."],
-        project_home: Annotated[str, "Directory where the repository should be cloned."] = ".",
+        revision: Annotated[Ref | str | None, "Optional branch, tag, or commit revision."] = None,
+        /,
         *,
+        project_home: Annotated[str, "Directory where the repository should be cloned."] = ".",
         db_path: Annotated[str | None, "Override path to the LMDB database."] = None,
         db_map_size_headroom: Annotated[int | None, "Extra LMDB map size headroom in bytes."] = None,
         db_map_size_max: Annotated[int | None, "Maximum LMDB map size in bytes."] = None,
@@ -1063,13 +1040,9 @@ class Dml:
         user: Annotated[str | None, "User name recorded in commits and runtime actions."] = None,
         config_home: Annotated[str | None, "Override config directory path."] = None,
     ) -> "Dml":
-        """Clone a remote project ref into a newly initialized local repository."""
-        uri = ProjectUri.from_uri(project_uri)
-        if uri.owner is None or uri.project is None:
-            raise DmlRepoError(f"Clone requires a full remote project URI: {project_uri}")
+        """Clone one revision from the configured remote root."""
         Path(project_home).mkdir(parents=True, exist_ok=True)
-        remote_project = str(ProjectUri(uri.owner, uri.project))
-        config = Config.init(project_home, remote_root=remote_root, remote_project=remote_project)
+        config = Config.init(project_home, remote_root=remote_root)
         dml = cls.from_config_vars(
             _python_config_vars_to_canonical(
                 project_home=config.project_home,
@@ -1077,7 +1050,6 @@ class Dml:
                 db_map_size_headroom=db_map_size_headroom,
                 db_map_size_max=db_map_size_max,
                 default_branch_name=default_branch_name,
-                remote_project=remote_project,
                 remote_root=remote_root,
                 remote_prune_age_seconds=remote_prune_age_seconds,
                 remote_fetch_workers=remote_fetch_workers,
@@ -1085,7 +1057,9 @@ class Dml:
                 config_home=config_home,
             )
         )
-        branch = uri.branch or (None if uri.tag is not None else dml._config.default.branch_name)
+        _require_remote_root(dml)
+        selected = revision or dml._config.default.branch_name
+        branch = selected if isinstance(selected, str) and not selected.startswith(("@", "HEAD")) else None
         initial_branch = branch or dml._config.default.branch_name
         head = Head(config.project_home)
         with head.lock():
@@ -1096,18 +1070,20 @@ class Dml:
                 head.init(None, initial_branch)
             else:
                 raise DmlRepoError(f"Cannot clone into an initialized repository: {dml._config.project_home}")
-        dml.fetch("origin")
-        name = uri.tag or branch
-        assert name is not None
-        kind = "tag" if uri.tag is not None else "branch"
+        if isinstance(selected, str) and re.match(r"^[0-9a-f]{64}$", selected):
+            raise DmlRepoError("Clone requires a branch or tag revision")
+        dml.fetch(selected if isinstance(selected, str) else None)
+        kind = "tag" if isinstance(selected, str) and selected.startswith("@") else "branch"
+        name = selected[1:] if kind == "tag" and isinstance(selected, str) else selected
+        assert isinstance(name, str)
         with head.lock():
-            commit = head.get_remote_tracking_ref("origin", name, kind=kind)
+            commit = head.get_remote_tracking_ref(name, kind=kind)
             if kind == "tag":
                 head.write_detached_head(commit)
             else:
                 head.update_local_ref(name, commit, kind="branch")
                 head.write_attached_head(name)
-                head.set_upstream(name, "origin", name)
+                head.set_upstream(name, name)
         return dml
 
     def status(self) -> StatusPayload:
@@ -1118,7 +1094,7 @@ class Dml:
         upstream = head.get_upstream(head_info["branch"]) if head_info["branch"] is not None else None
         if upstream is not None:
             try:
-                upstream_ref = head.get_remote_tracking_ref(upstream["remote"], upstream["merge"])
+                upstream_ref = head.get_remote_tracking_ref(upstream["branch"])
             except DmlRepoError:
                 pass
             else:
@@ -1136,7 +1112,7 @@ class Dml:
             "branch": head_info["branch"],
             "commit": head_info["commit"],
             "branches": head.list_local_refs(kind="branch"),
-            "upstream": f"{upstream['remote']}/{upstream['merge']}" if upstream is not None else None,
+            "upstream": upstream["branch"] if upstream is not None else None,
             "num_indexes": num_indexes,
             "ahead": ahead,
             "behind": behind,
@@ -1146,15 +1122,24 @@ class Dml:
         self,
         revision: Annotated[Ref | str, "Revision to start the log from."] = "HEAD",
         limit: Annotated[int, "Maximum number of commits to return."] = 10,
+        *,
+        remote: Annotated[bool, "Resolve from fetched remote tracking refs."] = False,
+        dep: Annotated[str | None, "Resolve from a fetched dependency."] = None,
     ) -> LogPayload:
         """Return commit history starting from one revision."""
-        commit_ref, _ = resolve_rev(_head_ops(self), revision, db=self._db)
+        commit_ref = resolve_rev(_head_ops(self), revision, db=self._db, remote=remote, dep=dep)
         commit_ref = _require_resolved_commit(commit_ref, revision)
         return {"commits": CommitOps().log(commit_ref, limit=limit, db=self._db)}
 
-    def show(self, revision: Annotated[Ref | str, "Revision to describe."] = "HEAD") -> CommitFullDescription:
+    def show(
+        self,
+        revision: Annotated[Ref | str, "Revision to describe."] = "HEAD",
+        *,
+        remote: bool = False,
+        dep: str | None = None,
+    ) -> CommitFullDescription:
         """Return a full commit description for one revision."""
-        commit_ref, _ = resolve_rev(_head_ops(self), revision, db=self._db)
+        commit_ref = resolve_rev(_head_ops(self), revision, db=self._db, remote=remote, dep=dep)
         commit_ref = _require_resolved_commit(commit_ref, revision)
         return CommitOps().show(commit_ref, db=self._db)
 
@@ -1162,34 +1147,42 @@ class Dml:
         self,
         revision: Annotated[Ref | str, "Revision to diff."] = "HEAD",
         relative_to: Annotated[Ref | str | None, "Optional base revision. Defaults to the commit parent."] = None,
+        *,
+        remote: Annotated[bool, "Resolve the primary revision from remote tracking."] = False,
+        dep: Annotated[str | None, "Resolve the primary revision from a dependency."] = None,
     ) -> CommitDiffPayload:
         """Return DAG-level changes for one revision."""
         head = _head_ops(self)
-        commit_ref, _ = resolve_rev(head, revision, db=self._db)
+        commit_ref = resolve_rev(head, revision, db=self._db, remote=remote, dep=dep)
         commit_ref = _require_resolved_commit(commit_ref, revision)
         if relative_to is None:
             return CommitOps().diff(commit_ref, db=self._db)
-        rel_to_commit, _ = resolve_rev(head, relative_to, db=self._db)
+        rel_to_commit = resolve_rev(head, relative_to, db=self._db)
         rel_to_commit = _require_resolved_commit(rel_to_commit, relative_to)
         return CommitOps().diff(commit_ref, rel_to_commit, db=self._db)
 
-    def rev_parse(self, revision: Annotated[str, "Revision expression to resolve."]) -> RevisionPayload:
+    def rev_parse(
+        self,
+        revision: Annotated[str, "Revision expression to resolve."],
+        *,
+        remote: bool = False,
+        dep: str | None = None,
+    ) -> RevisionPayload:
         """Resolve a revision expression into a commit and ref metadata."""
         head = _head_ops(self)
         branch = tag = None
-        commit_ref, uri = resolve_rev(head, revision, db=self._db)
-        if uri is None:
-            if revision.startswith("HEAD"):
-                kind = "head"
-            elif re.match(r"^[0-9a-f]{64}$", revision) or re.match(r"^commit:[0-9a-f]{64}$", revision):
-                kind = "commit"
-            else:
-                kind = "unknown"
+        commit_ref = resolve_rev(head, revision, db=self._db, remote=remote, dep=dep)
+        if revision.startswith("HEAD"):
+            kind = "head"
+        elif re.match(r"^(?:commit:)?[0-9a-f]{64}$", revision):
+            kind = "commit"
         else:
-            branch, tag, kind = uri.branch, uri.tag, "ref"
+            kind = "ref"
+        if kind == "ref":
+            branch, tag = (None, revision[1:]) if revision.startswith("@") else (revision, None)
         return {
             "input": revision,
-            "uri": str(uri) if uri else None,
+            "uri": None,
             "kind": kind,
             "commit": commit_ref,
             "branch": branch,
@@ -1200,6 +1193,8 @@ class Dml:
         self,
         revision: Annotated[Ref | str, "Revision whose changes should be reverted."],
         message: Annotated[str | None, "Optional commit message for the revert commit."] = None,
+        *,
+        remote: bool = False,
     ) -> StatusPayload:
         """Revert the changes introduced by one revision."""
         head = _head_ops(self)
@@ -1207,7 +1202,7 @@ class Dml:
             head_info = head.get_head()
             if head_info["branch"] is None:
                 raise DmlRepoError("Cannot revert when HEAD is detached")
-            commit_ref, _ = resolve_rev(head, revision, db=self._db)
+            commit_ref = resolve_rev(head, revision, db=self._db, remote=remote)
             commit_ref = _require_resolved_commit(commit_ref, revision)
             new_commit = CommitOps().revert(
                 commit_ref,
@@ -1219,7 +1214,9 @@ class Dml:
             head.update_local_ref(head_info["branch"], new_commit, kind="branch")
         return self.status()
 
-    def checkout(self, revision: Annotated[Ref | str, "Revision to check out."]) -> StatusPayload:
+    def checkout(
+        self, revision: Annotated[Ref | str, "Revision to check out."], *, remote: bool = False
+    ) -> StatusPayload:
         """Check out a different revision.
 
         If the revision resolves to a local branch, HEAD stays attached to that branch.
@@ -1227,21 +1224,24 @@ class Dml:
         """
         head = _head_ops(self)
         with head.lock():
-            commit_ref, uri = resolve_rev(head, revision, db=self._db)
-            if uri is None or uri.branch is None or uri.project is not None:
-                commit_ref = _require_resolved_commit(commit_ref, revision)
-                head.write_detached_head(commit_ref)
-            elif uri.project is None and uri.branch is not None:
-                # attached
-                head.write_attached_head(uri.branch)
+            commit_ref = resolve_rev(head, revision, db=self._db, remote=remote)
+            if (
+                not remote
+                and isinstance(revision, str)
+                and not revision.startswith(("@", "HEAD"))
+                and not re.match(r"^(?:commit:)?[0-9a-f]{64}$", revision)
+            ):
+                head.write_attached_head(revision)
             else:
-                raise DmlRepoError(f"Unsupported revision URI: {uri}")
+                head.write_detached_head(_require_resolved_commit(commit_ref, revision))
         return self.status()
 
     def merge(
         self,
         revision: Annotated[Ref | str, "Revision to merge into the current branch."],
         ff_only: Annotated[bool, "Whether to only allow fast-forward merges."] = True,
+        *,
+        remote: bool = False,
     ) -> StatusPayload:
         """Merge a revision into the current HEAD."""
         head = _head_ops(self)
@@ -1249,7 +1249,7 @@ class Dml:
             head_info = head.get_head()
             if head_info["branch"] is None:
                 raise DmlRepoError("Cannot merge when HEAD is detached")
-            commit_ref, _ = resolve_rev(head, revision, db=self._db)
+            commit_ref = resolve_rev(head, revision, db=self._db, remote=remote)
             commit_ref = _require_resolved_commit(commit_ref, revision)
             new_commit = CommitOps().merge(
                 head_info["commit"],
@@ -1261,14 +1261,16 @@ class Dml:
             head.update_local_ref(head_info["branch"], new_commit)
         return self.status()
 
-    def rebase(self, revision: Annotated[Ref | str, "Revision to rebase the current branch onto."]) -> StatusPayload:
+    def rebase(
+        self, revision: Annotated[Ref | str, "Revision to rebase the current branch onto."], *, remote: bool = False
+    ) -> StatusPayload:
         """Rebase the current HEAD onto a different revision."""
         head = _head_ops(self)
         with head.lock():
             head_info = head.get_head()
             if head_info["branch"] is None:
                 raise DmlRepoError("Cannot rebase when HEAD is detached")
-            commit_ref, _ = resolve_rev(head, revision, db=self._db)
+            commit_ref = resolve_rev(head, revision, db=self._db, remote=remote)
             new_commit = CommitOps().rebase(
                 _require_resolved_commit(head_info["commit"], "HEAD"),
                 _require_resolved_commit(commit_ref, revision),
@@ -1278,32 +1280,31 @@ class Dml:
             head.update_local_ref(head_info["branch"], new_commit)
         return self.status()
 
-    def fetch(self, remote: Annotated[str, "Optional named remote or DML project ref to fetch."] = "origin", /) -> None:
-        """Fetch all refs from one named remote or one explicit DML project ref."""
-        if remote.startswith("dml://"):
-            uri = ProjectUri.from_uri(remote).ensure_project()
-            name = uri.branch or uri.tag or self._config.default.branch_name
-            kind = "tag" if uri.tag is not None else "branch"
-            commit = _remote_ops(self).get_ref(uri.owner, uri.project, kind, name, db=self._db)
-            if commit is None:
-                raise DmlRepoError(f"Remote {kind} ref not found: {uri}")
-            with _head_ops(self).lock():
-                _head_ops(self).update_remote_ref(uri.owner, uri.project, name, commit, kind=kind)
-            return
-        project = self._config.remote.remotes.get(remote)
-        if project is None:
-            raise DmlRepoError(f"Unknown remote: {remote}")
-        uri = ProjectUri.from_uri(project).ensure_project()
+    def fetch(
+        self, revision: Annotated[str | None, "Branch or @tag to fetch."] = None, /, *, dep: str | None = None
+    ) -> None:
+        """Fetch one branch or tag from remote.root or a named dependency."""
+        selector = revision or self._config.default.branch_name
+        kind = "tag" if selector.startswith("@") else "branch"
+        name = selector[1:] if kind == "tag" else selector
         head = _head_ops(self)
-        remote_ops = _remote_ops(self)
+        if dep is None:
+            remote_ops = _remote_ops(self)
+        else:
+            config = head.get_dependency_config(dep)
+            remote_ops = Remote(
+                config["root"], n_workers=self._config.remote.fetch_workers, client=_require_s3_client(self),
+                prune_age_seconds=self._config.remote.prune_age_seconds,
+            )
+        # get_ref fully validates and materializes the closure before the tracking ref changes.
+        commit = remote_ops.get_ref(kind, name, db=self._db)
+        if commit is None:
+            raise DmlRepoError(f"Remote {kind} ref not found: {selector}")
         with head.lock():
-            for kind in ("branch", "tag"):
-                for ref_uri in remote_ops.list_refs(uri, kind=kind):
-                    name = ref_uri.branch if kind == "branch" else ref_uri.tag
-                    assert name is not None
-                    commit = remote_ops.get_ref(uri.owner, uri.project, kind, name, db=self._db)
-                    if commit is not None:
-                        head.update_remote_tracking_ref(remote, name, commit, kind=kind)
+            if dep is None:
+                head.update_remote_tracking_ref(name, commit, kind=kind)
+            else:
+                head.update_dependency_ref(dep, name, commit, kind=kind)
 
     def pull(self, ff_only: Annotated[bool, "Whether to only allow fast-forward merges."] = True) -> StatusPayload:
         """Fetch and merge the current branch's configured upstream."""
@@ -1314,8 +1315,8 @@ class Dml:
         upstream = head.get_upstream(head_info["branch"])
         if upstream is None:
             raise DmlRepoError(f"Cannot pull untracked branch: {head_info['branch']}")
-        self.fetch(upstream["remote"])
-        self.merge(f"{upstream['remote']}/{upstream['merge']}", ff_only=ff_only)
+        self.fetch(upstream["branch"])
+        self.merge(upstream["branch"], ff_only=ff_only, remote=True)
         return self.status()
 
     def push(
@@ -1327,27 +1328,7 @@ class Dml:
         """Publish the attached branch to its configured upstream."""
         head = _head_ops(self)
         if revision != "HEAD":
-            commit_ref, parsed_uri = resolve_rev(head, revision, db=self._db)
-            if parsed_uri is None:
-                raise DmlRepoError(f"Unsupported revision for push: {revision}")
-            commit_ref = _require_resolved_commit(commit_ref, revision)
-            name = parsed_uri.tag or parsed_uri.branch
-            if name is None:
-                raise DmlRepoError(f"Unsupported revision for push: {revision}")
-            project = self._config.remote.remotes.get("origin")
-            if project is None:
-                raise DmlRepoError("Unknown remote: origin")
-            uri = ProjectUri.from_uri(project).ensure_project()
-            _remote_ops(self).put_ref(
-                commit_ref,
-                uri.owner,
-                uri.project,
-                kind="tag" if parsed_uri.tag is not None else "branch",
-                name=name,
-                db=self._db,
-                force=force,
-            )
-            return
+            raise DmlRepoError("Push only publishes the current attached branch")
         head_info = head.get_head()
         branch = head_info["branch"]
         if branch is None:
@@ -1355,21 +1336,15 @@ class Dml:
         commit_ref = _require_resolved_commit(head_info["commit"], "HEAD")
         upstream = head.get_upstream(branch)
         if upstream is None:
-            upstream = {"remote": "origin", "merge": branch}
+            upstream = {"branch": branch}
             set_upstream = True
         else:
             set_upstream = False
-        project = self._config.remote.remotes.get(upstream["remote"])
-        if project is None:
-            raise DmlRepoError(f"Unknown remote: {upstream['remote']}")
-        uri = ProjectUri.from_uri(project).ensure_project()
         remote = _remote_ops(self)
-        remote.put_ref(
-            commit_ref, uri.owner, uri.project, kind="branch", name=upstream["merge"], db=self._db, force=force
-        )
+        remote.put_ref(commit_ref, kind="branch", name=upstream["branch"], db=self._db, force=force)
         if set_upstream:
             with head.lock():
-                head.set_upstream(branch, upstream["remote"], upstream["merge"])
+                head.set_upstream(branch, upstream["branch"])
 
     @property
     def branch(self) -> Annotated[_BranchNamespace, "Local branch lifecycle commands."]:
@@ -1377,9 +1352,9 @@ class Dml:
         return _BranchNamespace(self)
 
     @property
-    def remote(self) -> Annotated[_RemoteNamespace, "Named remote lifecycle commands."]:
-        """Expose named remote lifecycle commands."""
-        return _RemoteNamespace(self)
+    def dep(self) -> Annotated[_DependencyNamespace, "Import-only dependency lifecycle commands."]:
+        """Expose import-only dependency lifecycle commands."""
+        return _DependencyNamespace(self)
 
     @property
     def tag(self) -> Annotated[_TagNamespace, "Local tag lifecycle commands."]:

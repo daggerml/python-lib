@@ -8,13 +8,15 @@ targets.
 
 Publishing walks the local object closure from a root ref, uploads missing CAS
 objects, and writes a manifest ref. Child DAG boundaries remain explicit rather
-than being recursively flattened into one transport object. Fetching enumerates
-a named project's refs, validates and materializes each manifest closure into
-the local database, then writes local tracking pointers under that remote name.
-Local branches persist a separate upstream mapping to one remote tracking branch.
+than being recursively flattened into one transport object. Fetching validates
+and materializes a selected manifest closure into the local database before
+writing a tracking pointer. Local branches persist an upstream branch name.
 
-Project transport uses `dml://owner/project#branch` and `@tag` selectors. Local
-tracking uses `remote/branch` and `remote@tag` selectors. Branch
+Each remote root contains one project, with direct `refs/heads/*` and
+`refs/tags/*` transport paths. Local project tracking is under
+`.dml/refs/remote/{heads,tags}`, while import-only dependencies use
+`.dml/refs/dep/<name>/{heads,tags}`. Revision strings never include endpoint
+identity; callers select remote or dependency tracking with source flags. Branch
 updates check ancestry and use conditional S3 writes to avoid silently replacing
 concurrent remote changes; non-forced tags are create-only. Cache publication
 uses `refs/cache/` keyed by normalized function arguments.

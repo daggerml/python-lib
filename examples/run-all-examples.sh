@@ -71,11 +71,7 @@ setup_example() {
   mkdir -p "${example_project_home}" "${DML_CONFIG_HOME}"
   (
     cd "${example_project_home}"
-    if [[ "${example_name}" == "push_load" || "${example_name}" == "bash_full_cli_workflow" ]]; then
-      uv run dml --remote-project "dml://cool-guy/${example_name}-managed" init > /dev/null
-    else
-      uv run dml init > /dev/null
-    fi
+    uv run dml init > /dev/null
   )
 }
 

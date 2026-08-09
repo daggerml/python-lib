@@ -12,8 +12,7 @@ require_env DML_REMOTE_ROOT
 require_env DML_EXAMPLE_PROJECT_HOME
 require_env DML_EXAMPLE_SCRATCH
 
-dml_user="cool-guy"
-dml config set user "${dml_user}" --scope global
+dml config set user "cool-guy" --scope global
 work_dir="${DML_EXAMPLE_SCRATCH}/work"
 dag_namespace="examples/bash-full-cli-workflow"
 hello_dag_name="${dag_namespace}/hello-world"
@@ -26,7 +25,7 @@ project0="project-0"
 log "Initializing DML repo in ${project0}"
 mkdir -p "${work_dir}/${project0}"
 cd "${work_dir}/${project0}"
-dml --remote-project "dml://${dml_user}/${project0}" init | jq .
+dml init | jq .
 
 log "Configuring and inspecting CLI-visible settings"
 dml config set --scope local remote.fetch_workers 2
@@ -41,6 +40,7 @@ dml rev-parse HEAD | jq .
 
 log "Running example: 00-hello_world.py"
 python "${examples_dir}/python/00-hello_world.py" "${hello_dag_name}"
+dml push
 
 log "Inspecting committed history and DAG state after 00-hello_world.py"
 dml status | jq '.branches'
@@ -96,25 +96,19 @@ dml checkout main | jq .
 dml show --revision HEAD | jq .
 
 log "Listing DML refs after running all examples:"
-dml admin remote list-projects --owner "${dml_user}" | jq .
-dml push
-dml push --revision '#main'
-dml admin remote list-projects | jq .
-dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
+dml admin remote list-refs | jq .
 dml admin remote gc | jq .
 
 log "Fetching into the runner-managed repository"
 cd "${DML_EXAMPLE_PROJECT_HOME}"
-dml remote add project-0 "dml://${dml_user}/${project0}"
-dml fetch project-0
-dml rev-parse "project-0/main" | jq .
-dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
-dml branch create --remote project-0 --revision "project-0/main" "${example_branch}"
+dml fetch main
+dml rev-parse main --remote | jq .
+dml admin remote list-refs | jq .
+dml branch create "${example_branch}" --remote --revision main
 dml checkout "${example_branch}" | jq .
-dml branch set-upstream project-0/main
-remote_hello_dag_ref="${hello_dag_ref}"
-log "Checking out remote DAG ref ${remote_hello_dag_ref} into ${dag_namespace}/hello-world-copy"
-dml dag checkout "${remote_hello_dag_ref}" "${dag_namespace}/hello-world-copy"
+dml branch set-upstream main
+log "Checking out the fetched remote DAG into ${dag_namespace}/hello-world-copy"
+dml dag checkout main "${hello_dag_name}" --remote --name "${dag_namespace}/hello-world-copy"
 dml status | jq .
 dml revert HEAD | jq .
 merge_demo_branch="merge-demo"
@@ -127,7 +121,7 @@ dml checkout "${example_branch}" | jq .
 dml merge "${merge_demo_branch}" | jq .
 rebase_demo_branch="rebase-demo"
 renamed_rebase_branch="rebase-demo-renamed"
-dml branch create --remote project-0 --revision "project-0/main" "${rebase_demo_branch}"
+dml branch create "${rebase_demo_branch}" --remote --revision main
 dml checkout "${rebase_demo_branch}" | jq .
 dml rebase "${example_branch}" | jq .
 dml checkout "${example_branch}" | jq .
@@ -138,11 +132,11 @@ tag_name="cli-demo-tag"
 dml tag create "${tag_name}"
 dml tag list | jq .
 dml tag delete "${tag_name}"
-dml dag checkout "${remote_hello_dag_ref}" "${hello_dag_name}"
+dml dag checkout main "${hello_dag_name}" --remote
 dml dag delete "${dag_namespace}/merge-demo"
 dml branch delete "${renamed_rebase_branch}"
-dml remote add disposable "dml://${dml_user}/${project0}"
-dml remote delete disposable
+dml dep add disposable "${DML_REMOTE_ROOT}"
+dml dep delete disposable
 dml status | jq .
 
 log "Running example: 01b-load_fn.py"
@@ -150,7 +144,7 @@ python "${examples_dir}/python/01b-load_fn.py" "${dag_namespace}/load-fn" "${hel
 
 log "Inspecting fetched and pulled history from the second project"
 dml status | jq '.branches'
-dml admin remote list-refs "dml://${dml_user}/${project0}" | jq .
+dml admin remote list-refs | jq .
 dml log --revision HEAD --limit 10 | jq .
 dml show --revision HEAD | jq .
 load_fn_dag_ref="$(dml show --revision HEAD | jq -r --arg dag_name "${dag_namespace}/load-fn" '.dags[$dag_name]')"

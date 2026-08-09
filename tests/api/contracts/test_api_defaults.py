@@ -94,7 +94,7 @@ def test_api_default_008__new_uses_active_default(fake_dml):
 def test_api_default_009__load_resolves_named_dag(fake_dml, refs):
     dag = api.load("demo", dml=fake_dml)
 
-    fake_dml.show.assert_called_once_with()
+    fake_dml.show.assert_called_once_with("HEAD", remote=False, dep=None)
     assert dag.dml is fake_dml
     assert dag.ref == refs.dag
     assert dag.name == "demo"

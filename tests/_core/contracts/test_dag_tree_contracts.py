@@ -14,7 +14,7 @@ def test_dag_checkout_overwrites_name(tmp_path, monkeypatch) -> None:
     commit_literal_dag(dml, "target", 2)
     source_ref = dml.show(first)["dags"]["source"]
 
-    dml.dag.checkout(source_ref, name="target")
+    dml.dag.checkout(first, "source", name="target", replace=True)
 
     assert dml.show("HEAD")["dags"]["target"] == source_ref
 
@@ -32,21 +32,23 @@ def test_dag_delete_removes_named_dag_and_missing_delete_fails(tmp_path, monkeyp
 
 
 def test_dag_checkout_on_unborn_head_materializes_first_branch_commit(tmp_path, monkeypatch) -> None:
-    source = make_local_dml(tmp_path / "source", monkeypatch)
-    source_commit = commit_literal_dag(source, "source", 1)
-    source_ref = source.show(source_commit)["dags"]["source"]
     target = make_local_dml(tmp_path / "target", monkeypatch)
-    target.dag.checkout(source_ref, name="source")
+    source_commit = commit_literal_dag(target, "source", 1)
+    source_ref = target.show(source_commit)["dags"]["source"]
+    target.branch.create("empty", revision=source_commit)
+    target.checkout("empty")
+    target.dag.delete("source")
+    target.dag.checkout(source_commit, "source", name="source")
     assert target.show("HEAD")["dags"]["source"] == source_ref
     assert target.status()["commit"] is not None
-    assert target.branch.list() == ["main"]
+    assert target.branch.list() == ["empty", "main"]
 
 
 @pytest.mark.parametrize(
     ("op", "message"),
     [
         pytest.param(
-            lambda dml, dag: dml.dag.checkout(dag, name="copy"),
+            lambda dml, dag: dml.dag.checkout("HEAD", "source", name="copy"),
             "Cannot checkout DAG when HEAD is detached",
             id="REPO-DAG-001:checkout-detached",
         ),

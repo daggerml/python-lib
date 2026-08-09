@@ -7,7 +7,7 @@ import daggerml as dml
 ```
 
 - `dml.new(name="", message="", dml=None) -> Dag`: create an open DAG runtime.
-- `dml.load(name, dml=None) -> Dag`: load a committed named DAG from `HEAD`.
+- `dml.load(name, dml=None, *, revision="HEAD", remote=False, dep=None) -> Dag`: load a committed named DAG from local, fetched remote, or fetched dependency state.
 - `dml.temporary(**kw)`: context manager for an initialized temporary project.
 - `Dag.put(value, name=None)`: stage a value and return a node.
 - `Dag.call(fn, *args, name=None, timeout=-1)`: call a runnable and return its result node.

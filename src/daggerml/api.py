@@ -79,10 +79,17 @@ def new(
     return Dag(dml=runtime, token=index_id, name=name, message=message)
 
 
-def load(name: str, dml=None) -> "Dag":
+def load(
+    name: str,
+    dml: Dml | None = None,
+    *,
+    revision: Ref | str = "HEAD",
+    remote: bool = False,
+    dep: str | None = None,
+) -> "Dag":
     """Load a DAG using the active default Dml runtime."""
     dml = dml or get_default_dml()
-    dag_ref = dml.show()["dags"].get(name)
+    dag_ref = dml.show(revision, remote=remote, dep=dep)["dags"].get(name)
     if dag_ref is None:
         raise DmlRepoError(f"DAG not found: {name}")
     return Dag(dml=dml, ref=dag_ref, name=name)
@@ -477,7 +484,7 @@ class Dag:
         """
         return _make_node(self, self._put_literal(value, name=name))
 
-    def require(self, dag_name: str, node_name: str | None = None, *, name: str | None = None) -> "Node":
+    def require(self, dag_name: str | "Dag", node_name: str | None = None, *, name: str | None = None) -> "Node":
         """
         Import a node from a different (committed) DAG into the current DAG.
 
@@ -505,15 +512,20 @@ class Dag:
         {'a': 1, 'b': [42, '23']}
         """
         index = self._require_index_ref()
-        commit = self.dml.runtime.describe(index)["parents"][0]
-        dag = self.dml.show(revision=commit)["dags"].get(dag_name)
-        if dag is None:
-            raise DmlRepoError(f"DAG not found: {dag_name}")
-        dag_info = self.dml.dag.describe(dag)
+        if isinstance(dag_name, Dag):
+            if dag_name.ref is None:
+                raise DmlRepoError("Cannot import an uncommitted DAG")
+            dag_ref = dag_name.ref
+        else:
+            commit = self.dml.runtime.describe(index)["parents"][0]
+            dag_ref = self.dml.show(revision=commit)["dags"].get(dag_name)
+            if dag_ref is None:
+                raise DmlRepoError(f"DAG not found: {dag_name}")
+        dag_info = self.dml.dag.describe(dag_ref)
         node_ref = dag_info["names"].get(node_name) if node_name else dag_info.get("result")
         if node_ref is None:
             raise DmlRepoError(f"Node '{node_name}' not found in DAG '{dag_name}'")
-        node_ref = self.dml.runtime.put_import(index, dag, node_ref, name=name)
+        node_ref = self.dml.runtime.put_import(index, dag_ref, node_ref, name=name)
         return _make_node(self, node_ref)
 
     def call(

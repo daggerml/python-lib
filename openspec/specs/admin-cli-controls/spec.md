@@ -40,22 +40,16 @@ Low-frequency maintenance and recovery commands SHALL be exposed under `dml admi
 - **WHEN** a user runs `dml admin cache invalidate dag:abc123`
 - **THEN** the command fails because admin cache invalidation accepts exact cache keys only
 
-### Requirement: Admin remote list can list projects or one project's refs
-`dml admin remote list` SHALL support two modes through one command shape.
+### Requirement: Admin remote list reports direct remote-root refs
+`dml admin remote list` SHALL list direct branch and tag refs at resolved `remote.root`. It SHALL NOT accept project, owner, or dependency selectors and SHALL NOT perform project discovery.
 
-Without a project argument, it SHALL list remote projects as canonical `dml://<owner>/<project>` URIs and MAY filter by owner. With a `dml://<owner>/<project>` argument, it SHALL list the remote branches and tags for that project.
-
-#### Scenario: Remote list returns projects
+#### Scenario: Remote list returns direct refs
 - **WHEN** a user runs `dml admin remote list`
-- **THEN** the command returns JSON with a `projects` field containing canonical project URIs
+- **THEN** the command returns JSON containing direct `branches` and `tags` from `remote.root`
 
-#### Scenario: Remote list filters by owner
-- **WHEN** a user runs `dml admin remote list --owner alice`
-- **THEN** the command returns only projects owned by `alice`
-
-#### Scenario: Remote list returns project refs
-- **WHEN** a user runs `dml admin remote list dml://alice/demo`
-- **THEN** the command returns JSON containing `project`, `branches`, and `tags`
+#### Scenario: Remote list rejects project selectors
+- **WHEN** a user supplies a project or owner argument
+- **THEN** command parsing rejects the unsupported argument
 
 ### Requirement: Admin remote GC performs remote maintenance
 `dml admin remote gc` SHALL perform remote maintenance for the configured remote, including remote GC of CAS/refs state and remote transport cleanup, and SHALL report the result as JSON.

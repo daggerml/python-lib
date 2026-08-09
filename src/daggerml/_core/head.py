@@ -57,8 +57,7 @@ class HeadInfo(TypedDict):
 
 
 class UpstreamInfo(TypedDict):
-    remote: str
-    merge: str
+    branch: str
 
 
 @dataclass(frozen=True)
@@ -127,16 +126,12 @@ class Head:
         if not path.exists():
             return None
         upstream = json.loads(path.read_text(encoding="utf-8"))
-        return {
-            "remote": _validate_segment("remote", upstream["remote"]),
-            "merge": _validate_ref_name("upstream branch", upstream["merge"]),
-        }
+        if set(upstream) != {"branch"}:
+            raise DmlRepoError(f"Invalid upstream config: {branch}")
+        return {"branch": _validate_ref_name("upstream branch", upstream["branch"])}
 
-    def set_upstream(self, branch: str, remote: str, merge: str) -> UpstreamInfo:
-        upstream: UpstreamInfo = {
-            "remote": _validate_segment("remote", remote),
-            "merge": _validate_ref_name("upstream branch", merge),
-        }
+    def set_upstream(self, branch: str, upstream_branch: str) -> UpstreamInfo:
+        upstream: UpstreamInfo = {"branch": _validate_ref_name("upstream branch", upstream_branch)}
         path = self.upstream_path(branch)
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
@@ -155,79 +150,98 @@ class Head:
     def delete_upstream(self, branch: str) -> None:
         self.upstream_path(branch).unlink(missing_ok=True)
 
-    def get_remote_ref(
-        self,
-        owner: str,
-        project: str,
-        name: str,
-        *,
-        kind: Literal["branch", "tag"] = "branch",
-    ) -> Ref:
-        path = self.remote_ref_path(owner, project, name, kind=kind)
-        if not path.exists():
-            raise DmlRepoError(f"Pointer does not exist: {path}")
-        return Ref(f"commit:{path.read_text(encoding='utf-8').strip()}")
-
-    def create_remote_ref(
-        self,
-        owner: str,
-        project: str,
-        name: str,
-        commit: Ref,
-        *,
-        kind: Literal["branch", "tag"] = "branch",
-    ) -> str:
-        path = self.remote_ref_path(owner, project, name, kind=kind)
-        if path.exists():
-            raise DmlRepoError(f"{kind.title()} already exists: {name}")
-        self.write_ref(path, commit)
-        return name
-
-    def update_remote_ref(
-        self,
-        owner: str,
-        project: str,
-        name: str,
-        commit: Ref,
-        *,
-        kind: Literal["branch", "tag"] = "branch",
-    ) -> str:
-        self.write_ref(self.remote_ref_path(owner, project, name, kind=kind), commit)
-        return name
-
-    def delete_remote_ref(
-        self,
-        owner: str,
-        project: str,
-        name: str,
-        *,
-        kind: Literal["branch", "tag"] = "branch",
-    ) -> None:
-        self.remote_ref_path(owner, project, name, kind=kind).unlink()
-
-    def get_remote_tracking_ref(self, remote: str, name: str, *, kind: Literal["branch", "tag"] = "branch") -> Ref:
-        path = self.remote_tracking_ref_path(remote, name, kind=kind)
+    def get_remote_tracking_ref(self, name: str, *, kind: Literal["branch", "tag"] = "branch") -> Ref:
+        path = self.remote_tracking_ref_path(name, kind=kind)
         if not path.exists():
             raise DmlRepoError(f"Pointer does not exist: {path}")
         return Ref(f"commit:{path.read_text(encoding='utf-8').strip()}")
 
     def create_remote_tracking_ref(
-        self, remote: str, name: str, commit: Ref, *, kind: Literal["branch", "tag"] = "branch"
+        self, name: str, commit: Ref, *, kind: Literal["branch", "tag"] = "branch"
     ) -> str:
-        path = self.remote_tracking_ref_path(remote, name, kind=kind)
+        path = self.remote_tracking_ref_path(name, kind=kind)
         if path.exists():
             raise DmlRepoError(f"{kind.title()} already exists: {name}")
         self.write_ref(path, commit)
         return name
 
     def update_remote_tracking_ref(
-        self, remote: str, name: str, commit: Ref, *, kind: Literal["branch", "tag"] = "branch"
+        self, name: str, commit: Ref, *, kind: Literal["branch", "tag"] = "branch"
     ) -> str:
-        self.write_ref(self.remote_tracking_ref_path(remote, name, kind=kind), commit)
+        self.write_ref(self.remote_tracking_ref_path(name, kind=kind), commit)
         return name
 
-    def delete_remote_tracking_ref(self, remote: str, name: str, *, kind: Literal["branch", "tag"] = "branch") -> None:
-        self.remote_tracking_ref_path(remote, name, kind=kind).unlink()
+    def delete_remote_tracking_ref(self, name: str, *, kind: Literal["branch", "tag"] = "branch") -> None:
+        self.remote_tracking_ref_path(name, kind=kind).unlink()
+
+    def get_dependency_config(self, dependency: str) -> dict[str, str]:
+        path = self.dependency_config_path(dependency)
+        try:
+            config = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise DmlRepoError(f"Dependency does not exist: {dependency}") from exc
+        if not isinstance(config, dict) or set(config) != {"backend", "root"}:
+            raise DmlRepoError(f"Invalid dependency config: {dependency}")
+        if config.get("backend") != "s3" or not isinstance(config.get("root"), str):
+            raise DmlRepoError(f"Invalid dependency config: {dependency}")
+        from daggerml._core.config import validate_remote_root
+
+        try:
+            root = validate_remote_root(config["root"])
+        except ValueError as exc:
+            raise DmlRepoError(f"Invalid dependency config: {dependency}") from exc
+        if not root:
+            raise DmlRepoError(f"Invalid dependency config: {dependency}")
+        return {"backend": "s3", "root": root}
+
+    def add_dependency(self, dependency: str, root: str) -> str:
+        from daggerml._core.config import validate_remote_root
+
+        dependency = _validate_segment("dependency", dependency)
+        path = self.dependency_config_path(dependency)
+        if path.exists():
+            raise DmlRepoError(f"Dependency already exists: {dependency}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized_root = validate_remote_root(root)
+        if not normalized_root:
+            raise ValueError("Dependency root must be a non-empty s3:// URI")
+        payload = {"backend": "s3", "root": normalized_root}
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+            json.dump(payload, tmp, separators=(",", ":"), sort_keys=True)
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, path)
+        return dependency
+
+    def delete_dependency(self, dependency: str) -> None:
+        path = self.dependency_path(dependency)
+        if not path.exists():
+            raise DmlRepoError(f"Dependency does not exist: {dependency}")
+        for child in sorted(path.rglob("*"), reverse=True):
+            if child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                child.rmdir()
+        path.rmdir()
+
+    def list_dependencies(self) -> list[str]:
+        base = Path(self.project_home) / ".dml" / "refs" / "dep"
+        if not base.exists():
+            return []
+        return sorted(
+            path.name for path in base.iterdir() if path.is_dir() and self.dependency_config_path(path.name).exists()
+        )
+
+    def get_dependency_ref(self, dependency: str, name: str, *, kind: Literal["branch", "tag"] = "branch") -> Ref:
+        path = self.dependency_ref_path(dependency, name, kind=kind)
+        if not path.exists():
+            raise DmlRepoError(f"Pointer does not exist: {path}")
+        return Ref(f"commit:{path.read_text(encoding='utf-8').strip()}")
+
+    def update_dependency_ref(
+        self, dependency: str, name: str, commit: Ref, *, kind: Literal["branch", "tag"] = "branch"
+    ) -> str:
+        self.write_ref(self.dependency_ref_path(dependency, name, kind=kind), commit)
+        return name
 
     def write_attached_head(self, branch: str) -> str:
         branch = _validate_ref_name("branch", branch)
@@ -265,31 +279,27 @@ class Head:
             / quote(_validate_ref_name("branch", branch), safe="")
         )
 
-    def remote_tracking_ref_path(self, remote: str, name: str, *, kind: Literal["branch", "tag"]) -> Path:
+    def remote_tracking_ref_path(self, name: str, *, kind: Literal["branch", "tag"]) -> Path:
         leaf = "heads" if kind == "branch" else "tags"
         return (
             Path(self.project_home)
             / ".dml"
             / "refs"
             / "remote"
-            / _validate_segment("remote", remote)
             / leaf
             / quote(_validate_ref_name(kind, name), safe="")
         )
 
-    def remote_ref_path(self, owner: str, project: str, name: str, *, kind: Literal["branch", "tag"]) -> Path:
+    def dependency_path(self, dependency: str) -> Path:
+        return Path(self.project_home) / ".dml" / "refs" / "dep" / _validate_segment("dependency", dependency)
+
+    def dependency_config_path(self, dependency: str) -> Path:
+        return self.dependency_path(dependency) / "config.json"
+
+    def dependency_ref_path(self, dependency: str, name: str, *, kind: Literal["branch", "tag"]) -> Path:
         fname = quote(_validate_ref_name(kind, name), safe="")
         leaf = "heads" if kind == "branch" else "tags"
-        return (
-            Path(self.project_home)
-            / ".dml"
-            / "refs"
-            / "remote"
-            / _validate_segment("owner", owner)
-            / _validate_segment("project", project)
-            / leaf
-            / fname
-        )
+        return self.dependency_path(dependency) / leaf / fname
 
     def write_head_payload(self, payload: str) -> None:
         path = self.head_path()
@@ -306,29 +316,6 @@ class Head:
             tmp_path = Path(tmp.name)
         os.replace(tmp_path, path)
 
-    def list_remote_projects(self) -> list[tuple[str, str]]:
-        base = Path(self.project_home) / ".dml" / "refs" / "remote"
-        if not base.exists():
-            return []
-        projects = set()
-        for path in base.rglob("*"):
-            if path.is_file():
-                parts = path.relative_to(base).parts
-                if len(parts) >= 4:
-                    owner, project = parts[0], parts[1]
-                    projects.add((owner, unquote(project)))
-        return sorted(projects)
-
-    def list_remote_tracking_remotes(self) -> list[str]:
-        base = Path(self.project_home) / ".dml" / "refs" / "remote"
-        if not base.exists():
-            return []
-        return sorted(
-            path.name
-            for path in base.iterdir()
-            if path.is_dir() and ((path / "heads").exists() or (path / "tags").exists())
-        )
-
     def list_local_refs(self, kind: Literal["branch", "tag"] = "branch") -> list[str]:
         base = Path(self.project_home) / ".dml" / "refs" / "local" / ("heads" if kind == "branch" else "tags")
         refs = []
@@ -339,31 +326,12 @@ class Head:
                 refs.append(unquote(path.relative_to(base).as_posix()))
         return sorted(refs)
 
-    def list_remote_refs(self, owner: str, project: str, kind: Literal["branch", "tag"] = "branch") -> list[str]:
+    def list_remote_tracking_refs(self, kind: Literal["branch", "tag"] = "branch") -> list[str]:
         base = (
             Path(self.project_home)
             / ".dml"
             / "refs"
             / "remote"
-            / _validate_segment("owner", owner)
-            / quote(_validate_segment("project", project), safe="")
-            / ("heads" if kind == "branch" else "tags")
-        )
-        refs = []
-        if not base.exists():
-            return refs
-        for path in base.rglob("*"):
-            if path.is_file():
-                refs.append(unquote(path.relative_to(base).as_posix()))
-        return sorted(refs)
-
-    def list_remote_tracking_refs(self, remote: str, kind: Literal["branch", "tag"] = "branch") -> list[str]:
-        base = (
-            Path(self.project_home)
-            / ".dml"
-            / "refs"
-            / "remote"
-            / _validate_segment("remote", remote)
             / ("heads" if kind == "branch" else "tags")
         )
         if not base.exists():
@@ -371,23 +339,17 @@ class Head:
         return sorted(unquote(path.relative_to(base).as_posix()) for path in base.rglob("*") if path.is_file())
 
     def iter_remote_tracking_refs(self) -> Iterator[Ref]:
-        for remote in self.list_remote_tracking_remotes():
-            for kind in ("branch", "tag"):
-                for name in self.list_remote_tracking_refs(remote, kind=kind):
-                    yield self.get_remote_tracking_ref(remote, name, kind=kind)
+        for kind in ("branch", "tag"):
+            for name in self.list_remote_tracking_refs(kind=kind):
+                yield self.get_remote_tracking_ref(name, kind=kind)
 
     def iter_all_remote_tracking_refs(self) -> Iterator[Ref]:
         yield from self.iter_remote_tracking_refs()
-        for owner, project in self.list_remote_projects():
+        for dependency in self.list_dependencies():
             for kind in ("branch", "tag"):
-                for name in self.list_remote_refs(owner, project, kind=kind):
-                    yield self.get_remote_ref(owner, project, name, kind=kind)
-
-    def migrate_legacy_remote_refs(self, remote: str, owner: str, project: str) -> None:
-        for kind in ("branch", "tag"):
-            for name in self.list_remote_refs(owner, project, kind=kind):
-                legacy = self.remote_ref_path(owner, project, name, kind=kind)
-                tracking = self.remote_tracking_ref_path(remote, name, kind=kind)
-                if not tracking.exists():
-                    tracking.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(legacy, tracking)
+                base = self.dependency_path(dependency) / ("heads" if kind == "branch" else "tags")
+                if base.exists():
+                    for path in base.rglob("*"):
+                        if path.is_file():
+                            name = unquote(path.relative_to(base).as_posix())
+                            yield self.get_dependency_ref(dependency, name, kind=kind)

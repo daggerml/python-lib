@@ -1,14 +1,14 @@
 ## Purpose
-Establish a single contract-matrix owner for revision/ref/URI parsing behaviors so grammar coverage is centralized and workflow tests stay focused on operational invariants.
+Establish a single contract-matrix owner for namespace-independent revision parsing and source-selection behaviors so grammar coverage is centralized and workflow tests stay focused on operational invariants.
 
 ## Requirements
 
-### Requirement: Revision and URI parsing contracts are centrally owned by one parameterized matrix suite
-The repository SHALL define revision/ref/URI parsing behavior in one maintained contract test suite that uses parameterized case matrices rather than duplicating equivalent parsing assertions across workflow tests.
+### Requirement: Revision parsing contracts are centrally owned by one matrix
+The repository SHALL define namespace-independent revision parsing and source-selection behavior in one maintained parameterized contract matrix rather than duplicating grammar assertions across workflow tests.
 
 #### Scenario: Parsing contract matrix is the single maintained owner
-- **WHEN** maintained tests assert behavior for `parse_ref`, DML URI canonicalization, or revision-form resolution
-- **THEN** those assertions are implemented in the centralized parsing contract matrix suite instead of being repeated across unrelated workflow contract files
+- **WHEN** maintained tests assert revision parsing or local, remote, and dependency source selection
+- **THEN** those assertions live in the centralized parsing matrix
 
 #### Scenario: Workflow contracts avoid duplicate parsing assertions
 - **WHEN** a workflow contract test validates delegation, state transitions, or side-effect invariants
@@ -26,16 +26,32 @@ The centralized parsing matrix SHALL encode each case with direct canonical cont
 - **THEN** the failing node identifier includes both the contract ID and case label needed to identify the exact parsing form boundary
 
 ### Requirement: Revision-form matrix covers accepted and rejected local resolution boundaries
-The centralized parsing matrix SHALL cover the accepted revision forms and local-only rejection boundaries required by commit/project revision resolution behavior, including file-backed `HEAD` semantics.
+The centralized parsing matrix SHALL cover namespace-independent revision grammar and explicit local, remote, and dependency source selection. Every branch, `@tag`, `HEAD`, ancestry, direct commit ID, and exact commit-ref form SHALL be accepted with every source. `remote` and `dep` selectors SHALL be mutually exclusive and SHALL affect symbolic lookup only, never network access. Valid but unavailable combinations SHALL fail during resolution rather than parsing.
 
-#### Scenario: Accepted revision forms resolve with expected classification
-- **WHEN** the suite evaluates accepted revision forms (branch, tag, ancestry expression, direct commit id, explicit commit ref, and `HEAD` backed by `.dml/HEAD`)
-- **THEN** each form resolves to the expected classification and commit target for the fixture setup
+#### Scenario: Local branch resolves by default
+- **WHEN** revision `main` is evaluated without a source selector
+- **THEN** it resolves only from local refs
+
+#### Scenario: Remote branch uses separate source selection
+- **WHEN** revision `main` is evaluated with `remote=True`
+- **THEN** it resolves from `.dml/refs/remote/heads/main`
+
+#### Scenario: Dependency tag uses separate source selection
+- **WHEN** revision `@v1` is evaluated with `dep="models"`
+- **THEN** it resolves from `.dml/refs/dep/models/tags/v1`
+
+#### Scenario: Source selectors are mutually exclusive
+- **WHEN** revision resolution receives both `remote=True` and `dep="models"`
+- **THEN** it fails before reading refs
+
+#### Scenario: Unfetched selected revision fails locally
+- **WHEN** selected remote or dependency tracking state does not contain the revision
+- **THEN** resolution fails without connecting to an endpoint and reports that fetch is required
+
+#### Scenario: Exact commit resolves with any source
+- **WHEN** an existing direct commit is evaluated with local, remote, or dependency source selection
+- **THEN** every case resolves to the same local database commit
 
 #### Scenario: Detached HEAD ancestry resolves from HEAD file
 - **WHEN** `.dml/HEAD` contains a detached commit payload and the suite evaluates `HEAD~1`
 - **THEN** resolution walks ancestry from the detached commit stored in `.dml/HEAD`
-
-#### Scenario: Unfetched remote revision form fails with local-resolution boundary
-- **WHEN** a `dml://...#<branch>` revision form is evaluated without corresponding local tracking state
-- **THEN** resolution fails with the documented local-resolution boundary error indicating fetch is required

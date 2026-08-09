@@ -108,31 +108,15 @@ Integration tests SHALL be marked `@pytest.mark.slow` so they can be excluded fr
 - **THEN** tests marked `slow` are excluded and the remaining suite represents the fast-path contract checks
 
 ### Requirement: Legacy test suite is fully migrated and superseded tests are removed
-The repository SHALL complete migration of maintained tests to the contract matrix setup and SHALL remove superseded legacy tests to avoid duplicate maintenance.
+The repository SHALL fully migrate maintained tests to the target taxonomy and remove superseded legacy tests after parity. Duplicate revision and source-selection parsing checks SHALL be removed after centralized matrix coverage exists.
 
-#### Scenario: Superseded legacy tests are removed after parity
-- **WHEN** a legacy test's contract coverage is represented by migrated contract-matrix tests
-- **THEN** the legacy test is removed from maintained test paths
+#### Scenario: Duplicate revision parsing checks are removed
+- **WHEN** revision grammar and source-selection forms are covered by the centralized matrix
+- **THEN** workflow tests retain only operational invariants
 
-#### Scenario: End state contains only maintained tests aligned to taxonomy
-- **WHEN** migration is complete
-- **THEN** maintained tests conform to taxonomy, canonical ID, lifecycle parameterization, and slow-marker requirements defined in this specification
-
-#### Scenario: Redundant parser smoke tests are removed once equivalent arg-level coverage exists
-- **WHEN** a parser-creation smoke test duplicates parser argument assertions already maintained in the same suite
-- **THEN** the redundant parser-creation smoke test is removed after parity verification
-
-#### Scenario: Duplicate revision parsing checks are removed after central matrix adoption
-- **WHEN** revision/ref/URI parsing forms are covered by the centralized parsing contract matrix
-- **THEN** duplicate parsing checks in workflow-oriented contract tests are removed and workflow tests remain focused on operational invariants
-
-#### Scenario: External-process orchestration tests are classified as slow
-- **WHEN** a test requires subprocess execution, adapter polling loops, remote roundtrips, or equivalent runtime orchestration
-- **THEN** the test is marked `slow` and excluded from `pytest -m "not slow"` selection
-
-#### Scenario: Expensive adapter-path duplicates are collapsed into parameterized matrices
-- **WHEN** multiple maintained tests exercise the same adapter-path contract family with near-identical setup and assertions
-- **THEN** they are consolidated into one parameterized matrix suite that preserves canonical contract IDs and behavior-stage traceability
+#### Scenario: External-process tests remain slow
+- **WHEN** a test requires subprocesses, polling, or remote roundtrips
+- **THEN** it remains classified as slow
 
 ### Requirement: Migration ledger governs parity and removal
 The repository SHALL track migration progress in a ledger that maps canonical contract IDs from legacy tests to migrated tests and records parity evidence before legacy removal.
@@ -157,7 +141,7 @@ Maintained tests for `daggerml._core` SHALL verify behavior that is contractuall
 - **THEN** the test is not included in the maintained `_core` contract suite
 
 #### Scenario: Meaningful string contracts are included
-- **WHEN** a `_core` string contract accepts a broad valid input space such as owner, project, branch, tag, ref name, revision selector, or remote root
+- **WHEN** a `_core` string contract accepts a broad valid input space such as branch, tag, ref name, revision selector, endpoint config, config value, or remote root
 - **THEN** the maintained tests include generated or matrix coverage for accepted edge cases and representative rejection cases
 
 ### Requirement: Core git-like repository workflows are covered at the correct test boundary
@@ -184,7 +168,7 @@ Maintained `_core` git-like workflow tests SHALL rely on canonical valid revisio
 #### Scenario: Workflow test uses representative valid selector
 - **WHEN** a checkout, merge, show, diff, fetch, pull, or push contract test needs a revision selector
 - **THEN** the test uses one or more representative valid selector forms needed for that workflow
-- **AND** it does not expand into a separate grammar matrix for branch, tag, commit, and URI parsing permutations already owned elsewhere
+- **AND** it does not expand into a separate grammar matrix for branch, tag, commit, and source-selection permutations already owned elsewhere
 
 #### Scenario: Parsing breadth remains centralized
 - **WHEN** maintainers need to add or adjust accepted and rejected selector forms for revision parsing
@@ -195,7 +179,7 @@ Maintained `_core` git-like workflow tests SHALL rely on canonical valid revisio
 Generated-input tests for `daggerml._core` SHALL use Hypothesis only where generation improves confidence in accepted contract spaces, and SHALL bound examples and recursive shapes to preserve fast local feedback.
 
 #### Scenario: Accepted input spaces use bounded strategies
-- **WHEN** Hypothesis is used for `_core` ref names, project URIs, revision selectors, config values, or serde values
+- **WHEN** Hypothesis is used for `_core` ref names, revision selectors, endpoint configs, config values, or serde values
 - **THEN** the strategy generates contractually accepted inputs with explicit bounds on examples, recursion, and collection sizes
 
 #### Scenario: Recursive serde generation stays small

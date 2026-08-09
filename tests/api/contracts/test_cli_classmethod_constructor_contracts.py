@@ -80,7 +80,7 @@ def test_cli_cm_003__dml_init_intersected_options_are_root_only() -> None:
     assert "--db-map-size-headroom DB_MAP_SIZE_HEADROOM" in root_help
     assert "--db-map-size-max DB_MAP_SIZE_MAX" in root_help
     assert "--default-branch-name DEFAULT_BRANCH_NAME" in root_help
-    assert "--remote-project REMOTE_PROJECT" in root_help
+    assert "--remote-project REMOTE_PROJECT" not in root_help
     assert "--remote-root REMOTE_ROOT" in root_help
     assert "--remote-prune-age-seconds REMOTE_PRUNE_AGE_SECONDS" in root_help
     assert "--remote-fetch-workers REMOTE_FETCH_WORKERS" in root_help

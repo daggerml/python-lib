@@ -4,19 +4,19 @@
 TBD - created by archiving change thin-cli-git-ops-routing. Update Purpose after archive.
 ## Requirements
 ### Requirement: CLI project commands delegate to a single Dml workflow method
-The `dml` CLI project command handlers SHALL remain thin adapters that parse command arguments and invoke exactly one workflow entrypoint per command path.
+The `dml` CLI project command handlers SHALL remain thin adapters that parse ref and source-selection arguments and invoke exactly one workflow entrypoint per command path.
 
 #### Scenario: Fetch delegates through Dml
-- **WHEN** a user runs `dml fetch <remote-or-uri> [branch]`
-- **THEN** the CLI handler parses inputs and calls one shared `Dml` fetch workflow method that performs remote synchronization behavior
+- **WHEN** a user runs `dml fetch [--dep DEP] [BRANCH|@TAG]`
+- **THEN** the CLI calls one shared `Dml` fetch method with the selected dependency and ref
 
 #### Scenario: Checkout delegates through Dml
-- **WHEN** a user runs `dml checkout <revision>`
-- **THEN** the CLI handler parses the revision and calls one shared `Dml` checkout workflow method that returns attached/detached result details
+- **WHEN** a user runs checkout with a revision and optional `--remote`
+- **THEN** the CLI calls one shared `Dml` checkout method that returns attached or detached result details
 
 #### Scenario: Merge delegates through Dml
-- **WHEN** a user runs `dml merge <revision> --head <head-ref> --user <user>`
-- **THEN** the CLI handler calls one shared `Dml` merge workflow method and does not instantiate commit or remote ops directly
+- **WHEN** a user runs merge with a revision and optional `--remote`
+- **THEN** the CLI calls one shared `Dml` merge method and does not instantiate commit or remote ops directly
 
 ### Requirement: CLI does not own git-like project business logic
 The `_cli` layer SHALL NOT contain git-like project orchestration logic that coordinates repository state, commit resolution, or remote protocol execution.

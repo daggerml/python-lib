@@ -21,27 +21,27 @@ The system SHALL expose one shared internal resolver that supports `project/runt
 - **THEN** the resolver applies `explicit > environment variables > global config > defaults` without requiring a project config file
 
 ### Requirement: Canonical config parameters are reduced to one normalized set
-The system SHALL normalize supported configuration inputs into the canonical internal parameters `project.home`, `remote.project`, `db.path`, `remote.root`, `user`, `default_branch`, `hooks.post-init`, `hooks.post-clone`, `config_home`, and ephemeral runtime field `execution.id`.
+The system SHALL normalize supported configuration inputs into canonical internal parameters including `project.home`, `db.path`, `remote.root`, `user`, `default_branch`, hooks, `config_home`, and ephemeral `execution.id`. The canonical model SHALL NOT include project URI identity or named ordinary remotes.
 
-#### Scenario: Branch context is not a canonical config parameter
+#### Scenario: Remote root is the sole project endpoint parameter
 - **WHEN** project configuration is resolved
-- **THEN** the canonical internal model does not include a separate branch-selection parameter and does not derive the active checkout branch from configuration
+- **THEN** the canonical endpoint parameter is `remote.root`
 
-#### Scenario: Legacy overlapping remote parameters are not canonical
+#### Scenario: Branch and revision source are not config parameters
 - **WHEN** remote-backed configuration is resolved
-- **THEN** the canonical remote parameter is `remote.root` rather than separate `remote.bucket` or `remote.prefix` parameters
+- **THEN** checkout branch and local/remote/dependency revision selection remain operation state rather than canonical config
 
-#### Scenario: Execution identity is part of the canonical runtime config model
+#### Scenario: Execution identity remains canonical runtime state
 - **WHEN** execution-aware runtime code resolves session configuration
 - **THEN** the canonical internal model includes `execution.id`
-- **AND** that field participates in the same resolved runtime config object as the other canonical parameters
+- **THEN** the canonical model includes ephemeral `execution.id`
 
 ### Requirement: Multiple config sources normalize into the shared internal model
 The system SHALL treat explicit arguments, environment variables, project-local config, and global config as sources that feed the shared internal configuration model. Source-specific loading may differ, but normalization and precedence MUST be centralized in the shared internal resolver. Ephemeral runtime fields such as `execution.id` SHALL resolve from explicit input, then environment, then `null`, and SHALL NOT be loaded from project-local or global config files.
 
 #### Scenario: Project-local and global config feed shared resolution
 - **WHEN** a frontend resolves configuration for an operation in a project directory
-- **THEN** project-local `.dml/config.toml` and any applicable global config inputs are loaded as sources for the same shared internal resolution path
+- **THEN** project-local `.dml/config.json` and any applicable global config inputs are loaded as sources for the same shared internal resolution path
 
 #### Scenario: Environment values are normalized centrally
 - **WHEN** configuration is resolved from environment variables

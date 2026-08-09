@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from tempfile import TemporaryDirectory
 
 import pytest
@@ -8,8 +9,7 @@ from hypothesis import given, settings
 from daggerml._core.db import Ref
 from daggerml._core.head import Head, _validate_ref_name, _validate_segment
 from daggerml._core.types import DmlRepoError
-from daggerml._core.uri import ProjectUri
-from tests._core.strategies import nested_ref_names, project_segments, project_uris
+from tests._core.strategies import nested_ref_names
 
 
 @given(nested_ref_names)
@@ -26,26 +26,19 @@ def test_valid_ref_names_round_trip_through_path(name: str) -> None:
         assert "/" not in head.local_ref_path(name, kind="branch").name
 
 
-@given(project_segments, project_segments, nested_ref_names)
+@given(nested_ref_names)
 @settings(max_examples=35, deadline=None)
-def test_remote_refs_validate_and_round_trip(owner: str, project: str, name: str) -> None:
+def test_remote_tracking_refs_round_trip(name: str) -> None:
     with TemporaryDirectory() as root:
         head = Head(root)
         commit = Ref("commit:" + "b" * 64)
 
-        head.create_remote_ref(owner, project, name, commit, kind="tag")
+        head.create_remote_tracking_ref(name, commit, kind="tag")
 
-        assert head.get_remote_ref(owner, project, name, kind="tag") == commit
-        assert head.list_remote_refs(owner, project, kind="tag") == [name]
-
-
-@given(project_uris)
-@settings(max_examples=35, deadline=None)
-def test_accepted_project_uris_parse_and_stringify(uri: str) -> None:
-    parsed = ProjectUri.from_uri(uri)
-
-    assert str(parsed) == uri
-    assert parsed.ensure_project().owner == parsed.owner
+        assert head.get_remote_tracking_ref(name, kind="tag") == commit
+        assert head.list_remote_tracking_refs(kind="tag") == [name]
+        path = head.remote_tracking_ref_path(name, kind="tag")
+        assert path.parts[-3:] == ("remote", "tags", name.replace("/", "%2F"))
 
 
 @pytest.mark.parametrize(
@@ -120,24 +113,23 @@ def test_local_tag_refs_round_trip_update_and_delete(tmp_path) -> None:
     assert head.list_local_refs(kind="tag") == []
 
 
-def test_remote_branch_refs_round_trip_update_and_duplicate_rejection(tmp_path) -> None:
+def test_remote_tracking_branch_refs_round_trip_update_and_duplicate_rejection(tmp_path) -> None:
     head = Head(str(tmp_path))
     first = Ref("commit:" + "5" * 64)
     second = Ref("commit:" + "6" * 64)
 
-    head.create_remote_ref("acme", "demo", "main", first)
-    assert head.get_remote_ref("acme", "demo", "main") == first
-    assert head.list_remote_projects() == [("acme", "demo")]
-    assert head.list_remote_refs("acme", "demo") == ["main"]
+    head.create_remote_tracking_ref("main", first)
+    assert head.get_remote_tracking_ref("main") == first
+    assert head.list_remote_tracking_refs() == ["main"]
 
     with pytest.raises(DmlRepoError, match="Branch already exists"):
-        head.create_remote_ref("acme", "demo", "main", second)
+        head.create_remote_tracking_ref("main", second)
 
-    head.update_remote_ref("acme", "demo", "main", second)
-    assert head.get_remote_ref("acme", "demo", "main") == second
+    head.update_remote_tracking_ref("main", second)
+    assert head.get_remote_tracking_ref("main") == second
 
-    head.delete_remote_ref("acme", "demo", "main")
-    assert head.list_remote_refs("acme", "demo") == []
+    head.delete_remote_tracking_ref("main")
+    assert head.list_remote_tracking_refs() == []
 
 
 def test_branch_upstream_lifecycle_follows_branch_rename_and_delete(tmp_path) -> None:
@@ -146,24 +138,45 @@ def test_branch_upstream_lifecycle_follows_branch_rename_and_delete(tmp_path) ->
     head.create_local_ref("feature", commit)
 
     assert head.get_upstream("feature") is None
-    assert head.set_upstream("feature", "origin", "main") == {"remote": "origin", "merge": "main"}
+    assert head.set_upstream("feature", "main") == {"branch": "main"}
     head.rename_local_ref("feature", "review")
     assert head.get_upstream("feature") is None
-    assert head.get_upstream("review") == {"remote": "origin", "merge": "main"}
+    assert head.get_upstream("review") == {"branch": "main"}
 
     head.delete_local_ref("review")
     assert head.get_upstream("review") is None
 
 
-def test_named_remote_tracking_refs_migrate_legacy_origin_and_enumerate_gc_roots(tmp_path) -> None:
+def test_dependency_refs_and_config_are_isolated_gc_roots(tmp_path) -> None:
     head = Head(str(tmp_path))
     branch = Ref("commit:" + "8" * 64)
     tag = Ref("commit:" + "9" * 64)
-    head.create_remote_ref("acme", "demo", "main", branch)
-    head.create_remote_ref("acme", "demo", "v1", tag, kind="tag")
+    head.update_remote_tracking_ref("main", branch)
+    head.add_dependency("models", "s3://bucket/models/")
+    head.update_dependency_ref("models", "v1", tag, kind="tag")
 
-    head.migrate_legacy_remote_refs("origin", "acme", "demo")
-
-    assert head.get_remote_tracking_ref("origin", "main") == branch
-    assert head.list_remote_tracking_refs("origin", kind="tag") == ["v1"]
+    assert head.get_dependency_config("models") == {"backend": "s3", "root": "s3://bucket/models"}
+    assert head.dependency_config_path("models").parts[-2:] == ("models", "config.json")
     assert set(head.iter_all_remote_tracking_refs()) == {branch, tag}
+
+    head.delete_dependency("models")
+    assert head.list_dependencies() == []
+    assert set(head.iter_all_remote_tracking_refs()) == {branch}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"backend": "s3", "root": "s3://bucket/models", "unknown": True},
+        {"backend": "file", "root": "s3://bucket/models"},
+    ],
+)
+def test_dependency_config_is_strict(tmp_path, payload) -> None:
+    head = Head(str(tmp_path))
+    path = head.dependency_config_path("models")
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DmlRepoError, match="Invalid dependency config"):
+        head.get_dependency_config("models")

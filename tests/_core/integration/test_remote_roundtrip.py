@@ -35,8 +35,8 @@ def test_cache_roundtrip(tmp_path):
 
         cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
         loaded_dag = remote.get_cache(cache_key, target_db)
-        remote.put_ref(commit_ref, "acme", "demo", "branch", "main", source_db)
-        loaded_commit = remote.get_ref("acme", "demo", "branch", "main", target_db)
+        remote.put_ref(commit_ref, "branch", "main", source_db)
+        loaded_commit = remote.get_ref("branch", "main", target_db)
 
         assert cache_key == argv_value.id()
         assert loaded_dag == dag_ref
@@ -50,6 +50,26 @@ def test_cache_roundtrip(tmp_path):
 
         assert datum.data == "done"
         assert commit.tree == tree
+
+
+def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state():
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+
+        remote = Remote("s3://bucket/empty", n_workers=2, client=client)
+        assert json.loads(remote._store._get(remote._store._key_for("dml.json"))) == {
+            "cas_prefix": "cas/sha256",
+            "hash": "sha256",
+            "io_prefix": "io",
+            "layout": "one-project-cas+refs",
+            "refs_prefix": "refs",
+            "schema": 1,
+        }
+
+        client.put_object(Bucket="bucket", Key="nonempty/dml/refs/heads/main.json", Body=b"{}")
+        with pytest.raises(DmlRepoError, match="not empty"):
+            Remote("s3://bucket/nonempty", n_workers=2, client=client)
 
 
 def test_manifest_fetch_precedes_replayable_local_write(tmp_path, monkeypatch):
@@ -151,12 +171,12 @@ def test_remote_ref_payloads_use_typed_roots(tmp_path):
         cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
         remote.put_active(cache_key, "exec-1", argv_node, source_db)
         remote.put_transport("exec-1", dag_ref, source_db)
-        remote.put_ref(commit_ref, "acme", "demo", "branch", "main", source_db)
+        remote.put_ref(commit_ref, "branch", "main", source_db)
 
         cache_payload = remote._read_ref(remote._cache_key(cache_key))
         active_payload = remote._read_ref(remote._active_key(cache_key))
         transport_payload = remote._read_ref(remote._transport_key("exec-1"))
-        project_payload = remote._read_ref(remote._ref_key("acme", "demo", "branch", "main"))
+        project_payload = remote._read_ref(remote._ref_key("branch", "main"))
         cache_raw = remote.get_cache(cache_key, raw=True)
         active_raw = remote.get_active(cache_key, raw=True)
 
@@ -267,7 +287,7 @@ def test_non_forced_branch_push_ref_rejects_create_and_update_races(tmp_path, mo
             candidate = txn.put(Commit(tree=tree, parents=[base], author="alice", message="candidate"))
             racer = txn.put(Commit(tree=tree, parents=[base], author="bob", message="racer"))
 
-        ref_path = remote._ref_key("acme", "demo", "branch", "main")
+        ref_path = remote._ref_key("branch", "main")
         original_put_cas = remote._put_cas
 
         def race_create(ref, path, ref_db, **kwargs):
@@ -277,12 +297,12 @@ def test_non_forced_branch_push_ref_rejects_create_and_update_races(tmp_path, mo
 
         monkeypatch.setattr(remote, "_put_cas", race_create)
         with pytest.raises(DmlRepoError, match="updated concurrently"):
-            remote.put_ref(candidate, "acme", "demo", "branch", "main", db)
-        assert remote.get_ref("acme", "demo", "branch", "main", db) == racer
+            remote.put_ref(candidate, "branch", "main", db)
+        assert remote.get_ref("branch", "main", db) == racer
 
         monkeypatch.setattr(remote, "_put_cas", original_put_cas)
-        remote.put_ref(base, "acme", "demo", "branch", "other", db)
-        update_path = remote._ref_key("acme", "demo", "branch", "other")
+        remote.put_ref(base, "branch", "other", db)
+        update_path = remote._ref_key("branch", "other")
 
         def race_update(ref, path, ref_db, **kwargs):
             if isinstance(path, str):
@@ -292,5 +312,5 @@ def test_non_forced_branch_push_ref_rejects_create_and_update_races(tmp_path, mo
 
         monkeypatch.setattr(remote, "_put_cas", race_update)
         with pytest.raises(DmlRepoError, match="updated concurrently"):
-            remote.put_ref(candidate, "acme", "demo", "branch", "other", db)
-        assert remote.get_ref("acme", "demo", "branch", "other", db) == racer
+            remote.put_ref(candidate, "branch", "other", db)
+        assert remote.get_ref("branch", "other", db) == racer

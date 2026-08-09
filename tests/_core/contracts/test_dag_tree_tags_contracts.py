@@ -102,14 +102,13 @@ def test_tag_revert_checkout_replacement_and_delete_clear_tags(tmp_path, monkeyp
     dml = make_local_dml(tmp_path, monkeypatch)
     source_commit = commit_literal_dag(dml, "source", 1)
     commit_literal_dag(dml, "target", 2)
-    source_ref = dml.show(source_commit)["dags"]["source"]
     tagged = dml.dag.add_tag("target", "research.v0")
 
     dml.revert("HEAD")
     assert dml.show("HEAD")["tags"] == {}
 
     dml.dag.add_tag("target", "research.v0")
-    dml.dag.checkout(source_ref, name="target")
+    dml.dag.checkout(source_commit, "source", name="target", replace=True)
     assert dml.show("HEAD")["tags"] == {}
 
     dml.dag.add_tag("target", "research.v0")

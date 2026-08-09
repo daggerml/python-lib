@@ -10,7 +10,6 @@ from socket import gethostname
 from typing import Any, Literal, Mapping, cast, overload
 
 from daggerml._core.types import DmlRepoError
-from daggerml._core.uri import ProjectUri
 
 _ENV_KEYS = {
     "config_home": "DML_CONFIG_HOME",
@@ -20,7 +19,6 @@ _ENV_KEYS = {
     "default.branch_name": "DML_DEFAULT_BRANCH_NAME",
     "remote.prune_age_seconds": "DML_REMOTE_PRUNE_AGE_SECONDS",
     "project_home": "DML_PROJECT_HOME",
-    "remote.project": "DML_REMOTE_PROJECT",
     "remote.root": "DML_REMOTE_ROOT",
     "remote.fetch_workers": "DML_REMOTE_FETCH_WORKERS",
     "user": "DML_USER",
@@ -55,8 +53,6 @@ _DEFAULTS: dict[str, callable | str | None | int] = {
     "default.db_map_size_max": 10 * 1024**3,  # 10 GiB
     "default.branch_name": "main",
     "remote.prune_age_seconds": 24 * 3600,
-    "remote.project": None,
-    "remote.remotes": {},
     "remote.root": None,
     "remote.fetch_workers": 32,
     "user": default_user,
@@ -96,17 +92,6 @@ def _coerce_positive_int(value, *, key: str) -> int:
     return parsed
 
 
-def _coerce_remotes(value: object) -> dict[str, str]:
-    if not isinstance(value, Mapping):
-        raise ValueError("remote.remotes must be a mapping")
-    remotes = {}
-    for name, project in value.items():
-        if not isinstance(name, str) or not name or "/" in name:
-            raise ValueError("remote name must be a non-empty string without '/'")
-        remotes[name] = str(ProjectUri.from_uri(str(project)).ensure_project(strict=True))
-    return remotes
-
-
 _COERCION_MAP = {
     "config_home": _coerce_path,
     "db_path": _coerce_path,
@@ -115,8 +100,6 @@ _COERCION_MAP = {
     "default.db_map_size_max": lambda v: _coerce_positive_int(v, key="default.db_map_size_max"),
     "default.branch_name": str,
     "remote.prune_age_seconds": lambda v: _coerce_positive_int(v, key="remote.prune_age_seconds"),
-    "remote.project": lambda v: str(ProjectUri.from_uri(str(v)).ensure_project(strict=True)),
-    "remote.remotes": lambda v: _coerce_remotes(v),
     "remote.root": validate_remote_root,
     "remote.fetch_workers": lambda v: _coerce_positive_int(v, key="remote.fetch_workers"),
     "user": str,
@@ -183,29 +166,8 @@ def unflatten_dict(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _normalize_flat_config(data: Mapping[str, object]) -> dict[str, object]:
-    normalized = dict(data)
-    remotes = normalized.get("remote.remotes")
-    legacy_project = normalized.get("remote.project")
-    if remotes is None and legacy_project not in {None, ""}:
-        normalized["remote.remotes"] = {"origin": _COERCION_MAP["remote.project"](legacy_project)}
-    normalized.pop("remote.project", None)
-    return normalized
-
-
 def _normalized_config(path: Path) -> dict[str, object]:
-    raw = _read_json(path)
-    flat = flatten_dict(raw)
-    remote = raw.get("remote")
-    if isinstance(remote, Mapping) and isinstance(remote.get("remotes"), Mapping):
-        flat["remote.remotes"] = dict(remote["remotes"])
-        for key in tuple(flat):
-            if key.startswith("remote.remotes."):
-                flat.pop(key)
-    normalized = _normalize_flat_config(flat)
-    if normalized != flat:
-        _write_json(path, unflatten_dict(normalized))
-    return normalized
+    return flatten_dict(_read_json(path))
 
 
 @dataclass(frozen=True)
@@ -218,8 +180,6 @@ class DefaultSettings:
 @dataclass(frozen=True)
 class RemoteSettings:
     prune_age_seconds: int
-    project: str | None
-    remotes: dict[str, str]
     root: str | None
     fetch_workers: int
 
@@ -240,14 +200,12 @@ class Config:
         glob_conf = _normalized_config(Path(config_home) / "config.json")
         project_home = cast(str, coalesce("project_home", explicit, glob_conf))
         proj_conf = _normalized_config(Path(project_home) / ".dml" / "config.json")
-        explicit = _normalize_flat_config(explicit)
         config = unflatten_dict({k: coalesce(k, explicit, proj_conf, glob_conf) for k in _DEFAULTS.keys()})
         db_path = _coerce_path(config["db_path"])
         if db_path is None:
             db_path = str(Path(project_home) / ".dml" / "db")
         config["db_path"] = db_path
         config["project_home"] = project_home
-        config["remote"]["project"] = config["remote"]["remotes"].get("origin")
         config["remote"] = RemoteSettings(**config["remote"])
         config["default"] = DefaultSettings(**config["default"])
         return cls(**config)
@@ -258,7 +216,6 @@ class Config:
         project_home: str | Path = ".",
         *,
         remote_root: str | None = None,
-        remote_project: str | None = None,
     ) -> "Config":
         root = Path(project_home).resolve()
         if not root.exists():
@@ -270,8 +227,6 @@ class Config:
             (dml_dir / ".gitignore").write_text("db\nHEAD\nrefs\n", encoding="utf-8")
         if not (dml_dir / "config.json").exists():
             data = {"remote": {}}
-            if remote_project:
-                data["remote"]["remotes"] = {"origin": _COERCION_MAP["remote.project"](remote_project)}
             if remote_root:
                 data["remote"]["root"] = validate_remote_root(remote_root)
             _write_json(dml_dir / "config.json", data)
@@ -284,6 +239,8 @@ class Config:
     @overload
     def update(self, key: str, value: None, *, scope: Literal["global", "local"]) -> None: ...
     def update(self, key: str, value: str | int | None, *, scope: Literal["global", "local"]) -> str | int | None:
+        if key not in _DEFAULTS:
+            raise ValueError(f"Unsupported configuration key: {key}")
         if scope == "global":
             path = Path(self.config_home) / "config.json"
         else:
@@ -293,14 +250,6 @@ class Config:
         data = _normalized_config(path)
         if value is None:
             data.pop(key, None)
-            if key == "remote.project":
-                remotes = data.get("remote.remotes")
-                if isinstance(remotes, dict):
-                    remotes.pop("origin", None)
-        elif key == "remote.project":
-            data["remote.remotes"] = {"origin": _COERCION_MAP["remote.project"](value)}
-        elif key == "remote.remotes":
-            data[key] = _COERCION_MAP[key](value)
         else:
             data[key] = _COERCION_MAP.get(key, lambda v: v)(value)
         _write_json(path, unflatten_dict(data))

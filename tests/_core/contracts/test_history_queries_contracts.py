@@ -47,7 +47,7 @@ def test_status_reports_detached_head_without_changing_branch_list(tmp_path, mon
 
 
 def test_status_reports_ahead_and_behind_relative_to_fetched_remote_branch(tmp_path, monkeypatch) -> None:
-    dml = make_local_dml(tmp_path, monkeypatch, remote_project="dml://acme/demo")
+    dml = make_local_dml(tmp_path, monkeypatch)
     base = commit_literal_dag(dml, "train", 1, message="base")
     commit_literal_dag(dml, "local", 2, message="local")
 
@@ -55,8 +55,8 @@ def test_status_reports_ahead_and_behind_relative_to_fetched_remote_branch(tmp_p
     from daggerml._core.head import Head
 
     head = Head(str(tmp_path))
-    head.create_remote_tracking_ref("origin", "main", base)
-    head.set_upstream("main", "origin", "main")
+    head.create_remote_tracking_ref("main", base)
+    head.set_upstream("main", "main")
 
     status = dml.status()
 
@@ -65,7 +65,7 @@ def test_status_reports_ahead_and_behind_relative_to_fetched_remote_branch(tmp_p
 
 
 def test_status_reports_diverged_counts_against_fetched_remote_branch(tmp_path, monkeypatch) -> None:
-    dml = make_local_dml(tmp_path, monkeypatch, remote_project="dml://acme/demo")
+    dml = make_local_dml(tmp_path, monkeypatch)
     base = commit_literal_dag(dml, "train", 1, message="base")
 
     from daggerml._core.head import Head
@@ -77,8 +77,8 @@ def test_status_reports_diverged_counts_against_fetched_remote_branch(tmp_path, 
     dml.checkout("main")
     remote_tip = commit_literal_dag(dml, "remote-only", 3, message="remote-only")
 
-    head.create_remote_tracking_ref("origin", "feature", remote_tip)
-    head.set_upstream("feature", "origin", "feature")
+    head.create_remote_tracking_ref("feature", remote_tip)
+    head.set_upstream("feature", "feature")
     dml.checkout("feature")
 
     status = dml.status()

@@ -41,32 +41,25 @@ def test_positive_integer_config_rejects_non_positive(tmp_path, key: str) -> Non
         Config.resolve({"project_home": str(tmp_path), key: 0})
 
 
-@pytest.mark.parametrize("project", ["dml://owner/project#main", "dml://owner/project@v1", "https://owner/project", "dml://Owner/project"])
-def test_remote_project_must_be_strict_bare_project(tmp_path, project: str) -> None:
-    with pytest.raises(ValueError):
-        Config.resolve({"project_home": str(tmp_path), "remote.project": project})
-
-
-def test_legacy_remote_project_is_migrated_to_origin_on_read(tmp_path) -> None:
+def test_removed_remote_project_config_and_environment_are_ignored(tmp_path, monkeypatch) -> None:
     config_path = tmp_path / ".dml" / "config.json"
     config_path.parent.mkdir()
     config_path.write_text(json.dumps({"remote": {"project": "dml://acme/demo"}}), encoding="utf-8")
+    monkeypatch.setenv("DML_REMOTE_PROJECT", "dml://ignored/project")
+    monkeypatch.delenv("DML_REMOTE_ROOT", raising=False)
 
     config = Config.resolve({"project_home": str(tmp_path)})
 
-    assert config.remote.remotes == {"origin": "dml://acme/demo"}
-    assert config.remote.project == "dml://acme/demo"
-    assert json.loads(config_path.read_text(encoding="utf-8")) == {"remote": {"remotes": {"origin": "dml://acme/demo"}}}
+    assert config.remote.root is None
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {"remote": {"project": "dml://acme/demo"}}
 
 
-def test_remote_remotes_validate_names_and_write_normalized_config(tmp_path) -> None:
+@pytest.mark.parametrize("key", ["remote.project", "remote.remotes"])
+def test_removed_remote_configuration_keys_are_rejected(tmp_path, key: str) -> None:
     config = Config.init(tmp_path)
 
-    config.update("remote.remotes", {"research": "dml://acme/research"}, scope="local")
-
-    assert Config.resolve({"project_home": str(tmp_path)}).remote.remotes == {"research": "dml://acme/research"}
-    with pytest.raises(ValueError, match="without '/'"):
-        config.update("remote.remotes", {"bad/name": "dml://acme/research"}, scope="local")
+    with pytest.raises(ValueError, match="Unsupported configuration key"):
+        config.update(key, "removed", scope="local")
 
 
 @pytest.mark.parametrize("root", ["s3://bucket", "s3://bucket/prefix/"])

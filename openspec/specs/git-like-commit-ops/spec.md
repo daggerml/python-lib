@@ -3,6 +3,36 @@ Define the git-like repository workflow contracts for revision resolution, check
 
 ## Requirements
 
+### Requirement: History mutation may select fetched remote revisions
+Merge, rebase, and revert SHALL expose `remote=False` to select the revision from local remote tracking state. These workflows SHALL NOT expose dependency selection and SHALL NOT fetch implicitly.
+
+#### Scenario: Merge fetched remote revision
+- **WHEN** merge receives revision `main` with `remote=True`
+- **THEN** it merges the commit from `.dml/refs/remote/heads/main`
+
+#### Scenario: Rebase onto fetched remote revision
+- **WHEN** rebase receives revision `main` with `remote=True`
+- **THEN** it rebases onto the locally tracked remote commit
+
+#### Scenario: Revert fetched remote revision
+- **WHEN** revert receives revision `@v1` with `remote=True`
+- **THEN** it reverts the commit from `.dml/refs/remote/tags/v1`
+
+#### Scenario: Missing remote revision does not fetch
+- **WHEN** a history mutation selects an absent remote tracking revision
+- **THEN** it fails with fetch-required guidance without network access or history changes
+
+### Requirement: Tag creation may select a fetched remote revision
+Tag creation SHALL accept a namespace-independent revision and `remote=False`. With `remote=True`, it SHALL resolve the revision from existing remote tracking state. It SHALL NOT expose dependency selection or fetch implicitly.
+
+#### Scenario: Create local tag from remote tracking branch
+- **WHEN** local tag `baseline` is created from revision `main` with `remote=True`
+- **THEN** `baseline` points to the already-fetched remote tracking commit for `main`
+
+#### Scenario: Missing remote tag source does not fetch
+- **WHEN** tag creation selects an absent remote tracking revision
+- **THEN** it fails with fetch-required guidance without creating the local tag
+
 ### Requirement: Merge advances current head
 The system SHALL merge another commit or branch into the current branch by creating a merge commit when needed and advancing the current head. When the current attached head has no resolved commit because the branch is unborn, merge SHALL treat that destination as empty history and advance the current head to the merged commit without requiring a synthetic base commit.
 
@@ -73,7 +103,7 @@ The system SHALL support checking out one DAG from a resolved revision into the 
 - **THEN** DAG checkout creates a new commit with the target name pointing to the checked-out DAG ref
 
 ### Requirement: Revision resolution
-The system SHALL resolve revision values used by git-like commands to concrete local commit refs without performing network fetches. `HEAD` and ancestry expressions based on `HEAD` SHALL resolve through the repository's `.dml/HEAD` file. A remote-tracking branch selector SHALL use `<remote-name>/<branch-name>`.
+The system SHALL accept every supported revision grammar form with local, remote, or dependency source selection and resolve it to a concrete commit without network access when possible. A normalized source argument SHALL select local refs by default, remote tracking refs when `remote=True`, or dependency tracking refs when `dep=<name>`. Exact commit IDs and refs SHALL resolve from the local object database regardless of selected source. The only invalid source-argument combination is simultaneous `remote=True` and non-null `dep`; any otherwise unresolvable combination SHALL raise a descriptive resolution error.
 
 #### Scenario: Resolve branch shorthand
 - **WHEN** a command receives `main` as a revision

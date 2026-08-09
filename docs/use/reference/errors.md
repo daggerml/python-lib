@@ -6,7 +6,7 @@
 | --- | --- |
 | `DAG not found: ...` | Run `dml show` and confirm the DAG name and checkout. |
 | `remote.root is required` | Configure an S3 `remote.root`. |
-| `remote.project is required for project sync` | Configure `remote.project` before project sync. |
+| `remote.root is required` | Configure `remote.root` before project synchronization. |
 | Detached checkout cannot commit | Attach `HEAD` with `dml checkout BRANCH`. |
 | Function timeout | Inspect the runtime graph and execution boundary before retrying. |
 | Codec staging failure | Convert the value to a supported type or provide a codec. |

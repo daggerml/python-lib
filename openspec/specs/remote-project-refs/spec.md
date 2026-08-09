@@ -1,15 +1,56 @@
 ## ADDED Requirements
 
-### Requirement: Remote project refs namespace
-The system SHALL store project branch and tag refs under `refs/projects/<owner>/<project>/{heads,tags}/` within the remote protocol root.
+### Requirement: One-project remote refs namespace
+The system SHALL store branch and tag refs directly under `refs/{heads,tags}/` within resolved `remote.root`. A remote root SHALL represent exactly one DML project and execution domain and SHALL NOT require owner or project selectors.
 
 #### Scenario: Branch head path
-- **WHEN** project `alice/demo` branch `main` is addressed on the remote
-- **THEN** the branch head ref path is `refs/projects/alice/demo/heads/main.json`
+- **WHEN** branch `main` is addressed at `remote.root`
+- **THEN** its ref path is `refs/heads/main.json`
 
 #### Scenario: Tag path
-- **WHEN** project `alice/demo` tag `v1.0` is addressed on the remote
-- **THEN** the tag ref path is `refs/projects/alice/demo/tags/v1.0.json`
+- **WHEN** tag `v1.0` is addressed at `remote.root`
+- **THEN** its ref path is `refs/tags/v1.0.json`
+
+### Requirement: Remote descriptor rejects incompatible layouts
+The system SHALL store a versioned descriptor at each one-project endpoint root. First publication to a truly empty root SHALL conditionally create the current descriptor before other remote state. Missing descriptors on non-empty roots and unsupported or legacy descriptors SHALL be rejected before reading or mutating refs.
+
+#### Scenario: Current descriptor is accepted
+- **WHEN** an endpoint descriptor declares the supported one-project layout version
+- **THEN** remote operations may use its direct refs, CAS, cache, and execution paths
+
+#### Scenario: First push initializes empty root
+- **WHEN** first publication observes a root with no descriptor or DML transport state
+- **THEN** it conditionally creates the current descriptor and proceeds only if that initialization wins any race
+
+#### Scenario: Missing descriptor on non-empty root is rejected
+- **WHEN** a root has DML transport state but no descriptor
+- **THEN** remote operations fail without modifying that root
+
+#### Scenario: Legacy descriptor is rejected
+- **WHEN** an endpoint identifies the prior owner/project layout
+- **THEN** the operation fails with migration guidance before reading or writing project refs
+
+### Requirement: Remote root is the sole project endpoint
+The system SHALL use resolved `remote.root` for project synchronization, CAS, cache, execution coordination, and remote maintenance. Named dependencies SHALL be import-only endpoints and SHALL NOT replace `remote.root` for these operations.
+
+#### Scenario: Project synchronization requires remote root
+- **WHEN** fetch without `dep`, pull, push, or remote administration is requested without valid `remote.root`
+- **THEN** the operation fails with a descriptive configuration error
+
+#### Scenario: Runtime uses remote root
+- **WHEN** remote-backed execution or cache behavior is requested
+- **THEN** the operation uses the same resolved `remote.root`
+
+### Requirement: Local tracking namespaces follow endpoint capability
+The system SHALL store fetched `remote.root` refs under `.dml/refs/remote/{heads,tags}` and dependency refs under `.dml/refs/dep/<name>/{heads,tags}`. Tracking files SHALL contain commit pointers and SHALL be local GC roots.
+
+#### Scenario: Track fetched project branch
+- **WHEN** branch `main` is fetched from `remote.root`
+- **THEN** `.dml/refs/remote/heads/main` points to the fetched commit
+
+#### Scenario: Track fetched dependency tag
+- **WHEN** tag `v1` is fetched from dependency `models`
+- **THEN** `.dml/refs/dep/models/tags/v1` points to the fetched commit
 
 ### Requirement: Branch heads are mutable and project tags are immutable
 The system SHALL allow project branch head refs to move through safe update operations. The system SHALL reject a non-forced attempt to overwrite an existing project tag ref and SHALL allow a forced attempt to replace it.

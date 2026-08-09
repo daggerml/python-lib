@@ -4,19 +4,19 @@ Define the config-first repository bootstrap recovery behavior that the shared i
 ## Requirements
 
 ### Requirement: Init recovers missing DB when project config already exists
-The system SHALL treat `.dml/config.toml` + missing `.dml/db/` as a recoverable initialization state through the shared internal `Dml` bootstrap workflow.
+The system SHALL treat `.dml/config.json` plus missing `.dml/db/` as recoverable initialization state through the shared `Dml` bootstrap workflow.
 
-#### Scenario: Existing config with missing DB is recovered
-- **WHEN** the `Dml` init/bootstrap workflow runs in a project where `.dml/config.toml` exists and `.dml/db/` does not
-- **THEN** initialization uses `dml_context` to resolve bootstrap context, creates `.dml/db/`, and completes without requiring manual repository repair
+#### Scenario: Existing JSON config with missing DB is recovered
+- **WHEN** bootstrap finds `.dml/config.json` and no `.dml/db/`
+- **THEN** it resolves config, creates DB state, and completes without manual repair
 
-### Requirement: Recovery mode pulls when a project URI is configured
-The system SHALL fetch and check out project bootstrap state during recovery only when resolved configuration includes `remote.project`.
+### Requirement: Recovery fetches bootstrap state when remote root is configured
+The system SHALL fetch and check out bootstrap state during missing-DB recovery only when resolved configuration includes `remote.root`.
 
-#### Scenario: Recovery fetches project state when project URI is present
-- **WHEN** the `Dml` init/bootstrap workflow recovers a missing DB and resolved config includes `remote.project`
-- **THEN** it uses resolved remote and project configuration to fetch project state and check out the fetched revision locally
+#### Scenario: Recovery fetches state when remote root is present
+- **WHEN** recovery creates a missing DB and resolved config includes `remote.root`
+- **THEN** it fetches branch `default.branch_name` from that root and checks it out locally
 
-#### Scenario: Recovery skips fetch and checkout when project URI is absent
-- **WHEN** the `Dml` init/bootstrap workflow recovers a missing DB and resolved config has no `remote.project`
-- **THEN** it creates local DB state without invoking project fetch, pull, or checkout
+#### Scenario: Recovery remains local without remote root
+- **WHEN** recovery creates a missing DB and resolved config has no `remote.root`
+- **THEN** it creates local DB state without fetch, pull, or checkout

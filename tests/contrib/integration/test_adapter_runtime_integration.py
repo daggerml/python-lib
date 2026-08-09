@@ -21,14 +21,13 @@ def test_contrib_int_005__decorated_local_funk_runs_through_full_pipeline(tmp_pa
     )
 
     remote_root = "s3://test-bucket/test-prefix"
-    remote_project = "dml://acme/contrib-local-runtime"
 
     source_home = tmp_path / "source"
     target_home = tmp_path / "target"
     source_home.mkdir()
     target_home.mkdir()
 
-    Dml.init(str(source_home), user="tester", remote_root=remote_root, remote_project=remote_project)
+    Dml.init(str(source_home), user="tester", remote_root=remote_root)
     source_dml = Dml(str(source_home), remote_root=remote_root, user="tester")
 
     dag = api.new("contrib-local-runtime", dml=source_dml)
@@ -37,11 +36,10 @@ def test_contrib_int_005__decorated_local_funk_runs_through_full_pipeline(tmp_pa
     dag.commit(result)
     source_dml.push()
 
-    Dml.init(str(target_home), user="reviewer", remote_root=remote_root, remote_project=remote_project)
+    Dml.init(str(target_home), user="reviewer", remote_root=remote_root)
     target_dml = Dml(str(target_home), remote_root=remote_root, user="reviewer")
     target_dml.fetch()
-    fetched_dag = target_dml.show(revision="origin/main")["dags"]["contrib-local-runtime"]
-    target_dml.dag.checkout(fetched_dag, name="contrib-local-runtime")
+    target_dml.dag.checkout("main", "contrib-local-runtime", remote=True)
 
     loaded = api.load("contrib-local-runtime", dml=target_dml)
     assert loaded["out"].value() == 42

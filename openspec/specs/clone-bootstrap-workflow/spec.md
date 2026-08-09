@@ -1,29 +1,27 @@
 ## ADDED Requirements
 
-### Requirement: Dml clone bootstraps a local repo from a remote project ref
-The system SHALL expose `Dml.clone(...)` as a bootstrap workflow that initializes a local repo, records the cloned project as named remote `origin`, fetches the selected remote project ref, and sets local HEAD to that cloned ref. A cloned branch SHALL track `origin/<branch>`.
+### Requirement: Dml clone bootstraps from a remote root
+The system SHALL expose `Dml.clone(revision: Ref | str | None = None, /, *, project_home: str = ".", remote_root: str | None = None, ...)`. It SHALL resolve the project endpoint exclusively through normal `remote.root` configuration precedence, require a valid resolved root, initialize the local repository, persist that resolved root, materialize the optional revision from the endpoint, and set HEAD to the resolved commit. Branch revisions SHALL create an attached same-named local branch and upstream; tags, ancestry, and exact commits SHALL leave HEAD detached. Any accepted revision that cannot be materialized SHALL fail clone.
 
-#### Scenario: Clone branch-qualified project URI
-- **WHEN** a caller clones `dml://alice/demo#feature`
-- **THEN** the system initializes the local repo
-- **AND** persists remote `origin` as `dml://alice/demo`
-- **AND** fetches remote branch `feature`
-- **AND** leaves HEAD attached to local branch `feature` at the fetched commit
-- **AND** configures `feature` to track `origin/feature`
+#### Scenario: Clone selected branch
+- **WHEN** resolved configuration supplies `remote.root = "s3://bucket/demo"` and clone receives revision `feature`
+- **THEN** the system persists the resolved root, fetches branch `feature`, leaves HEAD attached to local branch `feature`, and records upstream branch `feature`
 
-#### Scenario: Clone tag-qualified project URI
-- **WHEN** a caller clones `dml://alice/demo@v1`
-- **THEN** the system initializes the local repo
-- **AND** persists remote `origin` as `dml://alice/demo`
-- **AND** fetches remote tag `v1`
-- **AND** leaves HEAD detached at the fetched commit
+#### Scenario: Clone selected tag
+- **WHEN** resolved configuration supplies `remote.root = "s3://bucket/demo"` and clone receives revision `@v1`
+- **THEN** the system persists the resolved root, fetches tag `v1`, and leaves HEAD detached at the fetched commit
 
-### Requirement: Bare project clone imputes the default branch
-The system SHALL treat a bare project URI as a request to clone the configured default branch and configure the resulting local branch to track that branch on `origin`.
+#### Scenario: Clone selected exact commit
+- **WHEN** clone receives an exact commit available from resolved `remote.root`
+- **THEN** it materializes that commit closure and leaves HEAD detached at that commit
 
-#### Scenario: Clone bare project URI
-- **WHEN** a caller clones `dml://alice/demo`
-- **THEN** the system selects branch `default.branch_name`
-- **AND** fetches that branch
-- **AND** leaves HEAD attached to the corresponding local branch
-- **AND** configures that branch to track `origin/<default.branch_name>`
+#### Scenario: Clone unresolvable revision fails
+- **WHEN** the supplied revision is accepted by the grammar but cannot be materialized from resolved `remote.root`
+- **THEN** clone fails without presenting an initialized checkout as successful
+
+### Requirement: Clone without a selector uses the default branch
+The system SHALL treat clone without a revision as a request for branch `default.branch_name` from resolved `remote.root`.
+
+#### Scenario: Clone bare endpoint root
+- **WHEN** clone resolves `remote.root` and receives no revision
+- **THEN** the system fetches branch `default.branch_name`, leaves HEAD attached to the corresponding local branch, and records that branch name as its upstream

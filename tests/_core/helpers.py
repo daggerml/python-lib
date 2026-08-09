@@ -26,7 +26,6 @@ def make_local_dml(
     *,
     user: str = "tester",
     remote_root: str = DEFAULT_REMOTE_ROOT,
-    remote_project: str | None = None,
 ):
     import daggerml._core.dml as dml_mod
     from daggerml._core.dml import Dml
@@ -34,8 +33,6 @@ def make_local_dml(
     project_home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("DML_DEFAULT_DB_MAP_SIZE_MAX", str(64 * 1024 * 1024))
     init_kwargs = {"user": user, "remote_root": remote_root}
-    if remote_project is not None:
-        init_kwargs["remote_project"] = remote_project
     Dml.init(str(project_home), **init_kwargs)
     ops = local_index_ops()
     monkeypatch.setattr(dml_mod, "_index_ops", lambda dml: ops)

@@ -3,6 +3,40 @@ Define the canonical shared `_internal.Dml` boundary, its fixed caller-facing su
 
 ## Requirements
 
+### Requirement: Revision-consuming Dml methods expose exact source signatures
+The shared public surface SHALL expose `show`, `log`, `diff`, and `rev_parse` with keyword-only mutually exclusive `remote: bool = False` and `dep: str | None = None`; `checkout`, `merge`, `rebase`, `revert`, `branch.create`, and `tag.create` with keyword-only `remote: bool = False` only; `dag.checkout` with both source selectors; and `fetch(revision: str | None = None, /, *, dep: str | None = None)`.
+
+#### Scenario: Inspection exposes both source selectors
+- **WHEN** callers inspect show, log, diff, rev-parse, or DAG checkout
+- **THEN** their signatures expose keyword-only `remote` and `dep`
+
+#### Scenario: History mutation exposes remote only
+- **WHEN** callers inspect repository checkout, merge, rebase, revert, branch creation, or tag creation
+- **THEN** their signatures expose keyword-only `remote` and no dependency selector
+
+#### Scenario: Fetch selects dependency separately from revision
+- **WHEN** callers inspect fetch
+- **THEN** its positional-only optional revision contains only a branch or `@tag` and optional keyword-only `dep` selects the endpoint
+
+#### Scenario: Source mutual exclusion is validated by Dml
+- **WHEN** any public method receives `remote=True` with non-null `dep`
+- **THEN** the shared method fails before revision lookup, regardless of whether it was called from Python or the generated CLI
+
+### Requirement: Dml construction owns remote-root configuration
+`Dml`, `Dml.init`, and `Dml.clone` SHALL accept `remote_root` through the shared configuration surface. Resolved `remote.root` SHALL affect a method only when that method performs remote-backed synchronization, storage, cache, execution, or administration behavior. Local-only methods SHALL not add special handling for this or other unrelated construction arguments.
+
+#### Scenario: Local method ignores unused remote capability
+- **WHEN** a `Dml` instance has `remote_root` and executes a method requiring no remote behavior
+- **THEN** that method behaves through its normal local path without remote access
+
+#### Scenario: Remote-backed method receives resolved root
+- **WHEN** the same instance executes remote-backed behavior
+- **THEN** the shared orchestration passes resolved `remote.root` to the relevant remote-aware component
+
+#### Scenario: CLI derives constructor option behavior
+- **WHEN** public construction parameters generate CLI options
+- **THEN** their effects follow shared `Dml` configuration and method usage without command-specific logic in `daggerml._cli`
+
 ### Requirement: One shared `_internal.Dml` class is the canonical orchestration boundary
 The system SHALL expose one shared `_internal.Dml` class for repository, DAG, admin, and runtime workflows.
 
@@ -63,7 +97,7 @@ The shared `Dml` constructor SHALL accept the full supported runtime configurati
 - **THEN** it can construct a `Dml` instance through `Dml.from_config_vars(...)` without translating those keys to Python kwargs first
 
 ### Requirement: Shared `Dml` exact DB object contracts use `Ref`
-The shared `Dml` surface SHALL require `Ref` objects for caller inputs that represent exact DB-backed objects, and it SHALL return `Ref` objects as the canonical identity for DB-backed objects in its payloads.
+The shared `Dml` surface SHALL require `Ref` objects for exact DB-backed object inputs and return `Ref` objects as canonical DB identity. Revision selectors, DAG and node names, branch and tag names, endpoint roots, dependency names, and runtime index IDs SHALL remain strings.
 
 #### Scenario: Exact DAG access requires `Ref`
 - **WHEN** a caller invokes a `Dml` method whose contract is to dereference an exact DAG object
@@ -76,7 +110,7 @@ The shared `Dml` surface SHALL require `Ref` objects for caller inputs that repr
 - **AND** it does not accept a plain `"node:..."` string as a substitute
 
 #### Scenario: Non-DB selectors remain strings
-- **WHEN** a caller provides a revision selector, DAG name, node name, branch, tag, remote URI, or `index_id`
+- **WHEN** a caller provides revision text, a symbolic object name, an endpoint root, a dependency name, or an index ID
 - **THEN** the shared `Dml` surface continues to accept that value as a string
 
 #### Scenario: DB-backed payloads use ref identity
@@ -85,9 +119,8 @@ The shared `Dml` surface SHALL require `Ref` objects for caller inputs that repr
 - **AND** the payload does not duplicate the same DB identity as a separate raw `id` string
 
 ### Requirement: Shared `Dml` exposes the fixed method namespaces
-The shared `Dml` class SHALL expose this caller-facing method surface:
+The shared `Dml` SHALL expose repository methods including `status`, `show`, `log`, `diff`, `checkout`, `branch`, `tag`, `fetch`, `pull`, `push`, `merge`, `rebase`, and `revert`; dependency lifecycle under `dep.add|list|delete`; and the existing `dag`, `admin`, `runtime`, `config`, and `ops` namespaces.
 
-- top level: `status`, `show`, `log`, `diff`, `checkout`, `branch`, `fetch`, `pull`, `push`, `merge`, `revert`
 - `dag`: `list`, `get`, `checkout`, `delete`
 - `admin.index`: `list`, `get`, `delete`
 - `admin.cache`: `invalidate`
@@ -97,9 +130,9 @@ The shared `Dml` class SHALL expose this caller-facing method surface:
 - `config`: `get`, `set`, `show`
 - `ops`: `commit`, `head`, `dag`, `node`, `index`, `cache`, `remote`, `gc`, `config`
 
-#### Scenario: Top-level repository methods are present
+#### Scenario: Repository and dependency methods are present
 - **WHEN** a caller inspects the shared `Dml` class
-- **THEN** the repository porcelain workflows are available on the top level rather than through raw subsystem factories
+- **THEN** repository porcelain is top-level and dependency endpoint lifecycle is under `dep`
 
 #### Scenario: DAG, admin, runtime, and config methods remain namespaced
 - **WHEN** a caller needs DAG inspection, admin maintenance, runtime staging behavior, or config access

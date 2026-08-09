@@ -9,7 +9,7 @@ def test_rev_parse_reports_head_commit_branch_tag_and_remote_refs(tmp_path, monk
     first = commit_literal_dag(dml, "train", 1, message="train-v1")
     head = Head(str(tmp_path))
     head.create_local_ref("release", first, kind="tag")
-    head.create_remote_ref("acme", "demo", "main", first)
+    head.create_remote_tracking_ref("main", first)
 
     head_payload = dml.rev_parse("HEAD")
     assert head_payload["kind"] == "head"
@@ -20,14 +20,14 @@ def test_rev_parse_reports_head_commit_branch_tag_and_remote_refs(tmp_path, monk
     assert branch_payload["kind"] == "ref"
     assert branch_payload["branch"] == "main"
     assert branch_payload["tag"] is None
-    assert branch_payload["uri"] == "#main"
+    assert branch_payload["uri"] is None
     assert branch_payload["commit"] == first
 
     tag_payload = dml.rev_parse("@release")
     assert tag_payload["kind"] == "ref"
     assert tag_payload["branch"] is None
     assert tag_payload["tag"] == "release"
-    assert tag_payload["uri"] == "@release"
+    assert tag_payload["uri"] is None
     assert tag_payload["commit"] == first
 
     commit_payload = dml.rev_parse(first.id())
@@ -35,11 +35,11 @@ def test_rev_parse_reports_head_commit_branch_tag_and_remote_refs(tmp_path, monk
     assert commit_payload["uri"] is None
     assert commit_payload["commit"] == first
 
-    remote_payload = dml.rev_parse("dml://acme/demo#main")
+    remote_payload = dml.rev_parse("main", remote=True)
     assert remote_payload["kind"] == "ref"
     assert remote_payload["branch"] == "main"
     assert remote_payload["tag"] is None
-    assert remote_payload["uri"] == "dml://acme/demo#main"
+    assert remote_payload["uri"] is None
     assert remote_payload["commit"] == first
 
 
