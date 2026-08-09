@@ -71,12 +71,17 @@ def use_default_dml(dml: "Dml"):
 
 
 def new(
-    name="", message="", cache_key: str | None = None, execution_id: str | None = None, dml: Dml | None = None
+    name="",
+    message="",
+    cache_key: str | None = None,
+    execution_id: str | None = None,
+    tags: list | None = None,
+    dml: Dml | None = None,
 ) -> "Dag":
     """Create a new DAG using the active or provided Dml runtime."""
     runtime = dml or get_default_dml()
     index_id = runtime.runtime.create(cache_key=cache_key, execution_id=execution_id)
-    return Dag(dml=runtime, token=index_id, name=name, message=message)
+    return Dag(dml=runtime, token=index_id, name=name, message=message, tags=tags)
 
 
 def load(
@@ -321,6 +326,7 @@ class Dag:
     ref: Optional[Ref] = None
     name: str = ""  # DAG name for commit
     message: str = ""  # Commit message
+    tags: list[str] | None = None
 
     def __repr__(self):
         to = self.ref.to if self.ref else (self.token.to if self.token is not None else "NA")
@@ -591,6 +597,9 @@ class Dag:
             value = value.ref
         self.ref = self.dml.runtime.commit(self._require_index_ref(), value, message=self.message, name=self.name)
         self.token = None  # Clear the working index since it's now committed
+        if self.tags:
+            for tag in self.tags:
+                self.dml.dag.add_tag(self.name, tag)
 
     def freeze(self, message: str | None = None) -> "Dag":
         """Freeze this uncommitted DAG's runtime index for read-only inspection."""
