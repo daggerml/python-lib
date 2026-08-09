@@ -35,6 +35,16 @@ def test_runtime_freeze_and_unfreeze_preserve_id_and_partial_dag(tmp_path, monke
     assert dml.runtime.describe(active)["state"] == "active"
     assert dml.runtime.describe(active)["dag"] == before["dag"]
 
+    resumed_dag = Dag(dml=dml, token=active)
+    approval = resumed_dag.put("approved", name="review")
+    resumed_dag.commit(approval)
+
+    completed_dag = Dag(dml=dml, ref=resumed_dag.ref)
+    assert completed_dag.keys() == ["implementation", "review"]
+    assert completed_dag.implementation.value() == {"status": "done"}
+    assert completed_dag.review.value() == "approved"
+    assert completed_dag.result.value() == "approved"
+
 
 def test_runtime_list_includes_frozen_indexes(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
