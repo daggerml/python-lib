@@ -150,8 +150,13 @@ def test_api_live_010__frozen_dag_can_be_reconstructed_resumed_and_committed(liv
     original.put({"status": "done"}, name="implementation")
     original.freeze("awaiting review")
 
-    resumed = api.Dag(dml=original.dml, token=original.token, name=original.name)
-    resumed.unfreeze()
+    resumed = api.resume(
+        original.token,
+        name="resumed",
+        message="complete review",
+        tags=["reviewed"],
+        dml=live_dml,
+    )
     approval = resumed.put("approved", name="review")
     resumed.commit(approval)
 
@@ -160,6 +165,9 @@ def test_api_live_010__frozen_dag_can_be_reconstructed_resumed_and_committed(liv
     assert completed.implementation.value() == {"status": "done"}
     assert completed.review.value() == "approved"
     assert completed.result.value() == "approved"
+    commit = live_dml.show()
+    assert commit["tags"] == {"resumed": ["reviewed"]}
+    assert live_dml.show(commit["parents"][0])["message"] == "complete review"
 
 
 def test_node_context_happy_path(live_dml):

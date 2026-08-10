@@ -100,6 +100,20 @@ def load(
     return Dag(dml=dml, ref=dag_ref, name=name)
 
 
+def resume(
+    frozen: Ref,
+    *,
+    name: str,
+    message: str,
+    tags: list[str] | None,
+    dml: Dml | None = None,
+) -> "Dag":
+    """Resume a frozen DAG runtime with explicitly supplied commit metadata."""
+    runtime = dml or get_default_dml()
+    index_id = runtime.runtime.unfreeze(frozen)
+    return Dag(dml=runtime, token=index_id, name=name, message=message, tags=tags)
+
+
 @contextmanager
 def temporary(prefix="dml-tmp-", **kw):
     """Create a temporary Dml runtime with an unborn attached HEAD."""

@@ -121,3 +121,19 @@ def test_api_default_011__temporary_initializes_and_yields_runtime():
     init.assert_called_once()
     assert init.call_args.kwargs["user"] == "tester"
     assert "project_home" in init.call_args.kwargs
+
+
+def test_api_default_012__resume_unfreezes_with_explicit_metadata_and_active_default(fake_dml, refs):
+    api.set_default_dml(fake_dml)
+    fake_dml.runtime.unfreeze.return_value = refs.index
+
+    dag = api.resume(refs.index, name="resumed", message="complete review", tags=None)
+
+    fake_dml.runtime.unfreeze.assert_called_once_with(refs.index)
+    assert dag.dml is fake_dml
+    assert dag.token == refs.index
+    assert dag.ref is None
+    assert (dag.name, dag.message, dag.tags) == ("resumed", "complete review", None)
+
+    with pytest.raises(TypeError):
+        api.resume(refs.index, name="resumed", message="complete review")

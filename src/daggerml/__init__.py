@@ -17,6 +17,7 @@ from daggerml.api import (
     get_default_dml,
     load,
     new,
+    resume,
     set_default_dml,
     status,
     temporary,
@@ -45,6 +46,7 @@ __all__ = (
     "clear_default_dml",
     "new",
     "load",
+    "resume",
     "status",
     "temporary",
 )
