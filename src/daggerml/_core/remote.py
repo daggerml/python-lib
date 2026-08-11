@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import InitVar, dataclass, field, fields, is_dataclass
@@ -86,10 +87,14 @@ class Remote:
     client: InitVar["boto3.client"]
     _store: S3Remote = field(init=False)
     prune_age_seconds: int = 24 * 3600
+    initialize: bool = True
 
     def __post_init__(self, client):
         self._store = S3Remote(self.root_uri.rstrip("/") + "/dml", client)
-        self._ensure_remote_descriptor()
+        if self.initialize:
+            self._ensure_remote_descriptor()
+        else:
+            self._inspect_remote_descriptor()
 
     def _ensure_remote_descriptor(self) -> None:
         descriptor_key = self._store._key_for("dml.json")
@@ -108,6 +113,20 @@ class Remote:
                     raise DmlRepoError(
                         "Unsupported remote descriptor; migrate this remote root before use"
                     ) from conflict
+
+    def _inspect_remote_descriptor(self) -> None:
+        descriptor_key = self._store._key_for("dml.json")
+        try:
+            descriptor = json.loads(self._store._get(descriptor_key))
+        except self._store.client.exceptions.NoSuchKey as exc:
+            endpoint = S3Remote(self.root_uri.rstrip("/"), self._store.client)
+            if endpoint._has_any(endpoint._key_for("")):
+                raise DmlRepoError("Remote root is not empty and has no supported descriptor") from exc
+            return
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise DmlRepoError("Unsupported remote descriptor; migrate this remote root before use") from exc
+        if descriptor != _REMOTE_DESCRIPTOR:
+            raise DmlRepoError("Unsupported remote descriptor; migrate this remote root before use")
 
     def _cas_key(self, oid: str) -> str:
         aa = oid[:2]
@@ -500,6 +519,28 @@ class Remote:
             name = unquote(key[len(self._store._key_for(prefix)) :][:-5])
             names.append(name)
         return sorted(names)
+
+    def list_ref_tips(self, kind: Literal["tag", "branch"] = "branch") -> list[tuple[str, Ref]]:
+        """List exact commit tips without materializing remote objects."""
+        kind_dir = "tags" if kind == "tag" else "heads"
+        prefix = f"refs/{kind_dir}/"
+        full_prefix = self._store._key_for(prefix)
+        tips = []
+        for key in self._store._iter(full_prefix):
+            if not key.endswith(".json"):
+                raise DmlRepoError(f"Invalid remote {kind} ref path: {key}")
+            name = unquote(key[len(full_prefix) : -5])
+            try:
+                payload = json.loads(self._store._get(key))
+                if not isinstance(payload, dict):
+                    raise ValueError("Remote ref payload must be an object")
+                tip = self._validate_ref_payload(payload, expected_root_ns="commit")
+                if re.fullmatch(r"[0-9a-f]{64}", tip.id()) is None:
+                    raise ValueError("Remote commit ref must use a 64-character lowercase hexadecimal id")
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise DmlRepoError(f"Invalid remote {kind} ref: {name}") from exc
+            tips.append((name, tip))
+        return sorted(tips, key=lambda item: item[0])
 
     def put_active(self, cache_key: str, execution_id: str, argv: Ref, db: DmlDB) -> None:
         ref_path = self._active_key(cache_key)

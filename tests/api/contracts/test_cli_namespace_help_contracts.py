@@ -61,3 +61,32 @@ def test_cli_dependency_commands_and_branch_create_options_are_generated() -> No
     assert "name" in create_help
     assert "--remote" in create_help
     assert "--revision REVISION" in create_help
+
+
+def test_cli_ref_listing_and_inspection_commands_are_generated() -> None:
+    cli = MethodCLI(Dml, prog="dml")
+    root_subparsers = next(
+        action for action in cli.parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    branch = root_subparsers.choices["branch"]
+    tag = root_subparsers.choices["tag"]
+    runtime = root_subparsers.choices["runtime"]
+    branch_subparsers = next(
+        action for action in branch._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    tag_subparsers = next(action for action in tag._actions if isinstance(action, argparse._SubParsersAction))
+    runtime_subparsers = next(
+        action for action in runtime._actions if isinstance(action, argparse._SubParsersAction)
+    )
+
+    branch_list_help = branch_subparsers.choices["list"].format_help()
+    tag_list_help = tag_subparsers.choices["list"].format_help()
+    assert "--remote" in branch_list_help and "--dep DEP" in branch_list_help
+    assert "--remote" in tag_list_help and "--dep DEP" in tag_list_help
+    assert "get-upstream" in branch_subparsers.choices
+    assert "get-upstream" not in tag_subparsers.choices
+    assert "read-launch-state" in runtime_subparsers.choices
+
+    parsed = cli.parser.parse_args(["branch", "list", "--remote", "--dep", "models"])
+    assert parsed.remote is True
+    assert parsed.dep == "models"

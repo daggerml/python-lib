@@ -117,6 +117,11 @@ class S3Remote:
                 return False
             raise
 
+    def _has_any(self, prefix: str) -> bool:
+        """Return whether at least one key exists under a prefix."""
+        response = self.client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, MaxKeys=1)
+        return bool(response.get("Contents"))
+
     def _iter(self, prefix: str, keys: bool = True) -> Iterable[str]:
         """Iterate over keys with the given prefix."""
         paginator = self.client.get_paginator("list_objects_v2")

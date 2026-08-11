@@ -255,7 +255,7 @@ The generated CLI SHALL emit normalized failures instead of unstructured traceba
 - **THEN** the CLI emits a structured JSON error payload instead of an unstructured traceback
 
 ### Requirement: Generated CLI exposes remote-root sync and dependency commands
-The generated CLI SHALL expose `dep add|list|delete`, `fetch [--dep DEP] [BRANCH|@TAG]`, no-positional-argument `pull` and `push`, and revision-source flags solely from public `Dml` signatures. Merge, rebase, and revert SHALL expose `--remote` but not `--dep`. Methods exposing both source flags SHALL validate mutual exclusion at the shared `Dml` boundary. This change SHALL NOT modify `src/daggerml/_cli.py`.
+The generated CLI SHALL expose `dep add|list|delete`, `fetch [--dep DEP] [BRANCH|@TAG]`, no-positional-argument `pull` and `push`, and revision-source flags solely from public `Dml` signatures. Merge, rebase, and revert SHALL expose `--remote` but not `--dep`. Revision-consuming methods exposing both source flags SHALL validate mutual exclusion at the shared `Dml` boundary. Generated `branch list` and `tag list` commands SHALL expose both flags as independent selectors and SHALL accept them together. This change SHALL NOT modify `src/daggerml/_cli.py`.
 
 #### Scenario: Fetch exposes optional dependency and ref
 - **WHEN** a user views `dml fetch --help`
@@ -266,8 +266,12 @@ The generated CLI SHALL expose `dep add|list|delete`, `fetch [--dep DEP] [BRANCH
 - **THEN** help shows `add`, `list`, and `delete` without named ordinary remote commands
 
 #### Scenario: Revision source flags are mutually exclusive
-- **WHEN** a command exposes both `--remote` and `--dep DEP` and a user supplies both
+- **WHEN** a revision-consuming command exposes both `--remote` and `--dep DEP` and a user supplies both
 - **THEN** generated dispatch reaches shared method validation, which rejects the invocation before revision lookup
+
+#### Scenario: Ref list source flags are independent
+- **WHEN** a user invokes generated `branch list` or `tag list` with both `--remote` and `--dep DEP`
+- **THEN** generated dispatch accepts both flags and requests dependency-endpoint enumeration
 
 #### Scenario: History mutation exposes remote only
 - **WHEN** a user views merge, rebase, or revert help

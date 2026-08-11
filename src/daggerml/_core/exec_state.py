@@ -343,8 +343,12 @@ class ExecutionState:
         self._remote.put_active(self.cache_key, execution_id, argv, db)
 
     def read_launch_state(self, execution_id: str) -> dict | None:
-        ls = cast(LaunchState, self._read(self._key_for_launch_state(execution_id)))
-        return ls["resume_state"] if ls is not None else None
+        value = self._read(self._key_for_launch_state(execution_id))
+        if value is None:
+            return None
+        if not isinstance(value, dict) or not isinstance(value.get("resume_state"), dict):
+            raise DmlRepoError(f"Invalid launch state for execution_id: {execution_id}")
+        return value["resume_state"]
 
     def create_launch_state(self, execution_id: str, launch_state: dict) -> bool:
         if self.cache_key is None:

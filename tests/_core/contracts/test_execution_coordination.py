@@ -56,6 +56,26 @@ def test_expired_lock_can_be_stolen() -> None:
     assert state.lock(ttl=60)
 
 
+def test_launch_state_read_returns_only_resume_object_and_missing_returns_none() -> None:
+    state = _state()
+    assert state.create_launch_state("exec", {"job_id": "j1"})
+
+    assert state.read_launch_state("exec") == {"job_id": "j1"}
+    assert state.read_launch_state("missing") is None
+
+
+@pytest.mark.parametrize("resume_state", [None, "job", ["job"], 1])
+def test_launch_state_read_rejects_non_object_resume_state(resume_state) -> None:
+    state = _state()
+    state._store._put_js(
+        state._key_for_launch_state("exec"),
+        {"execution_id": "exec", "cache_key": "cache", "created_at": 0, "resume_state": resume_state},
+    )
+
+    with pytest.raises(DmlRepoError, match="Invalid launch state"):
+        state.read_launch_state("exec")
+
+
 def test_spawned_execution_add_drop_retries_cas_conflict() -> None:
     state = _state()
     state.create_execution_record(_record("caller"))

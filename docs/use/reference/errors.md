@@ -6,7 +6,10 @@
 | --- | --- |
 | `DAG not found: ...` | Run `dml show` and confirm the DAG name and checkout. |
 | `remote.root is required` | Configure an S3 `remote.root`. |
-| `remote.root is required` | Configure `remote.root` before project synchronization. |
+| Unknown dependency during ref listing | Configure it with `dml dep add NAME ROOT`. |
+| Invalid remote branch or tag ref | Repair or republish the malformed endpoint ref before listing it. |
+| Invalid upstream config | Repair the malformed local branch upstream metadata. |
+| Invalid launch state | Repair or remove malformed execution coordination state; resume state must be a JSON object. |
 | Detached checkout cannot commit | Attach `HEAD` with `dml checkout BRANCH`. |
 | Function timeout | Inspect the runtime graph and execution boundary before retrying. |
 | Codec staging failure | Convert the value to a supported type or provide a codec. |

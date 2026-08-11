@@ -21,6 +21,12 @@ updates check ancestry and use conditional S3 writes to avoid silently replacing
 concurrent remote changes; non-forced tags are create-only. Cache publication
 uses `refs/cache/` keyed by normalized function arguments.
 
+Branch and tag inspection can read typed commit tips directly from either the
+main endpoint or a dependency endpoint. This path validates a present descriptor
+without initializing a missing one, limits descriptorless emptiness detection to
+one-key existence probing, and reads only the selected ref namespace. It does
+not traverse CAS, materialize commits, or update local tracking pointers.
+
 Execution coordination is adjacent to, but separate from, CAS and project refs.
 `ExecutionState` stores locks, lifecycle records, launch state, lineage, and
 adapter I/O under its execution prefix. Remote cleanup likewise has two scopes:

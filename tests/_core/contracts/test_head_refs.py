@@ -164,6 +164,37 @@ def test_dependency_refs_and_config_are_isolated_gc_roots(tmp_path) -> None:
     assert set(head.iter_all_remote_tracking_refs()) == {branch}
 
 
+def test_ref_tip_readers_preserve_exact_tips_and_name_order(tmp_path) -> None:
+    head = Head(str(tmp_path))
+    local_tip = Ref("commit:" + "a" * 64)
+    fetched_tip = Ref("commit:" + "b" * 64)
+    dependency_tip = Ref("commit:" + "c" * 64)
+
+    head.create_local_ref("zeta", local_tip)
+    head.create_local_ref("alpha", fetched_tip)
+    head.update_remote_tracking_ref("zeta", fetched_tip)
+    head.update_remote_tracking_ref("alpha", local_tip)
+    head.add_dependency("models", "s3://bucket/models")
+    head.update_dependency_ref("models", "zeta", dependency_tip)
+    head.update_dependency_ref("models", "alpha", fetched_tip)
+
+    assert head.list_local_ref_tips() == [("alpha", fetched_tip), ("zeta", local_tip)]
+    assert head.list_remote_tracking_ref_tips() == [("alpha", local_tip), ("zeta", fetched_tip)]
+    assert head.list_dependency_ref_tips("models") == [("alpha", fetched_tip), ("zeta", dependency_tip)]
+
+
+def test_ref_tip_readers_fail_closed_for_malformed_commit_pointer(tmp_path) -> None:
+    head = Head(str(tmp_path))
+    valid_tip = Ref("commit:" + "a" * 64)
+    head.create_local_ref("alpha", valid_tip)
+    malformed = head.local_ref_path("zeta", kind="branch")
+    malformed.parent.mkdir(parents=True, exist_ok=True)
+    malformed.write_text("not-a-commit-id", encoding="utf-8")
+
+    with pytest.raises(DmlRepoError, match="Invalid commit pointer"):
+        head.list_local_ref_tips()
+
+
 @pytest.mark.parametrize(
     "payload",
     [

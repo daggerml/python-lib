@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -50,6 +51,13 @@ def _validate_ref_name(label: str, value: str) -> str:
     return value
 
 
+def _read_commit_ref(path: Path) -> Ref:
+    commit_id = path.read_text(encoding="utf-8").strip()
+    if re.fullmatch(r"[0-9a-f]{64}", commit_id) is None:
+        raise DmlRepoError(f"Invalid commit pointer: {path}")
+    return Ref(f"commit:{commit_id}")
+
+
 class HeadInfo(TypedDict):
     mode: Literal["attached", "detached"]
     branch: str | None
@@ -90,7 +98,7 @@ class Head:
         path = self.local_ref_path(name, kind=kind)
         if not path.exists():
             raise DmlRepoError(f"Pointer does not exist: {path}")
-        return Ref(f"commit:{path.read_text(encoding='utf-8').strip()}")
+        return _read_commit_ref(path)
 
     def create_local_ref(self, name: str, commit: Ref, *, kind: Literal["branch", "tag"] = "branch") -> str:
         path = self.local_ref_path(name, kind=kind)
@@ -125,10 +133,16 @@ class Head:
         path = self.upstream_path(branch)
         if not path.exists():
             return None
-        upstream = json.loads(path.read_text(encoding="utf-8"))
-        if set(upstream) != {"branch"}:
-            raise DmlRepoError(f"Invalid upstream config: {branch}")
-        return {"branch": _validate_ref_name("upstream branch", upstream["branch"])}
+        try:
+            upstream = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(upstream, dict) or set(upstream) != {"branch"}:
+                raise ValueError("expected an object containing only 'branch'")
+            upstream_branch = upstream["branch"]
+            if not isinstance(upstream_branch, str):
+                raise ValueError("expected 'branch' to be a string")
+            return {"branch": _validate_ref_name("upstream branch", upstream_branch)}
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise DmlRepoError(f"Invalid upstream config: {branch}") from exc
 
     def set_upstream(self, branch: str, upstream_branch: str) -> UpstreamInfo:
         upstream: UpstreamInfo = {"branch": _validate_ref_name("upstream branch", upstream_branch)}
@@ -154,7 +168,7 @@ class Head:
         path = self.remote_tracking_ref_path(name, kind=kind)
         if not path.exists():
             raise DmlRepoError(f"Pointer does not exist: {path}")
-        return Ref(f"commit:{path.read_text(encoding='utf-8').strip()}")
+        return _read_commit_ref(path)
 
     def create_remote_tracking_ref(
         self, name: str, commit: Ref, *, kind: Literal["branch", "tag"] = "branch"
@@ -235,7 +249,7 @@ class Head:
         path = self.dependency_ref_path(dependency, name, kind=kind)
         if not path.exists():
             raise DmlRepoError(f"Pointer does not exist: {path}")
-        return Ref(f"commit:{path.read_text(encoding='utf-8').strip()}")
+        return _read_commit_ref(path)
 
     def update_dependency_ref(
         self, dependency: str, name: str, commit: Ref, *, kind: Literal["branch", "tag"] = "branch"
@@ -326,6 +340,9 @@ class Head:
                 refs.append(unquote(path.relative_to(base).as_posix()))
         return sorted(refs)
 
+    def list_local_ref_tips(self, kind: Literal["branch", "tag"] = "branch") -> list[tuple[str, Ref]]:
+        return [(name, self.get_local_ref(name, kind=kind)) for name in self.list_local_refs(kind=kind)]
+
     def list_remote_tracking_refs(self, kind: Literal["branch", "tag"] = "branch") -> list[str]:
         base = (
             Path(self.project_home)
@@ -337,6 +354,21 @@ class Head:
         if not base.exists():
             return []
         return sorted(unquote(path.relative_to(base).as_posix()) for path in base.rglob("*") if path.is_file())
+
+    def list_remote_tracking_ref_tips(self, kind: Literal["branch", "tag"] = "branch") -> list[tuple[str, Ref]]:
+        return [
+            (name, self.get_remote_tracking_ref(name, kind=kind))
+            for name in self.list_remote_tracking_refs(kind=kind)
+        ]
+
+    def list_dependency_ref_tips(
+        self, dependency: str, kind: Literal["branch", "tag"] = "branch"
+    ) -> list[tuple[str, Ref]]:
+        base = self.dependency_path(dependency) / ("heads" if kind == "branch" else "tags")
+        if not base.exists():
+            return []
+        names = sorted(unquote(path.relative_to(base).as_posix()) for path in base.rglob("*") if path.is_file())
+        return [(name, self.get_dependency_ref(dependency, name, kind=kind)) for name in names]
 
     def iter_remote_tracking_refs(self) -> Iterator[Ref]:
         for kind in ("branch", "tag"):

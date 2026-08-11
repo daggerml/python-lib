@@ -13,7 +13,7 @@ from daggerml._core.config import Config, flatten_dict
 from daggerml._core.dag import DagDescription, DagOps, NodeDescriptionPayload
 from daggerml._core.db import DmlDbKeyNotFoundError, Ref
 from daggerml._core.exec_state import ExecutionGraph, ExecutionRecord, ExecutionState, InvalidationResponse
-from daggerml._core.head import Head
+from daggerml._core.head import Head, UpstreamInfo
 from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItemConflict
@@ -61,11 +61,16 @@ def _require_s3_client(dml: "Dml"):
 
 
 def _remote_ops(dml: "Dml") -> Remote:
+    return _remote_ops_for_root(dml, _require_remote_root(dml))
+
+
+def _remote_ops_for_root(dml: "Dml", root: str, *, initialize: bool = True) -> Remote:
     return Remote(
-        _require_remote_root(dml),
+        root,
         n_workers=dml._config.remote.fetch_workers,
         client=_require_s3_client(dml),
         prune_age_seconds=dml._config.remote.prune_age_seconds,
+        initialize=initialize,
     )
 
 
@@ -176,6 +181,29 @@ def _revision_source(remote: bool, dep: str | None) -> tuple[bool, str | None]:
     if remote and dep is not None:
         raise DmlRepoError("remote and dep cannot be selected together")
     return remote, dep
+
+
+class RefListItem(TypedDict):
+    name: str
+    commit: Ref
+
+
+def _list_ref_items(dml: "Dml", *, kind: Literal["branch", "tag"], remote: bool, dep: str | None) -> list[RefListItem]:
+    head = _head_ops(dml)
+    if dep is None:
+        tips = (
+            _remote_ops_for_root(dml, _require_remote_root(dml), initialize=False).list_ref_tips(kind)
+            if remote
+            else head.list_local_ref_tips(kind)
+        )
+    else:
+        dependency = head.get_dependency_config(dep)
+        tips = (
+            _remote_ops_for_root(dml, dependency["root"], initialize=False).list_ref_tips(kind)
+            if remote
+            else head.list_dependency_ref_tips(dep, kind)
+        )
+    return [{"name": name, "commit": commit} for name, commit in sorted(tips)]
 
 
 def resolve_rev(
@@ -515,6 +543,13 @@ class _RuntimeNamespace:
         execution_id = execution.id() if isinstance(execution, Ref) else execution
         return _exec_state(self._dml).read_execution_record(execution_id)
 
+    def read_launch_state(
+        self,
+        execution_id: Annotated[str, "Execution id whose persisted executor resume state should be read."],
+    ) -> dict | None:
+        """Read the persisted executor resume-state object for one execution."""
+        return _exec_state(self._dml).read_launch_state(execution_id)
+
     def cancel(
         self,
         index: Annotated[Ref | str, "Runtime index to cancel."],
@@ -692,9 +727,14 @@ class _DagNamespace:
 class _BranchNamespace:
     _dml: "Dml"
 
-    def list(self) -> list[str]:
-        """List local branch names."""
-        return _head_ops(self._dml).list_local_refs(kind="branch")
+    def list(
+        self,
+        *,
+        remote: Annotated[bool, "List branches directly from the selected endpoint."] = False,
+        dep: Annotated[str | None, "Dependency to inspect; list fetched or remote refs."] = None,
+    ) -> list[RefListItem]:
+        """List branch names and exact commit tips from the selected source."""
+        return _list_ref_items(self._dml, kind="branch", remote=remote, dep=dep)
 
     def create(
         self,
@@ -733,6 +773,13 @@ class _BranchNamespace:
             head.set_upstream(current, upstream)
         return upstream
 
+    def get_upstream(
+        self,
+        branch: Annotated[str, "Local branch name whose configured upstream should be inspected."],
+    ) -> UpstreamInfo | None:
+        """Return the configured remote-root upstream for one branch."""
+        return _head_ops(self._dml).get_upstream(branch)
+
     def move(
         self,
         name: Annotated[str, "Local branch name to repoint."],
@@ -770,9 +817,14 @@ class _BranchNamespace:
 class _TagNamespace:
     _dml: "Dml"
 
-    def list(self) -> list[str]:
-        """List local tag names."""
-        return _head_ops(self._dml).list_local_refs(kind="tag")
+    def list(
+        self,
+        *,
+        remote: Annotated[bool, "List tags directly from the selected endpoint."] = False,
+        dep: Annotated[str | None, "Dependency to inspect; list fetched or remote refs."] = None,
+    ) -> list[RefListItem]:
+        """List tag names and exact commit tips from the selected source."""
+        return _list_ref_items(self._dml, kind="tag", remote=remote, dep=dep)
 
     def create(
         self,
@@ -813,23 +865,6 @@ class RemoteRefListPayload(TypedDict):
 class _RemoteNamespace:
     _dml: "Dml"
 
-    def add(
-        self,
-        name: Annotated[str, "Name for the import-only dependency."],
-        root: Annotated[str, "S3 root for the dependency endpoint."],
-    ) -> str:
-        """Add one import-only dependency endpoint."""
-        return _head_ops(self._dml).add_dependency(name, root)
-
-    def list(self) -> dict[str, str]:
-        """List configured import-only dependency endpoints."""
-        head = _head_ops(self._dml)
-        return {name: head.get_dependency_config(name)["root"] for name in head.list_dependencies()}
-
-    def delete(self, name: Annotated[str, "Name of the remote to delete."]) -> None:
-        """Delete one import-only dependency endpoint and its tracking refs."""
-        _head_ops(self._dml).delete_dependency(name)
-
     def get_cache(self, cache_key: Annotated[str, "Cache key to resolve."]) -> Ref | None:
         """Return the cached DAG ref for a cache key, if present."""
         return _remote_ops(self._dml).get_cache(cache_key, raw=False, db=self._dml._db)
@@ -843,11 +878,6 @@ class _RemoteNamespace:
     def gc(self) -> GCSummary:
         """Garbage-collect remote CAS data and tombstones."""
         return cast(GCSummary, _remote_ops(self._dml).gc())
-
-    def list_refs(self) -> dict[str, list[str]]:
-        """List direct branch and tag refs at remote.root."""
-        remote = _remote_ops(self._dml)
-        return {"branches": remote.list_refs("branch"), "tags": remote.list_refs("tag")}
 
 
 @dataclass(frozen=True)
@@ -1293,7 +1323,9 @@ class Dml:
         else:
             config = head.get_dependency_config(dep)
             remote_ops = Remote(
-                config["root"], n_workers=self._config.remote.fetch_workers, client=_require_s3_client(self),
+                config["root"],
+                n_workers=self._config.remote.fetch_workers,
+                client=_require_s3_client(self),
                 prune_age_seconds=self._config.remote.prune_age_seconds,
             )
         # get_ref fully validates and materializes the closure before the tracking ref changes.
@@ -1347,8 +1379,8 @@ class Dml:
                 head.set_upstream(branch, upstream["branch"])
 
     @property
-    def branch(self) -> Annotated[_BranchNamespace, "Local branch lifecycle commands."]:
-        """Expose local branch lifecycle commands."""
+    def branch(self) -> Annotated[_BranchNamespace, "Branch inspection and lifecycle commands."]:
+        """Expose branch inspection and lifecycle commands."""
         return _BranchNamespace(self)
 
     @property
@@ -1357,8 +1389,8 @@ class Dml:
         return _DependencyNamespace(self)
 
     @property
-    def tag(self) -> Annotated[_TagNamespace, "Local tag lifecycle commands."]:
-        """Expose local tag lifecycle commands."""
+    def tag(self) -> Annotated[_TagNamespace, "Tag inspection and lifecycle commands."]:
+        """Expose tag inspection and lifecycle commands."""
         return _TagNamespace(self)
 
     @property
@@ -1367,8 +1399,8 @@ class Dml:
         return _ConfigNamespace(self)
 
     @property
-    def runtime(self) -> Annotated[_RuntimeNamespace, "Mutable runtime index commands."]:
-        """Expose runtime index commands."""
+    def runtime(self) -> Annotated[_RuntimeNamespace, "Runtime mutation and execution-state inspection commands."]:
+        """Expose runtime mutation and execution-state inspection commands."""
         return _RuntimeNamespace(self)
 
     @property

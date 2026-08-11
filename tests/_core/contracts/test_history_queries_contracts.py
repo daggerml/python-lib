@@ -221,6 +221,22 @@ def test_runtime_read_execution_record_surfaces_missing_record_error(tmp_path, m
         dml.runtime.read_execution_record(Ref("index:missing"))
 
 
+def test_runtime_read_launch_state_delegates_exact_execution_id(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    calls = []
+
+    class State:
+        def read_launch_state(self, execution_id):
+            calls.append(execution_id)
+            return {"job_id": "j1"} if execution_id == "exec-1" else None
+
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: State())
+
+    assert dml.runtime.read_launch_state("exec-1") == {"job_id": "j1"}
+    assert dml.runtime.read_launch_state("missing") is None
+    assert calls == ["exec-1", "missing"]
+
+
 def test_runtime_describe_graph_visual_renders_and_returns_none(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     index = dml.runtime.create()
@@ -405,4 +421,4 @@ def test_first_named_commit_materializes_unborn_branch_ref_and_branch_list(tmp_p
     commit = commit_literal_dag(dml, "train", 1, message="train-v1")
 
     assert head.get_local_ref("main") == commit
-    assert dml.branch.list() == ["main"]
+    assert dml.branch.list() == [{"name": "main", "commit": commit}]

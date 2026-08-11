@@ -24,4 +24,16 @@ Frozen DAGs remain uncommitted: named-node lookup, `keys()`, `values()`, and `ar
 
 `dml.Dml(project_home=".")` opens an existing project. `dml.Dml.init(...)` initializes one programmatically, but researcher workflows should use `dml init` instead. `dml.Dml` also exposes low-level history, runtime, and administration namespaces; prefer the CLI for those operations.
 
+Low-level ref inspection returns names with exact commit tips:
+
+```python
+local_branches = session.branch.list()
+remote_tags = session.tag.list(remote=True)
+fetched_dependency_branches = session.branch.list(dep="models")
+dependency_endpoint_branches = session.branch.list(remote=True, dep="models")
+# [{"name": "main", "commit": Ref("commit:...")}]
+```
+
+For these list methods, `remote` selects endpoint state and `dep` selects the dependency, so both may be used together. Endpoint listing is read-only and does not fetch commits or update local tracking refs. `session.branch.get_upstream("feature")` returns `{"branch": "main"}` or `None`; tags have no upstream metadata. `session.runtime.read_launch_state(execution_id)` returns the persisted executor resume-state JSON object or `None` when launch state is absent.
+
 For the higher-level `daggerml.contrib.api` helpers, including `funkify`, `ref`, `load`, `dagclass`, and `run`, see [author a DAG](../guides/author-a-dag.md).

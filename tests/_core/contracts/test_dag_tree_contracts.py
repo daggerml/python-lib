@@ -41,7 +41,10 @@ def test_dag_checkout_on_unborn_head_materializes_first_branch_commit(tmp_path, 
     target.dag.checkout(source_commit, "source", name="source")
     assert target.show("HEAD")["dags"]["source"] == source_ref
     assert target.status()["commit"] is not None
-    assert target.branch.list() == ["empty", "main"]
+    assert target.branch.list() == [
+        {"name": "empty", "commit": target.status()["commit"]},
+        {"name": "main", "commit": source_commit},
+    ]
 
 
 @pytest.mark.parametrize(

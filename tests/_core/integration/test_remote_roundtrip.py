@@ -4,6 +4,8 @@ import boto3
 import pytest
 from moto import mock_aws
 
+from daggerml._core.db import Ref
+from daggerml._core.head import Head
 from daggerml._core.remote import Remote
 from daggerml._core.types import ArgvNode, Commit, Dag, DmlDB, DmlRepoError, ListDatum, LiteralNode, ScalarDatum, Tree
 
@@ -70,6 +72,80 @@ def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state(
         client.put_object(Bucket="bucket", Key="nonempty/dml/refs/heads/main.json", Body=b"{}")
         with pytest.raises(DmlRepoError, match="not empty"):
             Remote("s3://bucket/nonempty", n_workers=2, client=client)
+
+
+def test_remote_inspection_is_bounded_non_mutating_and_lists_unmaterialized_tips(tmp_path, monkeypatch):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        calls = []
+        original_list = client.list_objects_v2
+
+        def list_objects_v2(**kwargs):
+            calls.append(kwargs)
+            return original_list(**kwargs)
+
+        monkeypatch.setattr(client, "list_objects_v2", list_objects_v2)
+        empty = Remote("s3://bucket/empty", n_workers=2, client=client, initialize=False)
+        assert calls == [{"Bucket": "bucket", "Prefix": "empty/", "MaxKeys": 1}]
+        calls.clear()
+        assert empty.list_ref_tips() == []
+        assert calls == [{"Bucket": "bucket", "Prefix": "empty/dml/refs/heads/"}]
+        with pytest.raises(client.exceptions.NoSuchKey):
+            empty._store._get(empty._store._key_for("dml.json"))
+
+        client.put_object(Bucket="bucket", Key="nonempty/legacy", Body=b"legacy")
+        calls.clear()
+        with pytest.raises(DmlRepoError, match="not empty"):
+            Remote("s3://bucket/nonempty", n_workers=2, client=client, initialize=False)
+        assert calls == [{"Bucket": "bucket", "Prefix": "nonempty/", "MaxKeys": 1}]
+
+        writer = Remote("s3://bucket/root", n_workers=2, client=client)
+        tip = Ref("commit:" + "a" * 64)
+        client.put_object(
+            Bucket="bucket",
+            Key=writer._store._key_for("refs/heads/main.json"),
+            Body=json.dumps({"ref": {"to": tip.to}, "created": 0, "metadata": {}}).encode(),
+        )
+        head = Head(str(tmp_path))
+        tracked_tip = Ref("commit:" + "b" * 64)
+        head.update_remote_tracking_ref("main", tracked_tip)
+
+        remote = Remote("s3://bucket/root", n_workers=2, client=client, initialize=False)
+        original_get = remote._store._get
+
+        def no_cas_reads(key, **kwargs):
+            assert "/cas/sha256/" not in key
+            return original_get(key, **kwargs)
+
+        monkeypatch.setattr(remote._store, "_get", no_cas_reads)
+        assert remote.list_ref_tips() == [("main", tip)]
+        assert head.get_remote_tracking_ref("main") == tracked_tip
+        assert list(remote._store._iter(remote._store._key_for("cas/sha256/"))) == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ref": {"to": "commit:" + "a" * 64}},
+        {"ref": {"to": "dag:" + "a" * 64}, "created": 0, "metadata": {}},
+        {"ref": {"to": "commit:not-a-hash"}, "created": 0, "metadata": {}},
+    ],
+)
+def test_remote_inspection_fails_closed_for_invalid_commit_refs(payload):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        writer = Remote("s3://bucket/root", n_workers=2, client=client)
+        client.put_object(
+            Bucket="bucket",
+            Key=writer._store._key_for("refs/heads/main.json"),
+            Body=json.dumps(payload).encode(),
+        )
+
+        remote = Remote("s3://bucket/root", n_workers=2, client=client, initialize=False)
+        with pytest.raises(DmlRepoError, match="Invalid remote branch ref"):
+            remote.list_ref_tips()
 
 
 def test_manifest_fetch_precedes_replayable_local_write(tmp_path, monkeypatch):
