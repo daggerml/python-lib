@@ -4,4 +4,6 @@ A funk is a DaggerML-packaged `Runnable`. Adding one to a DAG gives DaggerML the
 
 For a non-builtin funk, DaggerML first checks the cache identity derived from the staged runnable and normalized DaggerML data. A cache hit reuses the completed DAG; a miss invokes the configured execution boundary. Distributed execution and cache coordination require `remote.root`.
 
+Use `Dml.cache.get(cache_key)` to resolve the current cached DAG and `Dml.cache.invalidate(*cache_keys)` to intentionally invalidate exact computation identities. Cache invalidation follows execution lineage and affects every user sharing the same `remote.root`.
+
 Use [author a DAG](../guides/author-a-dag.md) for the current Python authoring pattern and [refresh cached work](../guides/refresh-cache.md) when intentionally recomputing a result.

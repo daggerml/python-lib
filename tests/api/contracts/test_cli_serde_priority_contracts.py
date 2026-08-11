@@ -202,3 +202,31 @@ def test_cli_sp_012__runtime_freeze_and_unfreeze_emit_replacement_refs(tmp_path:
 
     assert cli.run(["--project-home", str(tmp_path), "runtime", "unfreeze", frozen_ref]) == 0
     assert capsys.readouterr().out == f"{index.to}\n"
+
+
+def test_cli_sp_013__gc_union_serializes_local_and_remote_summaries(tmp_path: Path, monkeypatch, capsys) -> None:
+    make_local_dml(tmp_path, monkeypatch)
+    cli = MethodCLI(Dml, prog="dml")
+
+    assert cli.run(["--project-home", str(tmp_path), "gc"]) == 0
+    local = json.loads(capsys.readouterr().out)
+    assert set(local) == {"deleted", "gc-time", "ref-enumeration-time"}
+
+    remote = {
+        "tombstones-deleted": 1,
+        "cas-deleted": 2,
+        "cas-retained": 3,
+        "total-refs": 4,
+        "gc-time": 5,
+        "ref-enumeration-time": 6,
+        "cas-enumeration-time": 7,
+    }
+
+    class Remote:
+        def gc(self):
+            return remote
+
+    monkeypatch.setattr(dml_mod, "_remote_ops", lambda _dml: Remote())
+
+    assert cli.run(["--project-home", str(tmp_path), "gc", "--remote"]) == 0
+    assert json.loads(capsys.readouterr().out) == remote

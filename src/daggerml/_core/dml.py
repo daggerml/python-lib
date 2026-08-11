@@ -843,8 +843,8 @@ class _TagNamespace:
         _head_ops(self._dml).delete_local_ref(name, kind="tag")
 
 
-GCSummary = TypedDict(
-    "GCSummary",
+RemoteGCSummary = TypedDict(
+    "RemoteGCSummary",
     {
         "tombstones-deleted": int,
         "cas-deleted": int,
@@ -857,27 +857,30 @@ GCSummary = TypedDict(
 )
 
 
-class RemoteRefListPayload(TypedDict):
-    refs: list[str]
+def _validate_cache_key(cache_key: object) -> str:
+    if not isinstance(cache_key, str) or re.fullmatch(r"[a-z0-9][a-z0-9._-]*", cache_key) is None:
+        raise ValueError(
+            "Invalid cache key: expected a non-empty lowercase letter or digit segment using '.', '_', or '-'"
+        )
+    return cache_key
 
 
 @dataclass(frozen=True)
-class _RemoteNamespace:
+class _CacheNamespace:
     _dml: "Dml"
 
-    def get_cache(self, cache_key: Annotated[str, "Cache key to resolve."]) -> Ref | None:
+    def get(self, cache_key: Annotated[str, "Exact cache key to resolve."]) -> Ref | None:
         """Return the cached DAG ref for a cache key, if present."""
-        return _remote_ops(self._dml).get_cache(cache_key, raw=False, db=self._dml._db)
+        return _remote_ops(self._dml).get_cache(_validate_cache_key(cache_key), raw=False, db=self._dml._db)
 
-    def invalidate_cache(
-        self, *cache_key: Annotated[str, "One or more cache keys to invalidate."]
+    def invalidate(
+        self, *cache_keys: Annotated[str, "One or more exact cache keys to invalidate."]
     ) -> InvalidationResponse:
         """Invalidate one or more remote execution cache keys."""
-        return _exec_state(self._dml).invalidate_cache(cache_key, self._dml._config.user)
-
-    def gc(self) -> GCSummary:
-        """Garbage-collect remote CAS data and tombstones."""
-        return cast(GCSummary, _remote_ops(self._dml).gc())
+        if not cache_keys:
+            raise ValueError("At least one cache key is required")
+        validated = tuple(_validate_cache_key(cache_key) for cache_key in cache_keys)
+        return _exec_state(self._dml).invalidate_cache(validated, self._dml._config.user)
 
 
 @dataclass(frozen=True)
@@ -908,31 +911,26 @@ LocalGCSummary = TypedDict(
 )
 
 
+def _local_gc(dml: "Dml") -> LocalGCSummary:
+    """Garbage-collect objects unreachable from repository and tracking refs."""
+    t0 = time()
+    head = _head_ops(dml)
+    refs = set()
+    commit = head.get_head()["commit"]
+    if commit is not None:
+        refs.add(commit)
+    refs |= {head.get_local_ref(name, kind="branch") for name in head.list_local_refs(kind="branch")}
+    refs |= {head.get_local_ref(name, kind="tag") for name in head.list_local_refs(kind="tag")}
+    refs |= set(head.iter_all_remote_tracking_refs())
+    t1 = time()
+    resp = dml._db.gc(sorted(refs))
+    t2 = time()
+    return {"gc-time": int(t2 - t1), "ref-enumeration-time": int(t1 - t0), "deleted": resp}
+
+
 @dataclass(frozen=True)
 class _AdminNamespace:
     _dml: "Dml"
-
-    @property
-    def remote(self) -> Annotated[_RemoteNamespace, "Remote cache, refs, and GC commands."]:
-        """Expose remote administration commands."""
-        return _RemoteNamespace(self._dml)
-
-    def gc(self) -> LocalGCSummary:
-        """Garbage-collect unreachable local objects."""
-        # get all commits referenced by all local branches, tags, etc.
-        t0 = time()
-        head = _head_ops(self._dml)
-        refs = set()
-        commit = head.get_head()["commit"]
-        if commit is not None:
-            refs.add(commit)
-        refs |= {head.get_local_ref(name, kind="branch") for name in head.list_local_refs(kind="branch")}
-        refs |= {head.get_local_ref(name, kind="tag") for name in head.list_local_refs(kind="tag")}
-        refs |= set(head.iter_all_remote_tracking_refs())
-        t1 = time()
-        resp = self._dml._db.gc(sorted(refs))
-        t2 = time()
-        return {"gc-time": int(t2 - t1), "ref-enumeration-time": int(t1 - t0), "deleted": resp}
 
     def agent_skill(self) -> str:
         """Print the bundled coding-agent skill as portable Markdown."""
@@ -1378,6 +1376,16 @@ class Dml:
             with head.lock():
                 head.set_upstream(branch, upstream["branch"])
 
+    def gc(
+        self,
+        *,
+        remote: Annotated[bool, "Garbage-collect configured remote state instead of local objects."] = False,
+    ) -> LocalGCSummary | RemoteGCSummary:
+        """Garbage-collect unreachable local or configured remote state."""
+        if not remote:
+            return _local_gc(self)
+        return cast(RemoteGCSummary, _remote_ops(self).gc())
+
     @property
     def branch(self) -> Annotated[_BranchNamespace, "Branch inspection and lifecycle commands."]:
         """Expose branch inspection and lifecycle commands."""
@@ -1387,6 +1395,11 @@ class Dml:
     def dep(self) -> Annotated[_DependencyNamespace, "Import-only dependency lifecycle commands."]:
         """Expose import-only dependency lifecycle commands."""
         return _DependencyNamespace(self)
+
+    @property
+    def cache(self) -> Annotated[_CacheNamespace, "Remote execution cache inspection and control commands."]:
+        """Expose remote execution cache inspection and control commands."""
+        return _CacheNamespace(self)
 
     @property
     def tag(self) -> Annotated[_TagNamespace, "Tag inspection and lifecycle commands."]:
@@ -1409,6 +1422,6 @@ class Dml:
         return _DagNamespace(self)
 
     @property
-    def admin(self) -> Annotated[_AdminNamespace, "Administrative and remote maintenance commands."]:
-        """Expose repository administration commands."""
+    def admin(self) -> Annotated[_AdminNamespace, "Administrative support commands."]:
+        """Expose remaining repository administration commands."""
         return _AdminNamespace(self)

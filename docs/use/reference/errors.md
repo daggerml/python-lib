@@ -6,6 +6,7 @@
 | --- | --- |
 | `DAG not found: ...` | Run `dml show` and confirm the DAG name and checkout. |
 | `remote.root is required` | Configure an S3 `remote.root`. |
+| Invalid cache key | Pass a non-empty exact cache-key segment, not a DAG/ref selector or path. |
 | Unknown dependency during ref listing | Configure it with `dml dep add NAME ROOT`. |
 | Invalid remote branch or tag ref | Repair or republish the malformed endpoint ref before listing it. |
 | Invalid upstream config | Repair the malformed local branch upstream metadata. |

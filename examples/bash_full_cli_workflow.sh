@@ -78,16 +78,16 @@ dml runtime get-node "${runtime_idx}" imported-greeting
 if printf '["%s","%s"]\n' "${hello_runtime_ref}" "${seed_ref}" | dml runtime start-fn "${runtime_idx}" - --name runtime-hello >/dev/null 2>&1; then
   fail "Expected runtime start-fn CLI JSON argv parsing to reject list[Ref] inputs"
 fi
-dml admin remote get-cache "${greeting_cache_key}"
-dml admin remote invalidate-cache "${greeting_cache_key}" | jq .
-dml admin remote get-cache "${greeting_cache_key}" | jq .
+dml cache get "${greeting_cache_key}"
+dml cache invalidate "${greeting_cache_key}" | jq .
+dml cache get "${greeting_cache_key}" | jq .
 
 dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported_greeting_ref}"
 dml runtime get-node "${runtime_idx}" cli-greeting-alias
 dml runtime describe "${runtime_idx}" | jq .
 dml runtime cancel "${cancel_idx}" | jq .
 dml runtime describe "${scratch_idx}" | jq .
-dml admin gc | jq .
+dml gc | jq .
 
 log "Exercising top-level checkout workflows"
 dml checkout HEAD~1 | jq .
@@ -96,14 +96,16 @@ dml checkout main | jq .
 dml show --revision HEAD | jq .
 
 log "Listing DML refs after running all examples:"
-dml admin remote list-refs | jq .
-dml admin remote gc | jq .
+dml branch list --remote | jq .
+dml tag list --remote | jq .
+dml gc --remote | jq .
 
 log "Fetching into the runner-managed repository"
 cd "${DML_EXAMPLE_PROJECT_HOME}"
 dml fetch main
 dml rev-parse main --remote | jq .
-dml admin remote list-refs | jq .
+dml branch list --remote | jq .
+dml tag list --remote | jq .
 dml branch create "${example_branch}" --remote --revision main
 dml checkout "${example_branch}" | jq .
 dml branch set-upstream main
@@ -144,7 +146,8 @@ python "${examples_dir}/python/01b-load_fn.py" "${dag_namespace}/load-fn" "${hel
 
 log "Inspecting fetched and pulled history from the second project"
 dml status | jq '.branches'
-dml admin remote list-refs | jq .
+dml branch list --remote | jq .
+dml tag list --remote | jq .
 dml log --revision HEAD --limit 10 | jq .
 dml show --revision HEAD | jq .
 load_fn_dag_ref="$(dml show --revision HEAD | jq -r --arg dag_name "${dag_namespace}/load-fn" '.dags[$dag_name]')"

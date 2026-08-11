@@ -36,4 +36,15 @@ dependency_endpoint_branches = session.branch.list(remote=True, dep="models")
 
 For these list methods, `remote` selects endpoint state and `dep` selects the dependency, so both may be used together. Endpoint listing is read-only and does not fetch commits or update local tracking refs. `session.branch.get_upstream("feature")` returns `{"branch": "main"}` or `None`; tags have no upstream metadata. `session.runtime.read_launch_state(execution_id)` returns the persisted executor resume-state JSON object or `None` when launch state is absent.
 
+Cache control and garbage collection use direct low-level surfaces:
+
+```python
+cached_dag = session.cache.get(cache_key)
+session.cache.invalidate(cache_key)
+local_summary = session.gc()
+remote_summary = session.gc(remote=True)
+```
+
+Cache and remote GC require `remote.root`; local GC does not. Remote GC never targets import-only dependencies. The removed `session.admin.remote` and `session.admin.gc` paths have no compatibility aliases.
+
 For the higher-level `daggerml.contrib.api` helpers, including `funkify`, `ref`, `load`, `dagclass`, and `run`, see [author a DAG](../guides/author-a-dag.md).

@@ -82,7 +82,7 @@ def test_frozen_index_is_retained_by_local_gc(tmp_path, monkeypatch) -> None:
     dml.runtime.put_literal(index, "retained", name="implementation")
     frozen = dml.runtime.freeze(index)
 
-    dml.admin.gc()
+    dml.gc()
 
     with dml._db.tx(readonly=True) as txn:
         assert isinstance(txn.get(frozen), FrozenIndex)

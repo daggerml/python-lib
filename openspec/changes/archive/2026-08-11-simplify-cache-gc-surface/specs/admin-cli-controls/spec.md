@@ -1,8 +1,4 @@
-## Purpose
-
-Define generated command placement and behavior for administrative support, cache control, and local or remote garbage collection.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Administrative CLI flows are grouped under `dml admin`
 Low-frequency recovery and agent-support commands SHALL remain under `dml admin`. Cache control and local or remote garbage collection SHALL be generated as top-level command surfaces rather than admin commands.
@@ -12,28 +8,7 @@ Low-frequency recovery and agent-support commands SHALL remain under `dml admin`
 - **THEN** remaining index recovery and agent-support commands appear under `dml admin`
 - **AND** cache, remote, and GC commands do not appear there
 
-### Requirement: Admin index list returns indexes with commit info
-`dml admin index list` SHALL return every live index together with commit information for the commit each index currently points to.
-
-#### Scenario: Index list includes commit summaries
-- **WHEN** a user runs `dml admin index list`
-- **THEN** the command returns JSON with an `indexes` field
-- **AND** each index entry includes its identifier and commit information for the pointed-to commit
-
-### Requirement: Admin index get returns full index inspection payload
-`dml admin index get <index-id>` SHALL return index inspection data including commit information for the commit the index points to, rather than only a commit identifier.
-
-#### Scenario: Index get includes commit details
-- **WHEN** a user runs `dml admin index get idx1`
-- **THEN** the command returns JSON with an `index` object
-- **AND** that object includes commit metadata for the pointed-to commit
-
-### Requirement: Admin index delete removes an index
-`dml admin index delete <index-id>` SHALL delete the selected index and report the deletion result as JSON.
-
-#### Scenario: Index delete reports success
-- **WHEN** a user runs `dml admin index delete idx1`
-- **THEN** the command returns JSON containing `index` and `deleted`
+## ADDED Requirements
 
 ### Requirement: Cache invalidation accepts exact cache keys only
 The generated CLI SHALL expose cache invalidation as `dml cache invalidate <cache-key> [more cache keys]`. It SHALL accept one or more exact cache keys and SHALL NOT accept DAG refs, argv refs, or other selector types.
@@ -74,10 +49,24 @@ The generated CLI SHALL expose `dml gc [--remote]` from `Dml.gc`. Without `--rem
 - **THEN** help exposes `--remote`
 - **AND** it does not expose `--dep` or `--dry-run`
 
-### Requirement: Admin exports the bundled agent skill
-`dml admin agent-skill` SHALL write the complete bundled agent skill document to standard output and SHALL not write command framing or serialized representation around that document.
+## REMOVED Requirements
 
-#### Scenario: User redirects the agent skill to a file
-- **WHEN** a user runs `dml admin agent-skill > SKILL.md`
-- **THEN** `SKILL.md` contains the complete bundled agent skill document
-- **AND** it begins with the skill document's YAML frontmatter
+### Requirement: Admin cache invalidation accepts exact cache keys only
+**Reason**: Cache control moves from administration to the top-level generated cache namespace.
+
+**Migration**: Replace `dml admin cache invalidate KEY...` with `dml cache invalidate KEY...`.
+
+### Requirement: Admin remote list reports direct remote-root refs
+**Reason**: Branch and tag endpoint inspection is now owned by `dml branch list --remote` and `dml tag list --remote`, including dependency endpoint selection and exact commit tips.
+
+**Migration**: Replace `dml admin remote list` with separate `dml branch list --remote` and `dml tag list --remote` calls; add `--dep NAME` when inspecting a dependency endpoint.
+
+### Requirement: Admin remote GC performs remote maintenance
+**Reason**: Local and remote collection are consolidated into one top-level source-selectable GC command.
+
+**Migration**: Replace `dml admin remote gc` with `dml gc --remote`.
+
+### Requirement: Admin local GC supports dry-run inspection
+**Reason**: Local collection moves to the top-level GC command, and the new shared signature intentionally supports only source selection rather than the previously specified dry-run option.
+
+**Migration**: Replace `dml admin gc` with `dml gc`. There is no replacement for `dml admin gc --dry-run` in this change.

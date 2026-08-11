@@ -26,7 +26,7 @@ def test_cli_namespace_help_002__root_help_lists_commands_before_namespaces() ->
     assert "commands:" in root_help
     assert "namespaces:" in root_help
     assert "checkout            Check out a different revision." in root_help
-    assert "admin               Administrative and remote maintenance commands." in root_help
+    assert "admin               Administrative support commands." in root_help
     assert root_help.index("commands:") < root_help.index("namespaces:")
 
 
@@ -37,12 +37,10 @@ def test_cli_namespace_help_003__nested_help_lists_commands_before_namespaces() 
     admin_help = subparsers.choices["admin"].format_help()
 
     assert "commands:" in admin_help
-    assert "namespaces:" in admin_help
-    assert "gc" in admin_help
-    assert "Garbage-collect unreachable local objects." in admin_help
-    assert "remote" in admin_help
-    assert "Remote cache, refs, and GC commands." in admin_help
-    assert admin_help.index("commands:") < admin_help.index("namespaces:")
+    assert "agent-skill" in admin_help
+    assert "namespaces:" not in admin_help
+    assert "gc" not in admin_help
+    assert "remote" not in admin_help
 
 
 def test_cli_dependency_commands_and_branch_create_options_are_generated() -> None:
@@ -90,3 +88,31 @@ def test_cli_ref_listing_and_inspection_commands_are_generated() -> None:
     parsed = cli.parser.parse_args(["branch", "list", "--remote", "--dep", "models"])
     assert parsed.remote is True
     assert parsed.dep == "models"
+
+
+def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None:
+    cli = MethodCLI(Dml, prog="dml")
+    root_subparsers = next(
+        action for action in cli.parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+
+    cache = root_subparsers.choices["cache"]
+    cache_subparsers = next(
+        action for action in cache._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    assert set(cache_subparsers.choices) == {"get", "invalidate"}
+
+    gc_help = root_subparsers.choices["gc"].format_help()
+    assert "--remote" in gc_help
+    assert "--dep" not in gc_help
+    assert "--dry-run" not in gc_help
+
+    admin = root_subparsers.choices["admin"]
+    admin_subparsers = next(
+        action for action in admin._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    assert "remote" not in admin_subparsers.choices
+    assert "gc" not in admin_subparsers.choices
+
+    parsed = cli.parser.parse_args(["gc", "--remote"])
+    assert parsed.remote is True

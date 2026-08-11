@@ -32,3 +32,9 @@ Execution coordination is adjacent to, but separate from, CAS and project refs.
 adapter I/O under its execution prefix. Remote cleanup likewise has two scopes:
 transport scratch data can be pruned, while CAS garbage collection traces from
 published refs as roots.
+
+The shared surface exposes cache reads and invalidation through `Dml.cache`.
+Garbage collection is one top-level workflow: `Dml.gc()` computes local roots
+from HEAD, local refs, fetched refs, dependencies, and live runtime indexes,
+while `Dml.gc(remote=True)` delegates to maintenance for configured
+`remote.root`. Import-only dependency endpoints are never GC targets.
