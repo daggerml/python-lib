@@ -45,7 +45,9 @@ with dml.new("squares") as dag:
     dag.commit(result)
 ```
 
-Funk arguments are node-like in the worker, so read input with `.value()`. Calling a staged funk records a function-call node. Script-backed funks execute in a separate worker and receive the function source, not module globals. Import dependencies inside the function body or inject them explicitly.
+Funk arguments are node-like in the worker, so read input with `.value()`. Calling a staged funk records a function-call node. Script-backed funks execute in a separate worker and receive the function source, not module globals. The worker imports that source from `_daggerml_live.py` as module `_daggerml_live`, with normal Python module metadata. Import dependencies inside the function body or inject them explicitly.
+
+The worker injects a DEBUG logger named `_daggerml_live`; code can use either `logger` or `logging.getLogger(__name__)`. Its records go to worker stderr for supervisor capture. This configuration is isolated to the live module and does not enable DEBUG output from third-party dependency loggers.
 
 Use `extra_objs` to include helper definitions in the generated script, or `post_lines` to append source lines after those definitions:
 

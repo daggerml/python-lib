@@ -15,12 +15,22 @@
 of every `extra_objs` object first, then the function source, then literal
 `post_lines`, and validates the combined text as Python.
 
-The script worker has only that rendered source and its own injected namespace;
-module globals and imports from the authoring process are not transferred.
-Put imports inside the function, include source-defined helpers in `extra_objs`,
-or use `post_lines` deliberately to create names needed at call time. The first
-function parameter must be named `dag`, and the rendered function must be a
-global definition. `script` cannot wrap a `sub` runnable.
+The worker materializes that source as `_daggerml_live.py` and imports it as the
+top-level module `_daggerml_live`. The script therefore receives ordinary
+`__name__`, `__file__`, `__package__`, `__loader__`, and `__spec__` metadata and
+can resolve its in-progress module through `sys.modules`.
+
+The module receives an injected `_daggerml_live` logger configured at DEBUG with
+a stderr handler; `logging.getLogger(__name__)` resolves the same logger. This
+configuration does not enable DEBUG output for dependency loggers. The
+supervisor captures the worker's stderr through its existing process pipe.
+
+The live module still has only the rendered source; module globals and imports
+from the authoring process are not transferred. Put imports inside the function,
+include source-defined helpers in `extra_objs`, or use `post_lines` deliberately
+to create names needed at call time. The first function parameter must be named
+`dag`, and the rendered function must be a global definition. `script` cannot
+wrap a `sub` runnable.
 
 ## Docker, SSH, and Batch
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.util
 import inspect
 import json
 import logging
@@ -232,7 +233,6 @@ def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
 
 
 def run_payload(*, execution_id: str, cache_key: str, remote_root: str) -> dict[str, Any]:
-    namespace: dict[str, Any] = {"logger": logging.getLogger("daggerml.contrib.script")}
     with dml.temporary(remote_root=remote_root) as tmpdml, chdir(tmpdml._config.project_home):
         try:
             with dml.new(dml=tmpdml, cache_key=cache_key, execution_id=execution_id) as dag:
@@ -240,8 +240,31 @@ def run_payload(*, execution_id: str, cache_key: str, remote_root: str) -> dict[
                 runnable = runnable_node.value().innermost()
                 for key, value in runnable.kwargs.get("prepop", {}).items():
                     dag.put(value, name=key)
-                exec(S3Store().get(runnable.kwargs["script_uri"]).decode("utf-8"), namespace)
-                fn = namespace.get(runnable.kwargs["fn_name"])
+                module_name = "_daggerml_live"
+                script_path = Path(f"{module_name}.py").resolve()
+                source = S3Store().get(runnable.kwargs["script_uri"]).decode("utf-8")
+                script_path.write_text(source, encoding="utf-8")
+                script_logger = logging.getLogger(module_name)
+                script_logger.handlers.clear()
+                script_logger.setLevel(logging.DEBUG)
+                handler = logging.StreamHandler(sys.stderr)
+                handler.setLevel(logging.DEBUG)
+                handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(lineno)d: %(message)s"))
+                script_logger.addHandler(handler)
+                script_logger.propagate = False
+                spec = importlib.util.spec_from_file_location(module_name, script_path)
+                if spec is None or spec.loader is None:
+                    raise DmlRepoError(f"Could not load script module from {script_path}")
+                module = importlib.util.module_from_spec(spec)
+                module.__dict__["logger"] = script_logger
+                sys.modules[module_name] = module
+                try:
+                    # The supervisor already captures this process's stderr via a pipe.
+                    spec.loader.exec_module(module)
+                except BaseException:
+                    sys.modules.pop(module_name, None)
+                    raise
+                fn = getattr(module, runnable.kwargs["fn_name"])
                 output = fn(dag, *arg_nodes)
                 if dag.ref is None:
                     dag.commit(output)

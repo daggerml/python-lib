@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
+import sys
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +13,57 @@ import daggerml.contrib.executors.script as script_mod
 from daggerml import Runnable, Uri
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors.script import ScriptExecutor
+
+
+def _run_worker_script(monkeypatch, tmp_path: Path, source: str):
+    calls = {"put": []}
+    tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))
+
+    class FakeDag:
+        def __init__(self):
+            self.argv = [
+                SimpleNamespace(
+                    value=lambda: SimpleNamespace(
+                        innermost=lambda: SimpleNamespace(
+                            kwargs={
+                                "prepop": {"seed": 7},
+                                "script_uri": "s3://bucket/script.py",
+                                "fn_name": "fn",
+                            }
+                        )
+                    )
+                ),
+                "arg-node",
+            ]
+            self.ref = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def put(self, value, name=None):
+            calls["put"].append((name, value))
+
+        def commit(self, output):
+            calls["commit"] = output
+            self.ref = SimpleNamespace(id=lambda: "d" * 64)
+
+    @contextmanager
+    def fake_temporary(**kwargs):
+        yield tmpdml
+
+    class FakeStore:
+        def get(self, uri):
+            calls["script_uri"] = uri
+            return source.encode("utf-8")
+
+    monkeypatch.setattr(script_mod.dml, "temporary", fake_temporary)
+    monkeypatch.setattr(script_mod.dml, "new", lambda **kwargs: FakeDag())
+    monkeypatch.setattr(script_mod, "S3Store", lambda: FakeStore())
+    result = script_mod.run_payload(execution_id="exec-1", cache_key="cache-1", remote_root="s3://bucket/root")
+    return result, calls
 
 
 def test_contrib_script_001__script_kwargs_capture_fn_name_and_require_parameter():
@@ -244,3 +298,100 @@ def test_contrib_script_007__run_payload_uses_prepop_and_script_uri_from_runnabl
     assert calls["script_uri"] == "s3://bucket/script.py"
     assert calls["put"] == [("seed", 7)]
     assert calls["commit"] == "result:arg-node"
+
+
+def test_contrib_script_008__worker_executes_file_backed_live_module(monkeypatch, tmp_path):
+    source = """
+import sys
+
+self_module = __import__("_daggerml_live")
+
+def fn(dag, arg):
+    return {
+        "arg": arg,
+        "file": __file__,
+        "function_module": fn.__module__,
+        "loader": type(__loader__).__name__,
+        "module": __name__,
+        "package": __package__,
+        "self_import": self_module is sys.modules[__name__],
+        "spec_name": __spec__.name,
+    }
+"""
+
+    try:
+        result, calls = _run_worker_script(monkeypatch, tmp_path, source)
+
+        assert result == {"status": "succeeded", "state": None, "error": None, "dag_id": "d" * 64}
+        assert calls["commit"] == {
+            "arg": "arg-node",
+            "file": str(tmp_path / "_daggerml_live.py"),
+            "function_module": "_daggerml_live",
+            "loader": "SourceFileLoader",
+            "module": "_daggerml_live",
+            "package": "",
+            "self_import": True,
+            "spec_name": "_daggerml_live",
+        }
+        assert (tmp_path / "_daggerml_live.py").read_text() == source
+    finally:
+        sys.modules.pop("_daggerml_live", None)
+
+
+def test_contrib_script_009__failed_live_module_reports_source_and_cleans_sys_modules(monkeypatch, tmp_path):
+    result, _ = _run_worker_script(monkeypatch, tmp_path, 'raise RuntimeError("module boom")\n')
+
+    assert result["status"] == "failed"
+    assert "module boom" in result["error"]
+    assert str(tmp_path / "_daggerml_live.py") in result["error"]
+    assert "_daggerml_live" not in sys.modules
+
+
+def test_contrib_script_010__live_logger_writes_debug_once_without_changing_other_loggers(
+    monkeypatch, tmp_path, capsys
+):
+    dependency_logger = logging.getLogger("dependency-under-test")
+    dependency_handler = logging.NullHandler()
+    dependency_logger.handlers = [dependency_handler]
+    dependency_logger.setLevel(logging.INFO)
+    dependency_logger.propagate = True
+    source = """
+import logging
+
+logger.debug("injected-debug")
+logging.getLogger(__name__).debug("module-debug")
+
+def fn(dag, arg):
+    return arg
+"""
+
+    try:
+        result, _ = _run_worker_script(monkeypatch, tmp_path, source)
+        captured = capsys.readouterr()
+
+        assert result["status"] == "succeeded"
+        assert captured.err.count("injected-debug") == 1
+        assert captured.err.count("module-debug") == 1
+        assert dependency_logger.handlers == [dependency_handler]
+        assert dependency_logger.level == logging.INFO
+        assert dependency_logger.propagate is True
+    finally:
+        logging.getLogger("_daggerml_live").handlers.clear()
+        sys.modules.pop("_daggerml_live", None)
+
+
+def test_contrib_script_011__funk_failure_reports_live_module_source_line(monkeypatch, tmp_path):
+    source = """
+def fn(dag, arg):
+    raise ValueError("funk boom")
+"""
+
+    try:
+        result, _ = _run_worker_script(monkeypatch, tmp_path, source)
+
+        assert result["status"] == "failed"
+        assert "funk boom" in result["error"]
+        assert str(tmp_path / "_daggerml_live.py") in result["error"]
+        assert 'raise ValueError("funk boom")' in result["error"]
+    finally:
+        sys.modules.pop("_daggerml_live", None)
