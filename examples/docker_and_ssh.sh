@@ -22,6 +22,9 @@ python "${examples_dir}/python/00-hello_world.py" "${dag_namespace}/hello-world"
 log "Running example: 01-docker_dataset.py"
 python "${examples_dir}/python/01-docker_dataset.py" "${dag_namespace}/docker-dataset"
 
+log "Running example: 04-docker-dagclass.py"
+python "${examples_dir}/python/04-docker-dagclass.py" "${dag_namespace}/docker-dagclass" "${dag_namespace}/docker-dataset"
+
 log "Running example: 02-ssh_docker_dataset.py"
 python "${examples_dir}/python/02-ssh_docker_dataset.py" "${dag_namespace}/ssh-docker-dataset" "${dag_namespace}/docker-dataset"
 

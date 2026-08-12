@@ -232,6 +232,10 @@ api.run(DatasetSummary(), ["2", "4", "8"], name="dataset-summary")
 
 Dagclass is a thin convenience wrapper, not a source normalizer. A dagclass method and an explicit `@api.funkify(prepop=...)` function share a cache when their user-authored function, configuration, and arguments are the same.
 
+Instantiating a dagclass compiles it into a self-contained namespace. Constructor values and other evaluated attributes seed that namespace; methods are then compiled in dependency order and bind `self.<member>` references to those namespace values. A compiled method can therefore be staged in another DAG without requiring same-named nodes there, and caller nodes cannot shadow its dagclass attributes. `api.run()` executes the entrypoint compiled during instantiation; it does not compile the instance later.
+
+Within a dagclass, every `api.ref("name")` is also local to the dagclass namespace. This includes references inside an externally defined `@api.funkify` value assigned as a dagclass attribute. Such a funk may reference only known dagclass attributes or members; instantiation fails if a reference cannot be resolved. Pass external configuration explicitly through constructor attributes rather than expecting a compiled dagclass member to capture a node from its caller DAG.
+
 Dagclasses can also be composed as reusable functions:
 
 ```python
@@ -250,4 +254,7 @@ The nested instance is a self-contained runnable: the parent DAG stages only `su
 
 `api.load("dag-name")` is another delayed authoring value. When staged, it imports the committed result of `dag-name`, equivalent to `dag.require("dag-name")`.
 
-See `examples/python/03-dagclass.py` for a runnable dagclass pipeline.
+See `examples/python/03-dagclass.py` for a runnable dagclass pipeline. For a
+funkify-decorated dagclass method whose Docker configuration and method-body
+dependencies share the dagclass namespace, see
+`examples/python/04-docker-dagclass.py`.

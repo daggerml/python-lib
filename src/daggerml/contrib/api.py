@@ -110,7 +110,7 @@ class _DagclassAnalyzer:
         return list(self.dependencies)
 
 
-def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_names: set[str], method_names: set[str]):
+def _analyze_dagclass_method(*, cls, method_name: str, method, member_names: set[str], method_names: set[str]):
     try:
         source = dedent(inspect.getsource(method))
     except (OSError, TypeError) as e:
@@ -119,14 +119,43 @@ def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_name
     if len(module.body) != 1 or not isinstance(module.body[0], ast.FunctionDef):
         raise DmlRepoError(f"dagclass method source for {cls.__name__}.{method_name} must be a single function")
     fn = module.body[0]
-    if fn.decorator_list:
-        raise DmlRepoError(f"dagclass method {cls.__name__}.{method_name} has unsupported decorators")
     if not fn.args.args or fn.args.args[0].arg != "self":
         raise DmlRepoError(f"dagclass method {cls.__name__}.{method_name} must declare self as first parameter")
     analyzer = _DagclassAnalyzer(member_names=member_names, method_names=method_names)
-    dependencies = analyzer.analyze(fn)
+    return analyzer.analyze(fn), fn.decorator_list
+
+
+def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_names: set[str], method_names: set[str]):
+    dependencies, decorators = _analyze_dagclass_method(
+        cls=cls,
+        method_name=method_name,
+        method=method,
+        member_names=member_names,
+        method_names=method_names,
+    )
+    if decorators:
+        raise DmlRepoError(f"dagclass method {cls.__name__}.{method_name} has unsupported decorators")
     delayed = funkify(method, uri="script", adapter="local", prepop={name: ref(name) for name in dependencies})
     return delayed, dependencies
+
+
+def _dagclass_decorated_method(value: Any) -> Callable[..., Any] | None:
+    current = value
+    while isinstance(current, DelayedRunnable):
+        fn = current.kwargs.get("fn")
+        if callable(fn):
+            params = list(inspect.signature(fn).parameters.values())
+            return fn if params and params[0].name == "self" else None
+        current = current.sub
+    return None
+
+
+def _add_dagclass_prepop(value: DelayedRunnable, dependencies: list[str]) -> DelayedRunnable:
+    if isinstance(value.sub, DelayedRunnable):
+        return replace(value, sub=_add_dagclass_prepop(value.sub, dependencies))
+    kwargs = dict(value.kwargs)
+    kwargs["prepop"] = {**kwargs.get("prepop", {}), **{name: ref(name) for name in dependencies}}
+    return replace(value, kwargs=kwargs)
 
 
 def _collect_member_dependencies(value: Any, member_names: set[str]) -> set[str]:
@@ -189,25 +218,33 @@ def _toposort_members(member_deps: dict[str, set[str]], order_hint: list[str]) -
     return ordered
 
 
-def _embed_dagclass_member(value, members: dict[str, Any], visiting: set[str]):
+def _bind_dagclass_member(value, members: dict[str, Any]):
     if isinstance(value, DelayedRef):
         if value.name not in members:
-            return value
-        if value.name in visiting:
-            raise DmlRepoError(f"dagclass member dependency cycle detected at: {value.name}")
-        return _embed_dagclass_member(members[value.name], members, visiting | {value.name})
+            raise DmlRepoError(f"Unknown dagclass member reference: {value.name}")
+        return members[value.name]
     if isinstance(value, DelayedRunnable):
         return replace(
             value,
-            sub=_embed_dagclass_member(value.sub, members, visiting),
-            kwargs={key: _embed_dagclass_member(item, members, visiting) for key, item in value.kwargs.items()},
+            sub=_bind_dagclass_member(value.sub, members),
+            kwargs={key: _bind_dagclass_member(item, members) for key, item in value.kwargs.items()},
+        )
+    if isinstance(value, Runnable):
+        return replace(
+            value,
+            sub=_bind_dagclass_member(value.sub, members),
+            kwargs={key: _bind_dagclass_member(item, members) for key, item in value.kwargs.items()},
         )
     if isinstance(value, dict):
-        return {key: _embed_dagclass_member(item, members, visiting) for key, item in value.items()}
+        return {key: _bind_dagclass_member(item, members) for key, item in value.items()}
     if isinstance(value, list):
-        return [_embed_dagclass_member(item, members, visiting) for item in value]
+        return [_bind_dagclass_member(item, members) for item in value]
     if isinstance(value, tuple):
-        return tuple(_embed_dagclass_member(item, members, visiting) for item in value)
+        return tuple(_bind_dagclass_member(item, members) for item in value)
+    if isinstance(value, set):
+        return {_bind_dagclass_member(item, members) for item in value}
+    if isinstance(value, frozenset):
+        return frozenset(_bind_dagclass_member(item, members) for item in value)
     return value
 
 
@@ -216,8 +253,7 @@ def _bind_dagclass_value(value):
         entrypoint = getattr(value.__class__, "__dagclass_entrypoint__", "main")
         if not hasattr(value, entrypoint):
             raise DmlRepoError(f"Dagclass instance missing configured entrypoint: {entrypoint}")
-        members = value.__dagclass_members__
-        return _embed_dagclass_member(members[entrypoint], members, {entrypoint})
+        return value.__dagclass_members__[entrypoint]
     return value
 
 
@@ -250,9 +286,9 @@ def _compile_dagclass_instance(instance) -> None:
     if getattr(instance, "__dagclass_compiled__", False):
         return
 
-    members: dict[str, Any] = {}
-    declaration_order: list[str] = []
-    method_defs: dict[str, Any] = {}
+    attributes: dict[str, Any] = {}
+    attribute_order: list[str] = []
+    method_defs: dict[str, tuple[Any, DelayedRunnable | None]] = {}
     field_names = {f.name for f in fields(instance)}
 
     for f in fields(instance):
@@ -260,8 +296,8 @@ def _compile_dagclass_instance(instance) -> None:
         bound = _bind_dagclass_value(current)
         if bound is not current:
             setattr(instance, f.name, bound)
-        members[f.name] = getattr(instance, f.name)
-        declaration_order.append(f.name)
+        attributes[f.name] = getattr(instance, f.name)
+        attribute_order.append(f.name)
 
     for name, class_value in instance.__class__.__dict__.items():
         if name.startswith("_"):
@@ -271,49 +307,72 @@ def _compile_dagclass_instance(instance) -> None:
         if isinstance(class_value, (staticmethod, classmethod, property)):
             raise DmlRepoError(f"dagclass member {name} uses unsupported descriptor type: {type(class_value).__name__}")
         if inspect.isfunction(class_value):
-            method_defs[name] = class_value
+            method_defs[name] = (class_value, None)
+            continue
+        decorated_method = _dagclass_decorated_method(class_value)
+        if decorated_method is not None:
+            method_defs[name] = (decorated_method, class_value)
             continue
         if callable(class_value):
             raise DmlRepoError(f"dagclass member {name} uses unsupported callable type: {type(class_value).__name__}")
         if name in instance.__dict__:
-            members[name] = getattr(instance, name)
-            declaration_order.append(name)
+            attributes[name] = getattr(instance, name)
+            attribute_order.append(name)
             continue
         bound = _bind_dagclass_value(class_value)
         if bound is not class_value:
             setattr(instance, name, bound)
-        members[name] = getattr(instance, name)
-        declaration_order.append(name)
+        attributes[name] = getattr(instance, name)
+        attribute_order.append(name)
 
-    member_names = set(members.keys()) | set(method_defs.keys())
+    member_names = set(attributes.keys()) | set(method_defs.keys())
     method_names = set(method_defs.keys())
     reserved = sorted(member_names & _DAGCLASS_RESERVED_NAMES)
     if reserved:
         bad = ", ".join(reserved)
         raise DmlRepoError(f"dagclass uses reserved names: {bad}")
+    attribute_deps: dict[str, set[str]] = {}
+    attribute_names = set(attributes)
+    for name, value in attributes.items():
+        attribute_deps[name] = _collect_member_dependencies(value, attribute_names)
+
+    members: dict[str, Any] = {}
+    order: list[str] = []
+    for name in _toposort_members(attribute_deps, attribute_order):
+        bound = _bind_dagclass_member(attributes[name], members)
+        setattr(instance, name, bound)
+        members[name] = bound
+        order.append(name)
+
     compiled_methods: dict[str, Any] = {}
-    for name, method in method_defs.items():
-        compiled, deps = _compile_plain_dagclass_method(
-            cls=instance.__class__,
-            method_name=name,
-            method=method,
-            member_names=member_names,
-            method_names=method_names,
-        )
+    method_deps: dict[str, set[str]] = {}
+    for name, (method, decorated) in method_defs.items():
+        if decorated is None:
+            compiled, deps = _compile_plain_dagclass_method(
+                cls=instance.__class__,
+                method_name=name,
+                method=method,
+                member_names=member_names,
+                method_names=method_names,
+            )
+        else:
+            deps, _decorators = _analyze_dagclass_method(
+                cls=instance.__class__,
+                method_name=name,
+                method=method,
+                member_names=member_names,
+                method_names=method_names,
+            )
+            compiled = _add_dagclass_prepop(decorated, deps)
         compiled_methods[name] = compiled
-    for name, compiled in compiled_methods.items():
+        method_deps[name] = set(deps) & method_names
+
+    method_order = _toposort_members(method_deps, list(method_defs))
+    for name in method_order:
+        compiled = _bind_dagclass_member(compiled_methods[name], members)
         setattr(instance, name, compiled)
         members[name] = compiled
-        declaration_order.append(name)
-
-    member_deps: dict[str, set[str]] = {}
-    for name, value in members.items():
-        deps = _collect_member_dependencies(value, set(members.keys()))
-        if name in deps:
-            raise DmlRepoError(f"dagclass member dependency cycle detected at: {name}")
-        member_deps[name] = deps
-
-    order = _toposort_members(member_deps, declaration_order)
+        order.append(name)
 
     instance.__dagclass_members__ = members
     instance.__dagclass_member_order__ = order
@@ -385,7 +444,7 @@ def run(instance, *args, name: str | None = None, entrypoint: str | None = None,
     entry = entrypoint or getattr(instance.__class__, "__dagclass_entrypoint__", "main")
     if not hasattr(instance, entry):
         raise DmlRepoError(f"api.run entrypoint not found: {entry}")
-    fn = getattr(instance, entry)
+    fn = instance.__dagclass_members__.get(entry)
     if not isinstance(fn, DelayedRunnable):
         raise DmlRepoError("api.run entrypoint must be DelayedRunnable")
     run_name = name or _default_run_name(instance)
