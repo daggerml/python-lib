@@ -460,7 +460,11 @@ class Dag:
         """Get the result node of the dag"""
         if self.ref is None:
             raise DmlRepoError("Cannot access result of an uncommitted DAG")
-        ref = self.dml.dag.describe(self.ref).get("result")
+        description = self.dml.dag.describe(self.ref)
+        error_ref = description.get("error")
+        if isinstance(error_ref, Ref):
+            raise self.dml.dag.get_error(error_ref)
+        ref = description.get("result")
         if not isinstance(ref, Ref):
             raise DmlRepoError(f"'{self.__class__.__name__}' dag has not been committed yet")
         return _make_node(self, ref)

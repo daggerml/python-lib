@@ -108,6 +108,19 @@ def test_api_live_006__context_manager_commits_error_capture(live_dml):
     assert isinstance(error_ref, Ref)
 
 
+def test_api_live_011__failed_dag_result_raises_persisted_error(live_dml):
+    dag = api.new("failed-result", dml=live_dml)
+    dag.commit(api.Error("boom", origin="test", type="RuntimeError"))
+
+    loaded = api.load("failed-result", dml=live_dml)
+    with pytest.raises(api.Error, match="boom") as exc_info:
+        _ = loaded.result
+
+    assert exc_info.value.message == "boom"
+    assert exc_info.value.origin == "test"
+    assert exc_info.value.type == "RuntimeError"
+
+
 def test_api_live_007__open_builtin_selection_context_skips_collection_builtins(live_dml):
     dag = api.new("open-selection-context", dml=live_dml)
     answer = dag.put(42, name="answer")

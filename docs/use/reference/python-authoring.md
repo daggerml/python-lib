@@ -16,6 +16,7 @@ import daggerml as dml
 - `Dag.freeze(message=None) -> Dag`: freeze an uncommitted runtime index for read-only inspection; records `dag: <name>` plus an optional newline-delimited annotation.
 - `Dag.unfreeze() -> Dag`: restore a frozen uncommitted runtime index for authoring.
 - `Dag.commit(value)`: finalize the DAG and record its result.
+- `Dag.result`: return the result node of a successful committed DAG; raise its persisted `Error` when the committed DAG failed; reject uncommitted or terminal-less DAGs.
 - `Node.value()`: materialize a value; `Node.context(root=True)`: trace provenance.
 
 `Dag(tags=None)` accepts an optional list of tags for a named DAG. On a successful `commit`, DaggerML adds each tag to the named tree entry in the provided order. Tag mutations occur after the DAG commit and are not atomic with it: a tag-mutation error propagates while the DAG commit (and any earlier tag mutations) remains published.

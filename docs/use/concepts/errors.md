@@ -18,6 +18,8 @@ with dag:
 
 The exception still propagates to the caller. The context manager also commits a durable base `Error`, so the failed DAG can be inspected later. Passing an `Error` directly to `dag.commit()` likewise records it as the terminal error rather than as a result value.
 
+Accessing `.result` on a loaded failed DAG raises that persisted `Error`. A successful committed DAG instead returns its result node, while an uncommitted or terminal-less DAG raises a repository error rather than inventing a result.
+
 ## Function failures
 
 Each function call records a function DAG. If the function fails, that DAG records an error ref instead of a result node; the parent DAG retains the function-call node and any name assigned to it.

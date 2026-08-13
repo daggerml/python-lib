@@ -107,6 +107,20 @@ def test_api_dag_011__argv_and_result_require_refs(dag, fake_dml, refs):
         _ = committed.result
 
 
+def test_api_dag_029__result_raises_committed_terminal_error(fake_dml, refs):
+    error_ref = api.Ref("error:failed")
+    error = Error("boom", origin="test", type="RuntimeError")
+    fake_dml.dag.describe.return_value = {"error": error_ref, "result": None}
+    fake_dml.dag.get_error.return_value = error
+    dag = api.Dag(dml=fake_dml, ref=refs.dag)
+
+    with pytest.raises(Error, match="boom") as exc_info:
+        _ = dag.result
+
+    assert exc_info.value is error
+    fake_dml.dag.get_error.assert_called_once_with(error_ref)
+
+
 def test_api_dag_012__require_imports_result_and_named_nodes(dag, fake_dml, refs):
     fake_dml.dag.describe.return_value = {"names": {"data": refs.dict}, "result": refs.result}
 
