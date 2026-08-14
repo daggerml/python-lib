@@ -14,7 +14,9 @@ from daggerml.api import DmlRepoError
 from daggerml.contrib.codecs import DelayedLoad, DelayedRef, DelayedRunnable
 
 _DAGCLASS_CALL_NODE_NAME = "<dagclass-call>"
-_DAGCLASS_RESERVED_NAMES = {"dag", "dml", "argv", "call", "put", "commit"}
+_DAGCLASS_RESERVED_NAMES = {f.name for f in fields(core_api.Dag)} | {
+    name for name in dir(core_api.Dag) if not name.startswith("_")
+}
 
 
 def _iter_dagclass_members(instance):
@@ -27,90 +29,49 @@ def _iter_dagclass_members(instance):
 
 
 class _DagclassAnalyzer:
-    def __init__(self, *, member_names: set[str], method_names: set[str]):
+    def __init__(self, *, member_names: set[str]):
         self.member_names = member_names
-        self.method_names = method_names
         self.dependencies: list[str] = []
         self._dep_set: set[str] = set()
+        self.assignments: set[str] = set()
 
     def _add_dependency(self, name: str) -> None:
         if name not in self._dep_set:
             self._dep_set.add(name)
             self.dependencies.append(name)
 
-    def _read_self_name(self, name: str, defined: set[str]) -> None:
-        if name not in self.member_names:
-            raise DmlRepoError(f"Unknown dagclass member reference: self.{name}")
-        if name not in defined:
-            self._add_dependency(name)
-
-    def _define_self_name(self, name: str, defined: set[str]) -> set[str]:
-        if name not in self.member_names:
-            raise DmlRepoError(f"Unknown dagclass member assignment: self.{name}")
-        if name in self.method_names:
-            raise DmlRepoError(f"Cannot assign to compiled dagclass method: self.{name}")
-        return defined | {name}
-
-    def _scan_children(self, node: ast.AST, defined: set[str]) -> set[str]:
+    def _scan(self, node: ast.AST) -> None:
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        ):
+            if isinstance(node.ctx, ast.Load):
+                self._add_dependency(node.attr)
+            elif isinstance(node.ctx, ast.Store):
+                self.assignments.add(node.attr)
         for child in ast.iter_child_nodes(node):
-            defined = self._scan(child, defined)
-        return defined
-
-    def _scan_target(self, target: ast.AST, defined: set[str]) -> set[str]:
-        if isinstance(target, ast.Attribute):
-            if isinstance(target.value, ast.Name) and target.value.id == "self":
-                return self._define_self_name(target.attr, defined)
-            return self._scan_children(target, defined)
-        if isinstance(target, (ast.Tuple, ast.List)):
-            for item in target.elts:
-                defined = self._scan_target(item, defined)
-        return defined
-
-    def _scan_block(self, statements: list[ast.stmt], defined: set[str]) -> set[str]:
-        for statement in statements:
-            defined = self._scan(statement, defined)
-        return defined
-
-    def _scan(self, node: ast.AST, defined: set[str]) -> set[str]:
-        if isinstance(node, ast.Attribute):
-            if isinstance(node.value, ast.Name) and node.value.id == "self":
-                if isinstance(node.ctx, ast.Load):
-                    self._read_self_name(node.attr, defined)
-                return defined
-        if isinstance(node, ast.Assign):
-            defined = self._scan(node.value, defined)
-            for target in node.targets:
-                defined = self._scan_target(target, defined)
-            return defined
-        if isinstance(node, ast.AnnAssign):
-            if node.value is not None:
-                defined = self._scan(node.value, defined)
-            return self._scan_target(node.target, defined)
-        if isinstance(node, ast.AugAssign):
-            if (
-                isinstance(node.target, ast.Attribute)
-                and isinstance(node.target.value, ast.Name)
-                and node.target.value.id == "self"
-            ):
-                self._read_self_name(node.target.attr, defined)
-            defined = self._scan(node.value, defined)
-            return self._scan_target(node.target, defined)
-        if isinstance(node, ast.If):
-            defined = self._scan(node.test, defined)
-            body = self._scan_block(node.body, set(defined))
-            orelse = self._scan_block(node.orelse, set(defined))
-            return body & orelse
-        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
-            self._scan_children(node, set(defined))
-            return defined
-        return self._scan_children(node, defined)
+            self._scan(child)
 
     def analyze(self, fn: ast.FunctionDef) -> list[str]:
-        self._scan_block(fn.body, set())
-        return list(self.dependencies)
+        for statement in fn.body:
+            self._scan(statement)
+        reserved_assignments = self.assignments & _DAGCLASS_RESERVED_NAMES
+        if reserved_assignments:
+            bad = ", ".join(sorted(reserved_assignments))
+            raise DmlRepoError(f"Cannot assign to reserved dagclass names: {bad}")
+        dependencies = [
+            name
+            for name in self.dependencies
+            if name not in self.assignments and name not in _DAGCLASS_RESERVED_NAMES
+        ]
+        for name in dependencies:
+            if name not in self.member_names:
+                raise DmlRepoError(f"Unknown dagclass member reference: self.{name}")
+        return dependencies
 
 
-def _analyze_dagclass_method(*, cls, method_name: str, method, member_names: set[str], method_names: set[str]):
+def _analyze_dagclass_method(*, cls, method_name: str, method, member_names: set[str]):
     try:
         source = dedent(inspect.getsource(method))
     except (OSError, TypeError) as e:
@@ -121,17 +82,16 @@ def _analyze_dagclass_method(*, cls, method_name: str, method, member_names: set
     fn = module.body[0]
     if not fn.args.args or fn.args.args[0].arg != "self":
         raise DmlRepoError(f"dagclass method {cls.__name__}.{method_name} must declare self as first parameter")
-    analyzer = _DagclassAnalyzer(member_names=member_names, method_names=method_names)
+    analyzer = _DagclassAnalyzer(member_names=member_names)
     return analyzer.analyze(fn), fn.decorator_list
 
 
-def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_names: set[str], method_names: set[str]):
+def _compile_plain_dagclass_method(*, cls, method_name: str, method, member_names: set[str]):
     dependencies, decorators = _analyze_dagclass_method(
         cls=cls,
         method_name=method_name,
         method=method,
         member_names=member_names,
-        method_names=method_names,
     )
     if decorators:
         raise DmlRepoError(f"dagclass method {cls.__name__}.{method_name} has unsupported decorators")
@@ -353,7 +313,6 @@ def _compile_dagclass_instance(instance) -> None:
                 method_name=name,
                 method=method,
                 member_names=member_names,
-                method_names=method_names,
             )
         else:
             deps, _decorators = _analyze_dagclass_method(
@@ -361,7 +320,6 @@ def _compile_dagclass_instance(instance) -> None:
                 method_name=name,
                 method=method,
                 member_names=member_names,
-                method_names=method_names,
             )
             compiled = _add_dagclass_prepop(decorated, deps)
         compiled_methods[name] = compiled

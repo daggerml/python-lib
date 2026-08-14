@@ -12,6 +12,37 @@ Freezing preserves the runtime index and its partial graph, but not the in-memor
 
 Prefer retaining the original `Dag` instance and calling `unfreeze()` on it. If reconstruction is necessary, call `dml.resume(frozen, name=..., message=..., tags=...)` before committing; do not assume metadata can be recovered from the frozen index or freeze message.
 
+### Dagclass dependency inference does not analyze control flow or item access
+
+A compiled dagclass method runs with `self` bound to its worker `Dag`, not to
+the original Python instance. The compiler infers member dependencies only from
+direct, non-reserved `self.<name>` attribute loads. Names that resolve directly
+on `Dag`, such as `self.put`, are not member dependencies.
+
+If any direct assignment to `self.<name>` appears anywhere in the method, the
+compiler assumes that method creates the named node and removes `name` from its
+dependencies. It does not prove that the assignment executes before a read or
+on every control-flow path:
+
+```python
+def main(self, raw, ready):
+    if ready.value():
+        self.output = raw
+    return self.output
+```
+
+This method compiles without an `output` dependency, but fails at runtime when
+`ready` is false because the worker DAG has no node named `output`.
+
+The compiler completely ignores item and dynamic access, including
+`self["name"]`, item assignment, `getattr`, `setattr`, and aliases. Even a
+literal item key does not create a topology edge or suppress one. These forms
+still execute with normal `Dag` behavior, but users must provide their own
+runtime ordering and cannot rely on dagclass dependency binding. Prefer direct
+`self.<name>` syntax and ensure every assigned node exists before it is read.
+See [Understand `self` inside dagclass methods](use/guides/author-a-dag.md#understand-self-inside-dagclass-methods)
+for the complete reserved-name list and examples.
+
 ### Editable dependency changes do not affect a funk cache key
 
 The cache key for a script funk includes the rendered function source and normalized DaggerML inputs. It does not include the implementation of modules imported by that function. This matters when an imported module comes from an editable or updated installation.

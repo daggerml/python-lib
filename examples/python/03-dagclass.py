@@ -57,7 +57,9 @@ class DatasetSummary:
     def main(self, raw):
         if self.same_as_fn.value() != self.same_as.value():  # pyright: ignore[reportAttributeAccessIssue]
             raise ValueError("same_as_fn is different from the method")
-        return self.summarize(self.preprocess(raw))  # pyright: ignore[reportCallIssue]
+        self.intermediate_value = self.preprocess(raw)  # pyright: ignore[reportCallIssue]
+        self.put(21, name="i0")
+        return self.summarize(self.intermediate_value)  # pyright: ignore[reportCallIssue]
 
 
 @api.dagclass

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import daggerml.api as api
 from daggerml import Dml
 from daggerml.contrib import api as contrib_api
@@ -19,6 +21,22 @@ class ConfiguredCalculation:
 
     def main(self, value):
         return (self.offset.value() + value.value()) * self.scale.value()
+
+
+@dagclass
+class NamedNodeCalculation:
+    def main(self, value):
+        self.output = value.value() + 1
+        direct = self.put(value.value() + 2)
+        return {"assigned": self.output, "direct": direct}
+
+
+@dagclass
+class ReadBeforeAssignmentCalculation:
+    def main(self, value):
+        output = self.output
+        self.output = value
+        return output
 
 
 def test_contrib_int_005__decorated_local_funk_runs_through_full_pipeline(tmp_path, monkeypatch, remote_env, s3_bucket):
@@ -110,3 +128,23 @@ def test_contrib_int_007__run_executes_compiled_dagclass_entrypoint(
         contrib_api.run(ConfiguredCalculation(offset=1, scale=2), 3, name="dagclass-api-run")
 
     assert api.load("dagclass-api-run", dml=runtime).result.value() == 8
+
+
+def test_contrib_int_008__dagclass_attributes_follow_worker_dag_semantics(
+    tmp_path, monkeypatch, remote_env, s3_bucket
+):
+    del remote_env, s3_bucket
+    monkeypatch.setenv("DML_DEFAULT_DB_MAP_SIZE_MAX", str(64 * 1024 * 1024))
+    monkeypatch.setattr(
+        api,
+        "_codecs",
+        [(1, 1, DelayedActionCodec()), (0, 2, api.NodeCodec()), (0, 3, api.MiscPyTypeCodec())],
+    )
+    runtime = Dml.init(tmp_path, user="tester", remote_root="s3://test-bucket/test-prefix")
+
+    with api.use_default_dml(runtime):
+        contrib_api.run(NamedNodeCalculation(), 3, name="dagclass-worker-nodes")
+        with pytest.raises(api.NodeError, match="Node 'output' not found in DAG"):
+            contrib_api.run(ReadBeforeAssignmentCalculation(), 3, name="dagclass-read-before-assignment")
+
+    assert api.load("dagclass-worker-nodes", dml=runtime).result.value() == {"assigned": 4, "direct": 5}

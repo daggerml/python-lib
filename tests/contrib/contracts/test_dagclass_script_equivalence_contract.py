@@ -126,6 +126,78 @@ class CyclicPipeline:
         return self.left(raw)
 
 
+@api.dagclass
+class DagOperationPipeline:
+    def main(self, raw):
+        self.put(raw, name="output")
+        return self.argv
+
+
+@api.dagclass
+class DagNamedMemberPipeline:
+    dag = preprocess
+
+    def main(self, raw):
+        return self.dag(raw)
+
+
+@api.dagclass
+class UndeclaredAssignmentPipeline:
+    def main(self, raw):
+        self.output = raw
+        return self.output
+
+
+@api.dagclass
+class ConditionalAssignmentPipeline:
+    output = None
+
+    def main(self, raw):
+        if raw:
+            self.output = raw
+        return self.output
+
+
+@api.dagclass
+class LaterAssignmentPipeline:
+    output = None
+
+    def main(self, raw):
+        value = self.output
+        self.output = raw
+        return value
+
+
+@api.dagclass
+class UnknownReferencePipeline:
+    def main(self, raw):
+        return self.missing(raw)
+
+
+@api.dagclass
+class ReservedAssignmentPipeline:
+    def main(self, raw):
+        self.put = raw
+        return raw
+
+
+@api.dagclass
+class ItemAccessPipeline:
+    transform = preprocess
+
+    def main(self, raw):
+        return self["transform"](raw)
+
+
+@api.dagclass
+class ItemAssignmentPipeline:
+    output = 1
+
+    def main(self, raw):
+        self["output"] = raw
+        return self.output
+
+
 @api.funkify(prepop={"summarize": api.ref("summarize"), "preprocess": api.ref("preprocess")})
 def main(self, raw):
     return self.summarize(self.preprocess(raw))
@@ -221,3 +293,72 @@ def test_contrib_dagclass_012__decorated_method_refs_share_dagclass_namespace():
 
     assert pipeline.main.kwargs["prepop"] == {"offset": 1, "scale": 2}
     assert pipeline.main.kwargs["kwargs"] == {"image": "python:3.10"}
+
+
+def test_contrib_dagclass_013__dag_resolved_names_are_not_dependencies():
+    assert api._DAGCLASS_RESERVED_NAMES == {
+        "argv",
+        "call",
+        "cancel",
+        "commit",
+        "dml",
+        "freeze",
+        "keys",
+        "message",
+        "name",
+        "put",
+        "ref",
+        "require",
+        "result",
+        "tags",
+        "token",
+        "unfreeze",
+        "values",
+    }
+    assert DagOperationPipeline().main.kwargs["prepop"] == {}
+
+
+def test_contrib_dagclass_014__dag_is_a_normal_member_name():
+    pipeline = DagNamedMemberPipeline()
+
+    assert pipeline.main.kwargs["prepop"] == {"dag": preprocess}
+
+
+def test_contrib_dagclass_015__any_attribute_assignment_removes_dependency():
+    assert UndeclaredAssignmentPipeline().main.kwargs["prepop"] == {}
+    assert ConditionalAssignmentPipeline().main.kwargs["prepop"] == {}
+    assert LaterAssignmentPipeline().main.kwargs["prepop"] == {}
+
+
+def test_contrib_dagclass_016__unknown_final_edge_fails_compilation():
+    with pytest.raises(DmlRepoError, match="Unknown dagclass member reference: self.missing"):
+        UnknownReferencePipeline()
+
+
+def test_contrib_dagclass_017__reserved_assignment_fails_compilation():
+    with pytest.raises(DmlRepoError, match="Cannot assign to reserved dagclass names: put"):
+        ReservedAssignmentPipeline()
+
+
+def test_contrib_dagclass_018__reserved_class_member_fails_compilation():
+    @api.dagclass
+    class ReservedMemberPipeline:
+        put = preprocess
+
+        def main(self, raw):
+            return raw
+
+    with pytest.raises(DmlRepoError, match="dagclass uses reserved names: put"):
+        ReservedMemberPipeline()
+
+
+def test_contrib_dagclass_019__item_access_is_opaque_to_compilation():
+    assert ItemAccessPipeline().main.kwargs["prepop"] == {}
+    assert ItemAssignmentPipeline().main.kwargs["prepop"] == {"output": 1}
+
+    @api.dagclass
+    class UnknownItemPipeline:
+        def main(self, raw):
+            return self["missing"](raw)
+
+    assert UnknownItemPipeline().main.kwargs["prepop"] == {}

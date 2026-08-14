@@ -236,6 +236,70 @@ Instantiating a dagclass compiles it into a self-contained namespace. Constructo
 
 Within a dagclass, every `api.ref("name")` is also local to the dagclass namespace. This includes references inside an externally defined `@api.funkify` value assigned as a dagclass attribute. Such a funk may reference only known dagclass attributes or members; instantiation fails if a reference cannot be resolved. Pass external configuration explicitly through constructor attributes rather than expecting a compiled dagclass member to capture a node from its caller DAG.
 
+### Understand `self` inside dagclass methods
+
+When a compiled method runs, its `self` argument is the worker's
+`daggerml.api.Dag`, not the original Python class instance. Compilation uses
+direct `self.<name>` syntax to build the member dependency topology:
+
+- A non-reserved `self.<name>` load depends on the dagclass member `name`.
+- Any assignment to the same `self.<name>` anywhere in the method removes that
+  dependency. The assigned name does not need a class-level declaration.
+- A remaining dependency whose name is not a dagclass member fails when the
+  dagclass is instantiated.
+
+Attribute assignment creates an invocation-local named node in the worker DAG:
+
+```python
+@api.dagclass
+class PreparedSummary:
+    summarize = summarize
+
+    def main(self, raw):
+        self.prepared = self.put([value.strip() for value in raw.value()])
+        return self.summarize(self.prepared)
+```
+
+Here `summarize` is a compiled member dependency, while `prepared` is not. The
+assignment does not mutate the original `PreparedSummary` instance, and a node
+created by one method invocation is not automatically available in another
+method invocation.
+
+Some names are reserved because normal Python lookup on `Dag` resolves them
+before named-node fallback can run:
+
+```text
+dml, token, ref, name, message, tags,
+argv, result, keys, values,
+put, require, call, commit, freeze, unfreeze, cancel
+```
+
+Reserved means only that `self.<name>` resolves to the `Dag` field, property, or
+method. It does not mean every listed operation is useful inside a worker. A
+dagclass cannot declare or assign a member with one of these names. `dag` is not
+reserved and can be a normal dagclass member.
+
+> **Sharp bit: assignments are syntactic.** Compilation does not evaluate
+> ordering, reachability, branches, or loops. If any `self.output = ...` occurs
+> anywhere in a method, `self.output` is excluded from dependencies for the
+> entire method. The method must create that node before every runtime read. For
+> example, this compiles without an `output` dependency but fails when `ready`
+> is false:
+
+```python
+def main(self, raw, ready):
+    if ready.value():
+        self.output = raw
+    return self.output
+```
+
+> **Sharp bit: item and dynamic access are invisible to compilation.** The
+> compiler does not inspect `self["name"]`, `self["name"] = value`, `getattr`,
+> `setattr`, aliases, or other dynamic forms. They add no topology edge and
+> remove no edge, even when the item key is a string literal. Such expressions
+> still execute with normal `Dag` runtime behavior, but dependency ordering and
+> binding are the user's responsibility.
+
 Dagclasses can also be composed as reusable functions:
 
 ```python
