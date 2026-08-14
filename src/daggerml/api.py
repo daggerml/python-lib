@@ -1243,5 +1243,17 @@ class NodeCodec:
             raise CodecError(f"Failed to encode cross-dag node import: {e}") from e
 
 
+class ProjectionCodec:
+    def can_encode(self, value: Any) -> bool:
+        return isinstance(value, Projection)
+
+    def encode(self, value: "Projection", dag: Dag) -> Ref:
+        assert dag.token is not None, "DAG must have a token to encode projections"
+        node_ref = NodeCodec().encode(value.base, dag)
+        for step in value.path:
+            node_ref = dag._call_builtin("daggerml:get", node_ref, step)
+        return node_ref
+
+
 def codecs() -> list:
-    return [(0, NodeCodec()), (0, MiscPyTypeCodec())]
+    return [(0, NodeCodec()), (0, MiscPyTypeCodec()), (0, ProjectionCodec())]

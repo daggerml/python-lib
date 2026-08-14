@@ -22,7 +22,11 @@ def isolated_api_state(monkeypatch):
         "_SCOPED_DEFAULT_DML",
         ContextVar("daggerml_test_scoped_default_dml", default=api._NO_DEFAULT_DML),
     )
-    monkeypatch.setattr(api, "_codecs", [(0, 1, api.NodeCodec()), (0, 2, api.MiscPyTypeCodec())])
+    monkeypatch.setattr(
+        api,
+        "_codecs",
+        [(0, 1, api.NodeCodec()), (0, 2, api.MiscPyTypeCodec()), (0, 3, api.ProjectionCodec())],
+    )
     monkeypatch.setattr(api, "_plugins_loaded", True)
 
 

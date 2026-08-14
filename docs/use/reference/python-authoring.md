@@ -19,6 +19,16 @@ import daggerml as dml
 - `Dag.result`: return the result node of a successful committed DAG; raise its persisted `Error` when the committed DAG failed; reject uncommitted or terminal-less DAGs.
 - `Node.value()`: materialize a value; `Node.context(root=True)`: trace provenance.
 
+Committed collection indexing returns a read-only `Projection`. A projection can be inspected with `.value()` and `.context()` without changing its source DAG, or supplied anywhere the codec system accepts a value. When the projection and target DAG use the same `Dml` instance, encoding imports the projection's committed base node and records each string key, integer index, or slice as a builtin access node in the target DAG:
+
+```python
+val = dag.call(fn, *args)
+ctx = val.context()
+selected = dag.put(ctx.node_name["my_key"]["my_key1"])
+```
+
+This behavior is codec-driven, so the same projection can appear directly, inside a list or dictionary, or as a function argument. It does not copy the projected Python value into a new literal.
+
 `Dag(tags=None)` accepts an optional list of tags for a named DAG. On a successful `commit`, DaggerML adds each tag to the named tree entry in the provided order. Tag mutations occur after the DAG commit and are not atomic with it: a tag-mutation error propagates while the DAG commit (and any earlier tag mutations) remains published.
 
 Frozen DAGs remain uncommitted: named-node lookup, `keys()`, `values()`, and `argv` inspect their partial DAG, while `result` remains unavailable. Mutation methods are not implicitly unfrozen; call `unfreeze()` on the original wrapper before authoring further changes. To resume from a frozen runtime in another process, call `dml.resume(frozen, name=..., message=..., tags=...)`; all three metadata arguments are required because freezing does not preserve them (`tags=None` is an explicit no-tags choice).

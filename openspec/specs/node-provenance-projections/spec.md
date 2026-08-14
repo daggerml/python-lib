@@ -12,15 +12,20 @@ The public API SHALL expose a read-only `Projection` object for committed-DAG di
 - **THEN** each step extends the read-only projection path without mutating repository state
 
 ### Requirement: `Projection` SHALL support read-only node-like interrogation only
-`Projection` SHALL support read-only interrogation helpers equivalent to committed-node inspection, including `.value()`, `.context(root=...)`, nested indexing, `type`, `keys()`, iteration, and length, and it SHALL NOT support mutation, callable behavior, codec insertion, or ref-based identity semantics.
+`Projection` SHALL support read-only interrogation helpers equivalent to committed-node inspection, including `.value()`, `.context(root=...)`, nested indexing, `type`, `keys()`, iteration, and length. It SHALL NOT have independent ref-based identity, mutable-node helpers, or callable behavior, but it SHALL be accepted by codec normalization so its committed base and access path can be materialized in an active DAG from the same `Dml` instance.
 
 #### Scenario: Projection value materializes selected subvalue
 - **WHEN** a caller invokes `.value()` on a `Projection`
 - **THEN** the API materializes the selected subvalue by reading the base committed value and applying the stored projection path
 
-#### Scenario: Projection rejects write-style semantics
-- **WHEN** a caller attempts to use a `Projection` as a mutable node, callable node, or ref-bearing runtime input
+#### Scenario: Projection rejects direct mutable and callable semantics
+- **WHEN** a caller attempts to mutate or invoke a `Projection` directly
 - **THEN** the API rejects that operation rather than treating the projection as a persisted node
+
+#### Scenario: Projection is materialized through codec normalization
+- **WHEN** a caller supplies a `Projection` from the same `Dml` instance to a codec-normalized input of an active DAG
+- **THEN** the system inserts its committed base node and access path into the active DAG
+- **AND** the source committed DAG remains unchanged
 
 ### Requirement: `context(root=False)` SHALL return the nearest non-builtin provenance context for projected or builtin-derived values
 For both real `Node` values and `Projection` values, `context(root=False)` SHALL backtrack through builtin-produced structure and builtin selection paths until it reaches the first non-builtin function/import provenance boundary, and it SHALL return that boundary's DAG.

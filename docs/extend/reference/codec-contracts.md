@@ -24,3 +24,15 @@ plugins loaded, so a future use can retry.
 runnable target/sub/kwargs, and delayed extension values. A codec can return a
 `Uri`, `Runnable`, DaggerML literal, collection, reference, or another
 encodable intermediate type, provided the chain eventually terminates.
+
+The built-in `Projection` codec accepts projections whose committed base belongs to the target DAG's `Dml` instance. It first applies normal node encoding to the base, producing an `ImportNode` in the active DAG, then stages one builtin `daggerml:get` operation for each stored projection path step. String keys, integer indices, and normalized slice bounds are passed through in path order, and the codec returns the final access-node ref.
+
+For `projection.path == ("my_key", "my_key1")`, normalization records:
+
+```text
+ImportNode(projection.base)
+  -> get(imported_base, "my_key")
+  -> get(previous_result, "my_key1")
+```
+
+Because this behavior is part of `apply_codecs()`, callers do not select when the codec runs: direct staging, nested normalization, and function inputs share the same contract. Constructing or indexing the projection remains read-only; only encoding it mutates the active target DAG, and the projected Python value is not stored as a copied literal.

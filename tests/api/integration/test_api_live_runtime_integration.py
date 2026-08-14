@@ -158,6 +158,35 @@ def test_api_live_009__committed_projection_supports_nested_traversal(live_dml):
     assert loaded.result["outer"][0]["inner"].value() == 7
 
 
+def test_api_live_012__context_projection_materializes_as_import_and_access_nodes(live_dml):
+    source = api.new("projection-codec-source", dml=live_dml)
+    root = source.put({"my_key": {"my_key1": 7}}, name="node_name")
+    source.commit(root)
+
+    target = api.new("projection-codec-target", dml=live_dml)
+    val = target.require("projection-codec-source", "node_name")
+    ctx = val.context()
+    selected = target.put(ctx.node_name["my_key"]["my_key1"], name="selected")
+
+    assert selected.value() == 7
+
+    final_info = live_dml.dag.describe_node(selected.ref)
+    first_get_ref = final_info["argv"][1]
+    first_get_info = live_dml.dag.describe_node(first_get_ref)
+    import_ref = first_get_info["argv"][1]
+    import_info = live_dml.dag.describe_node(import_ref)
+
+    assert final_info["type"] == "FnNode"
+    assert first_get_info["type"] == "FnNode"
+    assert import_info == {
+        "id": import_ref,
+        "type": "ImportNode",
+        "dag": source.ref,
+        "node": root.ref,
+    }
+    assert target.selected.ref == selected.ref
+
+
 def test_api_live_010__frozen_dag_can_be_reconstructed_resumed_and_committed(live_dml):
     original = api.new("resumed", dml=live_dml)
     original.put({"status": "done"}, name="implementation")

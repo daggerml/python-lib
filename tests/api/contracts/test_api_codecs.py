@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import UserDict
 from collections.abc import Sequence
 from dataclasses import dataclass
+from unittest.mock import call, patch
 
 import pytest
 
@@ -72,12 +73,13 @@ def test_api_codec_004__sets_are_not_list_like_values():
     assert not MiscPyTypeCodec().can_encode({1, 2})
 
 
-def test_api_codec_005__builtins_include_node_and_misc_codecs():
+def test_api_codec_005__builtins_include_node_misc_and_projection_codecs():
     registrations = api.codecs()
 
-    assert [priority for priority, _codec in registrations] == [0, 0]
+    assert [priority for priority, _codec in registrations] == [0, 0, 0]
     assert any(isinstance(codec, api.NodeCodec) for _priority, codec in registrations)
     assert any(isinstance(codec, api.MiscPyTypeCodec) for _priority, codec in registrations)
+    assert any(isinstance(codec, api.ProjectionCodec) for _priority, codec in registrations)
 
 
 def test_api_codec_006__entry_points_load_once_and_sort_by_priority(monkeypatch):
@@ -177,3 +179,49 @@ def test_api_codec_014__node_codec_wraps_import_failures(dag, fake_dml, refs):
 
     with pytest.raises(api.CodecError, match="Failed to encode cross-dag node import: nope"):
         api.NodeCodec().encode(node, dag)
+
+
+def test_api_codec_015__projection_codec_imports_base_and_replays_path(dag, fake_dml, refs):
+    source = api.Dag(dml=fake_dml, ref=refs.dag2)
+    base = api.DictNode(source, refs.dict, _info={"data_type": "dict", "length": 1, "keys": ["my_key"]})
+    projection = api.Projection(dag=source, base=base, path=("my_key", 1, [0, 2]))
+    codec = api.ProjectionCodec()
+
+    with patch.object(dag, "_call_builtin", side_effect=[refs.fn, refs.result, refs.scalar]) as builtin:
+        encoded = codec.encode(projection, dag)
+
+    assert codec.can_encode(projection)
+    assert not codec.can_encode(base)
+    assert encoded == refs.scalar
+    fake_dml.runtime.put_import.assert_called_once_with(refs.index, refs.dag2, node=refs.dict, name=None)
+    assert builtin.call_args_list == [
+        call("daggerml:get", refs.imported, "my_key"),
+        call("daggerml:get", refs.fn, 1),
+        call("daggerml:get", refs.result, [0, 2]),
+    ]
+
+
+def test_api_codec_016__projection_normalizes_directly_and_inside_collections(dag, refs):
+    source = api.Dag(dml=dag.dml, ref=refs.dag2)
+    base = api.DictNode(source, refs.dict, _info={"data_type": "dict", "length": 1, "keys": ["selected"]})
+    projection = api.Projection(dag=source, base=base, path=("selected",))
+
+    with patch.object(dag, "_call_builtin", side_effect=[refs.fn, refs.result]) as builtin:
+        assert api.apply_codecs(projection, dag=dag) == refs.fn
+        assert api.apply_codecs({"nested": [projection]}, dag=dag) == {"nested": [refs.result]}
+
+    assert builtin.call_args_list == [
+        call("daggerml:get", refs.imported, "selected"),
+        call("daggerml:get", refs.imported, "selected"),
+    ]
+
+
+def test_api_codec_017__put_names_final_projection_access_ref(dag, fake_dml, refs):
+    source = api.Dag(dml=fake_dml, ref=refs.dag2)
+    base = api.DictNode(source, refs.dict, _info={"data_type": "dict", "length": 1, "keys": ["selected"]})
+    projection = api.Projection(dag=source, base=base, path=("selected",))
+
+    with patch.object(dag, "_call_builtin", return_value=refs.result):
+        dag.put(projection, name="selected")
+
+    fake_dml.runtime.put_literal.assert_called_with(refs.index, refs.result, name="selected")
