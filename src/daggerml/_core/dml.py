@@ -367,6 +367,15 @@ RuntimeCancelSummary = TypedDict(
 )
 
 
+def _require_runtime_ref(value: object, *, allow_frozen: bool = True) -> Ref:
+    if not isinstance(value, Ref):
+        raise TypeError(f"expected runtime Ref, got {type(value).__name__}")
+    allowed = ("index", "frozenindex") if allow_frozen else ("index",)
+    if value.ns() not in allowed:
+        raise TypeError(f"expected runtime Ref in {allowed}, got {value.ns()!r}")
+    return value
+
+
 @dataclass(frozen=True)
 class _RuntimeNamespace:
     _dml: "Dml"
@@ -375,11 +384,12 @@ class _RuntimeNamespace:
     def create(
         self,
         cache_key: Annotated[str | None, "Cache key to reuse execution results."] = None,
-        execution_id: Annotated[str | None, "Execution id for adapter-coordinated runs."] = None,
+        execution: Annotated[Ref | None, "Runtime ref for adapter-coordinated runs."] = None,
     ) -> Ref:
         """Create a new mutable runtime index."""
-        if (cache_key is None) != (execution_id is None):
-            raise DmlRepoError("both cache_key and execution_id must be provided or neither")
+        if (cache_key is None) != (execution is None):
+            raise DmlRepoError("both cache_key and execution must be provided or neither")
+        execution_id = _require_runtime_ref(execution, allow_frozen=False).id() if execution is not None else None
         return _index_ops(self._dml).create(
             self._dml._config.user,
             commit=_head_ops(self._dml).get_head()["commit"],
@@ -537,40 +547,39 @@ class _RuntimeNamespace:
 
     def read_execution_record(
         self,
-        execution: Annotated[Ref | str, "Runtime index ref or execution id to inspect."],
+        execution: Annotated[Ref, "Runtime execution ref to inspect."],
     ) -> ExecutionRecord:
         """Read the raw execution record for one runtime execution."""
-        execution_id = execution.id() if isinstance(execution, Ref) else execution
+        execution_id = _require_runtime_ref(execution).id()
         return _exec_state(self._dml).read_execution_record(execution_id)
 
     def read_launch_state(
         self,
-        execution_id: Annotated[str, "Execution id whose persisted executor resume state should be read."],
+        execution: Annotated[Ref, "Runtime execution ref whose persisted executor resume state should be read."],
     ) -> dict | None:
         """Read the persisted executor resume-state object for one execution."""
+        execution_id = _require_runtime_ref(execution).id()
         return _exec_state(self._dml).read_launch_state(execution_id)
 
     def cancel(
         self,
-        index: Annotated[Ref | str, "Runtime index to cancel."],
+        index: Annotated[Ref, "Runtime index to cancel."],
         *,
         mode: Annotated[Literal["full", "drive"], "Cancellation mode."] = "full",
     ) -> RuntimeCancelSummary:
         """Cancel active execution state for a runtime index."""
-        if isinstance(index, str) and index.startswith("index:"):
-            index = Ref(index)
+        index = _require_runtime_ref(index)
         requested_by = self._dml._config.user if mode == "full" else None
-        idx = index.id() if isinstance(index, Ref) else index
-        resp = _exec_state(self._dml).cancel(idx, requested_by, self._dml._db, mode=mode)
+        resp = _exec_state(self._dml).cancel(index.id(), requested_by, self._dml._db, mode=mode)
         return cast(RuntimeCancelSummary, {"id": index, **resp})
 
     def describe_graph(
         self,
-        *roots: Annotated[Ref | str, "Execution roots to inspect."],
+        *roots: Annotated[Ref, "Runtime execution roots to inspect."],
         visual: Annotated[bool, "Render a human-friendly graph view instead of returning the raw payload."] = False,
     ) -> ExecutionGraph | None:
         """Describe reachable execution lineage for one or more runtime roots."""
-        execution_ids = [root.id() if isinstance(root, Ref) else root for root in roots]
+        execution_ids = [_require_runtime_ref(root).id() for root in roots]
         if not execution_ids:
             execution_ids = [item["id"].id() for item in self.list()]
         graph = _index_ops(self._dml).exec_state().describe_graph(execution_ids)

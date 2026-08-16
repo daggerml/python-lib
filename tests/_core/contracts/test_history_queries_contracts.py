@@ -9,7 +9,7 @@ import daggerml._core.dml as dml_mod
 from daggerml._core import DmlRepoError
 from daggerml._core.db import Ref
 from daggerml._core.head import Head
-from tests._core.helpers import NoopExecutionState, commit_literal_dag, make_local_dml
+from tests._core.helpers import NoopExecutionState, commit_literal_dag, local_index_ops, make_local_dml
 
 
 def test_status_reports_attached_head_branch_list_and_live_indexes(tmp_path, monkeypatch) -> None:
@@ -26,6 +26,39 @@ def test_status_reports_attached_head_branch_list_and_live_indexes(tmp_path, mon
         "ahead": None,
         "behind": None,
     }
+
+
+def test_runtime_create_accepts_execution_ref_and_delegates_id(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    execution = Ref("index:exec-1")
+    calls = []
+
+    class Ops:
+        def create(self, author, commit, cache_key=None, execution_id=None, *, db):
+            calls.append((author, commit, cache_key, execution_id, db))
+            return execution
+
+    monkeypatch.setattr(dml_mod, "_index_ops", lambda _dml: Ops())
+
+    assert dml.runtime.create(cache_key="cache-1", execution=execution) == execution
+    assert calls == [("tester", None, "cache-1", "exec-1", dml._db)]
+
+
+@pytest.mark.parametrize("execution", ["exec-1", "index:exec-1", Ref("dag:exec-1")])
+def test_runtime_create_rejects_non_index_execution_identity(tmp_path, monkeypatch, execution) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+
+    with pytest.raises(TypeError, match="runtime Ref"):
+        dml.runtime.create(cache_key="cache-1", execution=execution)
+
+
+def test_runtime_create_requires_paired_cache_and_execution(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+
+    with pytest.raises(DmlRepoError, match="both cache_key and execution"):
+        dml.runtime.create(cache_key="cache-1")
+    with pytest.raises(DmlRepoError, match="both cache_key and execution"):
+        dml.runtime.create(execution=Ref("index:exec-1"))
 
 
 def test_status_reports_detached_head_without_changing_branch_list(tmp_path, monkeypatch) -> None:
@@ -193,23 +226,15 @@ def test_runtime_read_execution_record_accepts_ref_and_returns_raw_payload(tmp_p
     assert dml.runtime.read_execution_record(index) == record
 
 
-def test_runtime_read_execution_record_accepts_execution_id_string(tmp_path, monkeypatch) -> None:
+def test_runtime_read_execution_record_rejects_execution_id_strings(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
-    record = {
-        "execution_id": "exec-2",
-        "cache_key": "cache-2",
-        "lifecycle": "pending",
-        "updated_at": 20,
-        "created_at": 19,
-        "spawned_execution_ids": [],
-        "child_execution_ids": ["child-1"],
-        "cancellation_requested_by": None,
-    }
     state = NoopExecutionState()
-    state.create_execution_record(record)
     monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: state)
 
-    assert dml.runtime.read_execution_record("exec-2") == record
+    for execution in ("exec-2", "index:exec-2"):
+        with pytest.raises(TypeError, match="runtime Ref"):
+            dml.runtime.read_execution_record(execution)
+    assert state.records == {}
 
 
 def test_runtime_read_execution_record_surfaces_missing_record_error(tmp_path, monkeypatch) -> None:
@@ -232,9 +257,47 @@ def test_runtime_read_launch_state_delegates_exact_execution_id(tmp_path, monkey
 
     monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: State())
 
-    assert dml.runtime.read_launch_state("exec-1") == {"job_id": "j1"}
-    assert dml.runtime.read_launch_state("missing") is None
+    assert dml.runtime.read_launch_state(Ref("index:exec-1")) == {"job_id": "j1"}
+    assert dml.runtime.read_launch_state(Ref("index:missing")) is None
     assert calls == ["exec-1", "missing"]
+
+
+def test_runtime_read_launch_state_rejects_execution_id_strings_before_delegation(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    calls = []
+
+    class State:
+        def read_launch_state(self, execution_id):
+            calls.append(execution_id)
+
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: State())
+
+    for execution in ("exec-1", "index:exec-1"):
+        with pytest.raises(TypeError, match="runtime Ref"):
+            dml.runtime.read_launch_state(execution)
+    assert calls == []
+
+
+@pytest.mark.parametrize("operation", ["read_execution_record", "read_launch_state", "describe_graph", "cancel"])
+def test_runtime_identity_methods_reject_wrong_ref_namespace(tmp_path, monkeypatch, operation) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+
+    with pytest.raises(TypeError, match="runtime Ref"):
+        getattr(dml.runtime, operation)(Ref("dag:not-runtime"))
+
+
+def test_runtime_graph_and_cancel_reject_strings_before_delegation(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    state = NoopExecutionState()
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: state)
+    monkeypatch.setattr(dml_mod, "_index_ops", lambda _dml: local_index_ops(state))
+
+    for execution in ("exec-1", "index:exec-1"):
+        with pytest.raises(TypeError, match="runtime Ref"):
+            dml.runtime.describe_graph(execution)
+        with pytest.raises(TypeError, match="runtime Ref"):
+            dml.runtime.cancel(execution)
+    assert state.cancel_calls == []
 
 
 def test_runtime_describe_graph_visual_renders_and_returns_none(tmp_path, monkeypatch) -> None:

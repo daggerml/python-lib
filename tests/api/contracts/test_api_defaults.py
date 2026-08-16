@@ -77,7 +77,7 @@ def test_api_default_006__status_reports_default_metadata(fake_dml):
 def test_api_default_007__new_uses_runtime_create_and_returns_working_dag(fake_dml, refs):
     dag = api.new("demo", message="msg", cache_key="cache", execution_id="exec", dml=fake_dml)
 
-    fake_dml.runtime.create.assert_called_once_with(cache_key="cache", execution_id="exec")
+    fake_dml.runtime.create.assert_called_once_with(cache_key="cache", execution=api.Ref("index:exec"))
     assert dag.dml is fake_dml
     assert dag.token == refs.index
     assert dag.ref is None

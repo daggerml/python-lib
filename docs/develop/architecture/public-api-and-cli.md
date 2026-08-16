@@ -26,3 +26,9 @@ kebab-case while Python parameter names remain snake_case where positional.
 When changing a public `dml.Dml` method or namespace, check both direct Python use
 and its generated CLI representation. Keep argument annotations and docstrings
 accurate because they supply CLI parsing and help text.
+
+Exact `Ref` annotations are also the CLI transport boundary: command-line text
+such as `index:<execution-id>` is converted to `Ref` before method invocation.
+Core `Dml` signatures remain strict and do not accept strings merely to support
+the CLI. Lower runtime layers may extract string execution IDs after `Dml` has
+validated the ref.

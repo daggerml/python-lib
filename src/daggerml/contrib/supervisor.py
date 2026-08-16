@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from daggerml import Dml
+from daggerml import Dml, Ref
 from daggerml.api import DmlRepoError
 
 logger = logging.getLogger(__name__)
@@ -278,13 +278,14 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     )
     stdout_thread.start()
     stderr_thread.start()
+    execution = Ref(f"index:{execution_id}")
     while proc.poll() is None:
-        if dml.runtime.read_execution_record(execution_id)["lifecycle"].startswith("cancel"):
+        if dml.runtime.read_execution_record(execution)["lifecycle"].startswith("cancel"):
             # log to log streams that we're cancelling
             stdout_sink.emit_lifecycle(event="cancel")
             stderr_sink.emit_lifecycle(event="cancel")
             proc.terminate()
-            dml.runtime.cancel(execution_id, mode="drive")
+            dml.runtime.cancel(execution, mode="drive")
             break
         time.sleep(0.1)
     proc.wait()

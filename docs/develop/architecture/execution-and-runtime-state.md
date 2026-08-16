@@ -22,10 +22,14 @@ execution lifecycle records, caller/callee lineage edges, invalidation markers,
 and adapter scratch data. Lifecycle states include pending, running, succeeded,
 failed, cancel-requested, cancel-ready, and canceled.
 
-`Dml.runtime.read_launch_state(execution_id)` exposes only the JSON-object
+`Dml.runtime.read_launch_state(execution_ref)` exposes only the JSON-object
 executor resume state from the caller-owned launch record. It returns `None`
 when that record is absent and fails closed when persisted resume state is not
 an object; it does not combine launch state with lifecycle or lineage data.
+All runtime identities entering the public `Dml.runtime` namespace are `Ref`
+values. That boundary validates the runtime namespace and passes only `ref.id()`
+to `IndexOps` and `ExecutionState`, whose remote records and protocols remain
+string-ID based.
 
 An adapter receives an invocation or cancellation request through an executable
 boundary. It reports a lifecycle result and optional resume state or finished

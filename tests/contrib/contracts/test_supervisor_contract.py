@@ -7,18 +7,19 @@ from types import SimpleNamespace
 import pytest
 
 import daggerml.contrib.supervisor as supervisor_mod
+from daggerml import Ref
 
 
 def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellation(monkeypatch, tmp_path: Path):
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[Ref, str | None]] = []
 
     class FakeRuntime:
-        def read_execution_record(self, execution_id: str):
-            assert execution_id == "exec-1"
+        def read_execution_record(self, execution: Ref):
+            assert execution == Ref("index:exec-1")
             return {"lifecycle": "cancel-pending"}
 
-        def cancel(self, execution_id: str, mode: str = "full"):
-            calls.append((execution_id, mode))
+        def cancel(self, execution: Ref, mode: str = "full"):
+            calls.append((execution, mode))
 
     class FakeDml:
         @staticmethod
@@ -76,7 +77,7 @@ def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellatio
         }
     )
 
-    assert calls == [("exec-1", "drive")]
+    assert calls == [(Ref("index:exec-1"), "drive")]
     assert result["status"] == "failed"
     assert "Worker killed by signal SIGTERM" in result["error"]
 

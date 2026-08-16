@@ -45,7 +45,7 @@ dependency_endpoint_branches = session.branch.list(remote=True, dep="models")
 # [{"name": "main", "commit": Ref("commit:...")}]
 ```
 
-For these list methods, `remote` selects endpoint state and `dep` selects the dependency, so both may be used together. Endpoint listing is read-only and does not fetch commits or update local tracking refs. `session.branch.get_upstream("feature")` returns `{"branch": "main"}` or `None`; tags have no upstream metadata. `session.runtime.read_launch_state(execution_id)` returns the persisted executor resume-state JSON object or `None` when launch state is absent.
+For these list methods, `remote` selects endpoint state and `dep` selects the dependency, so both may be used together. Endpoint listing is read-only and does not fetch commits or update local tracking refs. `session.branch.get_upstream("feature")` returns `{"branch": "main"}` or `None`; tags have no upstream metadata. `session.runtime.read_launch_state(Ref("index:<execution-id>"))` returns the persisted executor resume-state JSON object or `None` when launch state is absent. Runtime creation, inspection, graph, launch-state, and cancellation methods require `Ref` identities; they do not accept bare IDs or ref-shaped Python strings.
 
 Cache control and garbage collection use direct low-level surfaces:
 

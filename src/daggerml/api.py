@@ -80,7 +80,8 @@ def new(
 ) -> "Dag":
     """Create a new DAG using the active or provided Dml runtime."""
     runtime = dml or get_default_dml()
-    index_id = runtime.runtime.create(cache_key=cache_key, execution_id=execution_id)
+    execution = Ref(f"index:{execution_id}") if execution_id is not None else None
+    index_id = runtime.runtime.create(cache_key=cache_key, execution=execution)
     return Dag(dml=runtime, token=index_id, name=name, message=message, tags=tags)
 
 
