@@ -8,7 +8,7 @@ import pytest
 
 import daggerml._core.dml as dml_mod
 from daggerml._core.db import Ref
-from daggerml._core.dml import Dml, LocalGCSummary, RemoteGCSummary
+from daggerml._core.dml import CacheDescription, Dml, LocalGCSummary, RemoteGCSummary
 from daggerml._core.types import DmlRepoError
 from tests._core.helpers import make_local_dml
 
@@ -30,35 +30,57 @@ def test_cache_get_returns_present_and_absent_refs(tmp_path, monkeypatch) -> Non
     assert calls == [("present", dml._db), ("missing", dml._db)]
 
 
-def test_cache_invalidate_validates_before_exact_delegation(tmp_path, monkeypatch) -> None:
+def test_cache_describe_returns_exact_ref_identities(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    calls = []
+
+    class State:
+        def describe_cache(self, cache_key):
+            calls.append(cache_key)
+            return {"execution_id": "exec", "result_ref": "dag:result", "lifecycle": "succeeded"}
+
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: State())
+
+    assert dml.cache.describe("ck1") == {
+        "execution": Ref("index:exec"),
+        "dag": Ref("dag:result"),
+        "lifecycle": "succeeded",
+    }
+    assert calls == ["ck1"]
+
+
+def test_cache_invalidate_validates_execution_refs_before_exact_delegation(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch, user="alice")
     calls = []
     response = {"total_time": 0.0, "invalidations": []}
 
     class State:
-        def invalidate_cache(self, cache_keys, requested_by):
-            calls.append((cache_keys, requested_by))
+        def invalidate_executions(self, execution_ids, requested_by):
+            calls.append((execution_ids, requested_by))
             return response
 
     monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: State())
 
-    assert dml.cache.invalidate("ck1", "cache-key") == response
-    assert calls == [(("ck1", "cache-key"), "alice")]
+    assert dml.cache.invalidate(Ref("index:e1"), Ref("frozenindex:e2")) == response
+    assert calls == [(("e1", "e2"), "alice")]
 
-    invalid_cases: list[tuple[Any, ...]] = [(), (Ref("dag:abc"),), ("dag:abc",), ("bad/key",), ("",)]
+    invalid_cases: list[tuple[Any, ...]] = [(), (Ref("dag:abc"),), ("index:e1",), ("e1",)]
     for invalid in invalid_cases:
-        with pytest.raises(ValueError):
+        with pytest.raises((TypeError, ValueError)):
             dml.cache.invalidate(*invalid)
-    assert calls == [(("ck1", "cache-key"), "alice")]
+    assert calls == [(("e1", "e2"), "alice")]
 
 
 def test_cache_surface_has_exact_runtime_metadata_and_no_admin_aliases(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     get_hints = get_type_hints(type(dml.cache).get, include_extras=True)
+    describe_hints = get_type_hints(type(dml.cache).describe, include_extras=True)
     invalidate_hints = get_type_hints(type(dml.cache).invalidate, include_extras=True)
 
     assert get_args(get_hints["cache_key"])[0] is str
-    assert get_args(invalidate_hints["cache_keys"])[0] is str
+    assert get_args(describe_hints["cache_key"])[0] is str
+    assert CacheDescription in get_args(describe_hints["return"])
+    assert get_args(invalidate_hints["executions"])[0] is Ref
     assert not hasattr(dml.admin, "remote")
     assert not hasattr(dml.admin, "gc")
     assert not hasattr(dml.cache, "get_cache")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from daggerml._cli import MethodCLI
-from daggerml._core import Dml
+from daggerml._core import Dml, Ref
 
 
 def test_cli_namespace_help_001__uses_property_annotation_and_docstring() -> None:
@@ -100,7 +100,10 @@ def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None
     cache_subparsers = next(
         action for action in cache._actions if isinstance(action, argparse._SubParsersAction)
     )
-    assert set(cache_subparsers.choices) == {"get", "invalidate"}
+    assert set(cache_subparsers.choices) == {"get", "describe", "invalidate"}
+
+    parsed = cli.parser.parse_args(["cache", "invalidate", "index:e1", "frozenindex:e2"])
+    assert parsed.executions == [Ref("index:e1"), Ref("frozenindex:e2")]
 
     gc_help = root_subparsers.choices["gc"].format_help()
     assert "--remote" in gc_help

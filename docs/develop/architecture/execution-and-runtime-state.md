@@ -25,6 +25,13 @@ expiry uses S3 `LastModified + ttl <= Date`, not machine time.
 `cache/<cache-key>` contains only the current execution ID from reservation
 until cancelation or invalidation conditionally deletes it. Caller/callee edges
 and adapter-owned `io/<execution-id>/` data remain separate.
+
+Invalidation is rooted in explicit execution IDs, not cache keys. An explicit
+execution remains selected if its cache pointer is absent or has rebound. For a
+caller reached through an execution edge, however, the current pointer must
+still name that caller before it is selected: a missing or rebound pointer
+prunes that branch, without selecting its replacement or traversing callers
+above the pruned execution.
 All runtime identities entering the public `Dml.runtime` namespace are `Ref`
 values. That boundary validates the runtime namespace and passes only `ref.id()`
 to `IndexOps` and `ExecutionState`, whose remote records and protocols remain

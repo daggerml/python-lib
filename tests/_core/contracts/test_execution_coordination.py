@@ -157,7 +157,7 @@ def test_invalidation_removes_matching_pointer_before_marking_record() -> None:
     state._delete_cache = lambda *args: (events.append("delete"), delete_cache(*args))[1]
     state._mutate = lambda *args: (events.append("mark"), mutate(*args))[1]
 
-    response = state.invalidate_cache(["cache"], "user")
+    response = state.invalidate_executions([execution_id], "user")
 
     assert response["invalidations"][0]["execution_id"] == execution_id
     assert events.index("delete") < events.index("mark")
@@ -177,10 +177,131 @@ def test_invalidation_preserves_rebound_pointer_while_marking_selected_execution
         return delete_cache(cache_key, selected_execution_id)
 
     state._delete_cache = rebind_then_delete
-    state.invalidate_cache(["cache"], "user")
+    state.invalidate_executions([execution_id], "user")
 
     assert state._read_cache("cache")[0] == "replacement"
     assert state.read_execution_record(execution_id)["invalidation"] is not None
+
+
+def test_cache_description_reports_exact_running_and_reusable_terminal_execution() -> None:
+    state = _state()
+    assert state.create_execution_record(_record("running"))
+    assert state._create_cache("cache", "running")
+
+    assert state.describe_cache("cache") == {
+        "execution_id": "running",
+        "result_ref": None,
+        "lifecycle": "running",
+    }
+
+    state._store._delete(state._read_cache("cache")[1])
+    assert state.create_execution_record(_record("done", "succeeded", result_ref="dag:result"))
+    assert state._create_cache("cache", "done")
+    assert state.describe_cache("cache") == {
+        "execution_id": "done",
+        "result_ref": "dag:result",
+        "lifecycle": "succeeded",
+    }
+
+
+@pytest.mark.parametrize("marker", ["cancelation", "invalidation"])
+def test_cache_description_hides_marked_terminal_result(marker) -> None:
+    state = _state()
+    record = _record("done", "succeeded", result_ref="dag:result")
+    record[marker] = {"requested_by": "user", "requested_at": 1}
+    assert state.create_execution_record(record)
+    assert state._create_cache("cache", "done")
+
+    assert state.describe_cache("cache") == {
+        "execution_id": "done",
+        "result_ref": None,
+        "lifecycle": "succeeded",
+    }
+
+
+def test_cache_description_handles_absent_and_dangling_pointer() -> None:
+    state = _state()
+    assert state.describe_cache("cache") is None
+    assert state._create_cache("cache", "missing")
+
+    assert state.describe_cache("cache") is None
+    assert state._read_cache("cache") is None
+
+
+def test_cache_description_does_not_substitute_rebound_execution(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("selected"))
+    assert state.create_execution_record(_record("replacement"))
+    assert state._create_cache("cache", "selected")
+    read_record = state.read_execution_record
+
+    def rebind_then_read(execution_id):
+        state._store._put(state._cache_key("cache"), "replacement", overwrite=True)
+        return read_record(execution_id)
+
+    monkeypatch.setattr(state, "read_execution_record", rebind_then_read)
+
+    assert state.describe_cache("cache")["execution_id"] == "selected"
+    assert state._read_cache("cache")[0] == "replacement"
+
+
+def test_invalidation_propagates_to_current_caller_by_execution_id() -> None:
+    state = _state()
+    assert state.create_execution_record(_record("child", cache_key="child-key"))
+    assert state.create_execution_record(_record("parent", cache_key="parent-key"))
+    assert state._create_cache("child-key", "child")
+    assert state._create_cache("parent-key", "parent")
+    state._record_edge("parent", "child")
+
+    response = state.invalidate_executions(["child"], "user")
+
+    assert {item["execution_id"] for item in response["invalidations"]} == {"child", "parent"}
+    assert state.read_execution_record("child")["invalidation"] is not None
+    assert state.read_execution_record("parent")["invalidation"] is not None
+    assert state._read_cache("child-key") is None
+    assert state._read_cache("parent-key") is None
+
+
+def test_invalidation_prunes_rebound_caller_and_its_ancestors() -> None:
+    state = _state()
+    for execution_id, cache_key in (
+        ("child", "child-key"),
+        ("historical", "parent-key"),
+        ("replacement", "parent-key"),
+        ("ancestor", "ancestor-key"),
+    ):
+        assert state.create_execution_record(_record(execution_id, cache_key=cache_key))
+    assert state._create_cache("child-key", "child")
+    assert state._create_cache("parent-key", "replacement")
+    assert state._create_cache("ancestor-key", "ancestor")
+    state._record_edge("historical", "child")
+    state._record_edge("ancestor", "historical")
+
+    response = state.invalidate_executions(["child"], "user")
+
+    assert [item["execution_id"] for item in response["invalidations"]] == ["child"]
+    assert state.read_execution_record("historical")["invalidation"] is None
+    assert state.read_execution_record("replacement")["invalidation"] is None
+    assert state.read_execution_record("ancestor")["invalidation"] is None
+    assert state._read_cache("parent-key")[0] == "replacement"
+    assert state._read_cache("ancestor-key")[0] == "ancestor"
+
+
+def test_invalidation_marks_cacheless_root_and_deduplicates_missing_roots() -> None:
+    state = _state()
+    assert state.create_execution_record(_record("root", cache_key=None))
+
+    response = state.invalidate_executions(["root", "missing", "root"], "user")
+
+    assert response["invalidations"] == [
+        {
+            "execution_id": "root",
+            "cache_key": None,
+            "requested_by": "user",
+            "requested_at": response["invalidations"][0]["requested_at"],
+        }
+    ]
+    assert state.read_execution_record("root")["invalidation"] is not None
 
 
 @pytest.mark.parametrize(

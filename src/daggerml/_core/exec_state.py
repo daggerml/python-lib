@@ -84,7 +84,7 @@ class ExecutionRecord(TypedDict):
 
 class InvalidationRecord(TypedDict):
     execution_id: str
-    cache_key: str
+    cache_key: str | None
     requested_by: str
     requested_at: int
 
@@ -92,6 +92,12 @@ class InvalidationRecord(TypedDict):
 class InvalidationResponse(TypedDict):
     total_time: float
     invalidations: list[InvalidationRecord]
+
+
+class CacheStateDescription(TypedDict):
+    execution_id: str
+    result_ref: str | None
+    lifecycle: EXECUTION_LIFECYCLES
 
 
 class RemotePayload(TypedDict):
@@ -396,6 +402,26 @@ class ExecutionState:
             return None
         return self._materialize_record_ref(record["result_ref"], db, "dag")
 
+    def describe_cache(self, cache_key: str) -> CacheStateDescription | None:
+        pointer = self._read_cache(cache_key)
+        if pointer is None:
+            return None
+        try:
+            record = self.read_execution_record(pointer[0])
+        except DmlRepoError:
+            self._store._delete(pointer[1])
+            return None
+        reusable = (
+            record["lifecycle"] in ("succeeded", "failed")
+            and record["cancelation"] is None
+            and record["invalidation"] is None
+        )
+        return {
+            "execution_id": record["execution_id"],
+            "result_ref": record["result_ref"] if reusable else None,
+            "lifecycle": record["lifecycle"],
+        }
+
     def _resolve_or_create(self, argv_ref: Ref, db: DmlDB | None = None) -> tuple[str, str | None, bool]:
         if self.cache_key is None:
             raise DmlRepoError("cache_key is required")
@@ -649,50 +675,52 @@ class ExecutionState:
             pending.extend(reversed(children + spawned))
         return {"roots": roots, "nodes": nodes}
 
-    def invalidate_cache(self, cache_keys: Sequence[str], requested_by: str) -> InvalidationResponse:
+    def invalidate_executions(self, execution_ids: Sequence[str], requested_by: str) -> InvalidationResponse:
         started = time.time()
         invalidations: list[InvalidationRecord] = []
-        pending = list(cache_keys)
+        roots = set(execution_ids)
+        pending = list(execution_ids)
         seen: set[str] = set()
         while pending:
-            cache_key = pending.pop()
-            pointer = self._read_cache(cache_key)
-            if pointer is None or pointer[0] in seen:
+            execution_id = pending.pop()
+            if execution_id in seen:
                 continue
-            execution_id = pointer[0]
             seen.add(execution_id)
             try:
                 self.read_execution_record(execution_id)
             except DmlRepoError:
-                self._store._delete(pointer[1])
                 continue
-            for caller in self.list_execution_callers(execution_id):
-                try:
-                    caller_key = self.read_execution_record(caller)["cache_key"]
-                except DmlRepoError:
-                    continue
-                if caller_key is not None:
-                    pending.append(caller_key)
             owner = self._wait_acquire(execution_id)
-            requested_at = int(time.time())
             try:
-                def mark_invalid(item: ExecutionRecord, at: int = requested_at) -> None:
-                    item["invalidation"] = {"requested_by": requested_by, "requested_at": at}
+                record = self.read_execution_record(execution_id)
+                cache_key = record["cache_key"]
+                if execution_id not in roots:
+                    if cache_key is None:
+                        continue
+                    pointer = self._read_cache(cache_key)
+                    if pointer is None or pointer[0] != execution_id or not self._store._delete(pointer[1]):
+                        continue
+                elif cache_key is not None:
+                    self._delete_cache(cache_key, execution_id)
 
-                self._delete_cache(cache_key, execution_id)
-                self._mutate(
-                    execution_id,
-                    owner,
-                    mark_invalid,
-                )
+                requested_at = int(time.time())
+
+                def mark_invalid(item: ExecutionRecord, at: int = requested_at) -> None:
+                    if item["invalidation"] is None:
+                        item["invalidation"] = {"requested_by": requested_by, "requested_at": at}
+
+                record = self._mutate(execution_id, owner, mark_invalid)
             finally:
                 self.unlock(execution_id, owner)
+            pending.extend(self.list_execution_callers(execution_id))
+            invalidation = record["invalidation"]
+            assert invalidation is not None
             invalidations.append(
                 {
                     "execution_id": execution_id,
                     "cache_key": cache_key,
-                    "requested_by": requested_by,
-                    "requested_at": requested_at,
+                    "requested_by": invalidation["requested_by"],
+                    "requested_at": invalidation["requested_at"],
                 }
             )
         return {"total_time": time.time() - started, "invalidations": invalidations}

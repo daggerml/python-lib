@@ -273,6 +273,18 @@ def test_runtime_graph_and_cancel_reject_strings_before_delegation(tmp_path, mon
     assert state.cancel_calls == []
 
 
+def test_runtime_cancel_uses_execution_keyword(tmp_path, monkeypatch) -> None:
+    dml = make_local_dml(tmp_path, monkeypatch)
+    state = NoopExecutionState()
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: state)
+    execution = Ref("index:exec-1")
+
+    response = dml.runtime.cancel(execution=execution)
+
+    assert response["id"] == execution
+    assert state.cancel_calls == [("exec-1", "tester", "full")]
+
+
 def test_runtime_describe_graph_visual_renders_and_returns_none(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     index = dml.runtime.create()

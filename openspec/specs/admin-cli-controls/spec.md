@@ -35,28 +35,32 @@ Low-frequency recovery and agent-support commands SHALL remain under `dml admin`
 - **WHEN** a user runs `dml admin index delete idx1`
 - **THEN** the command returns JSON containing `index` and `deleted`
 
-### Requirement: Cache invalidation accepts exact cache keys only
-The generated CLI SHALL expose cache invalidation as `dml cache invalidate <cache-key> [more cache keys]`. It SHALL accept one or more exact cache keys and SHALL NOT accept DAG refs, argv refs, or other selector types.
+### Requirement: Cache invalidation accepts exact execution refs only
+The generated CLI SHALL expose cache invalidation as `dml cache invalidate <execution-ref> [more execution refs]`. It SHALL accept one or more `index:` or `frozenindex:` refs and SHALL NOT accept cache keys, bare execution IDs, DAG refs, argv refs, or other selector types.
 
-#### Scenario: Cache invalidation accepts multiple exact keys
-- **WHEN** a user runs `dml cache invalidate ck1 ck2`
-- **THEN** the command invalidates those exact cache keys
-- **AND** returns the existing invalidation response as JSON
+#### Scenario: Cache invalidation accepts multiple execution refs
+- **WHEN** a user runs `dml cache invalidate index:e1 frozenindex:e2`
+- **THEN** the command invalidates exactly executions `e1` and `e2`
+- **AND** returns the invalidation response as JSON
 
-#### Scenario: Cache invalidation rejects non-key selector forms
-- **WHEN** a user runs `dml cache invalidate dag:abc123`
-- **THEN** the command fails because cache invalidation accepts exact cache keys only
+#### Scenario: Cache invalidation rejects non-execution selectors
+- **WHEN** a user runs `dml cache invalidate ck1`
+- **THEN** the command fails because cache invalidation accepts execution refs only
 
 ### Requirement: Generated CLI SHALL expose cache lookup directly
-The generated CLI SHALL expose `dml cache get <cache-key>` from the shared cache namespace and SHALL serialize a cached DAG ref as its canonical ref string or emit the established absent result when no cache entry exists.
+The generated CLI SHALL expose `dml cache get <cache-key>` and `dml cache describe <cache-key>` from the shared cache namespace. Cache get SHALL serialize a reusable cached DAG ref as its canonical ref string or emit the established absent result. Cache describe SHALL serialize its structured cache description as JSON or emit the established absent result.
 
-#### Scenario: Cache get command is generated
+#### Scenario: Cache commands are generated
 - **WHEN** a user inspects `dml cache --help`
-- **THEN** `get` and `invalidate` appear as cache commands
+- **THEN** `get`, `describe`, and `invalidate` appear as cache commands
 
 #### Scenario: Cache get returns a ref
 - **WHEN** a user runs `dml cache get ck1` and a cached DAG exists
 - **THEN** the command prints the cached DAG ref
+
+#### Scenario: Cache describe returns identities
+- **WHEN** a user runs `dml cache describe ck1` and it names terminal execution `e1` with result `dag:d1`
+- **THEN** the command returns JSON containing `execution = "index:e1"`, `dag = "dag:d1"`, and the execution lifecycle
 
 ### Requirement: Generated CLI SHALL expose one source-selectable GC command
 The generated CLI SHALL expose `dml gc [--remote]` from `Dml.gc`. Without `--remote` it SHALL run local GC and serialize `LocalGCSummary`; with `--remote` it SHALL run configured remote GC and serialize `RemoteGCSummary`. It SHALL expose no dependency or dry-run option.

@@ -106,7 +106,7 @@ The shared `Dml` constructor SHALL accept the full supported runtime configurati
 - **THEN** it can construct a `Dml` instance through `Dml.from_config_vars(...)` without translating those keys to Python kwargs first
 
 ### Requirement: Shared `Dml` exact DB object contracts use `Ref`
-The shared `Dml` surface SHALL require `Ref` objects for exact DB-backed object inputs and for runtime or execution identity inputs, and SHALL return `Ref` objects as canonical runtime and DB identity. Revision selectors, DAG and node names, branch and tag names, endpoint roots, dependency names, cache keys, and lower-level execution-state IDs SHALL remain strings. `Dml.runtime` SHALL convert supplied runtime refs to string execution IDs only when delegating below the shared surface and SHALL NOT convert caller strings into refs.
+The shared `Dml` surface SHALL require `Ref` objects for exact DB-backed object inputs and for runtime or execution identity inputs, including execution roots supplied to cache invalidation, and SHALL return `Ref` objects as canonical runtime and DB identity. Revision selectors, DAG and node names, branch and tag names, endpoint roots, dependency names, cache keys, and lower-level execution-state IDs SHALL remain strings. Public methods accepting execution `Ref` values SHALL convert them to string execution IDs only when delegating below the shared surface and SHALL NOT convert caller strings into refs.
 
 #### Scenario: Exact DAG access requires `Ref`
 - **WHEN** a caller invokes a `Dml` method whose contract is to dereference an exact DAG object
@@ -123,12 +123,17 @@ The shared `Dml` surface SHALL require `Ref` objects for exact DB-backed object 
 - **THEN** the shared `Dml` method requires an `index` or otherwise method-supported runtime `Ref`
 - **AND** it does not accept a bare execution ID or plain `"index:..."` string as a substitute
 
+#### Scenario: Cache invalidation execution identity requires Ref
+- **WHEN** a caller supplies an execution identity to `Dml.cache.invalidate`
+- **THEN** the method requires an `index` or `frozenindex` `Ref`
+- **AND** it does not accept a cache key, bare execution ID, or plain ref-shaped string
+
 #### Scenario: Non-identity selectors remain strings
 - **WHEN** a caller provides revision text, a symbolic object name, an endpoint root, a dependency name, or a cache key
 - **THEN** the shared `Dml` surface continues to accept that value as a string
 
 #### Scenario: Lower-level execution state remains string addressed
-- **WHEN** a `Dml.runtime` method delegates a validated runtime ref to `IndexOps` or `ExecutionState`
+- **WHEN** a public `Dml` method delegates a validated runtime ref to `IndexOps` or `ExecutionState`
 - **THEN** it passes the ref's exact id as the lower-level execution ID string
 - **AND** the lower-level persisted and protocol representation does not change
 
@@ -159,11 +164,11 @@ The shared `Dml` runtime namespace SHALL expose execution-aware creation as `cre
 - **THEN** runtime creation fails without creating local index state
 
 ### Requirement: Shared `Dml` exposes the fixed method namespaces
-The shared `Dml` SHALL expose repository methods including `status`, `show`, `log`, `diff`, `checkout`, `fetch`, `pull`, `push`, `merge`, `rebase`, `revert`, and `gc`; dependency lifecycle under `dep.add|list|delete`; cache control under `cache.get|invalidate`; and the existing `branch`, `tag`, `dag`, `admin`, `runtime`, `config`, and `ops` namespaces. The shared surface SHALL NOT expose an `admin.remote` namespace or admin-owned cache and GC entrypoints.
+The shared `Dml` SHALL expose repository methods including `status`, `show`, `log`, `diff`, `checkout`, `fetch`, `pull`, `push`, `merge`, `rebase`, `revert`, and `gc`; dependency lifecycle under `dep.add|list|delete`; cache control under `cache.get|describe|invalidate`; and the existing `branch`, `tag`, `dag`, `admin`, `runtime`, `config`, and `ops` namespaces. The shared surface SHALL NOT expose an `admin.remote` namespace or admin-owned cache and GC entrypoints.
 
 - `branch`: `list`, `create`, `set_upstream`, `get_upstream`, `move`, `rename`, `delete`
 - `tag`: `list`, `create`, `delete`
-- `cache`: `get`, `invalidate`
+- `cache`: `get`, `describe`, `invalidate`
 - `dag`: `list`, `get`, `checkout`, `delete`
 - `admin.index`: `list`, `get`, `delete`
 - `admin`: `agent_skill`
@@ -200,22 +205,43 @@ The shared `Dml` SHALL expose repository methods including `status`, `show`, `lo
 - **THEN** the shared `Dml` exposes those objects under `dml.ops.*` rather than as direct top-level `Dml` attributes
 
 ### Requirement: Shared `Dml` SHALL expose direct cache control
-The shared `Dml` surface SHALL expose `dml.cache.get(cache_key: str) -> Ref | None` and `dml.cache.invalidate(*cache_keys: str) -> InvalidationResponse`. Cache lookup SHALL return the cached DAG ref when present and `None` when absent. Cache invalidation SHALL preserve the existing execution-graph invalidation behavior and SHALL require one or more exact string cache keys.
+The shared `Dml` surface SHALL expose `dml.cache.get(cache_key: str) -> Ref | None`, `dml.cache.describe(cache_key: str) -> CacheDescription | None`, and `dml.cache.invalidate(*executions: Ref) -> InvalidationResponse`. `CacheDescription` SHALL contain `execution: Ref`, `dag: Ref | None`, and `lifecycle: EXECUTION_LIFECYCLES`. Cache lookup SHALL return the reusable cached DAG when present. Cache description SHALL report the exact execution named by the cache pointer and SHALL include its DAG only when that execution is an unmarked reusable terminal result. Cache invalidation SHALL require one or more exact execution refs.
 
 #### Scenario: Cache get returns a cached DAG ref
-- **WHEN** cache key `ck1` names a current cached DAG
+- **WHEN** cache key `ck1` names a current reusable terminal DAG
 - **THEN** `dml.cache.get("ck1")` returns that DAG `Ref`
 
 #### Scenario: Cache get preserves absence
-- **WHEN** no current cache ref exists for `ck1`
+- **WHEN** no reusable terminal result exists for `ck1`
 - **THEN** `dml.cache.get("ck1")` returns `None`
 
-#### Scenario: Cache invalidate accepts exact keys
-- **WHEN** a caller invokes `dml.cache.invalidate("ck1", "ck2")`
-- **THEN** the existing invalidation workflow receives exactly those cache keys
+#### Scenario: Cache describe reports running execution
+- **WHEN** `cache/ck1` names running execution `e1`
+- **THEN** `dml.cache.describe("ck1")` returns execution `Ref("index:e1")`, lifecycle `running`, and `dag = None`
 
-#### Scenario: Cache invalidate requires at least one key
-- **WHEN** a caller invokes `dml.cache.invalidate()` without a cache key
+#### Scenario: Cache describe reports reusable terminal identities
+- **WHEN** `cache/ck1` names unmarked terminal execution `e1` with result `dag:d1`
+- **THEN** `dml.cache.describe("ck1")` returns execution `Ref("index:e1")`, the exact DAG ref `Ref("dag:d1")`, and the terminal lifecycle
+
+#### Scenario: Cache describe rejects marked result reuse
+- **WHEN** `cache/ck1` names a canceled or invalidated terminal execution
+- **THEN** `dml.cache.describe("ck1")` reports that execution and lifecycle with `dag = None`
+
+#### Scenario: Cache describe preserves absence
+- **WHEN** `cache/ck1` is absent or names a missing execution record
+- **THEN** `dml.cache.describe("ck1")` returns `None`
+
+#### Scenario: Cache describe retains selected execution identity during rebound
+- **WHEN** cache description reads `e1` from `cache/ck1` and that pointer is rebound to `e2` before the execution record is read
+- **THEN** the operation SHALL describe `e1` if its execution record exists
+- **AND** it SHALL NOT substitute `e2`
+
+#### Scenario: Cache invalidate accepts exact executions
+- **WHEN** a caller invokes `dml.cache.invalidate(Ref("index:e1"), Ref("frozenindex:e2"))`
+- **THEN** the invalidation workflow receives exactly execution IDs `e1` and `e2`
+
+#### Scenario: Cache invalidate requires at least one execution
+- **WHEN** a caller invokes `dml.cache.invalidate()` without an execution ref
 - **THEN** the call fails before running invalidation
 
 ### Requirement: Shared `Dml` SHALL expose source-selectable garbage collection
@@ -328,7 +354,7 @@ The shared `Dml` runtime namespace SHALL expose `describe_graph(*roots: Ref, vis
 - **AND** it SHALL return `None`
 
 ### Requirement: Shared `Dml` exposes runtime cancel with explicit mode selection
-The shared `Dml` runtime namespace SHALL expose cancellation as `dml.runtime.cancel(index: Ref, mode="full")`. It SHALL validate the runtime ref, delegate its id to execution state, and preserve the supplied `Ref` as the requested identity in the returned summary. `mode` SHALL accept `"full"` and `"drive"`.
+The shared `Dml` runtime namespace SHALL expose cancellation as `dml.runtime.cancel(execution: Ref, mode="full")`. It SHALL validate the runtime ref, delegate its id to execution state, and preserve the supplied `Ref` as the requested identity in the returned summary. `mode` SHALL accept `"full"` and `"drive"`.
 
 - `mode = "full"` SHALL run the full root-facing cancellation workflow.
 - `mode = "drive"` SHALL run only the cancellation driver needed by an already-canceling execution.

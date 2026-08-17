@@ -51,10 +51,19 @@ Cache control and garbage collection use direct low-level surfaces:
 
 ```python
 cached_dag = session.cache.get(cache_key)
-session.cache.invalidate(cache_key)
+description = session.cache.describe(cache_key)
+if description is not None:
+    session.cache.invalidate(description["execution"])
 local_summary = session.gc()
 remote_summary = session.gc(remote=True)
 ```
+
+`cache.describe(cache_key)` reports the current cache-pointer snapshot as
+`execution: Ref`, `dag: Ref | None`, and `lifecycle`. Its `dag` is present only
+for an unmarked reusable terminal result. Pass one or more `index:` or
+`frozenindex:` `Ref` values to `cache.invalidate`; cache keys and strings are
+not invalidation targets. `runtime.cancel(execution=Ref(...), mode=...)` names
+its execution argument explicitly and likewise requires a `Ref`.
 
 Cache and remote GC require `remote.root`; local GC does not. Remote GC never targets import-only dependencies. The removed `session.admin.remote` and `session.admin.gc` paths have no compatibility aliases.
 
