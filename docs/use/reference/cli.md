@@ -8,7 +8,7 @@ Run `dml --help` for the generated command surface. Global project options inclu
 | History | `log`, `show`, `diff`, `checkout`, `merge`, `rebase`, `revert`, `rev-parse` |
 | Refs | `branch list|create|move|rename|delete|set-upstream|get-upstream`, `tag list|create|delete` |
 | Sync | `dep add|list|delete`, `fetch [--dep DEP] [BRANCH|@TAG]`, `pull`, `push` |
-| Runtimes | `runtime list|describe|freeze|unfreeze|read-execution-record|read-launch-state|describe-graph|cancel` |
+| Runtimes | `runtime list|describe|freeze|unfreeze|read-execution-record|describe-graph|cancel` |
 | Remote cache | `cache get`, `cache invalidate` |
 | Cleanup | `gc [--remote]` |
 | Agent guidance | `admin agent-skill` |

@@ -30,7 +30,9 @@ def _put_argv_node(db) -> Ref:
         return txn.put(ArgvNode(value=txn.put(ListDatum([]))))
 
 
-def _put_reserved_execution(state: NoopExecutionState, execution_id: str, *, lifecycle: str) -> None:
+def _put_reserved_execution(
+    state: NoopExecutionState, execution_id: str, *, lifecycle: str, argv_ref: Ref | None = None
+) -> None:
     state.create_execution_record(
         {
             "execution_id": execution_id,
@@ -41,6 +43,7 @@ def _put_reserved_execution(state: NoopExecutionState, execution_id: str, *, lif
             "spawned_execution_ids": [],
             "child_execution_ids": [],
             "cancellation_requested_by": None,
+            "argv_ref": None if argv_ref is None else argv_ref.to,
         }
     )
 
@@ -121,9 +124,8 @@ def test_execution_aware_create_activates_pending_execution(tmp_path) -> None:
     state = NoopExecutionState()
     ops = local_index_ops(state)
     argv_ref = _put_argv_node(db)
-    _put_reserved_execution(state, "exec", lifecycle="pending")
-    ops._remote.get_active = lambda cache_key, raw=False: {"meta": {"execution_id": "exec"}}
-    ops._remote.materialize_manifest = lambda manifest, db, expected_root_ns: argv_ref
+    _put_reserved_execution(state, "exec", lifecycle="pending", argv_ref=argv_ref)
+    ops._remote.materialized_ref = argv_ref
 
     index = ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
 

@@ -4,38 +4,44 @@ Define distinct adapter operation contracts so invocation and cancellation have 
 ## Requirements
 
 ### Requirement: Adapter operations SHALL use separate invoke and cancel contracts
-The runtime SHALL define distinct `AdapterInvokeRequest` / `AdapterInvokeResponse` and `AdapterCancelRequest` / `AdapterCancelResponse` contracts. An invoke request SHALL contain invocation data and resume state. A cancel request SHALL contain cancellation data and SHALL carry the argv pointer needed to identify the target without resolving the mutable active pointer.
+Invoke and cancel requests SHALL remain distinct. Both SHALL identify the execution and may carry current `adapter_state`; invoke requests SHALL carry invocation data, while cancel requests SHALL read target argv identity from the unified execution record's `argv_ref`. Neither adapter operation SHALL directly mutate execution state.
 
-#### Scenario: Invoke request excludes cancellation-only fields
-- **WHEN** the runtime starts or resumes an adapter execution
-- **THEN** it sends an `AdapterInvokeRequest`
-- **AND** the request does not use cancellation requester or cancellation lifecycle fields
+#### Scenario: Invoke receives current adapter state
+- **WHEN** the runtime starts or checks execution `e1`
+- **THEN** it sends the adapter `execution_id`, invocation data, and current `adapter_state`
 
-#### Scenario: Cancel request carries execution-owned argv identity
+#### Scenario: Cancel reads execution-owned argv
 - **WHEN** the runtime cancels execution `e1`
-- **THEN** it sends an `AdapterCancelRequest` containing `execution_id = "e1"`
-- **AND** it includes the argv pointer obtained from `refs/cancel-targets/e1.json`
-- **AND** it does not resolve the argv through `active/<cache_key>`
+- **THEN** its cancel request carries `argv_ref` from `execution/e1`
+- **AND** it does not resolve active or cancel-target refs
 
 ### Requirement: Adapter operation responses SHALL remain operation-specific
-`AdapterInvokeResponse` SHALL report invocation progress or result in its `status` field using `running`, `succeeded`, or `failed`. `AdapterCancelResponse` SHALL report cancellation outcome separately and SHALL NOT define runtime execution lifecycle values such as `cancel-requested`, `cancel-ready`, or `canceled`.
+Running invoke responses SHALL return object state for persistence as `adapter_state`; terminal invoke and cancel responses may omit or return null state. Invoke status `running` SHALL mean retry, `succeeded` SHALL mean success, and any other reported status SHALL be treated as an error. Unrecoverable malformed protocol output SHALL raise a deliberate repository error. The runtime SHALL commit an error DAG, store it as `result_ref`, mark lifecycle `failed`, and retain the cache pointer for a reported non-success outcome. Adapter cancel responses SHALL remain advisory to runtime-owned cancelation lifecycle.
 
-#### Scenario: Invoke response reports execution progress
-- **WHEN** an adapter invocation is still running
-- **THEN** the adapter returns `AdapterInvokeResponse` with `status = "running"` and resumable state
+#### Scenario: Retry updates adapter state
+- **WHEN** an invoke response reports `running`
+- **THEN** the lock owner persists its returned state and later retries the same execution ID
 
-#### Scenario: Cancel response does not own runtime lifecycle
-- **WHEN** an adapter completes a cancellation request
-- **THEN** the adapter returns `AdapterCancelResponse`
-- **AND** the runtime, rather than the response, decides when to persist `canceled` or `cancel-ready`
+#### Scenario: Success updates adapter state
+- **WHEN** an invoke response reports `succeeded`
+- **THEN** the lock owner persists its returned state before completing result handling
+
+#### Scenario: Other outcome becomes cached error DAG
+- **WHEN** an invoke response is neither valid `running` nor valid `succeeded`
+- **THEN** the runtime commits an error DAG to `result_ref`
+- **AND** the current cache pointer remains bound to that execution
 
 ### Requirement: Adapter operation dispatch SHALL preserve executor responsibilities
-An invoke operation SHALL dispatch to executor `start()` when no resume state exists and to `poll()` when resume state exists. A cancel operation SHALL dispatch to executor `cancel()`.
+The adapter SHALL dispatch a fresh invoke when `adapter_state` is null and an idempotent status check when state is present. Executors SHALL maintain sufficient durable external state so repeated calls for one execution ID report the same running or terminal work without duplicating it. Adapter-owned IO MAY use `io/<execution_id>/` but SHALL NOT mutate the execution record.
 
-#### Scenario: Invoke dispatches a fresh start
-- **WHEN** an `AdapterInvokeRequest` has no resume state
-- **THEN** the adapter dispatches to executor `start()`
+#### Scenario: Null state starts execution
+- **WHEN** an invoke request has null `adapter_state`
+- **THEN** the adapter starts work for that execution ID
 
-#### Scenario: Cancel dispatches cleanup
-- **WHEN** an `AdapterCancelRequest` is received
-- **THEN** the adapter dispatches to executor `cancel()`
+#### Scenario: Stored state checks execution
+- **WHEN** an invoke request has object `adapter_state`
+- **THEN** the adapter performs an idempotent status check for the same execution ID
+
+#### Scenario: Repeated terminal check is stable
+- **WHEN** a terminal execution is checked again after a stale caller discarded its response
+- **THEN** the adapter returns terminal status and state without repeating the work

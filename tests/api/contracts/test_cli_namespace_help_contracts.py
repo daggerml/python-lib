@@ -83,7 +83,7 @@ def test_cli_ref_listing_and_inspection_commands_are_generated() -> None:
     assert "--remote" in tag_list_help and "--dep DEP" in tag_list_help
     assert "get-upstream" in branch_subparsers.choices
     assert "get-upstream" not in tag_subparsers.choices
-    assert "read-launch-state" in runtime_subparsers.choices
+    assert "read-launch-state" not in runtime_subparsers.choices
 
     parsed = cli.parser.parse_args(["branch", "list", "--remote", "--dep", "models"])
     assert parsed.remote is True

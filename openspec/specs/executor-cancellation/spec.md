@@ -1,3 +1,8 @@
+## Purpose
+Define executor responsibilities and retry safety during runtime cancelation.
+
+## Requirements
+
 ### Requirement: Executors SHALL handle runtime cancel invocation as a synchronous cancellation step
 When the runtime invokes an executor through an `AdapterCancelRequest`, the executor SHALL treat that invocation as synchronous cancellation work for the identified execution attempt. The executor cancel contract SHALL remain separate from execution-record-only lifecycle states such as `cancel-requested` and `cancel-ready`.
 
@@ -18,16 +23,11 @@ Executor stacks that wrap nested executors SHALL ensure that only one layer in t
 - **THEN** at most one layer SHALL call `Dml.runtime.cancel(child)` for that child execution during that cancel update
 
 ### Requirement: Executors SHALL tear down external resources during cancellation
-Executor-owned cancellation SHALL tear down external resources and SHALL NOT mutate the persisted execution record `state`. Script execution SHALL terminate the supervisor-managed process tree and remove its work directory. Docker execution SHALL stop and remove the container and SHALL remove any temporary loaded image. Batch execution SHALL cancel or terminate the Batch job as appropriate and SHALL deregister the temporary job definition. CloudFormation execution SHALL initiate rollback or cancellation of the stack operation and return without waiting for the rollback to finish. SSH execution SHALL return the nested adapter's cancellation result and SHALL NOT create additional remote wrapper state.
+Executor-owned cancellation SHALL tear down external resources and SHALL NOT mutate the persisted execution record `state`. Script execution SHALL terminate the supervisor-managed process tree and remove its work directory. Docker execution SHALL stop and remove the container and SHALL remove any temporary loaded image. Batch execution SHALL cancel or terminate the Batch job as appropriate and SHALL deregister the temporary job definition. SSH execution SHALL return the nested adapter's cancellation result and SHALL NOT create additional remote wrapper state.
 
 #### Scenario: Batch cancellation tears down Batch resources
 - **WHEN** the Batch executor receives an `AdapterCancelRequest`
 - **THEN** it SHALL cancel or terminate the Batch job and deregister the temporary job definition
-
-#### Scenario: CloudFormation cancellation returns quickly with rollback context
-- **WHEN** the CloudFormation executor receives an `AdapterCancelRequest`
-- **THEN** it SHALL start rollback or cancellation of the stack operation
-- **AND** it SHALL return promptly with enough stack context for the caller to identify the affected stack
 
 ### Requirement: Cancel-path return values SHALL remain advisory only
 Executors SHALL return a success or failure indication from cancel handling, but the runtime SHALL continue to own execution-record lifecycle persistence, including `cancel-ready` and `canceled`.

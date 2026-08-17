@@ -89,3 +89,14 @@ def test_contrib_supervisor_002__invalid_worker_result_includes_received_payload
         supervisor_mod._validate_output(result)
 
     assert repr(result) in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"status": "succeeded", "error": None, "dag_id": "d" * 64},
+        {"status": "failed", "error": "worker failed"},
+    ],
+)
+def test_contrib_supervisor_003__worker_terminal_schema_matches_script_output(result):
+    assert supervisor_mod._validate_output(result) == result

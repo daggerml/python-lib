@@ -10,8 +10,8 @@ from daggerml.api import DmlRepoError, _entry_points
 class ExecutorBase:
     """Base class for all executors.
 
-    The runtime owns durable resumable state. Executors receive ``state=None``
-    on first launch and the immutable persisted state on later polls. Executors
+    The runtime owns durable adapter state. Executors receive ``adapter_state=None``
+    on first launch and persisted state on later status checks. Executors
     return terminal or in-progress result dicts via stdout/return value:
 
         {"status": "running",    "error": null,  "state": {...}, "dag_id": null}
@@ -71,40 +71,53 @@ class ExecutorBase:
         execution_id: str,
         remote: dict,
         runnable: dict,
-        state: dict | None,
+        adapter_state: dict | None = None,
         scratch_uri: str,
         requested_by: str | None = None,
-        argv_ptr: str | None = None,
+        argv_ref: str | None = None,
     ) -> dict[str, Any]:
         """Dispatch an explicit adapter operation to the executor."""
+        if operation not in {"invoke", "cancel"}:
+            raise DmlRepoError(f"Unsupported adapter operation: {operation}")
+        if adapter_state is not None and not isinstance(adapter_state, dict):
+            raise DmlRepoError("adapter_state must be an object or null")
+        if operation == "cancel" and (not isinstance(argv_ref, str) or not argv_ref):
+            raise DmlRepoError("Cancel operation requires a non-empty argv_ref")
         executor = cls()
         if operation == "cancel":
-            return executor.cancel(
+            result = executor.cancel(
                 cache_key=cache_key,
                 execution_id=execution_id,
                 runnable=runnable,
-                state=state,
+                state=adapter_state,
                 remote=remote,
                 scratch_uri=scratch_uri,
                 cancel_requested_by=requested_by,
-                argv_ptr=argv_ptr,
+                argv_ptr=argv_ref,
             )
-        if state is None:
-            return executor.start(
+        elif adapter_state is None:
+            result = executor.start(
                 cache_key=cache_key,
                 execution_id=execution_id,
                 runnable=runnable,
                 remote=remote,
                 scratch_uri=scratch_uri,
             )
-        return executor.poll(
-            cache_key=cache_key,
-            execution_id=execution_id,
-            runnable=runnable,
-            state=state,
-            remote=remote,
-            scratch_uri=scratch_uri,
-        )
+        else:
+            result = executor.poll(
+                cache_key=cache_key,
+                execution_id=execution_id,
+                runnable=runnable,
+                state=adapter_state,
+                remote=remote,
+                scratch_uri=scratch_uri,
+            )
+        state = result.pop("state", None)
+        if isinstance(state, dict):
+            result["adapter_state"] = state
+        elif not isinstance(result.get("adapter_state"), dict):
+            result.pop("adapter_state", None)
+        return result
 
 
 ################################################################################

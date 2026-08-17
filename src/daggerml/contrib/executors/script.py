@@ -99,7 +99,7 @@ class ScriptExecutor(ExecutorBase):
         scratch_uri: str,
     ) -> AdapterInvokeResponse:
         del runnable, scratch_uri
-        workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{execution_id[:8]}-"))
+        workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{execution_id}-"))
         payload_path = workdir / "supervisor-input.json"
         result_path = workdir / "result.json"
         stdout_path = workdir / "stdout.log"
@@ -182,6 +182,7 @@ class ScriptExecutor(ExecutorBase):
             try:
                 parsed = json.loads(result_path.read_text())
                 if parsed.get("status") in {"succeeded", "failed"}:
+                    parsed["state"] = state
                     _cleanup_workdir(state)
                     return parsed
             except Exception as e:
@@ -189,14 +190,14 @@ class ScriptExecutor(ExecutorBase):
                 return {
                     "status": "failed",
                     "error": f"Could not read supervisor result: {e}",
-                    "state": None,
+                    "state": state,
                     "dag_id": None,
                 }
         _cleanup_workdir(state)
         return {
             "status": "failed",
             "error": "Script supervisor exited without result",
-            "state": None,
+            "state": state,
             "dag_id": None,
         }
 
@@ -213,7 +214,7 @@ class ScriptExecutor(ExecutorBase):
     ) -> AdapterCancelResponse:
         del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ptr
         if not isinstance(state, dict):
-            return {"status": "cancelled", "error": None}
+            return {"status": "cancelled", "error": None, "state": {}}
         pid = state.get("pid")
         if isinstance(pid, int):
             try:
@@ -223,7 +224,7 @@ class ScriptExecutor(ExecutorBase):
             except PermissionError:
                 pass
         _cleanup_workdir(state)
-        return {"status": "cancelled", "error": None}
+        return {"status": "cancelled", "error": None, "state": state}
 
 
 def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
@@ -270,9 +271,9 @@ def run_payload(*, execution_id: str, cache_key: str, remote_root: str) -> dict[
                     dag.commit(output)
             if dag.ref is None:
                 raise DmlRepoError("Script worker succeeded without committed DAG")
-            return {"status": "succeeded", "state": None, "error": None, "dag_id": dag.ref.id()}
+            return {"status": "succeeded", "error": None, "dag_id": dag.ref.id()}
         except Exception as e:
-            return {"status": "failed", "error": f"{e}\n{traceback.format_exc()}", "state": None, "dag_id": None}
+            return {"status": "failed", "error": f"{e}\n{traceback.format_exc()}"}
 
 
 def main(argv: list[str] | None = None) -> int:

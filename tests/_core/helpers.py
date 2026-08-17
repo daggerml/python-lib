@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -74,7 +75,48 @@ class NoopExecutionState:
     def create_execution_record(self, record: dict[str, Any]) -> bool:
         if record["execution_id"] in self.records:
             return False
-        self.records[record["execution_id"]] = dict(record)
+        normalized = {
+            "lock": None,
+            "adapter_state": None,
+            "argv_ref": None,
+            "result_ref": None,
+            "cancelation": None,
+            "invalidation": None,
+            **record,
+        }
+        requested_by = normalized.pop("cancellation_requested_by", None)
+        if requested_by is not None:
+            normalized["cancelation"] = {"requested_by": requested_by, "requested_at": 0}
+        self.records[record["execution_id"]] = normalized
+        return True
+
+    def reserve_execution(self, argv_ref, execution_id=None):
+        execution_id = execution_id or "reserved"
+        self.create_execution_record(
+            {
+                "execution_id": execution_id,
+                "cache_key": None,
+                "lifecycle": "running",
+                "updated_at": int(time.time()),
+                "created_at": int(time.time()),
+                "spawned_execution_ids": [],
+                "child_execution_ids": [],
+                "argv_ref": None if argv_ref is None else argv_ref.to,
+                "lock": {"owner": "owner", "ttl": 300.0},
+            }
+        )
+        return execution_id, "owner", None
+
+    def activate(self, execution_id, db):
+        record = self.require_mutation(execution_id, db, mode="activation")
+        return record, "owner"
+
+    def mark_running(self, execution_id, owner):
+        record = self.read_execution_record(execution_id)
+        record["lifecycle"] = "running"
+        self.update_execution_record(record)
+
+    def unlock(self, execution_id, owner):
         return True
 
     def update_execution_record(self, record: dict[str, Any]) -> None:
@@ -90,6 +132,7 @@ class NoopExecutionState:
         record = self.read_execution_record(execution_id)
         record["lifecycle"] = "succeeded"
         record["updated_at"] = int(time.time())
+        record["result_ref"] = dag.to
         self.update_execution_record(record)
 
     def require_mutation(self, execution_id: str, db: DmlDB, *, mode: str = "activation") -> dict[str, Any]:
@@ -133,7 +176,9 @@ class NoopExecutionState:
                 "lifecycle": record["lifecycle"],
                 "updated_at": record["updated_at"],
                 "created_at": record["created_at"],
-                "cancel_requested_by": record["cancellation_requested_by"],
+                "cancel_requested_by": (
+                    None if record["cancelation"] is None else record["cancelation"]["requested_by"]
+                ),
                 "children": children,
                 "spawned": spawned,
             }
@@ -149,9 +194,13 @@ class FakeRemote:
         client = None
 
     _store = _Store()
+    materialized_ref = None
 
     def get_active(self, cache_key: str, raw: bool = False):
         return None
+
+    def materialize_ref(self, ref, db):
+        return self.materialized_ref or ref
 
 
 def local_index_ops(state: NoopExecutionState | None = None) -> IndexOps:
@@ -173,8 +222,10 @@ class FakeCasStore:
 
     def __init__(self, prefix: str = "root/exec") -> None:
         self.prefix = prefix
-        self.objects: dict[str, tuple[str, str]] = {}
+        self.objects: dict[str, tuple[str, str, datetime]] = {}
         self.conflict_keys: set[str] = set()
+        self.now = datetime.now(timezone.utc)
+        self._lock = threading.Lock()
 
     def _key_for(self, relative_key: str) -> str:
         return f"{self.prefix}/{relative_key}" if self.prefix else relative_key
@@ -184,26 +235,29 @@ class FakeCasStore:
         return getattr(exc, "response", {}).get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}
 
     def _get(self, key: str, *, cas: bool = False):
-        if key not in self.objects:
-            raise MissingKey()
-        data, etag = self.objects[key]
-        return CasItem(key, data, etag) if cas else data
+        with self._lock:
+            if key not in self.objects:
+                raise MissingKey()
+            data, etag, last_modified = self.objects[key]
+            return CasItem(key, data, etag, last_modified, self.now) if cas else data
 
     def _put(self, key: str | CasItem, value: str | bytes, *, overwrite: bool = True, **kwargs) -> bool:
         expected_etag = None
         if isinstance(key, CasItem):
             expected_etag = key.etag
             key = key.key
-        if key in self.conflict_keys:
-            self.conflict_keys.remove(key)
-            raise CasItemConflict(key)
-        if not overwrite and key in self.objects:
-            raise CasItemConflict(key)
-        if expected_etag is not None and self.objects.get(key, (None, None))[1] != expected_etag:
-            raise CasItemConflict(key)
-        text = value.decode() if isinstance(value, bytes) else value
-        current = int(self.objects.get(key, ("", "0"))[1])
-        self.objects[key] = (text, str(current + 1))
+        with self._lock:
+            if key in self.conflict_keys:
+                self.conflict_keys.remove(key)
+                raise CasItemConflict(key)
+            if not overwrite and key in self.objects:
+                raise CasItemConflict(key)
+            if expected_etag is not None and self.objects.get(key, (None, None, None))[1] != expected_etag:
+                raise CasItemConflict(key)
+            text = value.decode() if isinstance(value, bytes) else value
+            current = int(self.objects.get(key, ("", "0", self.now))[1])
+            self.now += timedelta(milliseconds=1)
+            self.objects[key] = (text, str(current + 1), self.now)
         return True
 
     def _put_js(self, key: str | CasItem, value: Any, *, overwrite: bool = True, **kwargs) -> bool:
@@ -214,12 +268,13 @@ class FakeCasStore:
         if isinstance(key, CasItem):
             expected_etag = key.etag
             key = key.key
-        if key not in self.objects:
-            return False
-        if expected_etag is not None and self.objects[key][1] != expected_etag:
-            return False
-        del self.objects[key]
-        return True
+        with self._lock:
+            if key not in self.objects:
+                return False
+            if expected_etag is not None and self.objects[key][1] != expected_etag:
+                return False
+            del self.objects[key]
+            return True
 
     def _iter(self, prefix: str):
         return (key for key in sorted(self.objects) if key.startswith(prefix))
@@ -231,6 +286,12 @@ class FakeExecutionRemote:
         self.cancel_targets: dict[str, dict[str, Any]] = {}
         self.cache: dict[str, Ref] = {}
         self.transport: dict[str, Ref] = {}
+
+    def upload_object_graph(self, ref, db) -> None:
+        return None
+
+    def materialize_ref(self, ref, db):
+        return ref
 
     def get_cache(self, cache_key: str, db=None):
         return self.cache.get(cache_key)

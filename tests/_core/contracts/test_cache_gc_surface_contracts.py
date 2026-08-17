@@ -18,16 +18,16 @@ def test_cache_get_returns_present_and_absent_refs(tmp_path, monkeypatch) -> Non
     cached = Ref("dag:" + "a" * 64)
     calls = []
 
-    class Remote:
-        def get_cache(self, cache_key, *, raw, db):
-            calls.append((cache_key, raw, db))
+    class State:
+        def get_cached_result(self, cache_key, db):
+            calls.append((cache_key, db))
             return cached if cache_key == "present" else None
 
-    monkeypatch.setattr(dml_mod, "_remote_ops", lambda _dml: Remote())
+    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: State())
 
     assert dml.cache.get("present") == cached
     assert dml.cache.get("missing") is None
-    assert calls == [("present", False, dml._db), ("missing", False, dml._db)]
+    assert calls == [("present", dml._db), ("missing", dml._db)]
 
 
 def test_cache_invalidate_validates_before_exact_delegation(tmp_path, monkeypatch) -> None:

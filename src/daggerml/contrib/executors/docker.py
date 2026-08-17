@@ -147,7 +147,7 @@ class DockerExecutor(ExecutorBase):
                 "execution_id": execution_id,
                 "remote": remote,
                 "scratch_uri": scratch_uri,
-                "state": None,
+                "adapter_state": None,
             }
         )
         _write_scratch_json(input_uri, payload, raw=True)
@@ -256,13 +256,14 @@ class DockerExecutor(ExecutorBase):
         argv_ptr: str | None = None,
     ) -> dict[str, Any]:
         del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ptr
+        state = state if isinstance(state, dict) else {}
         docker_bin = shutil.which("docker")
         if docker_bin is None:
-            return {"status": "cancelled", "error": None}
+            return {"status": "cancelled", "error": None, "state": state}
         container_id = state.get("container_id")
         if isinstance(container_id, str) and container_id:
             _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
-        return {"status": "cancelled", "error": None}
+        return {"status": "cancelled", "error": None, "state": state}
 
 
 def _cleanup_docker(container_id: str, cleanup_image: str | None, docker_bin: str) -> None:

@@ -215,9 +215,14 @@ def test_runtime_read_execution_record_accepts_ref_and_returns_raw_payload(tmp_p
         "lifecycle": "running",
         "updated_at": 10,
         "created_at": 9,
+        "lock": None,
+        "adapter_state": {"job": "j1"},
+        "argv_ref": None,
+        "result_ref": None,
         "spawned_execution_ids": ["child-1"],
         "child_execution_ids": ["child-0"],
-        "cancellation_requested_by": "tester",
+        "cancelation": {"requested_by": "tester", "requested_at": 8},
+        "invalidation": None,
     }
     state = NoopExecutionState()
     state.create_execution_record(record)
@@ -246,39 +251,7 @@ def test_runtime_read_execution_record_surfaces_missing_record_error(tmp_path, m
         dml.runtime.read_execution_record(Ref("index:missing"))
 
 
-def test_runtime_read_launch_state_delegates_exact_execution_id(tmp_path, monkeypatch) -> None:
-    dml = make_local_dml(tmp_path, monkeypatch)
-    calls = []
-
-    class State:
-        def read_launch_state(self, execution_id):
-            calls.append(execution_id)
-            return {"job_id": "j1"} if execution_id == "exec-1" else None
-
-    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: State())
-
-    assert dml.runtime.read_launch_state(Ref("index:exec-1")) == {"job_id": "j1"}
-    assert dml.runtime.read_launch_state(Ref("index:missing")) is None
-    assert calls == ["exec-1", "missing"]
-
-
-def test_runtime_read_launch_state_rejects_execution_id_strings_before_delegation(tmp_path, monkeypatch) -> None:
-    dml = make_local_dml(tmp_path, monkeypatch)
-    calls = []
-
-    class State:
-        def read_launch_state(self, execution_id):
-            calls.append(execution_id)
-
-    monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: State())
-
-    for execution in ("exec-1", "index:exec-1"):
-        with pytest.raises(TypeError, match="runtime Ref"):
-            dml.runtime.read_launch_state(execution)
-    assert calls == []
-
-
-@pytest.mark.parametrize("operation", ["read_execution_record", "read_launch_state", "describe_graph", "cancel"])
+@pytest.mark.parametrize("operation", ["read_execution_record", "describe_graph", "cancel"])
 def test_runtime_identity_methods_reject_wrong_ref_namespace(tmp_path, monkeypatch, operation) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
 

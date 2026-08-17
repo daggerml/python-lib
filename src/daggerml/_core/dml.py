@@ -553,14 +553,6 @@ class _RuntimeNamespace:
         execution_id = _require_runtime_ref(execution).id()
         return _exec_state(self._dml).read_execution_record(execution_id)
 
-    def read_launch_state(
-        self,
-        execution: Annotated[Ref, "Runtime execution ref whose persisted executor resume state should be read."],
-    ) -> dict | None:
-        """Read the persisted executor resume-state object for one execution."""
-        execution_id = _require_runtime_ref(execution).id()
-        return _exec_state(self._dml).read_launch_state(execution_id)
-
     def cancel(
         self,
         index: Annotated[Ref, "Runtime index to cancel."],
@@ -880,7 +872,8 @@ class _CacheNamespace:
 
     def get(self, cache_key: Annotated[str, "Exact cache key to resolve."]) -> Ref | None:
         """Return the cached DAG ref for a cache key, if present."""
-        return _remote_ops(self._dml).get_cache(_validate_cache_key(cache_key), raw=False, db=self._dml._db)
+        validated = _validate_cache_key(cache_key)
+        return _exec_state(self._dml, cache_key=validated).get_cached_result(validated, self._dml._db)
 
     def invalidate(
         self, *cache_keys: Annotated[str, "One or more exact cache keys to invalidate."]

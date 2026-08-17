@@ -70,9 +70,12 @@ class AdapterBase:
         raw = cls._read_input(args.input)
         payload = json.loads(raw)
         result = cls.send(**payload)
-        payload["state"] = payload.get("state")
+        payload["adapter_state"] = payload.get("adapter_state")
         while args.poll and payload.get("operation") == "invoke" and result.get("status") == "running":
-            payload["state"] = result.get("state") or payload["state"]
+            state = result.get("adapter_state")
+            if not isinstance(state, dict):
+                raise DmlRepoError("Running adapter response requires object adapter_state")
+            payload["adapter_state"] = state
             time.sleep(0.1)
             result = cls.send(**payload)
         cls._write_output(args.output, json.dumps(result))

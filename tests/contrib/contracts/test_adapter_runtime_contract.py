@@ -18,7 +18,7 @@ def test_contrib_adapter_001__cli_passes_plain_payload_and_returns_raw_result(tm
         @classmethod
         def send(cls, **kwargs):
             calls.append(kwargs)
-            return {"status": "succeeded", "error": None, "state": None, "dag_id": "d" * 64}
+            return {"status": "succeeded", "error": None, "adapter_state": {}, "dag_id": "d" * 64}
 
     payload = {
         "operation": "invoke",
@@ -27,7 +27,7 @@ def test_contrib_adapter_001__cli_passes_plain_payload_and_returns_raw_result(tm
         "execution_id": "exec",
         "remote": {"root": "s3://bucket/root"},
         "scratch_uri": "s3://bucket/root/scratch",
-        "state": {"job": "123"},
+        "adapter_state": {"job": "123"},
     }
     input_path = tmp_path / "input.json"
     output_path = tmp_path / "output.json"
@@ -38,7 +38,7 @@ def test_contrib_adapter_001__cli_passes_plain_payload_and_returns_raw_result(tm
     assert json.loads(output_path.read_text()) == {
         "status": "succeeded",
         "error": None,
-        "state": None,
+        "adapter_state": {},
         "dag_id": "d" * 64,
     }
 
@@ -51,8 +51,8 @@ def test_contrib_adapter_002__cli_polling_reuses_persisted_state_between_polls(t
         def send(cls, **kwargs):
             calls.append(kwargs)
             if len(calls) == 1:
-                return {"status": "running", "error": None, "state": {"token": "abc"}, "dag_id": None}
-            return {"status": "succeeded", "error": None, "state": None, "dag_id": "d" * 64}
+                return {"status": "running", "error": None, "adapter_state": {"token": "abc"}, "dag_id": None}
+            return {"status": "succeeded", "error": None, "adapter_state": {"token": "abc"}, "dag_id": "d" * 64}
 
     payload = json.dumps(
         {
@@ -62,7 +62,7 @@ def test_contrib_adapter_002__cli_polling_reuses_persisted_state_between_polls(t
             "execution_id": "exec",
             "remote": {"root": "s3://bucket/root"},
             "scratch_uri": "s3://bucket/root/scratch",
-            "state": None,
+            "adapter_state": None,
         }
     )
     input_path = tmp_path / "input.json"
@@ -71,7 +71,7 @@ def test_contrib_adapter_002__cli_polling_reuses_persisted_state_between_polls(t
     assert PollingAdapter.cli(["--poll", "-i", str(input_path), "-o", str(output_path)]) == 0
     persisted = json.loads(output_path.read_text())
     assert persisted["status"] == "succeeded"
-    assert calls[1]["state"] == {"token": "abc"}
+    assert calls[1]["adapter_state"] == {"token": "abc"}
 
 
 def test_contrib_adapter_003__cli_supports_s3_input_and_output(monkeypatch):
@@ -82,7 +82,7 @@ def test_contrib_adapter_003__cli_supports_s3_input_and_output(monkeypatch):
         @classmethod
         def send(cls, **kwargs):
             calls.append(kwargs)
-            return {"status": "succeeded", "error": None, "state": None, "dag_id": "d" * 64}
+            return {"status": "succeeded", "error": None, "adapter_state": {}, "dag_id": "d" * 64}
 
     payload = {
         "operation": "invoke",
@@ -91,7 +91,7 @@ def test_contrib_adapter_003__cli_supports_s3_input_and_output(monkeypatch):
         "execution_id": "exec",
         "remote": {"root": "s3://bucket/root"},
         "scratch_uri": "s3://bucket/root/scratch",
-        "state": None,
+        "adapter_state": None,
     }
 
     class FakeStore:
@@ -111,7 +111,7 @@ def test_contrib_adapter_003__cli_supports_s3_input_and_output(monkeypatch):
     assert writes == {
         "Bucket": "bucket",
         "Key": "output.json",
-        "Body": json.dumps({"status": "succeeded", "error": None, "state": None, "dag_id": "d" * 64}).encode(
+        "Body": json.dumps({"status": "succeeded", "error": None, "adapter_state": {}, "dag_id": "d" * 64}).encode(
             "utf-8"
         ),
         "ContentType": "application/json",

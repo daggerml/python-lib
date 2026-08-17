@@ -5,208 +5,53 @@ Define runtime execution identity, persisted state, coordination, cancellation, 
 ## Requirements
 
 ### Requirement: Runtime SHALL separate cache identity from execution identity
-The runtime SHALL treat `cache_key` as the stable computation identity and `execution_id` as the stable identity of one execution attempt. The runtime SHALL acquire execution coordination locks by `cache_key` for launch, resume, and cancellation, SHALL propagate `execution_id` in the adapter envelope, and SHALL use execution id as the identity for dependency edges, execution state objects, and invalidation records.
+The runtime SHALL treat `cache_key` as stable computation identity and UUID7 `execution_id` as one attempt's identity. `cache/<cache_key>` SHALL contain only the current execution ID. `execution/<execution_id>` SHALL contain that attempt's state. S3 conditional operations, not UUID ordering, SHALL select the current execution.
 
-#### Scenario: First launch creates a new execution identity
-- **WHEN** `start_fn` observes a cache miss and confirms there is no active execution for the computed `cache_key`
-- **THEN** it creates a new `execution_id` for that launch attempt
-- **AND** it invokes the adapter with both `cache_key` and `execution_id`
+#### Scenario: First caller claims a cache key
+- **WHEN** a caller observes no cache pointer
+- **THEN** it creates a fresh execution record before conditionally creating the pointer
 
-#### Scenario: Resume preserves the current execution identity
-- **WHEN** `start_fn` observes an active execution for a `cache_key`
-- **THEN** it SHALL reuse the referenced `execution_id`
-- **AND** it SHALL NOT create a new `execution_id` for that execution while resuming it
-
-#### Scenario: Cancellation resolves lock identity from the execution record
-- **WHEN** cancellation targets execution `e1`
-- **AND** `exec/state/e1.json` records `cache_key = "ck1"`
-- **THEN** the runtime SHALL acquire the execution coordination lock for `ck1`
-- **AND** it SHALL continue to use `e1` as the execution-record and dependency-graph identity
+#### Scenario: Later caller joins the current attempt
+- **WHEN** `cache/ck1` contains `e1`
+- **THEN** a caller reads `execution/e1`
+- **AND** it SHALL NOT create another attempt solely because `e1` is running or its lock expired
 
 ### Requirement: Runtime SHALL maintain an active execution pointer per cache key
-The runtime SHALL persist the currently active execution for a `cache_key` at `active/<cache_key>` as plain text containing only the `execution_id`.
+The runtime SHALL persist the current execution for a cache key at `cache/<cache_key>` as plain text containing only the execution ID. The pointer SHALL exist from successful reservation until conditional deletion by cancelation or invalidation, including while the execution is running and after it stores a reusable terminal result.
 
-#### Scenario: Active pointer is created for a new running execution
-- **WHEN** the first adapter call for a new execution returns `running`
-- **THEN** the runtime SHALL create `active/<cache_key>` containing that execution's `execution_id`
+#### Scenario: Reservation publishes current execution
+- **WHEN** execution `e1` wins reservation for cache key `ck1`
+- **THEN** `cache/ck1` contains only `e1`
 
-#### Scenario: Stale active pointer is discarded
-- **WHEN** `active/<cache_key>` exists but `exec/state/<execution_id>.json` does not exist
-- **THEN** the runtime SHALL delete `active/<cache_key>`
-- **AND** it SHALL treat the cache key as having no active execution
+#### Scenario: Terminal result preserves pointer
+- **WHEN** execution `e1` stores a terminal result
+- **THEN** `cache/ck1` continues to contain `e1`
+
+#### Scenario: Missing execution behind pointer is stale
+- **WHEN** `cache/ck1` contains an execution ID whose record is missing
+- **THEN** the runtime SHALL conditionally repair or remove the stale pointer before continuing
 
 ### Requirement: Runtime SHALL maintain one mutable execution record per execution id
-The runtime SHALL persist one mutable lifecycle object per execution id as `execution_record`, separate from caller-owned `launch_state`. `execution_record` SHALL include `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `spawned_execution_ids`, `child_execution_ids`, and `cancellation_requested_by`, where `cancellation_requested_by` is `str | null`. `lifecycle` SHALL be one of `pending`, `running`, `cancel-requested`, `cancel-ready`, `canceled`, `succeeded`, or `failed`. `spawned_execution_ids` SHALL be the deduped set of direct child execution ids that have not reached normal terminal completion, including canceled children retained for cancellation traversal. `child_execution_ids` SHALL be the deduped set of direct children that reached `succeeded` or `failed`. The two lists SHALL remain disjoint. `execution_record` updates SHALL use compare-and-swap with the latest known ETag. If a compare-and-swap update observes ETag drift, the runtime SHALL reread the record and SHALL raise cancellation interruption only when the reread lifecycle is already a cancellation lifecycle; otherwise it SHALL continue from the latest valid reread state.
+The runtime SHALL persist `execution/<execution_id>` with fields `execution_id`, `cache_key`, `lifecycle`, `created_at`, `updated_at`, `lock`, `adapter_state`, `argv_ref`, `result_ref`, `spawned_execution_ids`, `child_execution_ids`, `cancelation`, and `invalidation`. `execution_id` SHALL be nonempty; `cache_key` null or nonempty; timestamps non-boolean nonnegative integers with `updated_at >= created_at`; and `lock` null or exact `{owner: nonempty str, ttl: positive finite non-boolean number}`. `adapter_state` SHALL be an object or null. `argv_ref` and `result_ref` SHALL be syntactically typed `node-argv` and `dag` ref strings respectively, or null; validation SHALL NOT check whether either ref exists in storage. Lineage lists SHALL contain unique nonempty execution IDs and be disjoint. `cancelation` and `invalidation` SHALL each be null or exact objects containing nonempty `requested_by` and a non-boolean nonnegative integer `requested_at`. Lifecycle and lineage semantics SHALL remain execution-owned, and every mutation SHALL require the embedded lock owner and CAS.
 
-The same `execution_record` schema SHALL also be used for each live index id. For index-root records, the object path SHALL be `exec/state/<index_id>.json`, `execution_id` SHALL equal the `index_id`, `cache_key` MAY be `null` when the root has no lock-bearing execution cache identity, and both `spawned_execution_ids` and `child_execution_ids` SHALL track the deduped direct execution descendants started from that index according to their active vs terminal state.
+#### Scenario: Fresh child record is complete and locked
+- **WHEN** the runtime reserves execution `e1` for cache key `ck1`
+- **THEN** it creates `execution/e1` with lifecycle `pending`, a fresh owner lock, its argv ref, null adapter and result state, empty lineage, and null control state
 
-`IndexOps.commit` SHALL always finalize the committing execution or root record as `lifecycle = "succeeded"`. A committed DAG `Error` value SHALL mean the execution successfully produced a DAG whose terminal result is an error. Runtime `failed` SHALL be reserved for execution-path failures that prevent successful DAG completion.
+#### Scenario: Result is stored in the same record
+- **WHEN** execution `e1` completes with DAG `dag:d1`
+- **THEN** its lock owner conditionally stores `result_ref = "dag:d1"` and a terminal lifecycle in `execution/e1`
 
-`IndexOps.commit` SHALL always update the committing execution or root record, and it SHALL publish a cache entry only when the committed DAG is runnable (`argv is not null`). Non-runnable DAG commits SHALL still finalize the execution/root record but SHALL NOT publish cache.
-
-Execution lifecycle gating for activation and mutation SHALL surface `BadExecutionStatusError` for non-cancel wrong-status failures and `CanceledExecutionError` for cancel-family failures, where `CanceledExecutionError` is a subclass of `BadExecutionStatusError`.
-
-The `execution_record` schema SHALL be:
-
-- `execution_id: str`
-- `cache_key: str | null`
-- `lifecycle: "pending" | "running" | "cancel-requested" | "cancel-ready" | "canceled" | "succeeded" | "failed"`
-- `updated_at: int`
-- `created_at: int`
-- `spawned_execution_ids: list[str]`
-- `child_execution_ids: list[str]`
-- `cancellation_requested_by: str | null`
-
-#### Scenario: Index creation creates the initial root execution record
-- **WHEN** `IndexOps.create` initializes a new non-execution-aware runtime root
-- **THEN** it SHALL create an `execution_record` for that root before execution starts
-- **AND** that record SHALL use `execution_id = index_id`
-- **AND** that record SHALL initialize `lifecycle = "running"`
-- **AND** that record SHALL initialize `created_at` and `updated_at`
-- **AND** that record SHALL initialize `spawned_execution_ids = []` and `child_execution_ids = []`
-
-#### Scenario: Child execution reservation creates a pending execution record
-- **WHEN** `start_fn` reserves a fresh adapter-backed child execution for cache key `ck1`
-- **THEN** it SHALL create `exec/state/<execution_id>.json` before treating that execution as active for `ck1`
-- **AND** that record SHALL store `cache_key = "ck1"`
-- **AND** that record SHALL initialize `lifecycle = "pending"`
-
-#### Scenario: Execution-aware activation transitions pending to running
-- **WHEN** worker bootstrap calls `IndexOps.create(cache_key="ck1", execution_id="e1")`
-- **AND** `exec/state/e1.json` exists with `lifecycle = "pending"`
-- **THEN** the runtime SHALL create the local mutable index for `e1`
-- **AND** it SHALL update `exec/state/e1.json` to `lifecycle = "running"`
-
-#### Scenario: Execution-aware activation rejects already-active or terminal records with wrong-status error
-- **WHEN** `IndexOps.create(cache_key="ck1", execution_id="e1")` reads `exec/state/e1.json`
-- **AND** the lifecycle is `running`, `succeeded`, or `failed`
-- **THEN** it SHALL raise `BadExecutionStatusError`
-- **AND** it SHALL NOT create or mutate local index state
-
-#### Scenario: Execution-aware activation rejects missing reservation state
-- **WHEN** `IndexOps.create(cache_key="ck1", execution_id="e1")` does not find `exec/state/e1.json`
-- **THEN** it SHALL raise `DmlRepoError`
-- **AND** it SHALL NOT create or mutate local index state
-
-#### Scenario: Execution-aware activation drives cancel-requested before raising canceled error
-- **WHEN** `IndexOps.create(cache_key="ck1", execution_id="e1")` reads `exec/state/e1.json`
-- **AND** the lifecycle is `cancel-requested`
-- **THEN** it SHALL drive Phase 2 cancellation for `e1`
-- **AND** it SHALL raise `CanceledExecutionError`
-- **AND** it SHALL NOT create or mutate local index state
-
-#### Scenario: Execution-aware activation rejects terminal cancel states with canceled error
-- **WHEN** `IndexOps.create(cache_key="ck1", execution_id="e1")` reads `exec/state/e1.json`
-- **AND** the lifecycle is `cancel-ready` or `canceled`
-- **THEN** it SHALL raise `CanceledExecutionError`
-- **AND** it SHALL NOT create or mutate local index state
-
-#### Scenario: Mutation workflows allow only running execution records
-- **WHEN** a mutating workflow other than activation checks `exec/state/e1.json`
-- **AND** the lifecycle is `running`
-- **THEN** the workflow MAY continue normal mutation
-
-#### Scenario: Mutation workflows reject non-running non-cancel states with wrong-status error
-- **WHEN** a mutating workflow other than activation checks `exec/state/e1.json`
-- **AND** the lifecycle is `pending`, `succeeded`, or `failed`
-- **THEN** it SHALL raise `BadExecutionStatusError`
-
-#### Scenario: Mutation workflows drive cancel-requested before raising canceled error
-- **WHEN** a mutating workflow other than activation checks `exec/state/e1.json`
-- **AND** the lifecycle is `cancel-requested`
-- **THEN** it SHALL drive Phase 2 cancellation for `e1`
-- **AND** it SHALL raise `CanceledExecutionError`
-
-#### Scenario: Mutation workflows reject terminal cancel states with canceled error
-- **WHEN** a mutating workflow other than activation checks `exec/state/e1.json`
-- **AND** the lifecycle is `cancel-ready` or `canceled`
-- **THEN** it SHALL raise `CanceledExecutionError`
-
-#### Scenario: Lifecycle record does not store resume state
-- **WHEN** the runtime persists `execution_record` for execution `e0`
-- **THEN** it SHALL NOT store adapter resume state in that object
-- **AND** resume state SHALL instead live only in caller-owned `launch_state`
-
-#### Scenario: CAS reread continues on non-cancellation drift
-- **WHEN** a compare-and-swap update for `execution_record` observes an ETag conflict
-- **AND** the reread lifecycle is `running`, `succeeded`, or `failed`
-- **THEN** the runtime SHALL continue from the reread record instead of raising cancellation interruption
-
-#### Scenario: CAS reread raises on cancellation lifecycle drift
-- **WHEN** a compare-and-swap update for `execution_record` observes an ETag conflict
-- **AND** the reread lifecycle is `cancel-requested`, `cancel-ready`, or `canceled`
-- **THEN** the runtime SHALL surface cancellation interruption rather than continuing normal execution updates
-
-#### Scenario: Top-level cancellation stores user provenance
-- **WHEN** a user cancels index `idx1`
-- **THEN** `exec/state/idx1.json` SHALL store `cancellation_requested_by` as that user identity
-
-#### Scenario: Nested cancellation stores execution provenance
-- **WHEN** execution `e1` triggers `cancel(e2)` during nested cancellation
-- **THEN** `exec/state/e2.json` SHALL store `cancellation_requested_by = "e1"`
-
-#### Scenario: Cancel-ready is a runtime-owned intermediate lifecycle
-- **WHEN** runtime cancellation has finished driving direct spawned descendants for execution `e1`
-- **THEN** the runtime SHALL persist `exec/state/e1.json` with `lifecycle = "cancel-ready"` before any parent adapter cancel step treats `e1` as ready
-
-#### Scenario: Full cancel writes terminal canceled after F2
-- **WHEN** runtime cancellation completes for execution `e1`
-- **THEN** `exec/state/e1.json` SHALL store `lifecycle = "canceled"`
-
-#### Scenario: Root record accumulates active spawned execution ids
-- **WHEN** index `idx1` starts execution `e1`
-- **THEN** the runtime SHALL update `exec/state/idx1.json` so that `spawned_execution_ids` contains `e1`
-- **AND** `child_execution_ids` SHALL remain unchanged while `e1` is still active
-
-#### Scenario: Commit of DAG error still records execution success
-- **WHEN** an execution successfully commits a DAG whose terminal result is an `Error` value
-- **THEN** the runtime SHALL record the committing execution record as `lifecycle = "succeeded"`
-- **AND** it SHALL NOT treat that outcome as runtime `failed`
-
-#### Scenario: Runtime failed is reserved for execution-path failure
-- **WHEN** an adapter or execution path fails before a DAG result is successfully committed
-- **THEN** the runtime MAY record the execution as `lifecycle = "failed"`
-- **AND** that lifecycle SHALL describe execution failure rather than a committed DAG error result
-
-#### Scenario: Non-runnable commit finalizes execution without cache publication
-- **WHEN** `IndexOps.commit` finalizes an execution or root whose committed DAG has no `argv`
-- **THEN** the runtime SHALL still update the committing execution or root record to `lifecycle = "succeeded"`
-- **AND** it SHALL NOT publish a cache entry for that commit
-
-#### Scenario: Caller record accumulates spawned execution ids by caller execution id
-- **WHEN** caller execution `e0` starts callee execution `e1`
-- **THEN** the runtime SHALL read and compare-and-swap update `exec/state/e0.json`
-- **AND** the updated `spawned_execution_ids` SHALL contain `e1`
-- **AND** that update SHALL not require the caller cache key to be threaded separately
-
-#### Scenario: Root caller uses index execution record
-- **WHEN** top-level runtime root `idx1` starts callee execution `e1`
-- **THEN** the runtime SHALL treat `idx1` as `caller_execution_id`
-- **AND** it SHALL read and compare-and-swap update `exec/state/idx1.json`
-- **AND** the updated `spawned_execution_ids` SHALL contain `e1`
-
-#### Scenario: Terminal direct child moves from spawned to child lineage
-- **WHEN** caller execution `e0` has active direct child `e1` in `spawned_execution_ids`
-- **AND** `e1` reaches terminal lifecycle `succeeded` or `failed`
-- **THEN** the runtime SHALL remove `e1` from `e0`'s `spawned_execution_ids`
-- **AND** it SHALL add `e1` to `e0`'s `child_execution_ids`
-
-#### Scenario: Canceled direct child does not move into child lineage
-- **WHEN** caller execution `e0` has direct child `e1` in `spawned_execution_ids`
-- **AND** `e1` reaches lifecycle `canceled`
-- **THEN** the runtime SHALL retain `e1` in `e0`'s `spawned_execution_ids`
-- **AND** it SHALL NOT add `e1` to `e0`'s `child_execution_ids`
-
-#### Scenario: Spawned and child execution summaries remain disjoint
-- **WHEN** the runtime persists an `execution_record`
-- **THEN** no execution id SHALL appear in both `spawned_execution_ids` and `child_execution_ids` in the same record
+#### Scenario: Every mutation requires ownership
+- **WHEN** a caller attempts to change lifecycle, adapter state, refs, lineage, cancelation, or invalidation
+- **THEN** it SHALL hold the matching execution lock owner
 
 ### Requirement: Adapter cancel dispatch SHALL target direct children that are cancel-ready
-Each runtime handling a `cancel-requested` execution SHALL wait for its direct callees to reach `cancel-ready`, invoke cancellation for those callees through an `AdapterCancelRequest` built from their execution-owned cancel-target refs, persist those callees as `canceled`, and then persist its own execution as `cancel-ready`. The wait SHALL time out after 60 seconds, after which the runtime SHALL perform the cancel-adapter work anyway. Runtime lifecycle ownership remains outside the adapter response contract.
+Each runtime handling a `cancel-requested` execution SHALL wait for its direct callees to reach `cancel-ready`, invoke cancellation for those callees through an `AdapterCancelRequest` built from their execution-record `argv_ref`, persist those callees as `canceled`, and then persist its own execution as `cancel-ready`. Each record mutation SHALL hold that execution's embedded lock. The wait SHALL time out after 60 seconds, after which the runtime SHALL perform the cancel-adapter work anyway. Runtime lifecycle ownership remains outside the adapter response contract.
 
 #### Scenario: Parent waits for child cancel-ready before adapter cancel dispatch
 - **WHEN** execution `e0` is driving cancellation for direct child `e1`
-- **AND** `exec/state/e1.json` is still `cancel-requested`
+- **AND** `execution/e1` is still `cancel-requested`
 - **THEN** `F2(e0)` SHALL NOT invoke adapter cancellation for `e1` yet
 
 #### Scenario: Adapter cancel response does not define execution-record lifecycle names
@@ -214,7 +59,7 @@ Each runtime handling a `cancel-requested` execution SHALL wait for its direct c
 - **THEN** the adapter response contract SHALL remain separate from execution-record-only lifecycle values such as `cancel-ready`
 
 ### Requirement: Runtime SHALL expose descendant execution graphs from execution records
-The runtime SHALL expose an execution-record-owned graph query that accepts root execution ids and returns only the reachable descendant closure from those roots. The payload SHALL have shape `{roots: list[str], nodes: dict[str, node_payload]}` where each `node_payload` contains `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `cancel_requested_by`, `children`, and `spawned`. `children` SHALL be derived from `child_execution_ids`, and `spawned` SHALL be derived from `spawned_execution_ids`. The graph query SHALL read only execution-record objects and SHALL include each reachable execution at most once.
+The runtime SHALL expose an execution-record-owned graph query that accepts root execution ids and returns only the reachable descendant closure from those roots. The payload SHALL have shape `{roots: list[str], nodes: dict[str, node_payload]}` where each `node_payload` contains `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `cancelation`, `children`, and `spawned`. `children` SHALL be derived from `child_execution_ids`, and `spawned` SHALL be derived from `spawned_execution_ids`. The graph query SHALL read only execution-record objects and SHALL include each reachable execution at most once.
 
 #### Scenario: Graph query returns active and completed descendants
 - **WHEN** root execution `e0` has active descendant `e1` in `spawned_execution_ids` and completed descendant `e2` in `child_execution_ids`
@@ -232,15 +77,15 @@ The runtime SHALL expose an execution-record-owned graph query that accepts root
 
 #### Scenario: Graph query uses execution records only
 - **WHEN** the runtime assembles the descendant graph payload
-- **THEN** it SHALL NOT require DAG objects, launch-state objects, edge files, active refs, or cache refs to shape the response
+- **THEN** it SHALL NOT require DAG objects, edge files, or cache pointers to shape the response
 
 ### Requirement: Runtime SHALL return raw execution records for direct record reads
-The runtime SHALL support a direct single-record read workflow for execution records addressed by execution id. When a caller-facing runtime inspection method requests one execution record, the execution-state layer SHALL read only `exec/state/<execution_id>.json` for that id and SHALL return the stored `execution_record` typed dict unchanged.
+The runtime SHALL support a direct single-record read workflow for execution records addressed by execution id. When a caller-facing runtime inspection method requests one execution record, the execution-state layer SHALL read only `execution/<execution_id>` for that id and SHALL return the stored execution record unchanged.
 
 #### Scenario: Direct record read returns the stored execution record unchanged
-- **WHEN** `exec/state/e1.json` exists for execution `e1`
+- **WHEN** `execution/e1` exists
 - **THEN** the runtime SHALL return the stored execution record for `e1`
-- **AND** the returned payload SHALL preserve `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `spawned_execution_ids`, `child_execution_ids`, and `cancellation_requested_by` exactly as stored
+- **AND** the returned payload SHALL preserve every unified execution-record field exactly as stored
 
 #### Scenario: Direct record read does not reshape into a graph or summary payload
 - **WHEN** a caller reads execution record `e1`
@@ -248,62 +93,35 @@ The runtime SHALL support a direct single-record read workflow for execution rec
 
 #### Scenario: Direct record read surfaces missing-record failure
 - **WHEN** a caller reads execution record `missing`
-- **AND** `exec/state/missing.json` does not exist
+- **AND** `execution/missing` does not exist
 - **THEN** the runtime SHALL raise `DmlRepoError`
 
 ### Requirement: Cache refs SHALL remain proper refs and record execution ids
-The runtime SHALL publish `refs/cache/<cache_key>.json` as a typed remote ref to the current DAG for that cache key, and that ref SHALL also record `execution_id` in `metadata`.
+The runtime SHALL replace typed terminal cache refs with plain `cache/<cache_key>` execution-ID pointers. A cache reader SHALL resolve the execution record and materialize its typed `result_ref`. Lifecycles `succeeded` and `failed` SHALL be reusable cache hits only when `result_ref` is present and neither cancelation nor invalidation blocks reuse.
 
-Readers that materialize cached results SHALL resolve the DAG through `ref.to`, and graph planners SHALL read `execution_id` from the same cache ref metadata.
+#### Scenario: Successful terminal cache lookup
+- **WHEN** `cache/ck1` contains `e1` and `execution/e1` is succeeded with `result_ref = "dag:d1"`
+- **THEN** cache lookup materializes `dag:d1`
 
-#### Scenario: Successful execution updates cache pointer
-- **WHEN** execution `e7` becomes the terminal cached result for cache key `ck1`
-- **THEN** the runtime writes `refs/cache/ck1.json` with `ref.to = "dag:<oid>"`
-- **AND** `metadata.execution_id = "e7"`
+#### Scenario: Error DAG remains cached
+- **WHEN** `execution/e1` is failed with an error DAG in `result_ref`
+- **THEN** cache lookup returns that error DAG
 
-#### Scenario: Runnable DAG publication uses explicit execution identity
-- **WHEN** an execution-aware worker commits a runnable DAG result
-- **THEN** the runtime publishes the cache entry using the explicit `execution_id` provided through the runtime execution-aware call path
-- **AND** it does not discover that identity through a process-local execution context object
-
-### Requirement: Active execution refs SHALL point to argv roots
-The runtime SHALL publish `refs/active/<cache_key>.json` as a typed remote ref to the `node-argv` root for the currently coordinated execution.
-
-#### Scenario: Active execution stores argv root
-- **WHEN** execution `e7` claims active coordination for cache key `ck1`
-- **THEN** the runtime writes `refs/active/ck1.json` with `ref.to = "node-argv:<oid>"`
-- **AND** `metadata.execution_id = "e7"`
-
-#### Scenario: Terminal result does not change active root type
-- **WHEN** execution `e7` later produces a terminal DAG result
-- **THEN** the runtime publishes that DAG through `cache` or `transport`
-- **AND** it does not overwrite `refs/active/ck1.json` with a `dag` root
-
-### Requirement: Transport refs SHALL point to DAG roots
-The runtime SHALL publish `refs/transport/<execution_id>.json` as a typed remote ref to a `dag` root.
-
-#### Scenario: Finished execution publishes transport DAG
-- **WHEN** execution `e7` finishes and publishes transport state
-- **THEN** `refs/transport/e7.json` contains `ref.to = "dag:<oid>"`
-- **AND** it contains integer `created` and object `metadata`
-
-#### Scenario: Re-run requires prior invalidation
-- **WHEN** a later execution `e8` attempts to publish a terminal cached result for cache key `ck1`
-- **AND** `refs/cache/ck1.json` already exists for an earlier execution
-- **THEN** the runtime SHALL reject that cache publication
-- **AND** the earlier cache ref MUST be invalidated or deleted before `e8` can publish `refs/cache/ck1.json`
+#### Scenario: Running execution is not a cache result
+- **WHEN** `cache/ck1` contains a running execution
+- **THEN** cache lookup reports that the result is not ready
 
 ### Requirement: Adapter operations SHALL follow the runtime-owned execution contract
-The runtime SHALL use `AdapterInvokeRequest` / `AdapterInvokeResponse` for invocation and `AdapterCancelRequest` / `AdapterCancelResponse` for cancellation. Invoke requests SHALL carry invocation and resume data without cancellation-only fields. Cancel requests SHALL carry the execution-owned argv pointer obtained from `refs/cancel-targets/<execution_id>.json`, rather than resolving `active/<cache_key>`. Cancel-path adapter responses SHALL NOT control runtime lifecycle persistence.
+The runtime SHALL use `AdapterInvokeRequest` / `AdapterInvokeResponse` for invocation and `AdapterCancelRequest` / `AdapterCancelResponse` for cancellation. Invoke requests SHALL carry invocation data and current `adapter_state` without cancellation-only fields. Cancel requests SHALL carry `argv_ref` from the unified execution record. Cancel-path adapter responses SHALL NOT control runtime lifecycle persistence.
 
-#### Scenario: First adapter call uses null resume state
+#### Scenario: First adapter call uses null adapter state
 - **WHEN** the runtime invokes an adapter for a new execution
-- **THEN** the `AdapterInvokeRequest` SHALL include null resume state
+- **THEN** the `AdapterInvokeRequest` SHALL include null `adapter_state`
 
 #### Scenario: Cancel update uses execution-owned target
 - **WHEN** the runtime invokes an adapter for a cancel update
 - **THEN** the runtime SHALL send an `AdapterCancelRequest` with the target execution ID
-- **AND** it SHALL include the argv pointer from that execution's cancel target
+- **AND** it SHALL include `argv_ref` from that execution's record
 
 #### Scenario: Runtime ignores cancel return for terminal lifecycle write
 - **WHEN** an adapter returns from a cancel update
@@ -316,33 +134,32 @@ The runtime SHALL use `AdapterInvokeRequest` / `AdapterInvokeResponse` for invoc
 
 #### Scenario: Immediate parent is recorded for nested cancellation
 - **WHEN** root cancellation of `idx1` leads to nested `cancel(e2)` through `e1`
-- **THEN** `exec/state/e2.json` SHALL record `cancellation_requested_by = "e1"`
-- **AND** it SHALL NOT replace that field with `idx1` solely because `idx1` started the overall cancellation tree
+- **THEN** `execution/e2.cancelation.requested_by` SHALL equal `e1`
+- **AND** it SHALL NOT replace that requester with `idx1` solely because `idx1` started the overall cancellation tree
 
 #### Scenario: Pending is rejected
 - **WHEN** an adapter returns `pending`
 - **THEN** the runtime SHALL reject that result as invalid adapter output
 
 ### Requirement: Stale lock recovery SHALL preserve active execution ownership
-The runtime SHALL use the lock for `cache_key` only to coordinate mutation of the active execution. If a lock is stale and an active execution record exists, the runtime SHALL recover the lock and resume that execution instead of creating a new one.
+If the current execution lock is expired, a caller SHALL attempt to steal that execution's embedded lock by CAS and resume the same execution ID. It SHALL NOT create a replacement attempt while the cache pointer still names the existing reusable or resumable execution.
 
-#### Scenario: Stale lock with active execution resumes existing execution
-- **WHEN** the lock for a `cache_key` is stale and `active/<cache_key>` points to an existing execution record
-- **THEN** the runtime SHALL recover the lock
-- **AND** it SHALL resume the existing `execution_id`
-- **AND** it SHALL NOT launch a duplicate execution
+#### Scenario: Expired current execution resumes
+- **WHEN** `cache/ck1` contains `e1` and `e1` has an expired lock
+- **THEN** a caller MAY CAS a new owner into `execution/e1`
+- **AND** it resumes `e1`
 
 ### Requirement: Failed execution SHALL be cached as a terminal result
-If an adapter returns `failed`, the runtime SHALL complete the DAG with the error and SHALL publish that failed terminal outcome to cache for the `cache_key`.
+If an adapter reports a non-success outcome, the runtime SHALL commit an error DAG, store it in the current execution's `result_ref`, set lifecycle `failed`, and retain the cache pointer.
 
 #### Scenario: Failed adapter result populates cache
-- **WHEN** an adapter returns `failed` for a cache key
-- **THEN** the runtime SHALL complete the DAG with the reported error
-- **AND** it SHALL publish the failed outcome into cache for that cache key
+- **WHEN** an adapter reports a non-success outcome for a cache key
+- **THEN** the runtime SHALL commit and store an error DAG in `result_ref`
+- **AND** the current cache pointer SHALL remain bound to that execution
 
-#### Scenario: Failed execution clears active pointer
-- **WHEN** an active execution returns `failed`
-- **THEN** the runtime SHALL delete `active/<cache_key>` before surfacing the failure
+#### Scenario: Failed execution remains reusable
+- **WHEN** a failed execution has a non-null `result_ref`
+- **THEN** cache lookup returns its error DAG
 
 ### Requirement: Commit lifecycle distinction SHALL be documented in code and spec
 The runtime SHALL document at the `IndexOps.commit` lifecycle update site that committing an `Error` value is still a successful execution, and that runtime `failed` is reserved for execution-path failures that prevent successful DAG completion.
@@ -353,16 +170,27 @@ The runtime SHALL document at the `IndexOps.commit` lifecycle update site that c
 - **AND** the comment distinguishes DAG error results from runtime execution failures
 
 ### Requirement: Runtime SHALL separate caller-owned launch state from runtime-owned lifecycle state
-The runtime SHALL treat `launch_state` as caller-owned state for launch and resume, and `execution_record` as execution-runtime-owned state for lifecycle, spawned execution summaries, and cancellation metadata. Cancellation Phase 1 SHALL own planning updates under the cache-key lock. Cancellation Phase 2 SHALL allow distributed runtimes to make only the lifecycle transitions defined by the cancellation protocol.
+The unified execution record SHALL store adapter-owned continuation data in `adapter_state` while the runtime owns all persisted fields. Only the current lock owner SHALL update `adapter_state`, lifecycle, refs, lineage summaries, cancelation, or invalidation. Adapters and executors SHALL NOT directly mutate the execution record.
 
-#### Scenario: Caller runtime owns launch state updates
-- **WHEN** `start_fn` launches or resumes execution `e1`
-- **THEN** the caller runtime SHALL be the only path that creates or updates `launch_state` for `e1`
+#### Scenario: Runtime persists adapter continuation data
+- **WHEN** an adapter call returns state
+- **THEN** the current lock owner stores it as `adapter_state` in the execution record
 
-#### Scenario: Execution runtime owns terminal lifecycle publication
-- **WHEN** execution `e1` reaches `succeeded` or `failed`
-- **THEN** the execution runtime for `e1` SHALL publish that terminal lifecycle in `execution_record`
-- **AND** caller runtimes SHALL NOT publish those terminal lifecycle values for `e1`
+#### Scenario: Adapter side effects remain external
+- **WHEN** an adapter performs execution work
+- **THEN** it MAY use `io/<execution_id>/`
+- **AND** it SHALL NOT mutate `execution/<execution_id>`
+
+### Requirement: Fresh pre-adapter launch failures SHALL clean owned artifacts
+If a fresh execution launch fails before the runtime calls its adapter, the runtime SHALL conditionally remove that launch's caller edge, matching cache pointer, and unchanged execution record. It SHALL not delete reused executions. Once the adapter call has begun, it SHALL retain the execution record because external work may exist.
+
+#### Scenario: Lineage registration fails before adapter call
+- **WHEN** a fresh execution's edge or caller lineage registration fails
+- **THEN** the runtime removes only that launch's edge, matching pointer, and unchanged record
+
+#### Scenario: Adapter call has begun
+- **WHEN** an exception occurs after the adapter call begins
+- **THEN** the runtime retains the execution record
 
 ### Requirement: Best-effort cancellation traversal MAY stop at terminal intermediates
 The runtime SHALL perform cancellation traversal from `spawned_execution_ids` on a best-effort basis. If a descendant execution is reachable only through an already-terminal intermediate runtime that is not reconstructed, the runtime MAY leave that descendant running.
@@ -371,19 +199,6 @@ The runtime SHALL perform cancellation traversal from `spawned_execution_ids` on
 - **WHEN** execution `A` spawned `B`, `B` spawned `C`, and `B` is already terminal before `A` is cancelled
 - **THEN** the runtime MAY cancel `A` without cancelling `C`
 - **AND** that outcome SHALL be treated as an accepted limitation of best-effort cancellation
-
-### Requirement: Contrib migration SHALL NOT change runtime execution-record implementation
-This contrib migration SHALL rely on the existing runtime execution-record and adapter-dispatch implementation. It SHALL NOT modify runtime execution-record storage, `Dml.runtime` behavior, `IndexOps`, `ExecutionState`, adapter-envelope production, cache publication, or public API entrypoints outside contrib.
-
-#### Scenario: Existing runtime creates execution-aware index
-- **WHEN** contrib needs a worker DAG for a runtime execution
-- **THEN** contrib SHALL call the existing public DAG creation path with `cache_key` and `execution_id`
-- **AND** the existing runtime implementation SHALL remain responsible for materializing the active argv and maintaining execution records
-
-#### Scenario: Runtime envelope mismatch is encountered
-- **WHEN** contrib adapter code encounters a protocol mismatch during implementation
-- **THEN** the mismatch SHALL be resolved inside contrib-owned parsing or normalization code if possible
-- **AND** runtime/core files SHALL NOT be modified as part of this change
 
 ### Requirement: Runtime SHALL durably register a child before adapter invocation
 For an adapter-backed child execution, the runtime SHALL append the child execution ID to the caller's `spawned_execution_ids` through a successful compare-and-swap update before invoking the adapter. The runtime SHALL retry CAS conflicts with bounded backoff. If registration exhausts its retry budget, the runtime SHALL fail the launch and SHALL NOT invoke the adapter.
@@ -410,23 +225,3 @@ The runtime SHALL move a normally terminal direct child from `spawned_execution_
 - **WHEN** caller `e0` cannot record terminal child `e1` after the bounded CAS retry budget
 - **THEN** the runtime SHALL surface a coordination failure
 - **AND** it SHALL not silently report bookkeeping success
-
-### Requirement: Runtime SHALL expose persisted executor resume state for direct reads
-The runtime SHALL support a direct launch-state read addressed by execution id. Persisted executor `resume_state` SHALL be a JSON object, and the read SHALL return that object as a `dict` without returning or combining execution lifecycle data. If no launch-state object exists for that execution id, the read SHALL return `None`. A stored launch-state object whose `resume_state` is not a JSON object, including JSON `null`, SHALL be treated as malformed state and fail rather than being conflated with absence.
-
-#### Scenario: Direct launch-state read returns resume state unchanged
-- **WHEN** execution `e1` has caller-owned launch state whose `resume_state` is `{"job_id": "j1"}`
-- **THEN** a direct launch-state read for `e1` returns `{"job_id": "j1"}` unchanged
-
-#### Scenario: Direct launch-state read excludes lifecycle data
-- **WHEN** a caller reads launch state for execution `e1`
-- **THEN** the result does not synthesize lifecycle, lineage, graph, or execution-record fields
-
-#### Scenario: Missing launch state returns none
-- **WHEN** no caller-owned launch-state object exists for execution `missing`
-- **THEN** a direct launch-state read for `missing` returns `None`
-
-#### Scenario: Non-object resume state fails closed
-- **WHEN** a stored launch-state object contains a scalar, array, or `null` `resume_state`
-- **THEN** a direct launch-state read fails as malformed persisted state
-- **AND** it does not return `None`
