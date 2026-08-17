@@ -25,7 +25,8 @@ dag_id=$(dml show | jq -r --arg dag_name "${dag_name}" '.dags[$dag_name]')
 node_id=$(dml dag describe "${dag_id}" | jq '.names.greeting' -r)
 fndag_id=$(dml dag describe-node "${node_id}" | jq .dag -r)
 cache_key=$(dml dag describe "${fndag_id}" | jq .cache_key -r)
-dml cache invalidate "${cache_key}" > /dev/null
+execution_ref=$(dml cache describe "${cache_key}" | jq .execution -r)
+dml cache invalidate "${execution_ref}" > /dev/null
 
 new_run=$(run_hello_world)
 log "New result:         ${new_run}"

@@ -8,11 +8,11 @@ The Python `Dag` wrapper manages its runtime for normal authoring. Use the CLI w
 
 ```bash
 dml runtime list
-dml runtime describe INDEX_REF
-dml runtime freeze INDEX_REF --message "Review implementation"
-dml runtime unfreeze FROZEN_INDEX_REF
-dml runtime describe-graph INDEX_REF
-dml runtime cancel INDEX_REF --mode full
+dml runtime describe index:<execution-id>
+dml runtime freeze index:<execution-id> --message "Review implementation"
+dml runtime unfreeze frozenindex:<execution-id>
+dml runtime describe-graph index:<execution-id>
+dml runtime cancel index:<execution-id> --mode full
 ```
 
-`drive` cancellation additionally attempts to stop running tasks. See [inspect and cancel runtimes](../guides/runtime-inspection-cancellation.md).
+At the public `Dml.runtime` boundary, runtime and execution identities are `Ref` values. In Python, cancellation is `Dml.runtime.cancel(execution=Ref(...), mode=...)`; `execution` is the requested execution identity. Internal execution coordination still stores and exchanges the ID portion as a string. `drive` cancellation additionally attempts to stop running tasks. See [inspect and cancel runtimes](../guides/runtime-inspection-cancellation.md).

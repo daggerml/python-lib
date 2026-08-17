@@ -6,7 +6,7 @@
 - **Result**: the node committed as a DAG's final outcome.
 - **Funk**: any DaggerML-packaged `Runnable` object. Once inserted into a DAG, DaggerML knows how to run it. Current authoring tooling is Python-based, but a funk is not inherently Python-specific.
 - **Runtime**: mutable, open computation state while a DAG is being authored or inspected. A runtime is finalized into a DAG.
-- **Cache**: a remote mapping from normalized DaggerML data that identifies a computation to its completed DAG result. Cache identity is part of the DaggerML data model, not a Python-specific mechanism.
+- **Cache**: a remote mapping from normalized DaggerML data that identifies a computation to its current execution attempt. A terminal execution record carries the reusable DAG result. Cache identity is part of the DaggerML data model, not a Python-specific mechanism.
 - **Artifact**: external data represented by a `Uri` in a DAG rather than embedded as repository data.
 - **Codec**: a conversion from a Python value to a value DaggerML can store.
 - **Provenance**: the chain of DAG imports and function calls that produced a value.

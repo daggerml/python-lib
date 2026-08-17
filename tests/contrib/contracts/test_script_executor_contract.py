@@ -146,19 +146,19 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
         "stderr_path": str(success_dir / "stderr.log"),
     }
     (success_dir / "result.json").write_text(
-        json.dumps({"status": "succeeded", "error": None, "state": None, "dag_id": "a" * 64})
+        json.dumps({"status": "succeeded", "error": None, "dag_id": "a" * 64})
     )
-    assert (
-        ScriptExecutor().poll(
-            cache_key="ck",
-            execution_id="exec",
-            runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
-            state=dict(success_state),
-            remote={"root": "s3://bucket/root"},
-            scratch_uri="s3://bucket/scratch",
-        )["status"]
-        == "succeeded"
+    success = ScriptExecutor().poll(
+        cache_key="ck",
+        execution_id="exec",
+        runnable={"target": {"uri": "script"}, "kwargs": {}, "adapter": "dml-local-adapter", "sub": None},
+        state=dict(success_state),
+        remote={"root": "s3://bucket/root"},
+        scratch_uri="s3://bucket/scratch",
     )
+    assert success["status"] == "succeeded"
+    assert success["state"] == success_state
+    assert not success_dir.exists()
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -237,7 +237,7 @@ def test_contrib_script_006__cancel_without_launch_state_is_still_cancelled():
         cancel_requested_by="user",
     )
 
-    assert result == {"status": "cancelled", "error": None}
+    assert result == {"status": "cancelled", "error": None, "state": {}}
 
 
 def test_contrib_script_007__run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_path):
@@ -294,7 +294,7 @@ def test_contrib_script_007__run_payload_uses_prepop_and_script_uri_from_runnabl
 
     result = script_mod.run_payload(execution_id="exec-1", cache_key="cache-1", remote_root="s3://bucket/root")
 
-    assert result == {"status": "succeeded", "state": None, "error": None, "dag_id": "d" * 64}
+    assert result == {"status": "succeeded", "error": None, "dag_id": "d" * 64}
     assert calls["script_uri"] == "s3://bucket/script.py"
     assert calls["put"] == [("seed", 7)]
     assert calls["commit"] == "result:arg-node"
@@ -322,7 +322,7 @@ def fn(dag, arg):
     try:
         result, calls = _run_worker_script(monkeypatch, tmp_path, source)
 
-        assert result == {"status": "succeeded", "state": None, "error": None, "dag_id": "d" * 64}
+        assert result == {"status": "succeeded", "error": None, "dag_id": "d" * 64}
         assert calls["commit"] == {
             "arg": "arg-node",
             "file": str(tmp_path / "_daggerml_live.py"),

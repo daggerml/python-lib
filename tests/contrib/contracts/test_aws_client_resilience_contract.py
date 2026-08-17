@@ -60,7 +60,8 @@ def test_contrib_aws_client_003__batch_launch_and_poll_use_high_resilience_clien
             writes.append(kwargs)
 
         def get_object(self, **kwargs):
-            return {"Body": type("Body", (), {"read": lambda self: json.dumps({"status": "succeeded"}).encode()})()}
+            response = {"status": "succeeded", "error": None, "adapter_state": {"nested": "done"}, "dag_id": "d"}
+            return {"Body": type("Body", (), {"read": lambda self: json.dumps(response).encode()})()}
 
     class BatchClient:
         def register_job_definition(self, **kwargs):
@@ -97,7 +98,19 @@ def test_contrib_aws_client_003__batch_launch_and_poll_use_high_resilience_clien
     )
 
     assert writes
-    assert result == {"status": "succeeded"}
+    assert result == {
+        "status": "succeeded",
+        "error": None,
+        "dag_id": "d",
+        "state": {
+            "job_id": "job-1",
+            "job_definition": "arn:job-definition",
+            "nested_adapter_state": {"nested": "done"},
+        },
+    }
+    nested_payload = json.loads(writes[0]["Body"])
+    assert nested_payload["adapter_state"] is None
+    assert "state" not in nested_payload
     expected_start_policy = {
         "connection_timeout": 60,
         "read_timeout": 60,

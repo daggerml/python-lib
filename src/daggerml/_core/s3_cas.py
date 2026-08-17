@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Iterable, Literal, overload
 from urllib.parse import urlparse
 
@@ -18,6 +20,8 @@ class CasItem:
     key: str
     data: str
     etag: str
+    last_modified: datetime
+    date: datetime
 
     @property
     def json(self) -> dict | list | str | int | float | bool | None:
@@ -88,7 +92,17 @@ class S3Remote:
         resp = self.client.get_object(Bucket=self.bucket, Key=key)
         data = resp["Body"].read().decode().strip()
         if cas:
-            return CasItem(key, data, resp["ETag"].strip('"'))
+            headers = resp.get("ResponseMetadata", {}).get("HTTPHeaders", {})
+            response_date = headers.get("date") or headers.get("Date")
+            if response_date is None:
+                raise ValueError("S3 response is missing the Date header")
+            return CasItem(
+                key,
+                data,
+                resp["ETag"].strip('"'),
+                resp["LastModified"],
+                parsedate_to_datetime(response_date),
+            )
         return data
 
     def _delete(self, key: str | CasItem, **kw) -> bool:

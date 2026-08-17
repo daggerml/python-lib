@@ -12,7 +12,13 @@ from daggerml._core.commit import CommitDescription, CommitDiffPayload, CommitFu
 from daggerml._core.config import Config, flatten_dict
 from daggerml._core.dag import DagDescription, DagOps, NodeDescriptionPayload
 from daggerml._core.db import DmlDbKeyNotFoundError, Ref
-from daggerml._core.exec_state import ExecutionGraph, ExecutionRecord, ExecutionState, InvalidationResponse
+from daggerml._core.exec_state import (
+    EXECUTION_LIFECYCLES,
+    ExecutionGraph,
+    ExecutionRecord,
+    ExecutionState,
+    InvalidationResponse,
+)
 from daggerml._core.head import Head, UpstreamInfo
 from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
@@ -354,6 +360,12 @@ class RuntimeListPayload(TypedDict):
     frozen_message: str | None
 
 
+class CacheDescription(TypedDict):
+    execution: Ref
+    dag: Ref | None
+    lifecycle: EXECUTION_LIFECYCLES
+
+
 RuntimeCancelSummary = TypedDict(
     "RuntimeCancelSummary",
     {
@@ -367,6 +379,15 @@ RuntimeCancelSummary = TypedDict(
 )
 
 
+def _require_runtime_ref(value: object, *, allow_frozen: bool = True) -> Ref:
+    if not isinstance(value, Ref):
+        raise TypeError(f"expected runtime Ref, got {type(value).__name__}")
+    allowed = ("index", "frozenindex") if allow_frozen else ("index",)
+    if value.ns() not in allowed:
+        raise TypeError(f"expected runtime Ref in {allowed}, got {value.ns()!r}")
+    return value
+
+
 @dataclass(frozen=True)
 class _RuntimeNamespace:
     _dml: "Dml"
@@ -375,11 +396,12 @@ class _RuntimeNamespace:
     def create(
         self,
         cache_key: Annotated[str | None, "Cache key to reuse execution results."] = None,
-        execution_id: Annotated[str | None, "Execution id for adapter-coordinated runs."] = None,
+        execution: Annotated[Ref | None, "Runtime ref for adapter-coordinated runs."] = None,
     ) -> Ref:
         """Create a new mutable runtime index."""
-        if (cache_key is None) != (execution_id is None):
-            raise DmlRepoError("both cache_key and execution_id must be provided or neither")
+        if (cache_key is None) != (execution is None):
+            raise DmlRepoError("both cache_key and execution must be provided or neither")
+        execution_id = _require_runtime_ref(execution, allow_frozen=False).id() if execution is not None else None
         return _index_ops(self._dml).create(
             self._dml._config.user,
             commit=_head_ops(self._dml).get_head()["commit"],
@@ -537,40 +559,31 @@ class _RuntimeNamespace:
 
     def read_execution_record(
         self,
-        execution: Annotated[Ref | str, "Runtime index ref or execution id to inspect."],
+        execution: Annotated[Ref, "Runtime execution ref to inspect."],
     ) -> ExecutionRecord:
         """Read the raw execution record for one runtime execution."""
-        execution_id = execution.id() if isinstance(execution, Ref) else execution
+        execution_id = _require_runtime_ref(execution).id()
         return _exec_state(self._dml).read_execution_record(execution_id)
-
-    def read_launch_state(
-        self,
-        execution_id: Annotated[str, "Execution id whose persisted executor resume state should be read."],
-    ) -> dict | None:
-        """Read the persisted executor resume-state object for one execution."""
-        return _exec_state(self._dml).read_launch_state(execution_id)
 
     def cancel(
         self,
-        index: Annotated[Ref | str, "Runtime index to cancel."],
+        execution: Annotated[Ref, "Runtime execution to cancel."],
         *,
         mode: Annotated[Literal["full", "drive"], "Cancellation mode."] = "full",
     ) -> RuntimeCancelSummary:
-        """Cancel active execution state for a runtime index."""
-        if isinstance(index, str) and index.startswith("index:"):
-            index = Ref(index)
+        """Cancel active state for a runtime execution."""
+        execution = _require_runtime_ref(execution)
         requested_by = self._dml._config.user if mode == "full" else None
-        idx = index.id() if isinstance(index, Ref) else index
-        resp = _exec_state(self._dml).cancel(idx, requested_by, self._dml._db, mode=mode)
-        return cast(RuntimeCancelSummary, {"id": index, **resp})
+        resp = _exec_state(self._dml).cancel(execution.id(), requested_by, self._dml._db, mode=mode)
+        return cast(RuntimeCancelSummary, {"id": execution, **resp})
 
     def describe_graph(
         self,
-        *roots: Annotated[Ref | str, "Execution roots to inspect."],
+        *roots: Annotated[Ref, "Runtime execution roots to inspect."],
         visual: Annotated[bool, "Render a human-friendly graph view instead of returning the raw payload."] = False,
     ) -> ExecutionGraph | None:
         """Describe reachable execution lineage for one or more runtime roots."""
-        execution_ids = [root.id() if isinstance(root, Ref) else root for root in roots]
+        execution_ids = [_require_runtime_ref(root).id() for root in roots]
         if not execution_ids:
             execution_ids = [item["id"].id() for item in self.list()]
         graph = _index_ops(self._dml).exec_state().describe_graph(execution_ids)
@@ -871,16 +884,30 @@ class _CacheNamespace:
 
     def get(self, cache_key: Annotated[str, "Exact cache key to resolve."]) -> Ref | None:
         """Return the cached DAG ref for a cache key, if present."""
-        return _remote_ops(self._dml).get_cache(_validate_cache_key(cache_key), raw=False, db=self._dml._db)
+        validated = _validate_cache_key(cache_key)
+        return _exec_state(self._dml, cache_key=validated).get_cached_result(validated, self._dml._db)
+
+    def describe(self, cache_key: Annotated[str, "Exact cache key to inspect."]) -> CacheDescription | None:
+        """Describe the execution currently bound to a cache key."""
+        validated = _validate_cache_key(cache_key)
+        description = _exec_state(self._dml, cache_key=validated).describe_cache(validated)
+        if description is None:
+            return None
+        result_ref = description["result_ref"]
+        return {
+            "execution": Ref(f"index:{description['execution_id']}"),
+            "dag": None if result_ref is None else Ref(result_ref),
+            "lifecycle": description["lifecycle"],
+        }
 
     def invalidate(
-        self, *cache_keys: Annotated[str, "One or more exact cache keys to invalidate."]
+        self, *executions: Annotated[Ref, "One or more runtime executions to invalidate."]
     ) -> InvalidationResponse:
-        """Invalidate one or more remote execution cache keys."""
-        if not cache_keys:
-            raise ValueError("At least one cache key is required")
-        validated = tuple(_validate_cache_key(cache_key) for cache_key in cache_keys)
-        return _exec_state(self._dml).invalidate_cache(validated, self._dml._config.user)
+        """Invalidate one or more remote executions and their current callers."""
+        if not executions:
+            raise ValueError("At least one execution is required")
+        execution_ids = tuple(_require_runtime_ref(execution).id() for execution in executions)
+        return _exec_state(self._dml).invalidate_executions(execution_ids, self._dml._config.user)
 
 
 @dataclass(frozen=True)

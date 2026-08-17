@@ -6,7 +6,6 @@
 | `docker` | `local` | run a nested adapter in a detached Docker container |
 | `ssh` | `local` | run a nested adapter synchronously over SSH |
 | `batch` | `lambda` | submit a nested adapter to AWS Batch through Lambda |
-| `cfn` | `local` | create or update a CloudFormation stack and return outputs |
 
 ## Script source injection
 
@@ -40,19 +39,6 @@ a non-empty host and accepts flags and environment files. Batch requires a
 Lambda URI and image, with optional CPU, memory, and GPU values; its deployment
 also needs `CPU_QUEUE` or `GPU_QUEUE` and `BATCH_TASK_ROLE_ARN` environment
 configuration.
-
-## CloudFormation
-
-`cfn` is a narrow executor, not a general CloudFormation helper. It expects the
-three callable arguments `(name, template, params)`, JSON-encodes the template,
-and creates or updates the named stack with only `CAPABILITY_IAM` and
-`CAPABILITY_NAMED_IAM`. It returns stack outputs in a committed DAG.
-
-It does not expose general CloudFormation request options such as tags, roles,
-notification ARNs, change sets, template URLs, or configurable capabilities.
-On cancellation it first attempts `cancel_update_stack` and then attempts stack
-delete if that fails. Treat it as best-effort and verify the resulting stack in
-CloudFormation.
 
 ## Dataframe codecs and S3Store
 

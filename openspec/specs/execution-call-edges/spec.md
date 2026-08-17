@@ -1,3 +1,8 @@
+## Purpose
+Define durable caller/callee lineage and registration cleanup for runtime executions.
+
+## Requirements
+
 ### Requirement: Call-edge records SHALL represent realized rooted dependencies
 The runtime SHALL record only realized rooted dependencies. An edge SHALL mean that caller id `caller_execution_id` was observed to depend on callee execution `callee_execution_id` during runtime execution, even if that dependency is discovered during a later `start_fn` poll cycle. The caller id MAY be either a normal execution id or a synthetic root index id.
 
@@ -43,22 +48,25 @@ The runtime SHALL treat `exec/edges/<callee_execution_id>/<caller_execution_id>.
 - **THEN** the runtime SHALL continue to treat `e1` as having live callers
 
 ### Requirement: Live caller edges and spawned execution ids SHALL remain distinct
-The runtime SHALL use live caller edges for reverse-lineage invalidation and orphan detection, and SHALL use `execution_record.spawned_execution_ids` for cancellation traversal. Removal of a live caller edge SHALL NOT remove the callee from the caller's historical spawned execution summary.
+The runtime SHALL retain separate caller-edge objects for reverse lineage and orphan detection. It SHALL update `spawned_execution_ids` and `child_execution_ids` only in the caller's unified execution record while holding that record's embedded lock. Edge removal SHALL NOT erase historical forward summaries.
 
-#### Scenario: Removing live edge preserves historical cancellation dependency
-- **WHEN** caller `e0` removes its live edge to callee `e1` during cancellation
-- **THEN** `e1` MAY still remain in `e0`'s `spawned_execution_ids`
-- **AND** the runtime SHALL continue treating those structures as distinct sources of truth
+#### Scenario: Caller summary mutation is locked
+- **WHEN** caller `e0` registers or completes child `e1`
+- **THEN** the runtime holds the lock for `execution/e0` while updating its forward summaries
+
+#### Scenario: Edge removal preserves summary
+- **WHEN** the live edge `e1 <- e0` is removed during cancelation
+- **THEN** `e1` MAY remain in `e0`'s spawned execution summary
 
 ### Requirement: Failed child registration SHALL roll back unrealized caller edges
-When a launch attempt writes a caller/callee edge but fails to durably register the child in the caller's execution record, the runtime SHALL remove that attempt's edge before surfacing the registration failure. If the attempt created a fresh active execution, it SHALL also clean up only the active and reservation artifacts owned by that attempt.
+When a launch writes a caller edge but fails to register the child in the caller's locked execution record, it SHALL remove that edge before surfacing failure. If the launch created a fresh execution but lost or failed cache-pointer publication, it SHALL conditionally delete only its unchanged execution record. Reused current executions and their cache pointers SHALL remain intact.
 
-#### Scenario: Fresh child registration failure cleans up attempt artifacts
-- **WHEN** a launch attempt creates fresh child `e1` and its registration under caller `e0` exhausts retries
-- **THEN** the runtime SHALL remove the `e1 <- e0` caller edge
-- **AND** it SHALL remove the fresh attempt's active and reservation artifacts
+#### Scenario: Fresh registration failure cleans owned artifacts
+- **WHEN** fresh execution `e1` cannot be registered under caller `e0`
+- **THEN** the runtime removes edge `e1 <- e0`
+- **AND** it conditionally removes only fresh artifacts still owned by that launch
 
-#### Scenario: Reused child registration failure preserves shared artifacts
-- **WHEN** a launch attempt reuses active child `e1` and its registration under caller `e0` fails
-- **THEN** the runtime SHALL remove the `e1 <- e0` caller edge
-- **AND** it SHALL not remove `e1`'s shared active or reservation artifacts
+#### Scenario: Reused execution survives registration failure
+- **WHEN** registration fails after resolving shared current execution `e1`
+- **THEN** the runtime removes only the attempted caller edge
+- **AND** it preserves `execution/e1` and its cache pointer

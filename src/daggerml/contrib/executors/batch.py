@@ -148,7 +148,7 @@ class BatchExecutor(LambdaExecutorBase):
                 "execution_id": execution_id,
                 "remote": remote,
                 "scratch_uri": scratch_uri,
-                "state": None,
+                "adapter_state": None,
             }
         )
         _write_scratch_json(input_uri, payload, raw=True)
@@ -194,7 +194,7 @@ class BatchExecutor(LambdaExecutorBase):
             return {
                 "status": "failed",
                 "error": "batch poll: missing job_id in job state",
-                "state": None,
+                "state": state,
                 "dag_id": None,
             }
         try:
@@ -216,7 +216,7 @@ class BatchExecutor(LambdaExecutorBase):
                     return {
                         "status": "failed",
                         "error": "batch poll: sub-adapter output not yet written to S3",
-                        "state": None,
+                        "state": state,
                         "dag_id": None,
                     }
                 result = json.loads(raw)
@@ -224,17 +224,25 @@ class BatchExecutor(LambdaExecutorBase):
                 return {
                     "status": "failed",
                     "error": f"batch poll: could not read sub-adapter result: {e}",
-                    "state": None,
+                    "state": state,
                     "dag_id": None,
                 }
             if result.get("status") not in {"succeeded", "failed"}:
                 return {
                     "status": "failed",
                     "error": f"batch poll: unexpected sub-adapter result: {result}",
-                    "state": None,
+                    "state": state,
                     "dag_id": None,
                 }
-            return result
+            nested_state = result.pop("adapter_state", None)
+            if not isinstance(nested_state, dict):
+                return {
+                    "status": "failed",
+                    "error": "batch poll: sub-adapter result missing object adapter_state",
+                    "state": state,
+                    "dag_id": None,
+                }
+            return {**result, "state": {**state, "nested_adapter_state": nested_state}}
 
         # Failed
         reason = None
@@ -247,7 +255,7 @@ class BatchExecutor(LambdaExecutorBase):
         error = f"Batch job {job_id} failed"
         if reason not in {None, ""}:
             error = f"{error}: {reason}"
-        return {"status": "failed", "error": error, "state": None, "dag_id": None}
+        return {"status": "failed", "error": error, "state": state, "dag_id": None}
 
     def cancel(
         self,
@@ -277,4 +285,4 @@ class BatchExecutor(LambdaExecutorBase):
                 client.deregister_job_definition(jobDefinition=job_definition)
             except Exception:
                 pass
-        return {"status": "cancelled", "error": None}
+        return {"status": "cancelled", "error": None, "state": state}

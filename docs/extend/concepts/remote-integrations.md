@@ -1,9 +1,9 @@
 # Remote Integrations
 
 Remote execution coordination is owned by `ExecutionState` under the configured
-remote root. It keeps an advisory lock per cache key, an active-execution
-pointer, immutable launch state, mutable execution records, cancellation
-targets, and adapter scratch space.
+remote root. A plain cache pointer names one unified execution record containing
+an embedded owner lock, adapter state, argv/result refs, lifecycle, cancelation,
+and invalidation. Caller edges and adapter scratch space remain separate.
 
 An adapter request contains a remote root and scratch URI. Detached executors
 should use the supplied scratch URI rather than inventing process-local handoff

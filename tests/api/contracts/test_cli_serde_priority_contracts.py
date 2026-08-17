@@ -71,6 +71,19 @@ def test_cli_sp_001__public_union_commands_drop_type_selectors() -> None:
     assert "--value-type" not in runtime_commit_help
 
 
+def test_cache_description_serializes_ref_identities_as_json() -> None:
+    cli = MethodCLI(Dml, prog="dml")
+    result: dml_mod.CacheDescription = {
+        "execution": Ref("index:e1"),
+        "dag": Ref("dag:d1"),
+        "lifecycle": "succeeded",
+    }
+
+    serialized = cli._serialize_result(dml_mod._CacheNamespace.describe, result)
+
+    assert json.loads(serialized) == {"execution": "index:e1", "dag": "dag:d1", "lifecycle": "succeeded"}
+
+
 def test_cli_sp_002__ref_or_str_prefers_string(capsys) -> None:
     cli = MethodCLI(_SerdeFixture, prog="fixture")
 
@@ -161,7 +174,7 @@ def test_cli_sp_010__dml_describe_graph_visual_flag_suppresses_json_output(tmp_p
 
     monkeypatch.setattr(dml_mod, "_render_execution_graph", fake_render)
 
-    assert cli.run(["--project-home", str(tmp_path), "runtime", "describe-graph", index.id(), "--visual"]) == 0
+    assert cli.run(["--project-home", str(tmp_path), "runtime", "describe-graph", str(index.to), "--visual"]) == 0
 
     assert capsys.readouterr().out == "rendered-graph\n"
 
@@ -171,7 +184,7 @@ def test_cli_sp_011__dml_describe_graph_raw_path_still_emits_json(tmp_path: Path
     index = dml.runtime.create()
     cli = MethodCLI(Dml, prog="dml")
 
-    assert cli.run(["--project-home", str(tmp_path), "runtime", "describe-graph", index.id()]) == 0
+    assert cli.run(["--project-home", str(tmp_path), "runtime", "describe-graph", str(index.to)]) == 0
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["roots"] == [index.id()]

@@ -1,9 +1,10 @@
-## ADDED Requirements
+## Purpose
+Define remote pointer formats, CAS object publication, materialization, and liveness.
+
+## Requirements
 
 ### Requirement: Remote refs SHALL be typed object pointers
-The system SHALL encode every published remote ref as a minimal typed pointer payload containing `ref.to`, `created`, and `metadata`.
-
-`metadata` is unconstrained globally, but specific ref families MAY require specific metadata fields.
+Published project refs SHALL remain typed pointer payloads. Execution cache pointers SHALL instead be plain execution IDs, while typed `argv_ref` and `result_ref` values SHALL reside in unified execution records. Active, transport, and cancel-target ref families SHALL NOT be published.
 
 #### Scenario: Project branch ref payload uses typed root pointer
 - **WHEN** a remote project branch is published
@@ -11,10 +12,13 @@ The system SHALL encode every published remote ref as a minimal typed pointer pa
 - **AND** it contains integer `created`
 - **AND** it contains object `metadata`
 
-#### Scenario: Active ref payload uses typed root pointer
-- **WHEN** an active execution ref is published for cache key `ck1`
-- **THEN** the ref payload contains `ref.to = "node-argv:<oid>"`
-- **AND** it does not require manifest closure fields
+#### Scenario: Cache pointer contains execution identity only
+- **WHEN** execution `e1` claims cache key `ck1`
+- **THEN** `cache/ck1` contains only `e1`
+
+#### Scenario: Execution record carries typed roots
+- **WHEN** `execution/e1` has input and result objects
+- **THEN** its `argv_ref` and `result_ref` contain typed DaggerML refs
 
 ### Requirement: Push SHALL publish reachable CAS objects before writing the remote ref
 The system SHALL publish a remote ref only after recursively traversing the local object graph from the root typed ref and uploading any reachable CAS objects missing on the remote.
@@ -39,21 +43,24 @@ Remote object materialization SHALL recompute object identity by writing the dec
 - **AND** it does not force the object into place with `to=` or a raw write path
 
 ### Requirement: Remote liveness SHALL follow the reachable object graph
-The system SHALL determine remote CAS liveness by traversing reachable stored objects recursively from published remote refs.
+Remote GC SHALL treat typed `argv_ref` and `result_ref` values in retained execution records as object-graph roots in addition to published project refs. It SHALL preserve execution records reachable from cache pointers or retained lineage/control policy and SHALL collect unreachable losing-attempt records according to that policy.
 
-Remote liveness traversal SHALL decode remote CAS objects directly and SHALL NOT require a temporary local database only for CAS deserialization.
+#### Scenario: Current running execution keeps argv live
+- **WHEN** `cache/ck1` contains `e1` and `execution/e1.argv_ref` names an argv root
+- **THEN** remote GC preserves the argv object closure
 
-#### Scenario: GC traverses decoded remote objects without scratch DB
-- **WHEN** remote GC marks live CAS objects from published refs
-- **THEN** it decodes each visited CAS object directly from the remote tagged JSON format
-- **AND** it discovers child refs from the decoded object graph
-- **AND** it does not create a temporary local database only to inspect CAS payloads
+#### Scenario: Terminal execution keeps result live
+- **WHEN** a retained execution has a non-null `result_ref`
+- **THEN** remote GC preserves the result DAG closure
+
+#### Scenario: Lost reservation can be collected
+- **WHEN** an execution record is not reachable from cache pointers, lineage, or retained control state
+- **THEN** remote GC MAY collect that record and its otherwise unreachable roots
 
 ### Requirement: Tombstones SHALL move the original ref unchanged
-The system SHALL record tombstones by moving the original live ref payload to the tombstone location without changing its contents.
+Tombstones SHALL continue to preserve deleted typed project refs unchanged. Plain cache-pointer deletion and execution-record cleanup SHALL use CAS and SHALL NOT require typed-ref tombstones.
 
-#### Scenario: Tombstone preserves deleted active ref payload
-- **WHEN** `refs/active/ck1.json` is deleted
-- **THEN** the tombstone payload is byte-for-byte the original active ref payload
-- **AND** it still contains `ref.to = "node-argv:<oid>"`
-- **AND** it still contains the original `metadata.execution_id`
+#### Scenario: Cache deletion is conditional without typed tombstone
+- **WHEN** a cache pointer is deleted after cancelation or invalidation
+- **THEN** deletion is conditional on its ETag and execution ID
+- **AND** no typed active-ref tombstone is created
