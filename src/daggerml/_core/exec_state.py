@@ -810,8 +810,21 @@ class ExecutionState:
             finally:
                 self.unlock(execution_id, owner)
 
-    def _run_cancel_driver(self, execution_id: str, requested_by: str | None, db: DmlDB, **_kw) -> dict:
+    def _run_cancel_driver(
+        self,
+        execution_id: str,
+        requested_by: str | None,
+        db: DmlDB,
+        *,
+        _driving: set[str] | None = None,
+        **_kw,
+    ) -> dict:
         plan = {"active-callers": [], "inactive": [], "cancelled": [], "timeout": [], "error": []}
+        if _driving is None:
+            _driving = set()
+        if execution_id in _driving:
+            return plan
+        _driving.add(execution_id)
         record = self.read_execution_record(execution_id)
         if record["lifecycle"] not in ("cancel-requested", "cancel-ready"):
             return plan
@@ -828,13 +841,14 @@ class ExecutionState:
         for child in record["spawned_execution_ids"]:
             child_record = self.read_execution_record(child)
             if child_record["lifecycle"] == "cancel-requested":
-                child_cancelation = child_record["cancelation"]
-                child_timed_out = (
-                    child_cancelation is not None
-                    and time.time() - child_cancelation["requested_at"] >= CANCEL_READY_TIMEOUT_SECONDS
-                )
-                if not child_timed_out:
+                child_plan = self._run_cancel_driver(child, requested_by, db, _driving=_driving)
+                for status, items in child_plan.items():
+                    plan[status].extend(items)
+                child_record = self.read_execution_record(child)
+                if child_record["lifecycle"] == "cancel-requested":
                     waiting = True
+                    continue
+                if child_record["lifecycle"] != "cancel-ready":
                     continue
                 response = self._invoke_cancel_adapter(child, requested_by, db)
                 self.set_canceled(child)

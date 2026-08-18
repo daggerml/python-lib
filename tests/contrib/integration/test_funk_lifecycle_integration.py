@@ -8,7 +8,6 @@ script executor serializes function source rather than test-module globals.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from queue import Queue
 from threading import Barrier, Event
 from time import monotonic
 from uuid import uuid4
@@ -77,6 +76,21 @@ def _wait_for_object(s3_client, key: str, *, timeout=20) -> None:
     raise AssertionError(f"worker did not publish readiness marker: {key}")
 
 
+def _wait_for_graph_shape(dml, d0, d1, *, timeout=20) -> None:
+    """Wait until both public caller runtimes have recorded the requested shared graph."""
+    deadline = monotonic() + timeout
+    retry = Event()
+    while monotonic() < deadline:
+        d0_graph = dml.runtime.describe_graph(d0.token)
+        d1_graph = dml.runtime.describe_graph(d1.token)
+        d0_spawned = set(d0_graph["nodes"][d0.token.id()]["spawned"])
+        d1_spawned = set(d1_graph["nodes"][d1.token.id()]["spawned"])
+        if len(d0_spawned) == len(d1_spawned) == 2 and len(d0_spawned & d1_spawned) == 1:
+            return
+        retry.wait(0.02)
+    raise AssertionError("caller runtimes did not record the requested shared graph")
+
+
 def _cache_key_for_result(dml, result) -> str:
     """Read the exact normalized cache key from the completed function DAG."""
     cache_key = dml.dag.describe(result.context().ref)["cache_key"]
@@ -141,9 +155,6 @@ def _spawned_execution(dml, caller_index):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason="Cancellation leaves D0's exclusive live leaf in cancel-ready instead of canceled.",
-)
 def test_contrib_int_010__canceling_one_dag_preserves_shared_dependency_for_another(
     tmp_path, monkeypatch, remote_env, s3_bucket, s3_client
 ):
@@ -184,6 +195,7 @@ def test_contrib_int_010__canceling_one_dag_preserves_shared_dependency_for_anot
         futures = [pool.submit(invoke, name, *item) for name, item in leaves.items()]
         for leaf in ("f0", "f1", "f2"):
             _wait_for_object(s3_client, f"lifecycle-markers/{run_id}/{leaf}-started")
+        _wait_for_graph_shape(dml, d0, d1)
 
         # D0 owns f0 and shares f1 with D1.  Canceling D0 must not cancel f1.
         dml.runtime.cancel(d0.token, mode="full")

@@ -437,6 +437,46 @@ def test_graph_reads_nested_cancelation_requester() -> None:
     assert graph["nodes"]["root"]["cancel_requested_by"] == "user"
 
 
+def test_cancel_driver_leaves_cyclic_requested_execution_pending(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(
+        _record(
+            "loop",
+            "cancel-requested",
+            cancelation={"requested_by": "user", "requested_at": 1},
+            spawned_execution_ids=["loop"],
+        )
+    )
+    monkeypatch.setattr(state, "_invoke_cancel_adapter", lambda *_: pytest.fail("cyclic execution must not dispatch"))
+
+    state._run_cancel_driver("loop", "user", None)
+
+    assert state.read_execution_record("loop")["lifecycle"] == "cancel-requested"
+
+
+def test_cancel_drive_finalizes_exclusive_requested_leaf_without_waiting_for_timeout(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("d0", spawned_execution_ids=["f0", "f1"]))
+    assert state.create_execution_record(_record("d1", spawned_execution_ids=["f1"]))
+    assert state.create_execution_record(_record("f0"))
+    assert state.create_execution_record(_record("f1"))
+    state._record_edge("d0", "f0")
+    state._record_edge("d0", "f1")
+    state._record_edge("d1", "f1")
+    dispatched = []
+    monkeypatch.setattr(
+        state, "_invoke_cancel_adapter", lambda execution_id, *_: dispatched.append(execution_id) or "cancelled"
+    )
+
+    state.cancel("d0", "user", None, mode="full")
+    state.cancel("d0", None, None, mode="drive")
+
+    assert state.read_execution_record("f0")["lifecycle"] == "canceled"
+    assert state.read_execution_record("f1")["lifecycle"] == "running"
+    assert state.list_execution_callers("f1") == ["d1"]
+    assert dispatched == ["f0"]
+
+
 def test_cancel_driver_dispatches_timed_out_root_after_timed_out_children(monkeypatch) -> None:
     state = _state()
     root = _record(
