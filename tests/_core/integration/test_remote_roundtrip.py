@@ -54,6 +54,63 @@ def test_cache_roundtrip(tmp_path):
         assert commit.tree == tree
 
 
+def test_gc_preserves_locked_reservation_and_rereads_cache_pointer_before_deletion(monkeypatch):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=1, client=client)
+        exec_store = remote._store.__class__("s3://bucket/root/exec", client)
+        locked = {"execution_id": "locked", "cache_key": "locked-key", "lock": {"owner": "owner", "ttl": 300}}
+        unlocked = {"execution_id": "unlocked", "cache_key": "unlocked-key", "lock": None}
+        exec_store._put_js(exec_store._key_for("execution/locked.json"), locked)
+        exec_store._put_js(exec_store._key_for("execution/unlocked.json"), unlocked)
+        original_get = exec_store.__class__._get
+
+        def publish_pointer_after_snapshot(store, key, *, cas=False):
+            item = original_get(store, key, cas=cas)
+            if key.endswith("execution/unlocked.json") and cas:
+                store._put(store._key_for("cache/unlocked-key"), "unlocked", overwrite=False)
+            return item
+
+        monkeypatch.setattr(exec_store.__class__, "_get", publish_pointer_after_snapshot)
+
+        remote.gc()
+
+        assert json.loads(exec_store._get(exec_store._key_for("execution/locked.json")))["execution_id"] == "locked"
+        assert json.loads(exec_store._get(exec_store._key_for("execution/unlocked.json")))["execution_id"] == "unlocked"
+
+
+def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypatch):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=1, client=client)
+        exec_store = remote._store.__class__("s3://bucket/root/exec", client)
+        execution_key = exec_store._key_for("execution/unlocked.json")
+        result = Ref("dag:surviving-result")
+        exec_store._put_js(execution_key, {"execution_id": "unlocked", "cache_key": "unlocked-key"})
+        remote._store._put(remote._store._key_for(f"cas/sha256/{result.id()}"), "result")
+        original_delete = exec_store.__class__._delete
+        mutated = False
+
+        def mutate_before_conditional_delete(store, key, **kwargs):
+            nonlocal mutated
+            if not mutated and getattr(key, "key", key) == execution_key:
+                mutated = True
+                store._put_js(
+                    execution_key,
+                    {"execution_id": "unlocked", "cache_key": "unlocked-key", "result_ref": result.to},
+                )
+            return original_delete(store, key, **kwargs)
+
+        monkeypatch.setattr(exec_store.__class__, "_delete", mutate_before_conditional_delete)
+        monkeypatch.setattr(remote, "_get_live_oids", lambda ref: {ref.id()})
+
+        remote.gc()
+
+        assert remote._store._exists(remote._store._key_for(f"cas/sha256/{result.id()}"))
+
+
 def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state():
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")

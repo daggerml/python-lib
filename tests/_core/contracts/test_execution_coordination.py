@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from daggerml._core import BadExecutionStatusError
 from daggerml._core.db import Ref
 from daggerml._core.exec_state import ExecutionState
 from daggerml._core.s3_cas import CasItemConflict
@@ -434,3 +435,61 @@ def test_graph_reads_nested_cancelation_requester() -> None:
     graph = state.describe_graph(["root"])
 
     assert graph["nodes"]["root"]["cancel_requested_by"] == "user"
+
+
+def test_cancel_driver_dispatches_timed_out_root_after_timed_out_children(monkeypatch) -> None:
+    state = _state()
+    root = _record(
+        "root",
+        "cancel-requested",
+        cancelation={"requested_by": "user", "requested_at": 1},
+        spawned_execution_ids=["child"],
+    )
+    assert state.create_execution_record(root)
+    assert state.create_execution_record(
+        _record("child", "cancel-requested", cancelation={"requested_by": "user", "requested_at": 1})
+    )
+    dispatched = []
+    monkeypatch.setattr("daggerml._core.exec_state.time.time", lambda: 61)
+    monkeypatch.setattr(
+        state, "_invoke_cancel_adapter", lambda execution_id, *_: dispatched.append(execution_id) or "cancelled"
+    )
+
+    state._run_cancel_driver("root", "user", None)
+
+    assert dispatched == ["child", "root"]
+    assert state.read_execution_record("root")["lifecycle"] == "canceled"
+
+
+@pytest.mark.parametrize("lifecycle", ["succeeded", "failed", "canceled"])
+def test_cancel_rejects_terminal_cache_entries_without_deleting_pointer(lifecycle) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("done", lifecycle, result_ref="dag:result"))
+    assert state._create_cache("cache", "done")
+
+    with pytest.raises(BadExecutionStatusError):
+        state.cancel("done", "user", None)
+
+    assert state._read_cache("cache")[0] == "done"
+
+
+@pytest.mark.parametrize("lifecycle", ["succeeded", "failed"])
+def test_cancel_revalidates_terminal_lifecycle_after_acquiring_lock(monkeypatch, lifecycle) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("done"))
+    assert state._create_cache("cache", "done")
+    wait_acquire = state._wait_acquire
+
+    def finish_before_cancel_mutation(execution_id):
+        record = state.read_execution_record(execution_id)
+        record["lifecycle"] = lifecycle
+        state._store._put_js(state._execution_key(execution_id), record)
+        return wait_acquire(execution_id)
+
+    monkeypatch.setattr(state, "_wait_acquire", finish_before_cancel_mutation)
+
+    with pytest.raises(BadExecutionStatusError):
+        state.cancel("done", "user", None)
+
+    assert state.read_execution_record("done")["lifecycle"] == lifecycle
+    assert state._read_cache("cache")[0] == "done"

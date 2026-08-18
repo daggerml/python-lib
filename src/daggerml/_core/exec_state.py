@@ -792,7 +792,12 @@ class ExecutionState:
                 continue
             owner = self._wait_acquire(execution_id)
             try:
-                def mutate(item: ExecutionRecord) -> None:
+                def mutate(item: ExecutionRecord, execution_id: str = execution_id) -> None:
+                    if item["lifecycle"] in ("succeeded", "failed", "canceled"):
+                        raise BadExecutionStatusError(
+                            f"Execution {execution_id} is {item['lifecycle']} and cannot be canceled",
+                            lifecycle=item["lifecycle"],
+                        )
                     item["lifecycle"] = "cancel-requested"
                     item["cancelation"] = {"requested_by": requested_by, "requested_at": int(time.time())}
                 record = self._mutate(execution_id, owner, mutate)
@@ -810,17 +815,41 @@ class ExecutionState:
         record = self.read_execution_record(execution_id)
         if record["lifecycle"] not in ("cancel-requested", "cancel-ready"):
             return plan
+        cancelation = record["cancelation"]
+        timed_out = (
+            cancelation is not None and time.time() - cancelation["requested_at"] >= CANCEL_READY_TIMEOUT_SECONDS
+        )
+        if record["lifecycle"] == "cancel-ready" and timed_out:
+            response = self._invoke_cancel_adapter(execution_id, requested_by, db)
+            self.set_canceled(execution_id)
+            plan[response].append({"cache_key": record["cache_key"], "execution_id": execution_id})
+            return plan
         waiting = False
         for child in record["spawned_execution_ids"]:
             child_record = self.read_execution_record(child)
             if child_record["lifecycle"] == "cancel-requested":
-                waiting = True
+                child_cancelation = child_record["cancelation"]
+                child_timed_out = (
+                    child_cancelation is not None
+                    and time.time() - child_cancelation["requested_at"] >= CANCEL_READY_TIMEOUT_SECONDS
+                )
+                if not child_timed_out:
+                    waiting = True
+                    continue
+                response = self._invoke_cancel_adapter(child, requested_by, db)
+                self.set_canceled(child)
+                plan[response].append({"cache_key": child_record["cache_key"], "execution_id": child})
             elif child_record["lifecycle"] == "cancel-ready":
                 response = self._invoke_cancel_adapter(child, requested_by, db)
                 self.set_canceled(child)
                 plan[response].append({"cache_key": child_record["cache_key"], "execution_id": child})
         if not waiting and self.read_execution_record(execution_id)["lifecycle"] == "cancel-requested":
             self._mark_lifecycle(execution_id, "cancel-ready")
+            if timed_out:
+                record = self.read_execution_record(execution_id)
+                response = self._invoke_cancel_adapter(execution_id, requested_by, db)
+                self.set_canceled(execution_id)
+                plan[response].append({"cache_key": record["cache_key"], "execution_id": execution_id})
         return plan
 
     def cancel(
@@ -832,6 +861,11 @@ class ExecutionState:
         mode: Literal["full", "drive"] = "full",
     ) -> dict:
         record = self.read_execution_record(execution_id)
+        if record["lifecycle"] in ("succeeded", "failed", "canceled"):
+            raise BadExecutionStatusError(
+                f"Execution {execution_id} is {record['lifecycle']} and cannot be canceled",
+                lifecycle=record["lifecycle"],
+            )
         effective = requested_by or (None if record["cancelation"] is None else record["cancelation"]["requested_by"])
         if mode == "full":
             if requested_by is None:

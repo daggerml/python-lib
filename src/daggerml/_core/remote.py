@@ -522,21 +522,30 @@ class Remote:
             live_oids.update(self._get_live_oids(root_ref))
             total_refs += 1
         exec_store = S3Remote(self.root_uri.rstrip("/") + "/exec", client=self._store.client)
-        cache_prefix = exec_store._key_for("cache/")
-        current_executions = {exec_store._get(key) for key in exec_store._iter(cache_prefix)}
         execution_prefix = exec_store._key_for("execution/")
         for key in list(exec_store._iter(execution_prefix)):
-            record = json.loads(exec_store._get(key))
+            item = exec_store._get(key, cas=True)
+            record = json.loads(item.data)
             execution_id = record.get("execution_id")
+            cache_key = record.get("cache_key")
+            current_execution = None
+            if cache_key is not None:
+                try:
+                    current_execution = exec_store._get(exec_store._key_for(f"cache/{cache_key}"))
+                except Exception as exc:
+                    if not exec_store._is_missing_error(exc):
+                        raise
             retained = (
-                execution_id in current_executions
-                or record.get("cache_key") is None
+                current_execution == execution_id
+                or cache_key is None
+                or record.get("lock") is not None
                 or record.get("cancelation") is not None
                 or record.get("invalidation") is not None
             )
             if not retained:
-                exec_store._delete(key)
-                continue
+                if exec_store._delete(item):
+                    continue
+                record = json.loads(exec_store._get(key))
             for ref_field in ("argv_ref", "result_ref"):
                 value = record.get(ref_field)
                 if value is not None:

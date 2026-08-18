@@ -94,10 +94,13 @@ class IndexOps:
         exec_id = execution_id or uuid7().hex
         if execution_id is not None:
             record, owner = state.activate(exec_id, db)
-            if record["cache_key"] != cache_key or record["argv_ref"] is None:
+            try:
+                if record["cache_key"] != cache_key or record["argv_ref"] is None:
+                    raise DmlRepoError(f"Invalid execution payload for cache key: {cache_key}")
+                argv = self._remote.materialize_ref(Ref(record["argv_ref"]), db)
+            except Exception:
                 state.unlock(exec_id, owner)
-                raise DmlRepoError(f"Invalid execution payload for cache key: {cache_key}")
-            argv = self._remote.materialize_ref(Ref(record["argv_ref"]), db)
+                raise
         else:
             argv = None
             _, owner, _ = state.reserve_execution(None, execution_id=exec_id)
@@ -125,9 +128,15 @@ class IndexOps:
                 to=Ref(f"index:{exec_id}"),
             )
 
-        index = db.write_with_growth(create_index)
         if execution_id is not None:
-            state.mark_running(exec_id, owner)
+            try:
+                index = db.write_with_growth(create_index)
+                state.mark_running(exec_id, owner)
+            except Exception:
+                state.unlock(exec_id, owner)
+                raise
+        else:
+            index = db.write_with_growth(create_index)
         return index
 
     def freeze(self, index: Ref, message: str | None, *, db: DmlDB) -> Ref:
