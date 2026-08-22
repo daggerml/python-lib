@@ -154,3 +154,27 @@ def test_contrib_batch_cleanup_004__active_retry_then_terminal_cleanup_is_repeat
     assert executor.cleanup(**kwargs)["status"] == "success"
     assert executor.cleanup(**kwargs)["status"] == "success"
     assert deregistered == ["definition-1", "definition-1"]
+
+
+def test_contrib_batch_cancel_reports_backend_failure(monkeypatch):
+    class Client:
+        def cancel_job(self, **kwargs):
+            raise RuntimeError("cancel failed")
+
+        def terminate_job(self, **kwargs):
+            raise RuntimeError("terminate failed")
+
+    monkeypatch.setattr(BatchExecutor, "_client", lambda self: Client())
+
+    result = BatchExecutor().cancel(
+        cache_key="ck",
+        execution_id="exec",
+        runnable={},
+        state={"job_id": "job-1"},
+        remote={"root": "s3://bucket/root"},
+        scratch_uri="s3://bucket/root/exec/io/exec/",
+        cancel_requested_by="user",
+    )
+
+    assert result["status"] == "failure"
+    assert "terminate failed" in result["error"]

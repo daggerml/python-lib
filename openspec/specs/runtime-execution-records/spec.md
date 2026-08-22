@@ -72,16 +72,16 @@ The runtime SHALL represent each execution ID with three exact JSON objects: imm
 - **THEN** cancel-pending is the only accepted nonterminal cancellation lifecycle
 
 ### Requirement: Adapter cancellation SHALL advance directly from cancel-pending to canceled
-For every adapter-backed execution in the Phase 1 cancellation set, Phase 2 SHALL build an `AdapterCancelRequest` from that execution's record, invoke the adapter synchronously, and compare-and-swap lifecycle from `cancel-pending` directly to `canceled`. If adapter invocation or lifecycle persistence is interrupted, the execution SHALL remain recoverable from `cancel-pending`, and repeated cancellation SHALL be safe.
+For every adapter-backed execution in the Phase 1 cancellation set, Phase 2 SHALL build an `AdapterCancelRequest` from that execution's record, invoke the adapter synchronously while holding the execution lock, and compare-and-swap lifecycle from `cancel-pending` directly to `canceled` only after status `cancelled`. Retry responses SHALL persist adapter state and `driver.not_before`; interrupted, failed, or exhausted cancellation SHALL remain recoverable from `cancel-pending`.
 
 #### Scenario: Adapter cancellation completes
-- **WHEN** the applicable cancel adapter returns for a `cancel-pending` execution
+- **WHEN** the applicable cancel adapter returns `cancelled` for a `cancel-pending` execution
 - **THEN** the runtime SHALL compare-and-swap that execution directly to `canceled`
 
 #### Scenario: Cancellation resumes after interruption
 - **WHEN** adapter work is interrupted before `canceled` is persisted
 - **THEN** the execution SHALL remain `cancel-pending`
-- **AND** a later drive SHALL be able to repeat the idempotent cancel operation
+- **AND** a later cancellation call SHALL be able to repeat the idempotent cancel operation
 
 ### Requirement: Runtime SHALL expose descendant execution graphs from execution records
 The runtime SHALL expose an execution-record-owned graph query that accepts root execution ids and returns only the reachable descendant closure from those roots. The payload SHALL have shape `{roots: list[str], nodes: dict[str, node_payload]}` where each `node_payload` contains `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `cancelation`, `children`, and `spawned`. `children` SHALL be derived from `child_execution_ids`, and `spawned` SHALL be derived from `spawned_execution_ids`. The graph query SHALL read only execution-record objects and SHALL include each reachable execution at most once.
@@ -147,7 +147,7 @@ The runtime SHALL retain plain `cache/<cache_key>` execution-ID pointers. A cach
 - **THEN** cache lookup reports that the result is not ready
 
 ### Requirement: Adapter operations SHALL follow the runtime-owned execution contract
-The runtime SHALL use distinct invoke, cleanup, and cancel requests. Repeated invoke requests SHALL carry current `adapter_state` and SHALL be the only start-or-status-check operation. Cleanup requests SHALL require a populated `result_ref` and SHALL carry that ref with current adapter state. Cancel requests SHALL carry `argv_ref` from metadata. Adapters SHALL NOT receive or mutate complete metadata, state, or driver objects.
+The runtime SHALL use distinct invoke, cleanup, and cancel requests. Repeated invoke requests SHALL carry current `adapter_state` and SHALL be the only start-or-status-check operation. Cleanup requests SHALL require a populated `result_ref` and SHALL carry that ref with current adapter state. Cancel requests SHALL carry `argv_ref` from metadata, respect persisted `driver.not_before`, and persist retry continuation state. Adapters SHALL NOT receive or mutate complete metadata, state, or driver objects.
 
 #### Scenario: First adapter call uses null adapter state
 - **WHEN** the runtime invokes an adapter for a new execution
@@ -167,8 +167,8 @@ The runtime SHALL use distinct invoke, cleanup, and cancel requests. Repeated in
 - **THEN** it sends that execution ID and `metadata.argv_ref`
 
 #### Scenario: Runtime ignores cancel return for terminal lifecycle write
-- **WHEN** a cancel adapter returns a well-formed response
-- **THEN** runtime-owned coordination determines the transition to canceled
+- **WHEN** a cancel adapter returns an outcome other than `cancelled`
+- **THEN** runtime-owned coordination SHALL leave the lifecycle `cancel-pending`
 
 #### Scenario: Every selected adapter-backed execution receives its own cancel update
 - **WHEN** Phase 1 selects a parent and one or more spawned adapter-backed executions

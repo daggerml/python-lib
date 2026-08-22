@@ -12,7 +12,7 @@ dml runtime describe index:<execution-id>
 dml runtime freeze index:<execution-id> --message "Review implementation"
 dml runtime unfreeze frozenindex:<execution-id>
 dml runtime describe-graph index:<execution-id>
-dml runtime cancel index:<execution-id> --mode full
+dml runtime cancel index:<execution-id> --max-retries 3
 ```
 
-At the public `Dml.runtime` boundary, runtime and execution identities are `Ref` values. In Python, cancellation is `Dml.runtime.cancel(execution=Ref(...), mode=...)`; `execution` is the requested execution identity. Internal execution coordination still stores and exchanges the ID portion as a string. `full` cancellation first selects the complete unreferenced execution set as `cancel-pending`, then asks each selected adapter to stop and records `canceled`. `drive` resumes those two phases from persisted `cancel-pending` state. See [inspect and cancel runtimes](../guides/runtime-inspection-cancellation.md).
+At the public `Dml.runtime` boundary, runtime and execution identities are `Ref` values. In Python, cancellation is `Dml.runtime.cancel(execution=Ref(...), max_retries=3)`; `execution` is the requested execution identity. Cancellation selects the complete unreferenced execution set as `cancel-pending`, then cancels the selected adapters concurrently. Unsuccessful adapters are retried after their shared `not_before` deadlines, and repeated calls resume persisted work. See [inspect and cancel runtimes](../guides/runtime-inspection-cancellation.md).

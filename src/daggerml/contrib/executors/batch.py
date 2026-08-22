@@ -304,14 +304,21 @@ class BatchExecutor(LambdaExecutorBase):
         if isinstance(job_id, str) and job_id:
             try:
                 client.cancel_job(jobId=job_id, reason="daggerml cancellation requested")
-            except Exception:
+            except Exception as cancel_exc:
                 try:
                     client.terminate_job(jobId=job_id, reason="daggerml cancellation requested")
-                except Exception:
-                    pass
+                except Exception as terminate_exc:
+                    exc = terminate_exc if self._is_throttling(terminate_exc) else cancel_exc
+                    if self._is_throttling(exc):
+                        result = {"status": "retry", "error": None, "state": state}
+                        retry_after = self._retry_after(exc)
+                        if retry_after is not None:
+                            result["retry_after_ms"] = retry_after
+                        return result
+                    return {"status": "failure", "error": f"batch cancellation failed: {terminate_exc}", "state": state}
         if isinstance(job_definition, str) and job_definition:
             try:
                 client.deregister_job_definition(jobDefinition=job_definition)
-            except Exception:
-                pass
+            except Exception as exc:
+                return {"status": "failure", "error": f"batch cancellation failed: {exc}", "state": state}
         return {"status": "cancelled", "error": None, "state": state}

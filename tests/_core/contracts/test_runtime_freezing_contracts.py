@@ -105,4 +105,4 @@ def test_frozen_runtime_uses_preserved_id_for_cancel_and_graph(tmp_path, monkeyp
     dml.runtime.cancel(frozen)
 
     assert graph["roots"] == [frozen.id()]
-    assert state.cancel_calls == [(frozen.id(), "tester", "full")]
+    assert state.cancel_calls == [(frozen.id(), "tester", 3)]

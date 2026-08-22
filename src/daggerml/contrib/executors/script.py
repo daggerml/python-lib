@@ -237,9 +237,12 @@ class ScriptExecutor(ExecutorBase):
                 os.killpg(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            except PermissionError:
-                pass
+            except PermissionError as exc:
+                return {"status": "failure", "error": f"script cancellation failed: {exc}", "state": state}
         _cleanup_workdir(state)
+        workdir = state.get("workdir")
+        if isinstance(workdir, str) and os.path.exists(workdir):
+            return {"status": "failure", "error": f"script cancellation failed to remove {workdir}", "state": state}
         return {"status": "cancelled", "error": None, "state": state}
 
 

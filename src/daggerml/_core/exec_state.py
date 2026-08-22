@@ -8,6 +8,7 @@ import random
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import InitVar, asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence, TypedDict, cast
 from uuid import uuid4
@@ -498,7 +499,9 @@ class ExecutionState:
     def _materialize(self, value: str | None, db: DmlDB) -> Ref | None:
         return None if value is None else self._remote.materialize_ref(Ref(value), db)
 
-    def _validate_adapter_response(self, response: object) -> AdapterInvokeResponse:
+    def _validate_adapter_response(
+        self, response: object, *, success_status: Literal["success", "cancelled"] = "success"
+    ) -> AdapterInvokeResponse:
         if not isinstance(response, dict):
             raise DmlRepoError("Adapter response must be a JSON object")
         if set(response) - {"status", "adapter_state", "retry_after_ms", "error"}:
@@ -521,7 +524,7 @@ class ExecutionState:
             raise DmlRepoError("Adapter response error must be a string or null")
         if status == "retry" and not isinstance(adapter_state, dict):
             raise DmlRepoError("Retry adapter response requires object adapter_state")
-        if status not in {"success", "retry"} and (not isinstance(error, str) or not error):
+        if status not in {success_status, "retry"} and (not isinstance(error, str) or not error):
             raise DmlRepoError("Failed adapter response requires error text")
         return response
 
@@ -648,7 +651,10 @@ class ExecutionState:
         state = self.read_execution_record(execution_id)["state"]
         if state["lifecycle"] == ("pending" if mode == "activation" else "running"):
             return state
-        if state["lifecycle"] in ("cancel-pending", "canceled"):
+        if state["lifecycle"] == "cancel-pending":
+            self.cancel(execution_id, None, db)
+            raise CancellationError(f"Execution {execution_id} is canceled", lifecycle="canceled")
+        if state["lifecycle"] == "canceled":
             raise CanceledExecutionError(
                 f"Execution {execution_id} is {state['lifecycle']}", lifecycle=state["lifecycle"]
             )
@@ -656,12 +662,12 @@ class ExecutionState:
 
     def activate(self, execution_id: str, db: DmlDB) -> tuple[ExecutionRecord, str]:
         owner = self._wait_acquire(execution_id)
-        try:
-            self.require_mutation(execution_id, db)
-        except Exception:
-            self.unlock(execution_id, owner)
-            raise
-        return self.read_execution_record(execution_id), owner
+        record = self.read_execution_record(execution_id)
+        if record["state"]["lifecycle"] == "pending":
+            return record, owner
+        self.unlock(execution_id, owner)
+        self.require_mutation(execution_id, db)
+        raise AssertionError("execution mutation guard returned an invalid activation state")
 
     def mark_running(self, execution_id: str, owner: str) -> None:
         self._mutate_state(execution_id, lambda state: state.update(lifecycle="running"))
@@ -742,11 +748,10 @@ class ExecutionState:
             raise DmlRepoError("Invalid adapter response JSON") from exc
         if not isinstance(response, dict) or not isinstance(response.get("status"), str) or not response["status"]:
             raise DmlRepoError("Invalid adapter response")
-        if request["operation"] == "cancel":
-            if response["status"] == "cancelled":
-                return response
-            return self._validate_adapter_response(response)
-        return self._validate_adapter_response(response)
+        return self._validate_adapter_response(
+            response,
+            success_status="cancelled" if request["operation"] == "cancel" else "success",
+        )
 
     def _error_dag(self, message: str, argv: Ref, db: DmlDB) -> Ref:
         def persist(txn):
@@ -924,15 +929,6 @@ class ExecutionState:
             )
         return {"total_time": time.time() - started, "invalidations": invalidations}
 
-    def set_canceled(self, execution_id: str) -> None:
-        def mutate(state: ExecutionSemanticState) -> None:
-            if state["lifecycle"] == "cancel-pending":
-                state["lifecycle"] = "canceled"
-            elif state["lifecycle"] not in ("succeeded", "failed", "canceled"):
-                raise DmlRepoError(f"Execution {execution_id} is not canceling")
-
-        self._mutate_state(execution_id, mutate)
-
     def _runnable_for_execution(self, metadata: ExecutionMetadata, db: DmlDB) -> Runnable | None:
         if metadata["argv_ref"] is None:
             return None
@@ -944,40 +940,53 @@ class ExecutionState:
             runnable = txn.get(txn.get(datum_ref).value(txn)[0]).value(txn)
         return cast(Runnable, runnable)
 
-    def _invoke_cancel_adapter(self, execution_id: str, requested_by: str | None, db: DmlDB) -> str | None:
-        owner = self._wait_acquire(execution_id)
-        try:
-            record = self.read_execution_record(execution_id)
-            if record["state"]["lifecycle"] != "cancel-pending":
-                return None
-            metadata = record["metadata"]
-            driver = record["driver"]
-        finally:
-            self.unlock(execution_id, owner)
-        runnable = self._runnable_for_execution(metadata, db)
-        if metadata["cache_key"] is None or metadata["argv_ref"] is None or runnable is None:
-            return "inactive"
-        response = self._call_adapter(
-            {
-                "operation": "cancel",
-                "cache_key": metadata["cache_key"],
-                "execution_id": execution_id,
-                "argv_ref": metadata["argv_ref"],
-                "remote": {"root": self.root_uri},
-                "runnable": asdict(runnable),
-                "adapter_state": driver["adapter_state"],
-                "scratch_uri": self.adapter_scratch(execution_id),
-                "requested_by": requested_by,
-            }
-        )
-        adapter_state = response.get("adapter_state")
-        if isinstance(adapter_state, dict):
+    def _invoke_cancel_adapter(self, execution_id: str, requested_by: str | None, db: DmlDB) -> bool:
+        while True:
             owner = self._wait_acquire(execution_id)
             try:
-                self._mutate_driver(execution_id, owner, lambda item: item.update(adapter_state=adapter_state))
+                record = self.read_execution_record(execution_id)
+                if record["state"]["lifecycle"] != "cancel-pending":
+                    return True
+                not_before = record["driver"]["not_before"]
+                delay = 0 if not_before is None else (not_before - int(time.time() * 1000)) / 1000
+                if delay > 0:
+                    self.unlock(execution_id, owner)
+                    owner = ""
+                    time.sleep(delay)
+                    continue
+                metadata, driver = record["metadata"], record["driver"]
+                runnable = self._runnable_for_execution(metadata, db) if metadata["cache_key"] is not None else None
+                if runnable is None:
+                    response = {"status": "cancelled"}
+                else:
+                    response = self._call_adapter(
+                        {
+                            "operation": "cancel",
+                            "cache_key": metadata["cache_key"],
+                            "execution_id": execution_id,
+                            "argv_ref": metadata["argv_ref"],
+                            "remote": {"root": self.root_uri},
+                            "runnable": asdict(runnable),
+                            "adapter_state": driver["adapter_state"],
+                            "scratch_uri": self.adapter_scratch(execution_id),
+                            "requested_by": requested_by,
+                        }
+                    )
+                driver_update = {"not_before": self._retry_not_before(response)}
+                if isinstance(response.get("adapter_state"), dict):
+                    driver_update["adapter_state"] = response["adapter_state"]
+                self._mutate_driver(
+                    execution_id,
+                    owner,
+                    lambda item, driver_update=driver_update: item.update(driver_update),
+                )
+                if response["status"] != "cancelled":
+                    return False
+                self._mutate_state(execution_id, lambda state: state.update(lifecycle="canceled"))
+                return True
             finally:
-                self.unlock(execution_id, owner)
-        return "cancelled" if response["status"] in {"success", "cancelled"} else "inactive"
+                if owner:
+                    self.unlock(execution_id, owner)
 
     def _plan_cancel(self, execution_ids: Sequence[str], requested_by: str) -> list[str]:
         pending = list(execution_ids)
@@ -1037,18 +1046,24 @@ class ExecutionState:
                 pending.append(child)
         return selected
 
-    def _run_cancel_driver(self, execution_ids: Sequence[str], requested_by: str | None, db: DmlDB) -> dict:
-        plan = {"active-callers": [], "inactive": [], "cancelled": [], "timeout": [], "error": []}
-        for execution_id in reversed(execution_ids):
-            record = self.read_execution_record(execution_id)
-            response = self._invoke_cancel_adapter(execution_id, requested_by, db)
-            if response is None:
-                continue
-            self.set_canceled(execution_id)
-            plan[response].append(
-                {"cache_key": record["metadata"]["cache_key"], "execution_id": execution_id}
-            )
-        return plan
+    def _run_cancel_driver(
+        self, execution_ids: Sequence[str], requested_by: str | None, db: DmlDB, max_retries: int
+    ) -> None:
+        remaining = set(execution_ids)
+        with ThreadPoolExecutor(max_workers=max(1, len(remaining))) as pool:
+            for _ in range(max_retries + 1):
+                futures = {
+                    execution_id: pool.submit(self._invoke_cancel_adapter, execution_id, requested_by, db)
+                    for execution_id in remaining
+                }
+                remaining = {
+                    execution_id
+                    for execution_id, future in futures.items()
+                    if future.exception() is not None or not future.result()
+                }
+                if not remaining:
+                    return
+        raise DmlRepoError(f"Cancellation failed for executions: {', '.join(sorted(remaining))}")
 
     def cancel(
         self,
@@ -1056,19 +1071,14 @@ class ExecutionState:
         requested_by: str | None,
         db: DmlDB,
         *,
-        mode: Literal["full", "drive"] = "full",
-    ) -> dict:
+        max_retries: int = 3,
+    ) -> None:
+        if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
+            raise TypeError("max_retries must be a nonnegative integer")
         record = self.read_execution_record(execution_id)
         cancelation = record["state"]["cancelation"]
-        effective = requested_by or (None if cancelation is None else cancelation["requested_by"])
-        if mode == "full":
-            if requested_by is None:
-                raise DmlRepoError("requested_by is required for full cancellation")
-            selected = self._plan_cancel([execution_id], requested_by)
-        elif record["state"]["lifecycle"] == "cancel-pending":
-            if effective is None:
-                raise DmlRepoError(f"Execution {execution_id} has no cancellation requester")
-            selected = self._plan_cancel([execution_id], effective)
-        else:
-            selected = []
-        return self._run_cancel_driver(selected, effective, db)
+        effective = cancelation["requested_by"] if cancelation is not None else requested_by
+        if effective is None:
+            raise DmlRepoError(f"Execution {execution_id} has no cancellation requester")
+        selected = self._plan_cancel([execution_id], effective)
+        self._run_cancel_driver(selected, effective, db, max_retries)

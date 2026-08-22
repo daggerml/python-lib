@@ -95,6 +95,27 @@ def test_ssh_cancel_with_null_requester_remains_cancel_operation(monkeypatch) ->
     assert payloads[0]["argv_ref"] == "node-argv:abc"
 
 
+def test_ssh_cancel_preserves_nested_retry(monkeypatch) -> None:
+    response = {"status": "retry", "error": None, "adapter_state": {"job": "stopping"}, "retry_after_ms": 50}
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.ssh.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr=""),
+    )
+
+    result = SshExecutor().cancel(
+        cache_key="ck",
+        execution_id="exec",
+        runnable=_runnable(),
+        state={"job": "running"},
+        remote={"root": "s3://bucket/root"},
+        scratch_uri="s3://bucket/root/exec/io/exec/",
+        cancel_requested_by="user",
+        argv_ptr="node-argv:abc",
+    )
+
+    assert result == response
+
+
 def test_ssh_cleanup_forwards_result_and_retry_state_across_fresh_calls(monkeypatch) -> None:
     payloads = []
     responses = iter(

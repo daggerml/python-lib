@@ -29,13 +29,16 @@ Executor-owned cancellation SHALL tear down external resources and SHALL NOT mut
 - **WHEN** the Batch executor receives an `AdapterCancelRequest`
 - **THEN** it SHALL cancel or terminate the Batch job and deregister the temporary job definition
 
-### Requirement: Cancel-path return values SHALL remain advisory only
-Executors SHALL return a success or failure indication from cancel handling, but the runtime SHALL continue to own execution-record lifecycle persistence, including the compare-and-swap from `cancel-pending` to `canceled`.
+### Requirement: Successful executor cancellation SHALL gate terminal cancellation
+Executors SHALL return `cancelled` only after their synchronous cancellation step succeeds. The runtime SHALL remain responsible for lifecycle persistence and SHALL transition `cancel-pending` to `canceled` only for that successful outcome.
 
-#### Scenario: Executor return does not own lifecycle persistence
-- **WHEN** an executor returns from one cancel-path invocation
-- **THEN** that return SHALL NOT itself define or persist execution-record lifecycle values
-- **AND** the runtime SHALL remain responsible for the `canceled` transition
+#### Scenario: Successful executor cancellation becomes terminal
+- **WHEN** an executor successfully completes cancellation and returns `cancelled`
+- **THEN** the runtime SHALL persist the execution as `canceled`
+
+#### Scenario: Unsuccessful executor cancellation remains pending
+- **WHEN** executor cancellation returns another outcome or raises
+- **THEN** the runtime SHALL leave the execution `cancel-pending` for bounded retry
 
 ### Requirement: Cancel adapter cleanup SHALL be safe to retry
 Executor cancellation SHALL be safe to retry when a runtime resumes an interrupted `cancel-pending` execution or concurrent cancellation drivers invoke cleanup for the same selected execution.

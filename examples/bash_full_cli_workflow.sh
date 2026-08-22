@@ -86,7 +86,7 @@ dml cache get "${greeting_cache_key}" | jq .
 dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported_greeting_ref}"
 dml runtime get-node "${runtime_idx}" cli-greeting-alias
 dml runtime describe "${runtime_idx}" | jq .
-dml runtime cancel "${cancel_idx}" | jq .
+dml runtime cancel "${cancel_idx}"
 dml runtime describe "${scratch_idx}" | jq .
 dml gc | jq .
 

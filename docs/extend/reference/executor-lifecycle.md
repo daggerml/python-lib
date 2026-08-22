@@ -18,8 +18,8 @@ idempotent status checks.
 
 The runtime invokes `cancel(...)` only after selecting the execution as
 `cancel-pending`. Cancellation must remain idempotent because interrupted or
-concurrent drivers can repeat the call. The runtime, not the executor, owns the
-compare-and-swap from `cancel-pending` to `canceled`.
+concurrent drivers can repeat the call. Return `cancelled` only after successful
+teardown; the runtime then owns the compare-and-swap to `canceled`.
 
 Invoke and cleanup use `success`, `retry`, or another nonempty failure code.
 Retry may include a delay hint and requires durable state; failure requires

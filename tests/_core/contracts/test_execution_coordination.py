@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -295,15 +297,98 @@ def test_adapter_wire_accepts_only_success_retry_and_failure(monkeypatch) -> Non
         state._call_adapter({"operation": "invoke", "runnable": {"adapter": "adapter"}, "adapter_state": None})
 
 
-def test_cancel_marks_selected_execution_and_preserves_terminal_pointer(monkeypatch) -> None:
+def test_cancel_marks_selected_execution_and_preserves_terminal_pointer() -> None:
     state = _state()
     assert state.create_execution_record(_record("active", cache_key=None, argv_ref=None))
     assert state.create_execution_record(_record("done", "succeeded", result_ref="dag:result"))
     assert state._create_cache("cache", "done")
-    monkeypatch.setattr(state, "_invoke_cancel_adapter", lambda *_: "inactive")
     state.cancel("active", "user", None)
     assert state.read_execution_record("active")["state"]["lifecycle"] == "canceled"
     assert state._read_cache("cache")[0] == "done"
+
+
+def test_cancel_driver_runs_parallel_rounds_and_retries_only_failures(monkeypatch) -> None:
+    state = _state()
+    counts = {"a": 0, "b": 0}
+    first_round = threading.Barrier(2)
+
+    def invoke(execution_id, *_):
+        counts[execution_id] += 1
+        if counts[execution_id] == 1:
+            first_round.wait(timeout=1)
+        return execution_id == "a" or counts[execution_id] > 1
+
+    monkeypatch.setattr(state, "_invoke_cancel_adapter", invoke)
+
+    state._run_cancel_driver(["a", "b"], "user", None, max_retries=1)
+
+    assert counts == {"a": 1, "b": 2}
+
+
+def test_cancel_retry_persists_deadline_and_holds_lock(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("exec"))
+    monkeypatch.setattr(state, "_runnable_for_execution", lambda *_: Runnable(Uri("target"), adapter="adapter"))
+    calls = []
+
+    def call_adapter(_request):
+        record = state.read_execution_record("exec")
+        assert record["driver"]["lock"] is not None
+        calls.append(int(time.time() * 1000))
+        if len(calls) == 1:
+            return {"status": "retry", "adapter_state": {"attempt": 1}, "retry_after_ms": 40}
+        assert record["driver"]["adapter_state"] == {"attempt": 1}
+        assert calls[-1] >= record["driver"]["not_before"]
+        return {"status": "cancelled"}
+
+    monkeypatch.setattr(state, "_call_adapter", call_adapter)
+
+    state.cancel("exec", "user", None, max_retries=1)
+
+    record = state.read_execution_record("exec")
+    assert len(calls) == 2
+    assert record["state"]["lifecycle"] == "canceled"
+    assert record["driver"]["lock"] is None
+    assert record["driver"]["not_before"] is None
+
+
+def test_cancel_exhaustion_preserves_pending_state_and_releases_lock(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("exec"))
+    monkeypatch.setattr(state, "_runnable_for_execution", lambda *_: Runnable(Uri("target"), adapter="adapter"))
+    monkeypatch.setattr(state, "_call_adapter", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(DmlRepoError, match="exec"):
+        state.cancel("exec", "user", None, max_retries=1)
+
+    record = state.read_execution_record("exec")
+    assert record["state"]["lifecycle"] == "cancel-pending"
+    assert record["driver"]["lock"] is None
+
+
+def test_concurrent_cancel_calls_serialize_adapter_invocation(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("exec"))
+    monkeypatch.setattr(state, "_runnable_for_execution", lambda *_: Runnable(Uri("target"), adapter="adapter"))
+    calls = []
+
+    def call_adapter(_request):
+        calls.append("cancel")
+        time.sleep(0.05)
+        return {"status": "cancelled"}
+
+    monkeypatch.setattr(state, "_call_adapter", call_adapter)
+
+    assert run_parallel(2, lambda _: state.cancel("exec", "user", None)) == [None, None]
+    assert calls == ["cancel"]
+
+
+def test_cancel_adapter_accepts_only_cancelled_as_success() -> None:
+    state = _state()
+
+    assert state._validate_adapter_response({"status": "cancelled"}, success_status="cancelled")
+    with pytest.raises(DmlRepoError, match="error text"):
+        state._validate_adapter_response({"status": "success"}, success_status="cancelled")
 
 
 def test_state_mutation_retries_cas_conflict(monkeypatch) -> None:

@@ -52,7 +52,7 @@ there is no wire-level `poll` operation, although executors retain an internal
 `poll()` method. Invoke and cleanup return `success`, `retry`, or a nonempty
 failure code. Retry requires durable object state and may provide
 `retry_after_ms`; the caller stores a shared absolute `driver.not_before` that
-all invoke and cleanup drivers respect. Cancellation bypasses that delay.
+all invoke, cleanup, and cancellation drivers respect.
 
 The next operation is derived from current state: `cancel-pending` selects
 cancel, an absent result selects invoke, and a result without a cleanup marker
@@ -67,8 +67,8 @@ complete unreferenced descendant set as `cancel-pending`, conditionally deletes
 matching cache pointers, and removes selected callers' outgoing edges. Caller
 registration uses the same callee lock, so registration either publishes a
 valid edge before selection or observes `cancel-pending` and stops. After
-planning finishes, the runtime invokes each selected adapter and CAS-transitions
-the execution directly to `canceled`. It does not hold the execution lock across
-the external adapter call; it reacquires the lock for persisted adapter state and
-the terminal CAS. Adapter results remain advisory and repeated cancellation is
-safe when a driver resumes interrupted work.
+planning finishes, the runtime invokes selected adapters concurrently. Each
+request waits for `driver.not_before` and holds its execution lock across the
+external call and response persistence. Only `cancelled` CAS-transitions the
+execution to `canceled`; retry and failure remain `cancel-pending` for bounded,
+idempotent retries.

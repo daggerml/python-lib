@@ -23,13 +23,11 @@ execution ID. A synchronous operation returns `success`; another nonempty
 status is a failure code and requires diagnostics. Shared `driver.not_before`
 backpressure prevents concurrent callers from hammering the backend.
 
-Cancellation is best-effort. The runtime can delete the execution's cache
-pointer before the adapter confirms cancellation, so the underlying job
-can still run briefly. A cancel operation receives the saved state, the
-execution-owned `argv_ref`, and `requested_by`; it must return `cancelled` or
-`failed`, not an invoke result. The runtime sends cancel operations only after
-it has selected the complete cancellation set as `cancel-pending`, and it owns
-the compare-and-swap to `canceled`. Executors do not persist lifecycle state.
+Cancellation first removes eligible cache pointers and selects the complete set
+as `cancel-pending`. It then sends cancel operations concurrently with saved
+state, `argv_ref`, and `requested_by`. Executors return `cancelled` only after
+successful teardown, or return retry with durable state and an optional delay.
+The runtime owns retries and the compare-and-swap to `canceled`.
 
 The funk runtime publishes normal results independently and a coordinating
 caller finalizes lifecycle. Invoke failure makes the caller synthesize an

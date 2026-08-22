@@ -265,9 +265,11 @@ class DockerExecutor(ExecutorBase):
         del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ptr
         state = state if isinstance(state, dict) else {}
         docker_bin = shutil.which("docker")
-        if docker_bin is None:
-            return {"status": "cancelled", "error": None, "state": state}
         container_id = state.get("container_id")
+        if docker_bin is None:
+            if isinstance(container_id, str) and container_id:
+                return {"status": "failure", "error": "docker executable not found in PATH", "state": state}
+            return {"status": "cancelled", "error": None, "state": state}
         if isinstance(container_id, str) and container_id:
             _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
         return {"status": "cancelled", "error": None, "state": state}

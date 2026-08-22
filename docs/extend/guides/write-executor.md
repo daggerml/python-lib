@@ -18,12 +18,13 @@ reports that cancellation is unsupported.
    resources. Retry while required finalization is active; repeated success
    must be harmless and cleanup must not change lifecycle or publish a result.
 5. In `cancel()`, use saved state to stop the job and return
-   `{"status": "cancelled", "error": None}` when the request has been
-   accepted or completed.
+    `{"status": "cancelled", "error": None}` when the request has been
+    completed successfully. Return retry with durable state and an optional
+    delay while cancellation remains incomplete.
 
 Do not retain lifecycle state on the executor instance: `handle()` constructs a
-new instance for every operation. Do not assume cancellation is synchronous or
-that a cache pointer still names the execution. Preserve nested adapter payloads when
+new instance for every operation. A cancel invocation is synchronous, may be
+retried, and cannot assume a cache pointer still names the execution. Preserve nested adapter payloads when
 wrapping work so they receive the original cache key, execution ID, remote,
 scratch URI, state, and cancel fields.
 

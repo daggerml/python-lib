@@ -82,6 +82,7 @@ def test_docker_cancel_preserves_adapter_state(monkeypatch) -> None:
     )
 
     assert result["state"] == {"container_id": "container-1"}
+    assert result["status"] == "failure"
 
 
 def test_docker_cleanup_retries_active_then_prunes_idempotently(monkeypatch) -> None:

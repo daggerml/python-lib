@@ -84,10 +84,17 @@ def test_cli_ref_listing_and_inspection_commands_are_generated() -> None:
     assert "get-upstream" in branch_subparsers.choices
     assert "get-upstream" not in tag_subparsers.choices
     assert "read-launch-state" not in runtime_subparsers.choices
+    cancel_help = runtime_subparsers.choices["cancel"].format_help()
+    assert "--max-retries MAX_RETRIES" in cancel_help
+    assert "--mode" not in cancel_help
 
     parsed = cli.parser.parse_args(["branch", "list", "--remote", "--dep", "models"])
     assert parsed.remote is True
     assert parsed.dep == "models"
+
+    parsed = cli.parser.parse_args(["runtime", "cancel", "index:e1", "--max-retries", "5"])
+    assert parsed.execution == Ref("index:e1")
+    assert parsed.max_retries == 5
 
 
 def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None:

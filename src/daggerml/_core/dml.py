@@ -365,19 +365,6 @@ class CacheDescription(TypedDict):
     lifecycle: EXECUTION_LIFECYCLES
 
 
-RuntimeCancelSummary = TypedDict(
-    "RuntimeCancelSummary",
-    {
-        "id": Ref,
-        "active-callers": list[Ref],
-        "inactive": list[Ref],
-        "cancelled": list[Ref],
-        "timeout": list[Ref],
-        "error": list[Ref],
-    },
-)
-
-
 def _require_runtime_ref(value: object, *, allow_frozen: bool = True) -> Ref:
     if not isinstance(value, Ref):
         raise TypeError(f"expected runtime Ref, got {type(value).__name__}")
@@ -568,13 +555,13 @@ class _RuntimeNamespace:
         self,
         execution: Annotated[Ref, "Runtime execution to cancel."],
         *,
-        mode: Annotated[Literal["full", "drive"], "Cancellation mode."] = "full",
-    ) -> RuntimeCancelSummary:
+        max_retries: Annotated[int, "Maximum cancellation retries after the initial attempt."] = 3,
+    ) -> None:
         """Cancel active state for a runtime execution."""
         execution = _require_runtime_ref(execution)
-        requested_by = self._dml._config.user if mode == "full" else None
-        resp = _exec_state(self._dml).cancel(execution.id(), requested_by, self._dml._db, mode=mode)
-        return cast(RuntimeCancelSummary, {"id": execution, **resp})
+        if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
+            raise TypeError("max_retries must be a nonnegative integer")
+        _exec_state(self._dml).cancel(execution.id(), self._dml._config.user, self._dml._db, max_retries=max_retries)
 
     def describe_graph(
         self,

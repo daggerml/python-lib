@@ -353,24 +353,20 @@ The shared `Dml` runtime namespace SHALL expose `describe_graph(*roots: Ref, vis
 - **AND** it SHALL render a human-friendly execution graph view
 - **AND** it SHALL return `None`
 
-### Requirement: Shared `Dml` exposes runtime cancel with explicit mode selection
-The shared `Dml` runtime namespace SHALL expose cancellation as `dml.runtime.cancel(execution: Ref, mode="full")`. It SHALL validate the runtime ref, delegate its id to execution state, and preserve the supplied `Ref` as the requested identity in the returned summary. `mode` SHALL accept `"full"` and `"drive"`.
+### Requirement: Shared `Dml` exposes one bounded runtime cancellation operation
+The shared `Dml` runtime namespace SHALL expose `dml.runtime.cancel(execution: Ref, max_retries=3)`. It SHALL validate the runtime ref and nonnegative integer retry count, run the complete cancellation workflow, return only after every selected execution is canceled successfully, and raise an observable cancellation failure when work remains after the initial attempt and at most `max_retries` retry rounds.
 
-- `mode = "full"` SHALL run the full root-facing cancellation workflow.
-- `mode = "drive"` SHALL run only the cancellation driver needed by an already-canceling execution.
+#### Scenario: Runtime cancellation succeeds
+- **WHEN** every selected execution confirms cancellation within its retry budget
+- **THEN** `dml.runtime.cancel(...)` SHALL return successfully
 
-#### Scenario: Runtime namespace exposes full cancellation by default
-- **WHEN** a caller invokes `dml.runtime.cancel(Ref("index:idx1"))` without an explicit mode
-- **THEN** the runtime namespace SHALL use `mode = "full"`
-- **AND** it SHALL delegate execution ID `idx1`
+#### Scenario: Runtime cancellation exhausts retries
+- **WHEN** any selected execution remains unsuccessful after its retry budget
+- **THEN** `dml.runtime.cancel(...)` SHALL raise a cancellation failure identifying the remaining executions
 
-#### Scenario: Runtime namespace exposes drive mode for internal cancellation progress
-- **WHEN** a caller invokes `dml.runtime.cancel(Ref("index:e1"), mode="drive")`
-- **THEN** the runtime namespace SHALL expose the driver-only cancellation behavior for execution `e1`
-
-#### Scenario: Runtime cancellation rejects string identity
-- **WHEN** a Python caller invokes `dml.runtime.cancel("e1")` or `dml.runtime.cancel("index:e1")`
-- **THEN** the runtime namespace SHALL fail before cancellation state is changed
+#### Scenario: Runtime cancellation rejects invalid input
+- **WHEN** a caller supplies a string execution identity, a negative retry count, or a boolean retry count
+- **THEN** cancellation SHALL fail before cancellation state is changed
 
 ### Requirement: Shared `Dml` surface SHALL be introspection-ready
 The shared `Dml` boundary and its public namespaces SHALL expose runtime documentation that explains class purpose, method behavior, and parameter meaning without changing workflow semantics, and that metadata SHALL be sufficient for generated CLI help.

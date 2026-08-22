@@ -18,8 +18,8 @@ def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellatio
             assert execution == Ref("index:exec-1")
             return {"state": {"lifecycle": "cancel-pending"}}
 
-        def cancel(self, execution: Ref, mode: str = "full"):
-            calls.append((execution, mode))
+        def cancel(self, execution: Ref, max_retries: int = 3):
+            calls.append((execution, str(max_retries)))
 
     class FakeDml:
         @staticmethod

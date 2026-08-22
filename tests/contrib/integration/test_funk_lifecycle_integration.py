@@ -203,8 +203,7 @@ def test_contrib_int_010__canceling_one_dag_preserves_shared_dependency_for_anot
         _wait_for_graph_shape(dml, d0, d1)
 
         # D0 owns f0 and shares f1 with D1.  Canceling D0 must not cancel f1.
-        dml.runtime.cancel(d0.token, mode="full")
-        dml.runtime.cancel(d0.token, mode="drive")
+        dml.runtime.cancel(d0.token)
 
         d0_graph = dml.runtime.describe_graph(d0.token)
         d1_graph = dml.runtime.describe_graph(d1.token)

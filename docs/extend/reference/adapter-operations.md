@@ -66,13 +66,11 @@ published result.
 ```
 
 Malformed protocol output raises an adapter protocol error; invoke failure
-codes are committed as cached error DAGs. Cancel returns
-`cancelled` or an error status. The runtime treats a status other than
-`cancelled` as inactive for cancellation coordination. Before this call, Phase
-1 has already selected the execution as `cancel-pending` and blocked further
-mutation. After any well-formed response, the runtime owns the CAS transition to
-`canceled`; the adapter does not persist lifecycle state. Cancellation
-confirmation does not prove that no backend work continues.
+codes are committed as cached error DAGs. Cancel returns `cancelled`, `retry`,
+or an error status. Retry requires object adapter state and may include
+`retry_after_ms`; the runtime persists both state and the shared deadline.
+Before this call, Phase 1 has selected the execution as `cancel-pending`.
+Only `cancelled` permits the runtime-owned CAS transition to `canceled`.
 
 `AdapterBase.cli()` supports `-i`/`-o` as `-`, local paths, or S3 URIs. Its
 `--poll` loop repeats `operation="invoke"` while it returns `retry`, then drives

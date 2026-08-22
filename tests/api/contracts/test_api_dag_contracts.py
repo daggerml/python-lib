@@ -325,3 +325,29 @@ def test_api_dag_024__frozen_index_remains_uncommitted_and_does_not_auto_unfreez
         dag.put(42)
     fake_dml.runtime.put_literal.assert_called_with(frozen, 42, name=None)
     fake_dml.runtime.unfreeze.assert_not_called()
+
+
+def test_api_dag_025__cancel_forwards_retry_budget_and_clears_token(dag, fake_dml, refs):
+    with pytest.raises(api.CancellationError, match="DAG execution cancelled"):
+        dag.cancel(max_retries=7)
+
+    fake_dml.runtime.cancel.assert_called_once_with(refs.index, max_retries=7)
+    assert dag.token is None
+
+
+def test_api_dag_026__cancel_failure_preserves_token(dag, fake_dml, refs):
+    fake_dml.runtime.cancel.side_effect = DmlRepoError("cancellation failed")
+
+    with pytest.raises(DmlRepoError, match="cancellation failed"):
+        dag.cancel()
+
+    assert dag.token == refs.index
+
+
+def test_api_dag_027__cancel_rejects_committed_dag(fake_dml, refs):
+    dag = api.Dag(dml=fake_dml, ref=refs.dag)
+
+    with pytest.raises(DmlRepoError, match="Cannot cancel a committed DAG"):
+        dag.cancel()
+
+    fake_dml.runtime.cancel.assert_not_called()

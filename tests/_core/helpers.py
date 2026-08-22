@@ -112,7 +112,7 @@ def run_parallel(count: int, fn: Callable[[int], Any]) -> list[Any]:
 class NoopExecutionState:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, Any]] = {}
-        self.cancel_calls: list[tuple[str, str | None, str]] = []
+        self.cancel_calls: list[tuple[str, str | None, int]] = []
 
     def create_execution_record(self, record: dict[str, Any]) -> bool:
         metadata = record["metadata"]
@@ -190,6 +190,8 @@ class NoopExecutionState:
         action = "activated" if mode == "activation" else "mutated"
         if lifecycle == allowed:
             return record
+        if lifecycle == "cancel-pending":
+            self.cancel(execution_id, None, db)
         if lifecycle in ("cancel-pending", "canceled"):
             raise CanceledExecutionError(
                 f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
@@ -198,9 +200,8 @@ class NoopExecutionState:
             f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
         )
 
-    def cancel(self, execution_id: str, requested_by: str | None, db: DmlDB, *, mode: str = "full") -> dict:
-        self.cancel_calls.append((execution_id, requested_by, mode))
-        return {"active-callers": [], "inactive": [], "cancelled": [], "timeout": [], "error": []}
+    def cancel(self, execution_id: str, requested_by: str | None, db: DmlDB, *, max_retries: int = 3) -> None:
+        self.cancel_calls.append((execution_id, requested_by, max_retries))
 
     def describe_graph(self, root_execution_ids: list[str]) -> ExecutionGraph:
         roots = list(dict.fromkeys(root_execution_ids))

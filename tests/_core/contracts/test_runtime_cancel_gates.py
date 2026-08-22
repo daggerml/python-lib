@@ -43,7 +43,7 @@ def _put_reserved_execution(
     )
 
 
-def test_put_literal_cancel_pending_execution_raises_without_drive(tmp_path) -> None:
+def test_put_literal_cancel_pending_execution_joins_cancellation(tmp_path) -> None:
     db = make_db(tmp_path)
     state = NoopExecutionState()
     state.create_execution_record(
@@ -59,7 +59,7 @@ def test_put_literal_cancel_pending_execution_raises_without_drive(tmp_path) -> 
     with pytest.raises(CanceledExecutionError):
         ops.put_literal(index, 42, db=db)
 
-    assert state.cancel_calls == []
+    assert state.cancel_calls == [("idx", None, 3)]
 
 
 def test_put_literal_canceled_execution_raises_without_drive(tmp_path) -> None:
@@ -131,7 +131,7 @@ def test_execution_aware_create_rejects_missing_execution_record(tmp_path) -> No
         ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
 
 
-def test_execution_aware_create_rejects_cancel_pending_without_drive(tmp_path) -> None:
+def test_execution_aware_create_joins_cancel_pending_execution(tmp_path) -> None:
     db = make_db(tmp_path)
     state = NoopExecutionState()
     ops = local_index_ops(state)
@@ -141,7 +141,7 @@ def test_execution_aware_create_rejects_cancel_pending_without_drive(tmp_path) -
     with pytest.raises(CanceledExecutionError):
         ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
 
-    assert state.cancel_calls == []
+    assert state.cancel_calls == [("exec", None, 3)]
 
 
 def test_execution_aware_create_raises_on_canceled_without_drive(tmp_path) -> None:

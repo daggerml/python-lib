@@ -245,6 +245,26 @@ def test_contrib_script_006__cancel_without_launch_state_is_still_cancelled():
     assert result == {"status": "cancelled", "error": None, "state": {}}
 
 
+def test_contrib_script_cancel_reports_permission_failure(monkeypatch):
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.script.os.killpg",
+        lambda *_: (_ for _ in ()).throw(PermissionError("denied")),
+    )
+
+    result = ScriptExecutor().cancel(
+        cache_key="ck",
+        execution_id="exec",
+        runnable={},
+        state={"pid": 123},
+        remote={"root": "s3://bucket/root"},
+        scratch_uri="s3://bucket/scratch",
+        cancel_requested_by="user",
+    )
+
+    assert result["status"] == "failure"
+    assert "denied" in result["error"]
+
+
 def test_contrib_script_007__run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_path):
     calls = {"put": []}
     tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))
