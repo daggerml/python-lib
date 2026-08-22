@@ -1,6 +1,6 @@
 # Adapter Operations
 
-`AdapterBase.send(**payload)` receives one of two request shapes.
+`AdapterBase.send(**payload)` receives one of three exact request shapes.
 
 ## Invoke
 
@@ -11,18 +11,43 @@
     "execution_id": str,
     "remote": {"root": str},
     "runnable": dict,
-    "state": dict | None,
+    "adapter_state": dict | None,
     "scratch_uri": str,
 }
 ```
 
-Return one of:
+Return `success`, `retry`, or another nonempty failure code:
 
 ```python
-{"status": "running", "state": dict, "dag_id": None, "error": None}
-{"status": "succeeded", "state": None, "dag_id": "<dag id>", "error": None}
-{"status": "failed", "state": None, "dag_id": None, "error": "message"}
+{"status": "retry", "adapter_state": dict, "retry_after_ms": 1000, "error": None}
+{"status": "success", "adapter_state": dict | None, "error": None}
+{"status": "provider-error", "adapter_state": dict | None, "error": "diagnostic"}
 ```
+
+Retry requires object `adapter_state`; `retry_after_ms` is an optional
+nonnegative hint used to set shared `driver.not_before`. Invoke success is valid
+only after the runtime has published a result, otherwise the caller records a
+protocol-error DAG.
+
+## Cleanup
+
+```python
+{
+    "operation": "cleanup",
+    "cache_key": str,
+    "execution_id": str,
+    "remote": {"root": str},
+    "runnable": dict,
+    "adapter_state": dict | None,
+    "scratch_uri": str,
+    "result_ref": str,
+}
+```
+
+Cleanup without a typed DAG result is rejected. Success records cleanup
+complete, retry leaves it pending and persists continuation/backpressure, and a
+failure code records diagnostics. No cleanup outcome changes lifecycle or the
+published result.
 
 ## Cancel
 
@@ -31,20 +56,23 @@ Return one of:
     "operation": "cancel",
     "cache_key": str,
     "execution_id": str,
-    "argv_ptr": str,
+    "argv_ref": str,
     "remote": {"root": str},
     "runnable": dict,
-    "state": dict,
+    "adapter_state": dict | None,
     "scratch_uri": str,
     "requested_by": str | None,
 }
 ```
 
-Return `{"status": "cancelled", "error": None}` after handling the request,
-or `{"status": "failed", "error": "message"}`. The runtime treats a status
-other than `cancelled` as inactive for cancellation coordination. It may have
-already revoked active ownership before this call, so cancellation confirmation
-does not prove that no backend work continues.
+Malformed protocol output raises an adapter protocol error; invoke failure
+codes are committed as cached error DAGs. Cancel returns `cancelled`, `retry`,
+or an error status. Retry requires object adapter state and may include
+`retry_after_ms`; the runtime persists both state and the shared deadline.
+Before this call, Phase 1 has selected the execution as `cancel-pending`.
+Only `cancelled` permits the runtime-owned CAS transition to `canceled`.
 
 `AdapterBase.cli()` supports `-i`/`-o` as `-`, local paths, or S3 URIs. Its
-`--poll` loop only repeats invoke requests while they return `running`.
+`--poll` loop repeats `operation="invoke"` while it returns `retry`, then drives
+nested cleanup to success or terminal failure before an ephemeral Docker or
+Batch environment exits. It never sends `operation="poll"`, which is unsupported.

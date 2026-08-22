@@ -5,6 +5,7 @@ import pytest
 from moto import mock_aws
 
 from daggerml._core.db import Ref
+from daggerml._core.exec_state import ExecutionState
 from daggerml._core.head import Head
 from daggerml._core.remote import Remote
 from daggerml._core.types import ArgvNode, Commit, Dag, DmlDB, DmlRepoError, ListDatum, LiteralNode, ScalarDatum, Tree
@@ -35,12 +36,11 @@ def test_cache_roundtrip(tmp_path):
             tree = txn.put(Tree(dags={"main": dag_ref}, tags={}))
             commit_ref = txn.put(Commit(parents=[], tree=tree, author="alice", message="snapshot"))
 
-        cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
-        loaded_dag = remote.get_cache(cache_key, target_db)
+        remote.upload_object_graph(dag_ref, source_db)
+        loaded_dag = remote.materialize_ref(dag_ref, target_db)
         remote.put_ref(commit_ref, "branch", "main", source_db)
         loaded_commit = remote.get_ref("branch", "main", target_db)
 
-        assert cache_key == argv_value.id()
         assert loaded_dag == dag_ref
         assert loaded_commit == commit_ref
 
@@ -54,6 +54,121 @@ def test_cache_roundtrip(tmp_path):
         assert commit.tree == tree
 
 
+def test_gc_preserves_locked_reservation_and_rereads_cache_pointer_before_deletion(monkeypatch):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=1, client=client)
+        exec_store = remote._store.__class__("s3://bucket/root/exec", client)
+        for execution_id, cache_key, lock in (
+            ("locked", "locked-key", {"owner": "owner", "ttl": 300}),
+            ("unlocked", "unlocked-key", None),
+        ):
+            exec_store._put_js(
+                exec_store._key_for(f"execution/{execution_id}/metadata.json"),
+                {"execution_id": execution_id, "cache_key": cache_key, "argv_ref": None, "created_at": 0},
+            )
+            exec_store._put_js(
+                exec_store._key_for(f"execution/{execution_id}/state.json"),
+                {
+                    "lifecycle": "running",
+                    "result_ref": None,
+                    "result_source": None,
+                    "spawned_execution_ids": [],
+                    "child_execution_ids": [],
+                    "cancelation": None,
+                    "invalidation": None,
+                    "updated_at": 0,
+                },
+            )
+            exec_store._put_js(
+                exec_store._key_for(f"execution/{execution_id}/driver.json"),
+                {"lock": lock, "not_before": None, "adapter_state": None, "cleanup": None},
+            )
+        original_get = exec_store.__class__._get
+
+        def publish_pointer_after_snapshot(store, key, *, cas=False):
+            item = original_get(store, key, cas=cas)
+            if key.endswith("execution/unlocked/metadata.json") and cas:
+                store._put(store._key_for("cache/unlocked-key"), "unlocked", overwrite=False)
+            return item
+
+        monkeypatch.setattr(exec_store.__class__, "_get", publish_pointer_after_snapshot)
+
+        remote.gc()
+
+        locked_metadata = json.loads(
+            exec_store._get(exec_store._key_for("execution/locked/metadata.json"))
+        )
+        unlocked_metadata = json.loads(
+            exec_store._get(exec_store._key_for("execution/unlocked/metadata.json"))
+        )
+        assert locked_metadata["execution_id"] == "locked"
+        assert unlocked_metadata["execution_id"] == "unlocked"
+
+
+def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypatch):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=1, client=client)
+        exec_store = remote._store.__class__("s3://bucket/root/exec", client)
+        metadata_key = exec_store._key_for("execution/unlocked/metadata.json")
+        state_key = exec_store._key_for("execution/unlocked/state.json")
+        driver_key = exec_store._key_for("execution/unlocked/driver.json")
+        result = Ref("dag:surviving-result")
+        exec_store._put_js(
+            metadata_key,
+            {"execution_id": "unlocked", "cache_key": "unlocked-key", "argv_ref": None, "created_at": 0},
+        )
+        exec_store._put_js(
+            state_key,
+            {
+                "lifecycle": "running",
+                "result_ref": None,
+                "result_source": None,
+                "spawned_execution_ids": [],
+                "child_execution_ids": [],
+                "cancelation": None,
+                "invalidation": None,
+                "updated_at": 0,
+            },
+        )
+        exec_store._put_js(
+            driver_key,
+            {"lock": None, "not_before": None, "adapter_state": None, "cleanup": None},
+        )
+        remote._store._put(remote._store._key_for(f"cas/sha256/{result.id()}"), "result")
+        original_delete = exec_store.__class__._delete
+        mutated = False
+
+        def mutate_before_conditional_delete(store, key, **kwargs):
+            nonlocal mutated
+            if not mutated and getattr(key, "key", key) == state_key:
+                mutated = True
+                store._put_js(
+                    state_key,
+                    {
+                        "lifecycle": "succeeded",
+                        "result_ref": result.to,
+                        "result_source": "runtime",
+                        "spawned_execution_ids": [],
+                        "child_execution_ids": [],
+                        "cancelation": None,
+                        "invalidation": None,
+                        "updated_at": 1,
+                    },
+                )
+            return original_delete(store, key, **kwargs)
+
+        monkeypatch.setattr(exec_store.__class__, "_delete", mutate_before_conditional_delete)
+        monkeypatch.setattr(remote, "_get_live_oids", lambda ref: {ref.id()})
+
+        remote.gc()
+
+        assert remote._store._exists(remote._store._key_for(f"cas/sha256/{result.id()}"))
+
+
 def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state():
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
@@ -64,9 +179,10 @@ def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state(
             "cas_prefix": "cas/sha256",
             "hash": "sha256",
             "io_prefix": "io",
-            "layout": "one-project-cas+refs",
+            "layout": "one-project-cas+refs+split-execution",
             "refs_prefix": "refs",
-            "schema": 1,
+            "schema": 2,
+            "execution_prefix": "../exec",
         }
 
         client.put_object(Bucket="bucket", Key="nonempty/dml/refs/heads/main.json", Body=b"{}")
@@ -161,7 +277,7 @@ def test_manifest_fetch_precedes_replayable_local_write(tmp_path, monkeypatch):
             value = txn.put(ScalarDatum("done"))
             result = txn.put(LiteralNode(value=value))
             dag_ref = txn.put(Dag(nodes=[argv, result], names={"result": result}, result=result, argv=argv))
-        cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
+        remote.upload_object_graph(dag_ref, source_db)
 
         in_local_write = False
         original_get = remote._store._get
@@ -182,7 +298,7 @@ def test_manifest_fetch_precedes_replayable_local_write(tmp_path, monkeypatch):
         monkeypatch.setattr(remote._store, "_get", guarded_get)
         monkeypatch.setattr(target_db, "write_with_growth", write_with_tracking)
 
-        assert remote.get_cache(cache_key, target_db) == dag_ref
+        assert remote.materialize_ref(dag_ref, target_db) == dag_ref
 
 
 def test_remote_materialization_skips_cas_fetch_for_local_root(tmp_path, monkeypatch):
@@ -223,9 +339,9 @@ def test_remote_materialization_grows_map_for_large_dag_payload(tmp_path):
             return txn.put(Dag(nodes=nodes, names={}, result=nodes[-1], argv=argv))
 
         dag_ref = source_db.write_with_growth(write_large_dag)
-        cache_key = remote.put_cache(dag_ref, "exec-large", source_db)
+        remote.upload_object_graph(dag_ref, source_db)
 
-        assert remote.get_cache(cache_key, target_db) == dag_ref
+        assert remote.materialize_ref(dag_ref, target_db) == dag_ref
 
 
 def test_remote_ref_payloads_use_typed_roots(tmp_path):
@@ -244,31 +360,25 @@ def test_remote_ref_payloads_use_typed_roots(tmp_path):
             tree = txn.put(Tree(dags={"main": dag_ref}, tags={}))
             commit_ref = txn.put(Commit(parents=[], tree=tree, author="alice", message="snapshot"))
 
-        cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
-        remote.put_active(cache_key, "exec-1", argv_node, source_db)
-        remote.put_transport("exec-1", dag_ref, source_db)
+        remote.upload_object_graph(argv_node, source_db)
+        remote.upload_object_graph(dag_ref, source_db)
+        state = ExecutionState("s3://bucket/root", 2, cache_key=argv_value.id(), client=client)
+        execution_id, owner, _ = state.reserve_execution(argv_node, execution_id="exec-1")
+        assert state._create_cache(argv_value.id(), execution_id)
+        state._mutate_state(
+            execution_id,
+            lambda record: record.update(
+                lifecycle="succeeded", result_ref=dag_ref.to, result_source="runtime"
+            ),
+        )
+        state.unlock(execution_id, owner)
         remote.put_ref(commit_ref, "branch", "main", source_db)
 
-        cache_payload = remote._read_ref(remote._cache_key(cache_key))
-        active_payload = remote._read_ref(remote._active_key(cache_key))
-        transport_payload = remote._read_ref(remote._transport_key("exec-1"))
         project_payload = remote._read_ref(remote._ref_key("branch", "main"))
-        cache_raw = remote.get_cache(cache_key, raw=True)
-        active_raw = remote.get_active(cache_key, raw=True)
-
-        assert set(cache_payload) == {"ref", "created", "metadata"}
-        assert cache_payload["ref"] == {"to": dag_ref.to}
-        assert cache_payload["metadata"] == {"execution_id": "exec-1"}
-        assert cache_raw["meta"]["execution_id"] == "exec-1"
-
-        assert set(active_payload) == {"ref", "created", "metadata"}
-        assert active_payload["ref"] == {"to": argv_node.to}
-        assert active_payload["metadata"] == {"execution_id": "exec-1"}
-        assert active_raw["meta"]["execution_id"] == "exec-1"
-
-        assert set(transport_payload) == {"ref", "created", "metadata"}
-        assert transport_payload["ref"] == {"to": dag_ref.to}
-        assert transport_payload["metadata"] == {"ts": transport_payload["metadata"]["ts"]}
+        assert state._read_cache(argv_value.id())[0] == "exec-1"
+        record = state.read_execution_record("exec-1")
+        assert record["metadata"]["argv_ref"] == argv_node.to
+        assert record["state"]["result_ref"] == dag_ref.to
 
         assert set(project_payload) == {"ref", "created", "metadata"}
         assert project_payload["ref"] == {"to": commit_ref.to}
@@ -289,7 +399,7 @@ def test_remote_cas_payloads_use_tagged_json(tmp_path):
             result = txn.put(LiteralNode(value=value))
             dag_ref = txn.put(Dag(nodes=[argv_node, result], names={"result": result}, result=result, argv=argv_node))
 
-        remote.put_cache(dag_ref, "exec-1", source_db)
+        remote.upload_object_graph(dag_ref, source_db)
 
         dag_payload = json.loads(remote._store._get(remote._cas_key(dag_ref.id())))
         scalar_payload = json.loads(remote._store._get(remote._cas_key(value.id())))
@@ -307,6 +417,38 @@ def test_remote_cas_payloads_use_tagged_json(tmp_path):
         assert scalar_payload == ["dict", {"data": ["scalar", "done"]}]
 
 
+def test_remote_gc_traces_unified_execution_refs_and_collects_losing_attempt(tmp_path):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=2, client=client)
+        source_db = make_db(tmp_path / "source-db")
+        with source_db.tx() as txn:
+            argv = txn.put(ArgvNode(value=txn.put(ListDatum([]))))
+            result = txn.put(LiteralNode(value=txn.put(ScalarDatum("done"))))
+            dag_ref = txn.put(Dag(nodes=[argv, result], names={}, result=result, argv=argv))
+        remote.upload_object_graph(dag_ref, source_db)
+
+        state = ExecutionState("s3://bucket/root", 2, cache_key="current", client=client)
+        execution_id, owner, _ = state.reserve_execution(argv, execution_id="current-exec")
+        assert state._create_cache("current", execution_id)
+        state._mutate_state(
+            execution_id,
+            lambda record: record.update(
+                lifecycle="succeeded", result_ref=dag_ref.to, result_source="runtime"
+            ),
+        )
+        state.unlock(execution_id, owner)
+        losing = ExecutionState("s3://bucket/root", 2, cache_key="lost", client=client)
+        _, losing_owner, _ = losing.reserve_execution(argv, execution_id="losing-exec")
+        losing.unlock("losing-exec", losing_owner)
+
+        remote.gc()
+
+        assert remote._store._exists(remote._cas_key(dag_ref.id()))
+        assert losing._snapshot(losing._execution_key("losing-exec")) is None
+
+
 def test_remote_pull_rejects_cas_identity_mismatch(tmp_path):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
@@ -322,11 +464,11 @@ def test_remote_pull_rejects_cas_identity_mismatch(tmp_path):
             result = txn.put(LiteralNode(value=value))
             dag_ref = txn.put(Dag(nodes=[argv_node, result], names={"result": result}, result=result, argv=argv_node))
 
-        cache_key = remote.put_cache(dag_ref, "exec-1", source_db)
+        remote.upload_object_graph(dag_ref, source_db)
         remote._store._put(remote._cas_key(value.id()), remote._dump_cas_object(ScalarDatum("different")))
 
         with pytest.raises(ValueError, match="Remote CAS object identity mismatch"):
-            remote.get_cache(cache_key, target_db)
+            remote.materialize_ref(dag_ref, target_db)
 
 
 def test_deleting_ref_moves_original_payload_to_tombstone(tmp_path):
@@ -337,14 +479,13 @@ def test_deleting_ref_moves_original_payload_to_tombstone(tmp_path):
         source_db = make_db(tmp_path / "source-db")
 
         with source_db.tx() as txn:
-            argv_value = txn.put(ListDatum([]))
-            argv_node = txn.put(ArgvNode(value=argv_value))
+            tree = txn.put(Tree(dags={}, tags={}))
+            commit_ref = txn.put(Commit(parents=[], tree=tree, author="alice", message="snapshot"))
 
-        remote.put_active("cache-1", "exec-1", argv_node, source_db)
-        active_path = remote._active_key("cache-1")
-        original = json.dumps(remote._read_ref(active_path), sort_keys=True)
+        branch_path = remote.put_ref(commit_ref, "branch", "main", source_db)
+        original = json.dumps(remote._read_ref(branch_path), sort_keys=True)
 
-        assert remote.delete_active("cache-1") is True
+        assert remote._del(branch_path) is True
 
         tombstones = list(remote._store._iter(remote._store._key_for("refs/tombstone/")))
         assert len(tombstones) == 1

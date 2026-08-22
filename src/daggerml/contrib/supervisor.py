@@ -280,12 +280,11 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     stderr_thread.start()
     execution = Ref(f"index:{execution_id}")
     while proc.poll() is None:
-        if dml.runtime.read_execution_record(execution)["lifecycle"].startswith("cancel"):
+        if dml.runtime.read_execution_record(execution)["state"]["lifecycle"].startswith("cancel"):
             # log to log streams that we're cancelling
             stdout_sink.emit_lifecycle(event="cancel")
             stderr_sink.emit_lifecycle(event="cancel")
             proc.terminate()
-            dml.runtime.cancel(execution, mode="drive")
             break
         time.sleep(0.1)
     proc.wait()

@@ -17,7 +17,6 @@ Public API:
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import InitVar, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
@@ -94,27 +93,19 @@ class IndexOps:
         state = self.exec_state(cache_key=cache_key)
         exec_id = execution_id or uuid7().hex
         if execution_id is not None:
-            record = state.require_mutation(exec_id, db, mode="activation")
-            argv_manifest = self._remote.get_active(cast(str, cache_key), raw=True)
-            if argv_manifest is None:
-                raise DmlRepoError(f"No active execution payload found for cache key: {cache_key}")
-            argv = self._remote.materialize_manifest(cast(dict, argv_manifest), db, expected_root_ns="node-argv")
+            record, owner = state.activate(exec_id, db)
+            try:
+                metadata = record["metadata"]
+                if metadata["cache_key"] != cache_key or metadata["argv_ref"] is None:
+                    raise DmlRepoError(f"Invalid execution payload for cache key: {cache_key}")
+                argv = self._remote.materialize_ref(Ref(metadata["argv_ref"]), db)
+            except Exception:
+                state.unlock(exec_id, owner)
+                raise
         else:
             argv = None
-            # Create initial execution record for non-execution-aware roots.
-            now_ts = int(time.time())
-            state.create_execution_record(
-                {
-                    "execution_id": exec_id,
-                    "cache_key": cache_key,
-                    "lifecycle": "running",
-                    "updated_at": now_ts,
-                    "created_at": now_ts,
-                    "spawned_execution_ids": [],
-                    "child_execution_ids": [],
-                    "cancellation_requested_by": None,
-                }
-            )
+            _, owner, _ = state.reserve_execution(None, execution_id=exec_id)
+            state.unlock(exec_id, owner)
 
         def create_index(txn) -> Ref:
             nodes: list[Ref] = [argv] if argv is not None else []
@@ -138,10 +129,15 @@ class IndexOps:
                 to=Ref(f"index:{exec_id}"),
             )
 
-        index = db.write_with_growth(create_index)
         if execution_id is not None:
-            record.update({"lifecycle": "running", "updated_at": int(time.time())})
-            state.update_execution_record(record)
+            try:
+                index = db.write_with_growth(create_index)
+                state.mark_running(exec_id, owner)
+            except Exception:
+                state.unlock(exec_id, owner)
+                raise
+        else:
+            index = db.write_with_growth(create_index)
         return index
 
     def freeze(self, index: Ref, message: str | None, *, db: DmlDB) -> Ref:

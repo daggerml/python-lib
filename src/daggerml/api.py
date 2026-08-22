@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from tempfile import TemporaryDirectory
 from threading import RLock
-from typing import Any, Literal, Optional, Protocol, Union, cast, get_args, overload
+from typing import Any, Optional, Protocol, Union, cast, get_args, overload
 
 from daggerml._core import CancellationError, Dml, DmlRepoError, Error, Ref, Runnable, Uri
 from daggerml.util import BackoffWithJitter, current_time_millis
@@ -633,21 +633,20 @@ class Dag:
         self.token = self.dml.runtime.unfreeze(self._require_index_ref())
         return self
 
-    def cancel(self, mode: Literal["full", "drive"] = "full"):
+    def cancel(self, max_retries: int = 3):
         """Cancel the DAG's execution.
 
         Parameters
         ----------
-        mode : str, default="plan"
-            Cancellation mode. "plan" cancels the execution plan, while "drive" also attempts to stop any
-            currently running tasks. "drive" is more aggressive and may be necessary for long-running DAGs.
+        max_retries : int, default=3
+            Maximum cancellation retries after the initial attempt.
         """
         if self.token is None:
             raise DmlRepoError("Cannot cancel a committed DAG")
-        logger.info(f"Cancelling execution {self.token} with mode '{mode}'")
-        self.dml.runtime.cancel(self.token, mode=mode)
+        logger.info(f"Cancelling execution {self.token}")
+        self.dml.runtime.cancel(self.token, max_retries=max_retries)
         self.token = None  # Clear the index ref to indicate it's no longer active
-        raise CancellationError(f"DAG execution cancelled with mode '{mode}'")
+        raise CancellationError("DAG execution cancelled")
 
 
 class NodeError(Error):

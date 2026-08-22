@@ -1,3 +1,8 @@
+## Purpose
+Define durable caller/callee lineage and registration cleanup for runtime executions.
+
+## Requirements
+
 ### Requirement: Call-edge records SHALL represent realized rooted dependencies
 The runtime SHALL record only realized rooted dependencies. An edge SHALL mean that caller id `caller_execution_id` was observed to depend on callee execution `callee_execution_id` during runtime execution, even if that dependency is discovered during a later `start_fn` poll cycle. The caller id MAY be either a normal execution id or a synthetic root index id.
 
@@ -31,34 +36,57 @@ The runtime SHALL persist each rooted dependency as the immutable object `exec/e
 - **AND** that object SHALL contain JSON with `caller_execution_id = "idx1"` and `callee_execution_id = "e1"`
 
 ### Requirement: Live caller edges SHALL be caller-owned and removable
-The runtime SHALL treat `exec/edges/<callee_execution_id>/<caller_execution_id>.json` as a live caller edge owned by the caller runtime. The caller runtime that created the edge SHALL be allowed to remove that edge when it cancels or otherwise stops being a caller of the callee execution.
+The runtime SHALL treat `exec/edges/<callee_execution_id>/<caller_execution_id>.json` as a live caller reference owned by the caller runtime. A caller edge SHALL become valid only after registration has serialized with the callee lifecycle and confirmed that the callee is neither `cancel-pending` nor `canceled`. The caller runtime that created the edge SHALL remove that edge when cancellation selects the caller or when registration fails. Cancellation planning SHALL preserve a callee that retains any valid incoming caller edge.
 
 #### Scenario: Caller cancellation removes its own live edge
-- **WHEN** caller execution `e0` is cancelled after creating edge `exec/edges/e1/e0.json`
-- **THEN** the runtime handling `e0` cancellation SHALL be allowed to remove that edge
+- **WHEN** Phase 1 selects caller execution `e0` after it created `exec/edges/e1/e0.json`
+- **THEN** Phase 1 SHALL idempotently remove that edge before evaluating `e1`
 
 #### Scenario: Other callers preserve callee liveness
 - **WHEN** caller `e0` removes its edge to callee `e1`
-- **AND** another live edge for `e1` still exists
-- **THEN** the runtime SHALL continue to treat `e1` as having live callers
+- **AND** another valid live edge for `e1` still exists
+- **THEN** cancellation planning SHALL leave `e1` active
+
+#### Scenario: Incomplete registration does not preserve callee liveness
+- **WHEN** registration creates an edge but cannot validate the callee lifecycle or complete caller lineage registration
+- **THEN** the registering caller SHALL remove its incomplete edge
+- **AND** that edge SHALL NOT be treated as a durable valid caller reference
+
+### Requirement: Caller registration SHALL serialize with cancellation selection
+Caller registration and Phase 1 cancellation selection SHALL acquire the callee's driver lock to order edge publication against the lifecycle decision, while lifecycle changes themselves SHALL use guarded state CAS. If registration wins, cancellation SHALL observe the valid edge before selecting the callee. If cancellation wins, registration SHALL observe `cancel-pending` or `canceled`, remove any incomplete edge, and SHALL NOT invoke the callee adapter.
+
+#### Scenario: Registration wins the race
+- **WHEN** registration publishes an edge and completes guarded state bookkeeping while holding the callee driver lock
+- **THEN** concurrent cancellation observes the valid caller reference
+
+#### Scenario: Cancellation wins the race
+- **WHEN** cancellation stores cancel-pending before registration validates state
+- **THEN** registration removes its incomplete edge and does not invoke the adapter
 
 ### Requirement: Live caller edges and spawned execution ids SHALL remain distinct
-The runtime SHALL use live caller edges for reverse-lineage invalidation and orphan detection, and SHALL use `execution_record.spawned_execution_ids` for cancellation traversal. Removal of a live caller edge SHALL NOT remove the callee from the caller's historical spawned execution summary.
+The runtime SHALL retain separate caller-edge objects for reverse lineage and orphan detection. It SHALL update `spawned_execution_ids` and `child_execution_ids` in the caller's `state.json` through guarded CAS with bounded retry. Edge removal SHALL NOT erase historical forward summaries.
 
-#### Scenario: Removing live edge preserves historical cancellation dependency
-- **WHEN** caller `e0` removes its live edge to callee `e1` during cancellation
-- **THEN** `e1` MAY still remain in `e0`'s `spawned_execution_ids`
-- **AND** the runtime SHALL continue treating those structures as distinct sources of truth
+#### Scenario: Caller summary mutation uses guarded state CAS
+- **WHEN** caller `e0` registers or completes child `e1`
+- **THEN** it conditionally updates the latest semantic state without requiring the driver lock
+
+#### Scenario: Caller summary mutation is locked
+- **WHEN** caller `e0` registers or completes child `e1`
+- **THEN** the state-object CAS serializes its forward-summary update without the driver lock
+
+#### Scenario: Edge removal preserves summary
+- **WHEN** the live edge `e1 <- e0` is removed during cancelation
+- **THEN** `e1` may remain in `e0`'s spawned execution summary
 
 ### Requirement: Failed child registration SHALL roll back unrealized caller edges
-When a launch attempt writes a caller/callee edge but fails to durably register the child in the caller's execution record, the runtime SHALL remove that attempt's edge before surfacing the registration failure. If the attempt created a fresh active execution, it SHALL also clean up only the active and reservation artifacts owned by that attempt.
+When a launch writes a caller edge but fails to register the child in the caller's locked execution record, it SHALL remove that edge before surfacing failure. If the launch created a fresh execution but lost or failed cache-pointer publication, it SHALL conditionally delete only its unchanged execution record. Reused current executions and their cache pointers SHALL remain intact.
 
-#### Scenario: Fresh child registration failure cleans up attempt artifacts
-- **WHEN** a launch attempt creates fresh child `e1` and its registration under caller `e0` exhausts retries
-- **THEN** the runtime SHALL remove the `e1 <- e0` caller edge
-- **AND** it SHALL remove the fresh attempt's active and reservation artifacts
+#### Scenario: Fresh registration failure cleans owned artifacts
+- **WHEN** fresh execution `e1` cannot be registered under caller `e0`
+- **THEN** the runtime removes edge `e1 <- e0`
+- **AND** it conditionally removes only fresh artifacts still owned by that launch
 
-#### Scenario: Reused child registration failure preserves shared artifacts
-- **WHEN** a launch attempt reuses active child `e1` and its registration under caller `e0` fails
-- **THEN** the runtime SHALL remove the `e1 <- e0` caller edge
-- **AND** it SHALL not remove `e1`'s shared active or reservation artifacts
+#### Scenario: Reused execution survives registration failure
+- **WHEN** registration fails after resolving shared current execution `e1`
+- **THEN** the runtime removes only the attempted caller edge
+- **AND** it preserves `execution/e1` and its cache pointer

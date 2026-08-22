@@ -4,38 +4,112 @@ Define distinct adapter operation contracts so invocation and cancellation have 
 ## Requirements
 
 ### Requirement: Adapter operations SHALL use separate invoke and cancel contracts
-The runtime SHALL define distinct `AdapterInvokeRequest` / `AdapterInvokeResponse` and `AdapterCancelRequest` / `AdapterCancelResponse` contracts. An invoke request SHALL contain invocation data and resume state. A cancel request SHALL contain cancellation data and SHALL carry the argv pointer needed to identify the target without resolving the mutable active pointer.
+Adapters SHALL accept distinct `invoke`, `cleanup`, and `cancel` requests. Invoke SHALL identify execution, runnable, remote, scratch URI, cache key, and current adapter state. Cleanup SHALL carry those fields plus a non-null result ref. Cancel SHALL carry cancelation metadata and argv identity. Repeated invoke SHALL serve both initial launch and status checks; there SHALL be no poll operation. No operation SHALL directly mutate execution files.
 
-#### Scenario: Invoke request excludes cancellation-only fields
-- **WHEN** the runtime starts or resumes an adapter execution
-- **THEN** it sends an `AdapterInvokeRequest`
-- **AND** the request does not use cancellation requester or cancellation lifecycle fields
+#### Scenario: Invoke infers launch or continuation
+- **WHEN** invoke receives an execution ID and null or object adapter state
+- **THEN** the adapter uses those values to idempotently start or inspect that execution
 
-#### Scenario: Cancel request carries execution-owned argv identity
+#### Scenario: Cleanup receives result context
+- **WHEN** cleanup is requested
+- **THEN** the request includes the execution's published result ref and current adapter state
+
+#### Scenario: Poll operation is rejected
+- **WHEN** an adapter receives `operation = "poll"`
+- **THEN** it rejects the request as unsupported
+
+#### Scenario: Invoke receives current adapter state
+- **WHEN** the runtime starts or checks execution `e1`
+- **THEN** it sends the adapter `execution_id`, invocation data, and current `adapter_state`
+
+#### Scenario: Cancel reads execution-owned argv
 - **WHEN** the runtime cancels execution `e1`
-- **THEN** it sends an `AdapterCancelRequest` containing `execution_id = "e1"`
-- **AND** it includes the argv pointer obtained from `refs/cancel-targets/e1.json`
-- **AND** it does not resolve the argv through `active/<cache_key>`
+- **THEN** its cancel request carries `argv_ref` from `metadata.json`
+- **AND** it does not resolve active or cancel-target refs
 
 ### Requirement: Adapter operation responses SHALL remain operation-specific
-`AdapterInvokeResponse` SHALL report invocation progress or result in its `status` field using `running`, `succeeded`, or `failed`. `AdapterCancelResponse` SHALL report cancellation outcome separately and SHALL NOT define runtime execution lifecycle values such as `cancel-requested`, `cancel-ready`, or `canceled`.
+Invoke and cleanup SHALL return an object with nonempty string `status`, optional object-or-null `adapter_state`, optional nonnegative integer `retry_after_ms`, and optional string-or-null `error`. Status `success` SHALL mean the requested operation completed. Status `retry` SHALL mean the operation remains incomplete and SHALL require resumable object adapter state; its retry delay SHALL be advisory input to shared caller backpressure. Every other status SHALL be a failure code and SHALL require nonempty error text. Malformed output SHALL raise a deliberate protocol error.
 
-#### Scenario: Invoke response reports execution progress
-- **WHEN** an adapter invocation is still running
-- **THEN** the adapter returns `AdapterInvokeResponse` with `status = "running"` and resumable state
+Invoke failure SHALL cause the caller to publish a cached adapter-error DAG and failed lifecycle. Cleanup success SHALL mark cleanup complete, cleanup retry SHALL leave cleanup pending, and cleanup failure SHALL record failed cleanup diagnostics. No cleanup response SHALL change execution lifecycle or result.
 
-#### Scenario: Cancel response does not own runtime lifecycle
-- **WHEN** an adapter completes a cancellation request
-- **THEN** the adapter returns `AdapterCancelResponse`
-- **AND** the runtime, rather than the response, decides when to persist `canceled` or `cancel-ready`
+#### Scenario: Invoke retry persists continuation and delay
+- **WHEN** invoke returns retry with object adapter state and optional retry-after
+- **THEN** the driver owner persists the state and shared delay
+
+#### Scenario: Invoke success requires a published result
+- **WHEN** invoke returns success
+- **THEN** the caller rereads semantic state and accepts success only when result ref is populated
+- **AND** otherwise it publishes an adapter protocol error DAG
+
+#### Scenario: Invoke failure becomes cached execution failure
+- **WHEN** invoke returns any status other than success or retry
+- **THEN** the caller publishes an adapter-error DAG with failed lifecycle
+
+#### Scenario: Cleanup retry affects only driver state
+- **WHEN** cleanup returns retry
+- **THEN** cleanup remains pending and shared not-before is updated
+- **AND** result and lifecycle remain unchanged
+
+#### Scenario: Cleanup failure is observable but not an execution failure
+- **WHEN** cleanup returns a failure code with error text
+- **THEN** driver cleanup records failed status and that error
+- **AND** the cached execution outcome remains reusable
+
+#### Scenario: Retry updates adapter state
+- **WHEN** an invoke response reports `retry`
+- **THEN** the lock owner persists its returned state and later retries the same execution ID
+
+#### Scenario: Success updates adapter state
+- **WHEN** an invoke response reports `success`
+- **THEN** the lock owner persists its returned state before completing result handling
+
+#### Scenario: Other outcome becomes cached error DAG
+- **WHEN** an invoke response is neither valid `retry` nor valid `success`
+- **THEN** the runtime commits an error DAG to `result_ref`
+- **AND** the current cache pointer remains bound to that execution
+
+### Requirement: Cancel responses SHALL determine cancellation progress
+A cancel response with status `cancelled` SHALL confirm successful cancellation. A retry response SHALL persist returned adapter state and populate the shared `driver.not_before` from `retry_after_ms` before another invocation. A failure response, malformed output, or adapter invocation error SHALL not confirm cancellation and SHALL leave the execution eligible for another bounded attempt. One execution's unsuccessful response SHALL not prevent collection of other concurrent cancellation outcomes.
+
+#### Scenario: Cancel response confirms success
+- **WHEN** a cancel adapter returns status `cancelled`
+- **THEN** the runtime SHALL treat that execution's cancellation attempt as successful
+
+#### Scenario: Cancel response remains unsuccessful
+- **WHEN** a cancel adapter returns any other outcome or fails to produce a valid response
+- **THEN** the runtime SHALL retain that execution for a bounded retry
+
+#### Scenario: Cancel retry controls the next request
+- **WHEN** a cancel adapter returns `retry` with adapter state and `retry_after_ms`
+- **THEN** the runtime SHALL persist that state and deadline
+- **AND** it SHALL not issue the next cancel request before `driver.not_before`
 
 ### Requirement: Adapter operation dispatch SHALL preserve executor responsibilities
-An invoke operation SHALL dispatch to executor `start()` when no resume state exists and to `poll()` when resume state exists. A cancel operation SHALL dispatch to executor `cancel()`.
+The adapter SHALL dispatch invoke with null adapter state to executor start and invoke with object state to executor status inspection. It SHALL dispatch cleanup to an idempotent executor cleanup method regardless of whether adapter state is null, and cancel to executor cancellation. Executors SHALL retain sufficient durable state for repeated operations without duplicating work or corrupting cleanup.
 
-#### Scenario: Invoke dispatches a fresh start
-- **WHEN** an `AdapterInvokeRequest` has no resume state
-- **THEN** the adapter dispatches to executor `start()`
+#### Scenario: Null state starts execution
+- **WHEN** invoke has null adapter state
+- **THEN** the executor idempotently starts or rediscovers work for that execution ID
 
-#### Scenario: Cancel dispatches cleanup
-- **WHEN** an `AdapterCancelRequest` is received
-- **THEN** the adapter dispatches to executor `cancel()`
+#### Scenario: Stored state checks execution
+- **WHEN** invoke has object adapter state
+- **THEN** the executor performs an idempotent status check
+
+#### Scenario: Repeated cleanup is safe
+- **WHEN** cleanup is repeated after a lost response
+- **THEN** the executor leaves resources pruned and returns a stable success
+
+#### Scenario: Repeated terminal check is stable
+- **WHEN** a terminal execution is checked again after a stale caller discarded its response
+- **THEN** the adapter returns stable status and state without repeating the work
+
+### Requirement: Cleanup request SHALL use an explicit schema
+Cleanup SHALL accept exactly `operation = "cleanup"`, nonempty `execution_id`, nonempty `cache_key`, remote object containing nonempty `root`, runnable object, object-or-null `adapter_state`, nonempty `scratch_uri`, and syntactically typed non-null DAG `result_ref`. Unspecified fields SHALL be rejected.
+
+#### Scenario: Valid cleanup request is dispatched
+- **WHEN** every required cleanup field is valid
+- **THEN** the adapter dispatches cleanup for the identified execution
+
+#### Scenario: Cleanup without result is rejected
+- **WHEN** cleanup omits result ref or supplies null
+- **THEN** the adapter rejects the request without invoking executor cleanup

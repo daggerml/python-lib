@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,6 +15,48 @@ from daggerml._core.s3_cas import CasItem, CasItemConflict
 from daggerml._core.types import BadExecutionStatusError, CanceledExecutionError, DmlDB, DmlRepoError
 
 DEFAULT_REMOTE_ROOT = "s3://bucket/root"
+
+
+def execution_record(
+    execution_id: str,
+    *,
+    cache_key: str | None = None,
+    lifecycle: str = "running",
+    argv_ref: str | None = None,
+    created_at: int = 0,
+    updated_at: int = 0,
+    spawned_execution_ids: list[str] | None = None,
+    child_execution_ids: list[str] | None = None,
+    cancelation: dict[str, Any] | None = None,
+    invalidation: dict[str, Any] | None = None,
+    result_ref: str | None = None,
+    result_source: str | None = None,
+    adapter_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "metadata": {
+            "execution_id": execution_id,
+            "cache_key": cache_key,
+            "argv_ref": argv_ref,
+            "created_at": created_at,
+        },
+        "state": {
+            "lifecycle": lifecycle,
+            "result_ref": result_ref,
+            "result_source": result_source,
+            "spawned_execution_ids": spawned_execution_ids or [],
+            "child_execution_ids": child_execution_ids or [],
+            "cancelation": cancelation,
+            "invalidation": invalidation,
+            "updated_at": updated_at,
+        },
+        "driver": {
+            "lock": None,
+            "not_before": None,
+            "adapter_state": adapter_state,
+            "cleanup": None,
+        },
+    }
 
 
 def make_db(path: Path) -> DmlDB:
@@ -69,16 +112,60 @@ def run_parallel(count: int, fn: Callable[[int], Any]) -> list[Any]:
 class NoopExecutionState:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, Any]] = {}
-        self.cancel_calls: list[tuple[str, str | None, str]] = []
+        self.cancel_calls: list[tuple[str, str | None, int]] = []
 
     def create_execution_record(self, record: dict[str, Any]) -> bool:
-        if record["execution_id"] in self.records:
+        metadata = record["metadata"]
+        execution_id = metadata["execution_id"]
+        if execution_id in self.records:
             return False
-        self.records[record["execution_id"]] = dict(record)
+        self.records[execution_id] = record
+        return True
+
+    def reserve_execution(self, argv_ref, execution_id=None):
+        execution_id = execution_id or "reserved"
+        self.create_execution_record(
+            {
+                "metadata": {
+                    "execution_id": execution_id,
+                    "cache_key": None,
+                    "argv_ref": None if argv_ref is None else argv_ref.to,
+                    "created_at": int(time.time()),
+                },
+                "state": {
+                    "lifecycle": "running",
+                    "result_ref": None,
+                    "result_source": None,
+                    "spawned_execution_ids": [],
+                    "child_execution_ids": [],
+                    "cancelation": None,
+                    "invalidation": None,
+                    "updated_at": int(time.time()),
+                },
+                "driver": {
+                    "lock": {"owner": "owner", "ttl": 300.0},
+                    "not_before": None,
+                    "adapter_state": None,
+                    "cleanup": None,
+                },
+            }
+        )
+        return execution_id, "owner", None
+
+    def activate(self, execution_id, db):
+        record = self.require_mutation(execution_id, db, mode="activation")
+        return record, "owner"
+
+    def mark_running(self, execution_id, owner):
+        record = self.read_execution_record(execution_id)
+        record["state"]["lifecycle"] = "running"
+        self.update_execution_record(record)
+
+    def unlock(self, execution_id, owner):
         return True
 
     def update_execution_record(self, record: dict[str, Any]) -> None:
-        self.records[record["execution_id"]] = dict(record)
+        self.records[record["metadata"]["execution_id"]] = record
 
     def read_execution_record(self, execution_id: str) -> dict[str, Any]:
         try:
@@ -88,23 +175,24 @@ class NoopExecutionState:
 
     def finish_execution(self, execution_id: str, dag: Ref, db: DmlDB) -> None:
         record = self.read_execution_record(execution_id)
-        record["lifecycle"] = "succeeded"
-        record["updated_at"] = int(time.time())
+        record["state"].update(
+            lifecycle="succeeded",
+            result_ref=dag.to,
+            result_source="runtime",
+            updated_at=int(time.time()),
+        )
         self.update_execution_record(record)
 
     def require_mutation(self, execution_id: str, db: DmlDB, *, mode: str = "activation") -> dict[str, Any]:
         record = self.read_execution_record(execution_id)
-        lifecycle = record["lifecycle"]
+        lifecycle = record["state"]["lifecycle"]
         allowed = "pending" if mode == "activation" else "running"
         action = "activated" if mode == "activation" else "mutated"
         if lifecycle == allowed:
             return record
-        if lifecycle == "cancel-requested":
-            self.cancel(execution_id, None, db, mode="drive")
-            raise CanceledExecutionError(
-                f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
-            )
-        if lifecycle in ("cancel-ready", "canceled"):
+        if lifecycle == "cancel-pending":
+            self.cancel(execution_id, None, db)
+        if lifecycle in ("cancel-pending", "canceled"):
             raise CanceledExecutionError(
                 f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
             )
@@ -112,9 +200,8 @@ class NoopExecutionState:
             f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
         )
 
-    def cancel(self, execution_id: str, requested_by: str | None, db: DmlDB, *, mode: str = "full") -> dict:
-        self.cancel_calls.append((execution_id, requested_by, mode))
-        return {"active-callers": [], "inactive": [], "cancelled": [], "timeout": [], "error": []}
+    def cancel(self, execution_id: str, requested_by: str | None, db: DmlDB, *, max_retries: int = 3) -> None:
+        self.cancel_calls.append((execution_id, requested_by, max_retries))
 
     def describe_graph(self, root_execution_ids: list[str]) -> ExecutionGraph:
         roots = list(dict.fromkeys(root_execution_ids))
@@ -125,15 +212,19 @@ class NoopExecutionState:
             if execution_id in nodes:
                 continue
             record = self.read_execution_record(execution_id)
-            spawned = list(record["spawned_execution_ids"])
-            children = list(record["child_execution_ids"])
+            metadata = record["metadata"]
+            state = record["state"]
+            spawned = list(state["spawned_execution_ids"])
+            children = list(state["child_execution_ids"])
             nodes[execution_id] = {
-                "execution_id": record["execution_id"],
-                "cache_key": record["cache_key"],
-                "lifecycle": record["lifecycle"],
-                "updated_at": record["updated_at"],
-                "created_at": record["created_at"],
-                "cancel_requested_by": record["cancellation_requested_by"],
+                "execution_id": metadata["execution_id"],
+                "cache_key": metadata["cache_key"],
+                "lifecycle": state["lifecycle"],
+                "updated_at": state["updated_at"],
+                "created_at": metadata["created_at"],
+                "cancel_requested_by": (
+                    None if state["cancelation"] is None else state["cancelation"]["requested_by"]
+                ),
                 "children": children,
                 "spawned": spawned,
             }
@@ -149,9 +240,13 @@ class FakeRemote:
         client = None
 
     _store = _Store()
+    materialized_ref = None
 
     def get_active(self, cache_key: str, raw: bool = False):
         return None
+
+    def materialize_ref(self, ref, db):
+        return self.materialized_ref or ref
 
 
 def local_index_ops(state: NoopExecutionState | None = None) -> IndexOps:
@@ -173,8 +268,10 @@ class FakeCasStore:
 
     def __init__(self, prefix: str = "root/exec") -> None:
         self.prefix = prefix
-        self.objects: dict[str, tuple[str, str]] = {}
+        self.objects: dict[str, tuple[str, str, datetime]] = {}
         self.conflict_keys: set[str] = set()
+        self.now = datetime.now(timezone.utc)
+        self._lock = threading.Lock()
 
     def _key_for(self, relative_key: str) -> str:
         return f"{self.prefix}/{relative_key}" if self.prefix else relative_key
@@ -184,26 +281,29 @@ class FakeCasStore:
         return getattr(exc, "response", {}).get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}
 
     def _get(self, key: str, *, cas: bool = False):
-        if key not in self.objects:
-            raise MissingKey()
-        data, etag = self.objects[key]
-        return CasItem(key, data, etag) if cas else data
+        with self._lock:
+            if key not in self.objects:
+                raise MissingKey()
+            data, etag, last_modified = self.objects[key]
+            return CasItem(key, data, etag, last_modified, self.now) if cas else data
 
     def _put(self, key: str | CasItem, value: str | bytes, *, overwrite: bool = True, **kwargs) -> bool:
         expected_etag = None
         if isinstance(key, CasItem):
             expected_etag = key.etag
             key = key.key
-        if key in self.conflict_keys:
-            self.conflict_keys.remove(key)
-            raise CasItemConflict(key)
-        if not overwrite and key in self.objects:
-            raise CasItemConflict(key)
-        if expected_etag is not None and self.objects.get(key, (None, None))[1] != expected_etag:
-            raise CasItemConflict(key)
-        text = value.decode() if isinstance(value, bytes) else value
-        current = int(self.objects.get(key, ("", "0"))[1])
-        self.objects[key] = (text, str(current + 1))
+        with self._lock:
+            if key in self.conflict_keys:
+                self.conflict_keys.remove(key)
+                raise CasItemConflict(key)
+            if not overwrite and key in self.objects:
+                raise CasItemConflict(key)
+            if expected_etag is not None and self.objects.get(key, (None, None, None))[1] != expected_etag:
+                raise CasItemConflict(key)
+            text = value.decode() if isinstance(value, bytes) else value
+            current = int(self.objects.get(key, ("", "0", self.now))[1])
+            self.now += timedelta(milliseconds=1)
+            self.objects[key] = (text, str(current + 1), self.now)
         return True
 
     def _put_js(self, key: str | CasItem, value: Any, *, overwrite: bool = True, **kwargs) -> bool:
@@ -214,12 +314,13 @@ class FakeCasStore:
         if isinstance(key, CasItem):
             expected_etag = key.etag
             key = key.key
-        if key not in self.objects:
-            return False
-        if expected_etag is not None and self.objects[key][1] != expected_etag:
-            return False
-        del self.objects[key]
-        return True
+        with self._lock:
+            if key not in self.objects:
+                return False
+            if expected_etag is not None and self.objects[key][1] != expected_etag:
+                return False
+            del self.objects[key]
+            return True
 
     def _iter(self, prefix: str):
         return (key for key in sorted(self.objects) if key.startswith(prefix))
@@ -231,6 +332,12 @@ class FakeExecutionRemote:
         self.cancel_targets: dict[str, dict[str, Any]] = {}
         self.cache: dict[str, Ref] = {}
         self.transport: dict[str, Ref] = {}
+
+    def upload_object_graph(self, ref, db) -> None:
+        return None
+
+    def materialize_ref(self, ref, db):
+        return ref
 
     def get_cache(self, cache_key: str, db=None):
         return self.cache.get(cache_key)

@@ -2,9 +2,8 @@
 
 `Remote` in `_core/remote.py` maps the local typed object graph to an S3-backed
 transport layout. It is not a second local repository. A remote contains a
-descriptor, immutable SHA-256-addressed CAS blobs, and JSON refs for projects,
-tags, DAG manifests, caches, active execution ownership, and cancellation
-targets.
+descriptor, immutable SHA-256-addressed CAS blobs, typed project refs, plain
+cache-to-execution pointers, and split execution metadata, state, and driver objects.
 
 Publishing walks the local object closure from a root ref, uploads missing CAS
 objects, and writes a manifest ref. Child DAG boundaries remain explicit rather
@@ -18,8 +17,8 @@ Each remote root contains one project, with direct `refs/heads/*` and
 `.dml/refs/dep/<name>/{heads,tags}`. Revision strings never include endpoint
 identity; callers select remote or dependency tracking with source flags. Branch
 updates check ancestry and use conditional S3 writes to avoid silently replacing
-concurrent remote changes; non-forced tags are create-only. Cache publication
-uses `refs/cache/` keyed by normalized function arguments.
+concurrent remote changes; non-forced tags are create-only. Execution cache
+pointers use `exec/cache/` keyed by normalized function arguments.
 
 Branch and tag inspection can read typed commit tips directly from either the
 main endpoint or a dependency endpoint. This path validates a present descriptor
@@ -28,10 +27,13 @@ one-key existence probing, and reads only the selected ref namespace. It does
 not traverse CAS, materialize commits, or update local tracking pointers.
 
 Execution coordination is adjacent to, but separate from, CAS and project refs.
-`ExecutionState` stores locks, lifecycle records, launch state, lineage, and
-adapter I/O under its execution prefix. Remote cleanup likewise has two scopes:
-transport scratch data can be pruned, while CAS garbage collection traces from
-published refs as roots.
+`ExecutionState` gives semantic state and adapter-driver coordination separate
+CAS domains, with separate lineage edges and adapter IO. Cancellation uses the driver lock to
+order caller-edge publication against the CAS transition to `cancel-pending`,
+then transitions adapter-canceled attempts to `canceled`. Normal executor
+cleanup is recorded independently in driver state and is distinct from
+top-level object garbage collection. Remote CAS garbage collection traces
+project refs plus `metadata.argv_ref` and `state.result_ref` roots.
 
 The shared surface exposes cache reads and invalidation through `Dml.cache`.
 Garbage collection is one top-level workflow: `Dml.gc()` computes local roots

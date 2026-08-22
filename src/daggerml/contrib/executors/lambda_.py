@@ -26,4 +26,9 @@ class LambdaExecutorBase(ExecutorBase):
             return cls.handle(**dict(event))
         except Exception as e:
             error = f"Lambda handler failed: {e}\n\n{traceback.format_exc()}"
-            return {"status": "failed", "error": error, "state": None, "dag_id": None}
+            adapter_state = event.get("adapter_state") if isinstance(event, dict) else None
+            return {
+                "status": "failure",
+                "error": error,
+                "adapter_state": adapter_state if isinstance(adapter_state, dict) else {},
+            }

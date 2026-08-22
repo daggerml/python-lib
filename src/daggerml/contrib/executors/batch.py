@@ -21,6 +21,7 @@ _BATCH_POLL_MAX_ATTEMPTS = 25
 _BATCH_MAX_POOL_CONNECTIONS = 100
 
 _ADAPTER_IO_NAME = "lambda:batch"
+_THROTTLING_CODES = {"Throttling", "ThrottlingException", "TooManyRequestsException", "RequestLimitExceeded"}
 
 
 def _batch_client(name: str, *, max_attempts: int = _BATCH_POLL_MAX_ATTEMPTS):
@@ -148,7 +149,7 @@ class BatchExecutor(LambdaExecutorBase):
                 "execution_id": execution_id,
                 "remote": remote,
                 "scratch_uri": scratch_uri,
-                "state": None,
+                "adapter_state": None,
             }
         )
         _write_scratch_json(input_uri, payload, raw=True)
@@ -170,9 +171,8 @@ class BatchExecutor(LambdaExecutorBase):
         )["jobDefinitionArn"]
         job_id = client.submit_job(jobName=job_name, jobQueue=job_queue, jobDefinition=job_def)["jobId"]
         return {
-            "status": "running",
+            "status": "retry",
             "error": None,
-            "dag_id": None,
             "state": {
                 "job_id": job_id,
                 "job_definition": job_def,
@@ -192,49 +192,49 @@ class BatchExecutor(LambdaExecutorBase):
         job_id = state.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             return {
-                "status": "failed",
+                "status": "failure",
                 "error": "batch poll: missing job_id in job state",
-                "state": None,
-                "dag_id": None,
+                "state": state,
             }
         try:
             jobs = self._client().describe_jobs(jobs=[job_id]).get("jobs", [])
-        except Exception:
-            return {"status": "running", "error": None, "state": state, "dag_id": None}
+        except Exception as exc:
+            if self._is_throttling(exc):
+                return {"status": "retry", "error": None, "state": state, "retry_after_ms": self._retry_after(exc)}
+            return {"status": "failure", "error": f"batch status check failed: {exc}", "state": state}
         if not jobs:
-            return {"status": "running", "error": None, "state": state, "dag_id": None}
+            return {"status": "retry", "error": None, "state": state}
         job = jobs[0]
         job_status = job["status"]
 
         if job_status in PENDING_BATCH_STATUSES:
-            return {"status": "running", "error": None, "state": state, "dag_id": None}
+            return {"status": "retry", "error": None, "state": state}
 
         if job_status == "SUCCEEDED":
             try:
                 raw = _read_scratch_output(_scratch_uri(scratch_uri, "output.json"))
                 if raw is None:
                     return {
-                        "status": "failed",
+                        "status": "failure",
                         "error": "batch poll: sub-adapter output not yet written to S3",
-                        "state": None,
-                        "dag_id": None,
+                        "state": state,
                     }
                 result = json.loads(raw)
             except Exception as e:
                 return {
-                    "status": "failed",
+                    "status": "failure",
                     "error": f"batch poll: could not read sub-adapter result: {e}",
-                    "state": None,
-                    "dag_id": None,
+                    "state": state,
                 }
-            if result.get("status") not in {"succeeded", "failed"}:
+            if result.get("status") not in {"success", "retry"} and not isinstance(result.get("error"), str):
                 return {
-                    "status": "failed",
+                    "status": "failure",
                     "error": f"batch poll: unexpected sub-adapter result: {result}",
-                    "state": None,
-                    "dag_id": None,
+                    "state": state,
                 }
-            return result
+            nested_state = result.pop("adapter_state", None)
+            next_state = {**state, "nested_adapter_state": nested_state} if isinstance(nested_state, dict) else state
+            return {**result, "state": next_state}
 
         # Failed
         reason = None
@@ -247,7 +247,44 @@ class BatchExecutor(LambdaExecutorBase):
         error = f"Batch job {job_id} failed"
         if reason not in {None, ""}:
             error = f"{error}: {reason}"
-        return {"status": "failed", "error": error, "state": None, "dag_id": None}
+        return {"status": "failure", "error": error, "state": state}
+
+    @staticmethod
+    def _is_throttling(exc: Exception) -> bool:
+        return getattr(exc, "response", {}).get("Error", {}).get("Code") in _THROTTLING_CODES
+
+    @staticmethod
+    def _retry_after(exc: Exception) -> int | None:
+        headers = getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPHeaders", {})
+        value = headers.get("retry-after")
+        try:
+            return max(0, int(float(value) * 1000))
+        except (TypeError, ValueError):
+            return None
+
+    def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
+        del cache_key, execution_id, runnable, remote, scratch_uri, result_ref
+        state = state if isinstance(state, dict) else {}
+        job_id = state.get("job_id")
+        job_definition = state.get("job_definition")
+        client = self._client()
+        if isinstance(job_id, str) and job_id:
+            try:
+                jobs = client.describe_jobs(jobs=[job_id]).get("jobs", [])
+            except Exception as exc:
+                if self._is_throttling(exc):
+                    return {"status": "retry", "error": None, "state": state, "retry_after_ms": self._retry_after(exc)}
+                return {"status": "failure", "error": f"batch cleanup status check failed: {exc}", "state": state}
+            if jobs and jobs[0].get("status") in PENDING_BATCH_STATUSES:
+                return {"status": "retry", "error": None, "state": state}
+        if isinstance(job_definition, str) and job_definition:
+            try:
+                client.deregister_job_definition(jobDefinition=job_definition)
+            except Exception as exc:
+                if self._is_throttling(exc):
+                    return {"status": "retry", "error": None, "state": state, "retry_after_ms": self._retry_after(exc)}
+                return {"status": "failure", "error": f"batch cleanup failed: {exc}", "state": state}
+        return {"status": "success", "error": None, "state": state}
 
     def cancel(
         self,
@@ -267,14 +304,21 @@ class BatchExecutor(LambdaExecutorBase):
         if isinstance(job_id, str) and job_id:
             try:
                 client.cancel_job(jobId=job_id, reason="daggerml cancellation requested")
-            except Exception:
+            except Exception as cancel_exc:
                 try:
                     client.terminate_job(jobId=job_id, reason="daggerml cancellation requested")
-                except Exception:
-                    pass
+                except Exception as terminate_exc:
+                    exc = terminate_exc if self._is_throttling(terminate_exc) else cancel_exc
+                    if self._is_throttling(exc):
+                        result = {"status": "retry", "error": None, "state": state}
+                        retry_after = self._retry_after(exc)
+                        if retry_after is not None:
+                            result["retry_after_ms"] = retry_after
+                        return result
+                    return {"status": "failure", "error": f"batch cancellation failed: {terminate_exc}", "state": state}
         if isinstance(job_definition, str) and job_definition:
             try:
                 client.deregister_job_definition(jobDefinition=job_definition)
-            except Exception:
-                pass
-        return {"status": "cancelled", "error": None}
+            except Exception as exc:
+                return {"status": "failure", "error": f"batch cancellation failed: {exc}", "state": state}
+        return {"status": "cancelled", "error": None, "state": state}

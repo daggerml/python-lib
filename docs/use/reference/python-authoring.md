@@ -45,16 +45,25 @@ dependency_endpoint_branches = session.branch.list(remote=True, dep="models")
 # [{"name": "main", "commit": Ref("commit:...")}]
 ```
 
-For these list methods, `remote` selects endpoint state and `dep` selects the dependency, so both may be used together. Endpoint listing is read-only and does not fetch commits or update local tracking refs. `session.branch.get_upstream("feature")` returns `{"branch": "main"}` or `None`; tags have no upstream metadata. `session.runtime.read_launch_state(Ref("index:<execution-id>"))` returns the persisted executor resume-state JSON object or `None` when launch state is absent. Runtime creation, inspection, graph, launch-state, and cancellation methods require `Ref` identities; they do not accept bare IDs or ref-shaped Python strings.
+For these list methods, `remote` selects endpoint state and `dep` selects the dependency, so both may be used together. Endpoint listing is read-only and does not fetch commits or update local tracking refs. `session.branch.get_upstream("feature")` returns `{"branch": "main"}` or `None`; tags have no upstream metadata. `session.runtime.read_execution_record(Ref("index:<execution-id>"))` returns exact `metadata`, semantic `state`, and coordinating `driver` sections. Runtime creation, inspection, graph, and cancellation methods require `Ref` identities; they do not accept bare IDs or ref-shaped Python strings.
 
 Cache control and garbage collection use direct low-level surfaces:
 
 ```python
 cached_dag = session.cache.get(cache_key)
-session.cache.invalidate(cache_key)
+description = session.cache.describe(cache_key)
+if description is not None:
+    session.cache.invalidate(description["execution"])
 local_summary = session.gc()
 remote_summary = session.gc(remote=True)
 ```
+
+`cache.describe(cache_key)` reports the current cache-pointer snapshot as
+`execution: Ref`, `dag: Ref | None`, and `lifecycle`. Its `dag` is present only
+for an unmarked reusable terminal result. Pass one or more `index:` or
+`frozenindex:` `Ref` values to `cache.invalidate`; cache keys and strings are
+not invalidation targets. `runtime.cancel(execution=Ref(...), max_retries=3)`
+names its execution argument explicitly and likewise requires a `Ref`.
 
 Cache and remote GC require `remote.root`; local GC does not. Remote GC never targets import-only dependencies. The removed `session.admin.remote` and `session.admin.gc` paths have no compatibility aliases.
 

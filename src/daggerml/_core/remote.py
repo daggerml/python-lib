@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote
 from daggerml._core.commit import CommitOps
 from daggerml._core.db import Ref
 from daggerml._core.s3_cas import CasItem, CasItemConflict, S3Remote
-from daggerml._core.types import NAMESPACES, Dag, DmlBase, DmlDB, DmlRepoError, TxnWithValid
+from daggerml._core.types import NAMESPACES, DmlBase, DmlDB, DmlRepoError, TxnWithValid
 from daggerml._core.util import uuid7
 
 if TYPE_CHECKING:
@@ -26,12 +26,13 @@ _SERDE_LIST = "list"
 _SERDE_DICT = "dict"
 _SERDE_REF = "ref"
 _REMOTE_DESCRIPTOR = {
-    "schema": 1,
+    "schema": 2,
     "hash": "sha256",
-    "layout": "one-project-cas+refs",
+    "layout": "one-project-cas+refs+split-execution",
     "refs_prefix": "refs",
     "io_prefix": "io",
     "cas_prefix": "cas/sha256",
+    "execution_prefix": "../exec",
 }
 
 
@@ -229,18 +230,6 @@ class Remote:
         kind_dir = "tags" if kind == "tag" else "heads"
         return f"refs/{kind_dir}/{quote(name, safe='')}.json"
 
-    def _cache_key(self, cache_key: str) -> str:
-        return f"refs/cache/{cache_key}.json"
-
-    def _active_key(self, cache_key: str) -> str:
-        return f"refs/active/{cache_key}.json"
-
-    def _transport_key(self, execution_id: str) -> str:
-        return f"refs/transport/{execution_id}.json"
-
-    def _cancel_target_key(self, execution_id: str) -> str:
-        return f"refs/cancel-targets/{execution_id}.json"
-
     def _tombstone_key(self) -> str:
         return f"refs/tombstone/{uuid7().hex}.json"
 
@@ -324,6 +313,14 @@ class Remote:
             return root_ref
 
         return db.write_with_growth(write_objects)
+
+    def upload_object_graph(self, ref: Ref, db: DmlDB) -> None:
+        """Upload a typed object graph without publishing a remote ref."""
+        self._put_cas(ref, None, db)
+
+    def materialize_ref(self, ref: Ref, db: DmlDB) -> Ref:
+        """Materialize a typed root referenced by execution state."""
+        return self.materialize_manifest(self._build_ref_payload(ref), db, expected_root_ns=ref.ns())
 
     def _read_ref(self, ref_path: str):
         return json.loads(self._store._get(self._store._key_for(ref_path)))
@@ -414,38 +411,6 @@ class Remote:
             self._collect_direct_refs(self._load_cas_object(ref, raw), deps)
             pending.extend(deps - visited)
         return live_oids
-
-    def put_cache(self, dag_ref: Ref, execution_id: str, db: DmlDB) -> str:
-        with db.tx(readonly=True) as txn:
-            dag: Dag = txn.get(dag_ref)
-            cache_key = dag.cache_key(txn)
-        ref_path = self._cache_key(cache_key)
-        self._put_cas(dag_ref, ref_path, db, meta={"execution_id": execution_id})
-        return cache_key
-
-    @overload
-    def get_cache(self, cache_key: str, db: DmlDB, *, raw: Literal[False] = False) -> Ref | None: ...
-    @overload
-    def get_cache(self, cache_key: str, db: DmlDB | None = None, *, raw: Literal[True] = True) -> dict | None: ...
-    def get_cache(self, cache_key: str, db: DmlDB | None = None, raw: bool = False) -> Ref | dict | None:
-        if raw:
-            return self._get_path(
-                self._cache_key(cache_key),
-                expected_ns="dag",
-                required_metadata=("execution_id",),
-                raw=True,
-            )
-        assert db is not None, "DmlDB instance required when raw=False"
-        return self._get_path(
-            self._cache_key(cache_key),
-            db,
-            expected_ns="dag",
-            required_metadata=("execution_id",),
-            raw=False,
-        )
-
-    def delete_cache(self, cache_key: str) -> bool:
-        return self._del(self._cache_key(cache_key))
 
     def put_ref(
         self,
@@ -542,88 +507,6 @@ class Remote:
             tips.append((name, tip))
         return sorted(tips, key=lambda item: item[0])
 
-    def put_active(self, cache_key: str, execution_id: str, argv: Ref, db: DmlDB) -> None:
-        ref_path = self._active_key(cache_key)
-        self._put_cas(argv, ref_path, db, meta={"execution_id": execution_id})
-
-    @overload
-    def get_active(self, cache_key: str, db: DmlDB, raw: Literal[False] = False) -> Ref | None: ...
-    @overload
-    def get_active(self, cache_key: str, db: None = None, raw: Literal[True] = True) -> dict | None: ...
-    def get_active(self, cache_key: str, db: DmlDB | None = None, raw: bool = False) -> Ref | dict | None:
-        if raw:
-            return self._get_path(
-                self._active_key(cache_key),
-                expected_ns="node-argv",
-                required_metadata=("execution_id",),
-                raw=True,
-            )
-        assert db is not None, "DmlDB instance required when raw=False"
-        return self._get_path(
-            self._active_key(cache_key),
-            db,
-            expected_ns="node-argv",
-            required_metadata=("execution_id",),
-            raw=False,
-        )
-
-    def delete_active(self, cache_key: str) -> bool:
-        return self._del(self._active_key(cache_key))
-
-    def move_active_to_cancel_target(self, cache_key: str, execution_id: str) -> bool:
-        """Move an execution's active argv manifest to its stable cancel target."""
-        active_key = self._store._key_for(self._active_key(cache_key))
-        try:
-            active = self._store._get(active_key, cas=True)
-        except self._store.client.exceptions.NoSuchKey:
-            return False
-        manifest = json.loads(active.data)
-        self._validate_ref_payload(manifest, expected_root_ns="node-argv", required_metadata=("execution_id",))
-        if manifest["metadata"]["execution_id"] != execution_id:
-            return False
-        target_key = self._store._key_for(self._cancel_target_key(execution_id))
-        try:
-            self._store._put(target_key, active.data, overwrite=False)
-        except CasItemConflict:
-            pass
-        return self._store._delete(active)
-
-    @overload
-    def get_cancel_target(self, execution_id: str, db: DmlDB, *, raw: Literal[False] = False) -> Ref | None: ...
-    @overload
-    def get_cancel_target(self, execution_id: str, db: None = None, *, raw: Literal[True] = True) -> dict | None: ...
-    def get_cancel_target(self, execution_id: str, db: DmlDB | None = None, raw: bool = False) -> Ref | dict | None:
-        if raw:
-            return self._get_path(
-                self._cancel_target_key(execution_id),
-                expected_ns="node-argv",
-                required_metadata=("execution_id",),
-                raw=True,
-            )
-        assert db is not None, "DmlDB instance required to materialize a cancel target"
-        return self._get_path(
-            self._cancel_target_key(execution_id),
-            db,
-            expected_ns="node-argv",
-            required_metadata=("execution_id",),
-            raw=False,
-        )
-
-    def delete_cancel_target(self, execution_id: str) -> bool:
-        return self._del(self._cancel_target_key(execution_id))
-
-    def put_transport(self, execution_id: str, dag: Ref, db: DmlDB) -> str:
-        ref_path = self._transport_key(execution_id)
-        self._put_cas(dag, ref_path, db, meta={"ts": int(time.time())})
-        return ref_path
-
-    def get_transport(self, execution_id: str, db: DmlDB) -> Ref | None:
-        ref_path = self._transport_key(execution_id)
-        return self._get_path(ref_path, db, expected_ns="dag", raw=False)
-
-    def delete_transport(self, execution_id: str) -> bool:
-        return self._del(self._transport_key(execution_id))
-
     def gc(self) -> dict[str, int]:
         live_oids: set[str] = set()
         tombstones_deleted = 0
@@ -637,6 +520,59 @@ class Remote:
             payload = json.loads(self._store._get(key))
             root_ref = self._validate_ref_payload(payload)
             live_oids.update(self._get_live_oids(root_ref))
+            total_refs += 1
+        exec_store = S3Remote(self.root_uri.rstrip("/") + "/exec", client=self._store.client)
+        execution_prefix = exec_store._key_for("execution/")
+        execution_ids = {
+            key[len(execution_prefix) :].removesuffix("/metadata.json")
+            for key in exec_store._iter(execution_prefix)
+            if key.endswith("/metadata.json")
+        }
+        for execution_id in execution_ids:
+            metadata_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"), cas=True)
+            state_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json"), cas=True)
+            driver_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/driver.json"), cas=True)
+            metadata = json.loads(metadata_item.data)
+            state = json.loads(state_item.data)
+            driver = json.loads(driver_item.data)
+            cache_key = metadata.get("cache_key")
+            current_execution = None
+            if cache_key is not None:
+                try:
+                    current_execution = exec_store._get(exec_store._key_for(f"cache/{cache_key}"))
+                except Exception as exc:
+                    if not exec_store._is_missing_error(exc):
+                        raise
+            retained = (
+                current_execution == execution_id
+                or cache_key is None
+                or driver.get("lock") is not None
+                or state.get("cancelation") is not None
+                or state.get("invalidation") is not None
+            )
+            if not retained:
+                # Delete semantic state first so concurrent result publication
+                # conflicts before immutable metadata can become partial.
+                if all(exec_store._delete(item) for item in (state_item, driver_item, metadata_item)):
+                    continue
+                try:
+                    metadata = json.loads(
+                        exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"))
+                    )
+                except Exception as exc:
+                    if not exec_store._is_missing_error(exc):
+                        raise
+                try:
+                    state = json.loads(
+                        exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json"))
+                    )
+                except Exception as exc:
+                    if not exec_store._is_missing_error(exc):
+                        raise
+            for ref_field in ("argv_ref", "result_ref"):
+                value = metadata.get(ref_field) if ref_field == "argv_ref" else state.get(ref_field)
+                if value is not None:
+                    live_oids.update(self._get_live_oids(Ref(value)))
             total_refs += 1
         t2 = time.time()
         cas_prefix = self._store._key_for("cas/sha256/")

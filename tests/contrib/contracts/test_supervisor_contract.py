@@ -16,10 +16,10 @@ def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellatio
     class FakeRuntime:
         def read_execution_record(self, execution: Ref):
             assert execution == Ref("index:exec-1")
-            return {"lifecycle": "cancel-pending"}
+            return {"state": {"lifecycle": "cancel-pending"}}
 
-        def cancel(self, execution: Ref, mode: str = "full"):
-            calls.append((execution, mode))
+        def cancel(self, execution: Ref, max_retries: int = 3):
+            calls.append((execution, str(max_retries)))
 
     class FakeDml:
         @staticmethod
@@ -77,7 +77,7 @@ def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellatio
         }
     )
 
-    assert calls == [(Ref("index:exec-1"), "drive")]
+    assert calls == []
     assert result["status"] == "failed"
     assert "Worker killed by signal SIGTERM" in result["error"]
 
@@ -89,3 +89,14 @@ def test_contrib_supervisor_002__invalid_worker_result_includes_received_payload
         supervisor_mod._validate_output(result)
 
     assert repr(result) in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"status": "succeeded", "error": None, "dag_id": "d" * 64},
+        {"status": "failed", "error": "worker failed"},
+    ],
+)
+def test_contrib_supervisor_003__worker_terminal_schema_matches_script_output(result):
+    assert supervisor_mod._validate_output(result) == result

@@ -11,7 +11,12 @@ from urllib.parse import urlparse
 from warnings import warn
 
 from daggerml import Runnable
-from daggerml._core.exec_state import AdapterCancelResponse, AdapterInvokeResponse
+from daggerml._core.exec_state import (
+    AdapterCancelResponse,
+    AdapterCleanupResponse,
+    AdapterInvokeResponse,
+    ExecutionState,
+)
 from daggerml.api import DmlRepoError, _entry_points
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 from daggerml.util import get_client
@@ -27,7 +32,7 @@ class AdapterBase:
         return get_executor(cls.name, uri).resolve_runnable(uri, kwargs, sub)
 
     @classmethod
-    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCancelResponse:
+    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCleanupResponse | AdapterCancelResponse:
         raise NotImplementedError("Adapter send method is not implemented")
 
     @classmethod
@@ -70,11 +75,29 @@ class AdapterBase:
         raw = cls._read_input(args.input)
         payload = json.loads(raw)
         result = cls.send(**payload)
-        payload["state"] = payload.get("state")
-        while args.poll and payload.get("operation") == "invoke" and result.get("status") == "running":
-            payload["state"] = result.get("state") or payload["state"]
+        while args.poll and payload.get("operation") == "invoke" and result.get("status") == "retry":
+            state = result.get("adapter_state")
+            if not isinstance(state, dict):
+                raise DmlRepoError("Retry adapter response requires object adapter_state")
+            payload["adapter_state"] = state
             time.sleep(0.1)
             result = cls.send(**payload)
+        if args.poll and payload.get("operation") == "invoke" and result.get("status") == "success":
+            record = ExecutionState.from_execution_id(
+                payload["execution_id"], root_uri=payload["remote"]["root"], n_workers=1
+            ).read_execution_record(payload["execution_id"])
+            result_ref = record["state"]["result_ref"]
+            if result_ref is None:
+                raise DmlRepoError("Successful nested invoke did not publish a result")
+            cleanup_payload = {**payload, "operation": "cleanup", "result_ref": result_ref}
+            result = cls.send(**cleanup_payload)
+            while result.get("status") == "retry":
+                state = result.get("adapter_state")
+                if not isinstance(state, dict):
+                    raise DmlRepoError("Retry adapter response requires object adapter_state")
+                cleanup_payload["adapter_state"] = state
+                time.sleep(0.1)
+                result = cls.send(**cleanup_payload)
         cls._write_output(args.output, json.dumps(result))
         return 0
 
@@ -84,7 +107,7 @@ class LocalAdapter(AdapterBase):
     executable = "dml-local-adapter"
 
     @classmethod
-    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCancelResponse:
+    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCleanupResponse | AdapterCancelResponse:
         from daggerml.contrib.executors._base import get_executor
 
         return get_executor("local", kw["runnable"]["target"]["uri"]).handle(**kw)
@@ -95,13 +118,31 @@ class LambdaAdapter(AdapterBase):
     executable = "dml-lambda-adapter"
 
     @classmethod
-    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCancelResponse:
+    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCleanupResponse | AdapterCancelResponse:
         client = get_client("lambda")
-        response = client.invoke(
-            FunctionName=kw["runnable"]["target"]["uri"],
-            InvocationType="RequestResponse",
-            Payload=json.dumps(kw, separators=(",", ":"), sort_keys=True).encode("utf-8"),
-        )
+        try:
+            response = client.invoke(
+                FunctionName=kw["runnable"]["target"]["uri"],
+                InvocationType="RequestResponse",
+                Payload=json.dumps(kw, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+            )
+        except Exception as exc:
+            code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+            if code not in {"TooManyRequestsException", "ThrottlingException"}:
+                raise
+            headers = getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPHeaders", {})
+            try:
+                retry_after_ms = max(0, int(float(headers.get("retry-after")) * 1000))
+            except (TypeError, ValueError):
+                retry_after_ms = None
+            result: AdapterInvokeResponse = {
+                "status": "retry",
+                "error": None,
+                "adapter_state": kw.get("adapter_state") if isinstance(kw.get("adapter_state"), dict) else {},
+            }
+            if retry_after_ms is not None:
+                result["retry_after_ms"] = retry_after_ms
+            return result
         stream = response.get("Payload")
         if stream is None:
             raise DmlRepoError("Lambda adapter invoke response missing Payload")

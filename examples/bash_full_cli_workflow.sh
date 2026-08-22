@@ -79,13 +79,14 @@ if printf '["%s","%s"]\n' "${hello_runtime_ref}" "${seed_ref}" | dml runtime sta
   fail "Expected runtime start-fn CLI JSON argv parsing to reject list[Ref] inputs"
 fi
 dml cache get "${greeting_cache_key}"
-dml cache invalidate "${greeting_cache_key}" | jq .
+greeting_execution_ref="$(dml cache describe "${greeting_cache_key}" | jq -r '.execution')"
+dml cache invalidate "${greeting_execution_ref}" | jq .
 dml cache get "${greeting_cache_key}" | jq .
 
 dml runtime set-node-name "${runtime_idx}" cli-greeting-alias "${imported_greeting_ref}"
 dml runtime get-node "${runtime_idx}" cli-greeting-alias
 dml runtime describe "${runtime_idx}" | jq .
-dml runtime cancel "${cancel_idx}" | jq .
+dml runtime cancel "${cancel_idx}"
 dml runtime describe "${scratch_idx}" | jq .
 dml gc | jq .
 

@@ -60,7 +60,8 @@ def test_contrib_aws_client_003__batch_launch_and_poll_use_high_resilience_clien
             writes.append(kwargs)
 
         def get_object(self, **kwargs):
-            return {"Body": type("Body", (), {"read": lambda self: json.dumps({"status": "succeeded"}).encode()})()}
+            response = {"status": "success", "error": None, "adapter_state": {"nested": "done"}}
+            return {"Body": type("Body", (), {"read": lambda self: json.dumps(response).encode()})()}
 
     class BatchClient:
         def register_job_definition(self, **kwargs):
@@ -97,7 +98,18 @@ def test_contrib_aws_client_003__batch_launch_and_poll_use_high_resilience_clien
     )
 
     assert writes
-    assert result == {"status": "succeeded"}
+    assert result == {
+        "status": "success",
+        "error": None,
+        "state": {
+            "job_id": "job-1",
+            "job_definition": "arn:job-definition",
+            "nested_adapter_state": {"nested": "done"},
+        },
+    }
+    nested_payload = json.loads(writes[0]["Body"])
+    assert nested_payload["adapter_state"] is None
+    assert "state" not in nested_payload
     expected_start_policy = {
         "connection_timeout": 60,
         "read_timeout": 60,
@@ -113,3 +125,56 @@ def test_contrib_aws_client_003__batch_launch_and_poll_use_high_resilience_clien
         expected_poll_policy,
         expected_poll_policy,
     ]
+
+
+def test_contrib_batch_cleanup_004__active_retry_then_terminal_cleanup_is_repeatable(monkeypatch):
+    jobs = iter(([{"status": "RUNNING"}], [{"status": "SUCCEEDED"}], []))
+    deregistered = []
+
+    class Client:
+        def describe_jobs(self, **kwargs):
+            return {"jobs": next(jobs)}
+
+        def deregister_job_definition(self, **kwargs):
+            deregistered.append(kwargs["jobDefinition"])
+
+    monkeypatch.setattr(BatchExecutor, "_client", lambda self: Client())
+    executor = BatchExecutor()
+    kwargs = {
+        "cache_key": "ck",
+        "execution_id": "exec",
+        "runnable": {},
+        "state": {"job_id": "job-1", "job_definition": "definition-1"},
+        "remote": {"root": "s3://bucket/root"},
+        "scratch_uri": "s3://bucket/root/exec/io/exec/",
+        "result_ref": "dag:result",
+    }
+
+    assert executor.cleanup(**kwargs)["status"] == "retry"
+    assert executor.cleanup(**kwargs)["status"] == "success"
+    assert executor.cleanup(**kwargs)["status"] == "success"
+    assert deregistered == ["definition-1", "definition-1"]
+
+
+def test_contrib_batch_cancel_reports_backend_failure(monkeypatch):
+    class Client:
+        def cancel_job(self, **kwargs):
+            raise RuntimeError("cancel failed")
+
+        def terminate_job(self, **kwargs):
+            raise RuntimeError("terminate failed")
+
+    monkeypatch.setattr(BatchExecutor, "_client", lambda self: Client())
+
+    result = BatchExecutor().cancel(
+        cache_key="ck",
+        execution_id="exec",
+        runnable={},
+        state={"job_id": "job-1"},
+        remote={"root": "s3://bucket/root"},
+        scratch_uri="s3://bucket/root/exec/io/exec/",
+        cancel_requested_by="user",
+    )
+
+    assert result["status"] == "failure"
+    assert "terminate failed" in result["error"]

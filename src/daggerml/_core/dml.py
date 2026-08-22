@@ -12,7 +12,13 @@ from daggerml._core.commit import CommitDescription, CommitDiffPayload, CommitFu
 from daggerml._core.config import Config, flatten_dict
 from daggerml._core.dag import DagDescription, DagOps, NodeDescriptionPayload
 from daggerml._core.db import DmlDbKeyNotFoundError, Ref
-from daggerml._core.exec_state import ExecutionGraph, ExecutionRecord, ExecutionState, InvalidationResponse
+from daggerml._core.exec_state import (
+    EXECUTION_LIFECYCLES,
+    ExecutionGraph,
+    ExecutionRecord,
+    ExecutionState,
+    InvalidationResponse,
+)
 from daggerml._core.head import Head, UpstreamInfo
 from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
@@ -42,8 +48,7 @@ def _graph_lifecycle_style(lifecycle: str) -> str:
         "running": "yellow",
         "succeeded": "green",
         "failed": "red",
-        "cancel-requested": "dark_goldenrod italic",
-        "cancel-ready": "dark_orange",
+        "cancel-pending": "dark_goldenrod italic",
         "canceled": "dim",
         "pending": "cyan",
     }.get(lifecycle, "white")
@@ -354,17 +359,10 @@ class RuntimeListPayload(TypedDict):
     frozen_message: str | None
 
 
-RuntimeCancelSummary = TypedDict(
-    "RuntimeCancelSummary",
-    {
-        "id": Ref,
-        "active-callers": list[Ref],
-        "inactive": list[Ref],
-        "cancelled": list[Ref],
-        "timeout": list[Ref],
-        "error": list[Ref],
-    },
-)
+class CacheDescription(TypedDict):
+    execution: Ref
+    dag: Ref | None
+    lifecycle: EXECUTION_LIFECYCLES
 
 
 def _require_runtime_ref(value: object, *, allow_frozen: bool = True) -> Ref:
@@ -553,25 +551,17 @@ class _RuntimeNamespace:
         execution_id = _require_runtime_ref(execution).id()
         return _exec_state(self._dml).read_execution_record(execution_id)
 
-    def read_launch_state(
-        self,
-        execution: Annotated[Ref, "Runtime execution ref whose persisted executor resume state should be read."],
-    ) -> dict | None:
-        """Read the persisted executor resume-state object for one execution."""
-        execution_id = _require_runtime_ref(execution).id()
-        return _exec_state(self._dml).read_launch_state(execution_id)
-
     def cancel(
         self,
-        index: Annotated[Ref, "Runtime index to cancel."],
+        execution: Annotated[Ref, "Runtime execution to cancel."],
         *,
-        mode: Annotated[Literal["full", "drive"], "Cancellation mode."] = "full",
-    ) -> RuntimeCancelSummary:
-        """Cancel active execution state for a runtime index."""
-        index = _require_runtime_ref(index)
-        requested_by = self._dml._config.user if mode == "full" else None
-        resp = _exec_state(self._dml).cancel(index.id(), requested_by, self._dml._db, mode=mode)
-        return cast(RuntimeCancelSummary, {"id": index, **resp})
+        max_retries: Annotated[int, "Maximum cancellation retries after the initial attempt."] = 3,
+    ) -> None:
+        """Cancel active state for a runtime execution."""
+        execution = _require_runtime_ref(execution)
+        if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
+            raise TypeError("max_retries must be a nonnegative integer")
+        _exec_state(self._dml).cancel(execution.id(), self._dml._config.user, self._dml._db, max_retries=max_retries)
 
     def describe_graph(
         self,
@@ -880,16 +870,30 @@ class _CacheNamespace:
 
     def get(self, cache_key: Annotated[str, "Exact cache key to resolve."]) -> Ref | None:
         """Return the cached DAG ref for a cache key, if present."""
-        return _remote_ops(self._dml).get_cache(_validate_cache_key(cache_key), raw=False, db=self._dml._db)
+        validated = _validate_cache_key(cache_key)
+        return _exec_state(self._dml, cache_key=validated).get_cached_result(validated, self._dml._db)
+
+    def describe(self, cache_key: Annotated[str, "Exact cache key to inspect."]) -> CacheDescription | None:
+        """Describe the execution currently bound to a cache key."""
+        validated = _validate_cache_key(cache_key)
+        description = _exec_state(self._dml, cache_key=validated).describe_cache(validated)
+        if description is None:
+            return None
+        result_ref = description["result_ref"]
+        return {
+            "execution": Ref(f"index:{description['execution_id']}"),
+            "dag": None if result_ref is None else Ref(result_ref),
+            "lifecycle": description["lifecycle"],
+        }
 
     def invalidate(
-        self, *cache_keys: Annotated[str, "One or more exact cache keys to invalidate."]
+        self, *executions: Annotated[Ref, "One or more runtime executions to invalidate."]
     ) -> InvalidationResponse:
-        """Invalidate one or more remote execution cache keys."""
-        if not cache_keys:
-            raise ValueError("At least one cache key is required")
-        validated = tuple(_validate_cache_key(cache_key) for cache_key in cache_keys)
-        return _exec_state(self._dml).invalidate_cache(validated, self._dml._config.user)
+        """Invalidate one or more remote executions and their current callers."""
+        if not executions:
+            raise ValueError("At least one execution is required")
+        execution_ids = tuple(_require_runtime_ref(execution).id() for execution in executions)
+        return _exec_state(self._dml).invalidate_executions(execution_ids, self._dml._config.user)
 
 
 @dataclass(frozen=True)

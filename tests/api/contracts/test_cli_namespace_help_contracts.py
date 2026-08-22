@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 
 from daggerml._cli import MethodCLI
-from daggerml._core import Dml
+from daggerml._core import Dml, Ref
 
 
 def test_cli_namespace_help_001__uses_property_annotation_and_docstring() -> None:
@@ -83,11 +83,18 @@ def test_cli_ref_listing_and_inspection_commands_are_generated() -> None:
     assert "--remote" in tag_list_help and "--dep DEP" in tag_list_help
     assert "get-upstream" in branch_subparsers.choices
     assert "get-upstream" not in tag_subparsers.choices
-    assert "read-launch-state" in runtime_subparsers.choices
+    assert "read-launch-state" not in runtime_subparsers.choices
+    cancel_help = runtime_subparsers.choices["cancel"].format_help()
+    assert "--max-retries MAX_RETRIES" in cancel_help
+    assert "--mode" not in cancel_help
 
     parsed = cli.parser.parse_args(["branch", "list", "--remote", "--dep", "models"])
     assert parsed.remote is True
     assert parsed.dep == "models"
+
+    parsed = cli.parser.parse_args(["runtime", "cancel", "index:e1", "--max-retries", "5"])
+    assert parsed.execution == Ref("index:e1")
+    assert parsed.max_retries == 5
 
 
 def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None:
@@ -100,7 +107,10 @@ def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None
     cache_subparsers = next(
         action for action in cache._actions if isinstance(action, argparse._SubParsersAction)
     )
-    assert set(cache_subparsers.choices) == {"get", "invalidate"}
+    assert set(cache_subparsers.choices) == {"get", "describe", "invalidate"}
+
+    parsed = cli.parser.parse_args(["cache", "invalidate", "index:e1", "frozenindex:e2"])
+    assert parsed.executions == [Ref("index:e1"), Ref("frozenindex:e2")]
 
     gc_help = root_subparsers.choices["gc"].format_help()
     assert "--remote" in gc_help
