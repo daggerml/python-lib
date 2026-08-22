@@ -60,15 +60,36 @@ def test_gc_preserves_locked_reservation_and_rereads_cache_pointer_before_deleti
         client.create_bucket(Bucket="bucket")
         remote = Remote("s3://bucket/root", n_workers=1, client=client)
         exec_store = remote._store.__class__("s3://bucket/root/exec", client)
-        locked = {"execution_id": "locked", "cache_key": "locked-key", "lock": {"owner": "owner", "ttl": 300}}
-        unlocked = {"execution_id": "unlocked", "cache_key": "unlocked-key", "lock": None}
-        exec_store._put_js(exec_store._key_for("execution/locked.json"), locked)
-        exec_store._put_js(exec_store._key_for("execution/unlocked.json"), unlocked)
+        for execution_id, cache_key, lock in (
+            ("locked", "locked-key", {"owner": "owner", "ttl": 300}),
+            ("unlocked", "unlocked-key", None),
+        ):
+            exec_store._put_js(
+                exec_store._key_for(f"execution/{execution_id}/metadata.json"),
+                {"execution_id": execution_id, "cache_key": cache_key, "argv_ref": None, "created_at": 0},
+            )
+            exec_store._put_js(
+                exec_store._key_for(f"execution/{execution_id}/state.json"),
+                {
+                    "lifecycle": "running",
+                    "result_ref": None,
+                    "result_source": None,
+                    "spawned_execution_ids": [],
+                    "child_execution_ids": [],
+                    "cancelation": None,
+                    "invalidation": None,
+                    "updated_at": 0,
+                },
+            )
+            exec_store._put_js(
+                exec_store._key_for(f"execution/{execution_id}/driver.json"),
+                {"lock": lock, "not_before": None, "adapter_state": None, "cleanup": None},
+            )
         original_get = exec_store.__class__._get
 
         def publish_pointer_after_snapshot(store, key, *, cas=False):
             item = original_get(store, key, cas=cas)
-            if key.endswith("execution/unlocked.json") and cas:
+            if key.endswith("execution/unlocked/metadata.json") and cas:
                 store._put(store._key_for("cache/unlocked-key"), "unlocked", overwrite=False)
             return item
 
@@ -76,8 +97,14 @@ def test_gc_preserves_locked_reservation_and_rereads_cache_pointer_before_deleti
 
         remote.gc()
 
-        assert json.loads(exec_store._get(exec_store._key_for("execution/locked.json")))["execution_id"] == "locked"
-        assert json.loads(exec_store._get(exec_store._key_for("execution/unlocked.json")))["execution_id"] == "unlocked"
+        locked_metadata = json.loads(
+            exec_store._get(exec_store._key_for("execution/locked/metadata.json"))
+        )
+        unlocked_metadata = json.loads(
+            exec_store._get(exec_store._key_for("execution/unlocked/metadata.json"))
+        )
+        assert locked_metadata["execution_id"] == "locked"
+        assert unlocked_metadata["execution_id"] == "unlocked"
 
 
 def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypatch):
@@ -86,20 +113,51 @@ def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypat
         client.create_bucket(Bucket="bucket")
         remote = Remote("s3://bucket/root", n_workers=1, client=client)
         exec_store = remote._store.__class__("s3://bucket/root/exec", client)
-        execution_key = exec_store._key_for("execution/unlocked.json")
+        metadata_key = exec_store._key_for("execution/unlocked/metadata.json")
+        state_key = exec_store._key_for("execution/unlocked/state.json")
+        driver_key = exec_store._key_for("execution/unlocked/driver.json")
         result = Ref("dag:surviving-result")
-        exec_store._put_js(execution_key, {"execution_id": "unlocked", "cache_key": "unlocked-key"})
+        exec_store._put_js(
+            metadata_key,
+            {"execution_id": "unlocked", "cache_key": "unlocked-key", "argv_ref": None, "created_at": 0},
+        )
+        exec_store._put_js(
+            state_key,
+            {
+                "lifecycle": "running",
+                "result_ref": None,
+                "result_source": None,
+                "spawned_execution_ids": [],
+                "child_execution_ids": [],
+                "cancelation": None,
+                "invalidation": None,
+                "updated_at": 0,
+            },
+        )
+        exec_store._put_js(
+            driver_key,
+            {"lock": None, "not_before": None, "adapter_state": None, "cleanup": None},
+        )
         remote._store._put(remote._store._key_for(f"cas/sha256/{result.id()}"), "result")
         original_delete = exec_store.__class__._delete
         mutated = False
 
         def mutate_before_conditional_delete(store, key, **kwargs):
             nonlocal mutated
-            if not mutated and getattr(key, "key", key) == execution_key:
+            if not mutated and getattr(key, "key", key) == state_key:
                 mutated = True
                 store._put_js(
-                    execution_key,
-                    {"execution_id": "unlocked", "cache_key": "unlocked-key", "result_ref": result.to},
+                    state_key,
+                    {
+                        "lifecycle": "succeeded",
+                        "result_ref": result.to,
+                        "result_source": "runtime",
+                        "spawned_execution_ids": [],
+                        "child_execution_ids": [],
+                        "cancelation": None,
+                        "invalidation": None,
+                        "updated_at": 1,
+                    },
                 )
             return original_delete(store, key, **kwargs)
 
@@ -121,7 +179,7 @@ def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state(
             "cas_prefix": "cas/sha256",
             "hash": "sha256",
             "io_prefix": "io",
-            "layout": "one-project-cas+refs+unified-execution",
+            "layout": "one-project-cas+refs+split-execution",
             "refs_prefix": "refs",
             "schema": 2,
             "execution_prefix": "../exec",
@@ -307,10 +365,11 @@ def test_remote_ref_payloads_use_typed_roots(tmp_path):
         state = ExecutionState("s3://bucket/root", 2, cache_key=argv_value.id(), client=client)
         execution_id, owner, _ = state.reserve_execution(argv_node, execution_id="exec-1")
         assert state._create_cache(argv_value.id(), execution_id)
-        state._mutate(
+        state._mutate_state(
             execution_id,
-            owner,
-            lambda record: record.update(lifecycle="succeeded", result_ref=dag_ref.to),
+            lambda record: record.update(
+                lifecycle="succeeded", result_ref=dag_ref.to, result_source="runtime"
+            ),
         )
         state.unlock(execution_id, owner)
         remote.put_ref(commit_ref, "branch", "main", source_db)
@@ -318,8 +377,8 @@ def test_remote_ref_payloads_use_typed_roots(tmp_path):
         project_payload = remote._read_ref(remote._ref_key("branch", "main"))
         assert state._read_cache(argv_value.id())[0] == "exec-1"
         record = state.read_execution_record("exec-1")
-        assert record["argv_ref"] == argv_node.to
-        assert record["result_ref"] == dag_ref.to
+        assert record["metadata"]["argv_ref"] == argv_node.to
+        assert record["state"]["result_ref"] == dag_ref.to
 
         assert set(project_payload) == {"ref", "created", "metadata"}
         assert project_payload["ref"] == {"to": commit_ref.to}
@@ -373,10 +432,11 @@ def test_remote_gc_traces_unified_execution_refs_and_collects_losing_attempt(tmp
         state = ExecutionState("s3://bucket/root", 2, cache_key="current", client=client)
         execution_id, owner, _ = state.reserve_execution(argv, execution_id="current-exec")
         assert state._create_cache("current", execution_id)
-        state._mutate(
+        state._mutate_state(
             execution_id,
-            owner,
-            lambda record: record.update(lifecycle="succeeded", result_ref=dag_ref.to),
+            lambda record: record.update(
+                lifecycle="succeeded", result_ref=dag_ref.to, result_source="runtime"
+            ),
         )
         state.unlock(execution_id, owner)
         losing = ExecutionState("s3://bucket/root", 2, cache_key="lost", client=client)

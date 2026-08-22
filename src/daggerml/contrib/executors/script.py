@@ -147,7 +147,7 @@ class ScriptExecutor(ExecutorBase):
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
         }
-        return {"status": "running", "error": None, "state": launch_state, "dag_id": None}
+        return {"status": "retry", "error": None, "state": launch_state}
 
     def poll(
         self,
@@ -168,38 +168,54 @@ class ScriptExecutor(ExecutorBase):
             try:
                 done_pid, _ = os.waitpid(pid, os.WNOHANG)
                 if done_pid == 0:
-                    return {"status": "running", "error": None, "state": state, "dag_id": None}
+                    return {"status": "retry", "error": None, "state": state}
             except ChildProcessError:
                 try:
                     os.kill(pid, 0)
-                    return {"status": "running", "error": None, "state": state, "dag_id": None}
+                    return {"status": "retry", "error": None, "state": state}
                 except ProcessLookupError:
                     pass
                 except PermissionError:
-                    return {"status": "running", "error": None, "state": state, "dag_id": None}
+                    return {"status": "retry", "error": None, "state": state}
         # Process exited — read result
         if result_path.exists():
             try:
                 parsed = json.loads(result_path.read_text())
                 if parsed.get("status") in {"succeeded", "failed"}:
-                    parsed["state"] = state
-                    _cleanup_workdir(state)
-                    return parsed
+                    return {
+                        "status": "success" if parsed["status"] == "succeeded" else "failure",
+                        "error": parsed.get("error"),
+                        "state": state,
+                    }
             except Exception as e:
-                _cleanup_workdir(state)
                 return {
-                    "status": "failed",
+                    "status": "failure",
                     "error": f"Could not read supervisor result: {e}",
                     "state": state,
-                    "dag_id": None,
                 }
-        _cleanup_workdir(state)
         return {
-            "status": "failed",
+            "status": "failure",
             "error": "Script supervisor exited without result",
             "state": state,
-            "dag_id": None,
         }
+
+    def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
+        del cache_key, execution_id, runnable, remote, scratch_uri, result_ref
+        state = state if isinstance(state, dict) else {}
+        pid = state.get("pid")
+        if isinstance(pid, int):
+            try:
+                done_pid, _ = os.waitpid(pid, os.WNOHANG)
+                if done_pid == 0:
+                    return {"status": "retry", "error": None, "state": state}
+            except ChildProcessError:
+                try:
+                    os.kill(pid, 0)
+                    return {"status": "retry", "error": None, "state": state}
+                except (ProcessLookupError, PermissionError):
+                    pass
+        _cleanup_workdir(state)
+        return {"status": "success", "error": None, "state": state}
 
     def cancel(
         self,

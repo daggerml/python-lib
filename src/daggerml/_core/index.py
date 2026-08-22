@@ -95,9 +95,10 @@ class IndexOps:
         if execution_id is not None:
             record, owner = state.activate(exec_id, db)
             try:
-                if record["cache_key"] != cache_key or record["argv_ref"] is None:
+                metadata = record["metadata"]
+                if metadata["cache_key"] != cache_key or metadata["argv_ref"] is None:
                     raise DmlRepoError(f"Invalid execution payload for cache key: {cache_key}")
-                argv = self._remote.materialize_ref(Ref(record["argv_ref"]), db)
+                argv = self._remote.materialize_ref(Ref(metadata["argv_ref"]), db)
             except Exception:
                 state.unlock(exec_id, owner)
                 raise

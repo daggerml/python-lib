@@ -6,7 +6,7 @@ from daggerml._core import DmlRepoError
 from daggerml._core.db import Ref
 from daggerml._core.types import ArgvNode, FrozenIndex, Index, ListDatum
 from daggerml.api import Dag
-from tests._core.helpers import NoopExecutionState, local_index_ops, make_local_dml
+from tests._core.helpers import NoopExecutionState, execution_record, local_index_ops, make_local_dml
 
 
 def test_runtime_freeze_and_unfreeze_preserve_id_and_partial_dag(tmp_path, monkeypatch) -> None:
@@ -96,16 +96,7 @@ def test_frozen_runtime_uses_preserved_id_for_cancel_and_graph(tmp_path, monkeyp
     frozen = dml.runtime.freeze(dml.runtime.create())
     state = NoopExecutionState()
     state.create_execution_record(
-        {
-            "execution_id": frozen.id(),
-            "cache_key": None,
-            "lifecycle": "running",
-            "updated_at": 0,
-            "created_at": 0,
-            "spawned_execution_ids": [],
-            "child_execution_ids": [],
-            "cancellation_requested_by": None,
-        }
+        execution_record(frozen.id())
     )
     monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: state)
     monkeypatch.setattr(dml_mod, "_index_ops", lambda _dml: local_index_ops(state))

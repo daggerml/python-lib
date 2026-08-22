@@ -28,7 +28,7 @@ _SERDE_REF = "ref"
 _REMOTE_DESCRIPTOR = {
     "schema": 2,
     "hash": "sha256",
-    "layout": "one-project-cas+refs+unified-execution",
+    "layout": "one-project-cas+refs+split-execution",
     "refs_prefix": "refs",
     "io_prefix": "io",
     "cas_prefix": "cas/sha256",
@@ -523,11 +523,19 @@ class Remote:
             total_refs += 1
         exec_store = S3Remote(self.root_uri.rstrip("/") + "/exec", client=self._store.client)
         execution_prefix = exec_store._key_for("execution/")
-        for key in list(exec_store._iter(execution_prefix)):
-            item = exec_store._get(key, cas=True)
-            record = json.loads(item.data)
-            execution_id = record.get("execution_id")
-            cache_key = record.get("cache_key")
+        execution_ids = {
+            key[len(execution_prefix) :].removesuffix("/metadata.json")
+            for key in exec_store._iter(execution_prefix)
+            if key.endswith("/metadata.json")
+        }
+        for execution_id in execution_ids:
+            metadata_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"), cas=True)
+            state_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json"), cas=True)
+            driver_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/driver.json"), cas=True)
+            metadata = json.loads(metadata_item.data)
+            state = json.loads(state_item.data)
+            driver = json.loads(driver_item.data)
+            cache_key = metadata.get("cache_key")
             current_execution = None
             if cache_key is not None:
                 try:
@@ -538,16 +546,31 @@ class Remote:
             retained = (
                 current_execution == execution_id
                 or cache_key is None
-                or record.get("lock") is not None
-                or record.get("cancelation") is not None
-                or record.get("invalidation") is not None
+                or driver.get("lock") is not None
+                or state.get("cancelation") is not None
+                or state.get("invalidation") is not None
             )
             if not retained:
-                if exec_store._delete(item):
+                # Delete semantic state first so concurrent result publication
+                # conflicts before immutable metadata can become partial.
+                if all(exec_store._delete(item) for item in (state_item, driver_item, metadata_item)):
                     continue
-                record = json.loads(exec_store._get(key))
+                try:
+                    metadata = json.loads(
+                        exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"))
+                    )
+                except Exception as exc:
+                    if not exec_store._is_missing_error(exc):
+                        raise
+                try:
+                    state = json.loads(
+                        exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json"))
+                    )
+                except Exception as exc:
+                    if not exec_store._is_missing_error(exc):
+                        raise
             for ref_field in ("argv_ref", "result_ref"):
-                value = record.get(ref_field)
+                value = metadata.get(ref_field) if ref_field == "argv_ref" else state.get(ref_field)
                 if value is not None:
                     live_oids.update(self._get_live_oids(Ref(value)))
             total_refs += 1

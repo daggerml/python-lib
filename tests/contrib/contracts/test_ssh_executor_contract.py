@@ -93,3 +93,37 @@ def test_ssh_cancel_with_null_requester_remains_cancel_operation(monkeypatch) ->
     assert payloads[0]["operation"] == "cancel"
     assert payloads[0]["requested_by"] is None
     assert payloads[0]["argv_ref"] == "node-argv:abc"
+
+
+def test_ssh_cleanup_forwards_result_and_retry_state_across_fresh_calls(monkeypatch) -> None:
+    payloads = []
+    responses = iter(
+        (
+            {"status": "retry", "error": None, "adapter_state": {"cleanup": 1}},
+            {"status": "success", "error": None, "adapter_state": {"cleanup": 1}},
+        )
+    )
+
+    def run(command, *, input, capture_output, check, text):
+        payloads.append(json.loads(input))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(next(responses)), stderr="")
+
+    monkeypatch.setattr("daggerml.contrib.executors.ssh.subprocess.run", run)
+    executor = SshExecutor()
+    common = {
+        "cache_key": "ck",
+        "execution_id": "exec",
+        "runnable": _runnable(),
+        "remote": {"root": "s3://bucket/root"},
+        "scratch_uri": "s3://bucket/root/exec/io/exec/",
+        "result_ref": "dag:result",
+    }
+
+    first = executor.cleanup(state={"job": "done"}, **common)
+    second = executor.cleanup(state=first["adapter_state"], **common)
+
+    assert first["status"] == "retry"
+    assert second["status"] == "success"
+    assert [payload["operation"] for payload in payloads] == ["cleanup", "cleanup"]
+    assert payloads[0]["result_ref"] == payloads[1]["result_ref"] == "dag:result"
+    assert payloads[1]["adapter_state"] == {"cleanup": 1}

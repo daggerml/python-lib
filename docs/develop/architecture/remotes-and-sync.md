@@ -3,7 +3,7 @@
 `Remote` in `_core/remote.py` maps the local typed object graph to an S3-backed
 transport layout. It is not a second local repository. A remote contains a
 descriptor, immutable SHA-256-addressed CAS blobs, typed project refs, plain
-cache-to-execution pointers, and unified execution records.
+cache-to-execution pointers, and split execution metadata, state, and driver objects.
 
 Publishing walks the local object closure from a root ref, uploads missing CAS
 objects, and writes a manifest ref. Child DAG boundaries remain explicit rather
@@ -27,12 +27,13 @@ one-key existence probing, and reads only the selected ref namespace. It does
 not traverse CAS, materialize commits, or update local tracking pointers.
 
 Execution coordination is adjacent to, but separate from, CAS and project refs.
-`ExecutionState` stores embedded locks and attempt state in unified records,
-with separate lineage edges and adapter IO. Cancellation uses those locks to
+`ExecutionState` gives semantic state and adapter-driver coordination separate
+CAS domains, with separate lineage edges and adapter IO. Cancellation uses the driver lock to
 order caller-edge publication against the CAS transition to `cancel-pending`,
-then CAS-transitions adapter-cleaned attempts to `canceled`. Remote CAS garbage
-collection traces project refs plus execution-record `argv_ref` and `result_ref`
-roots.
+then transitions adapter-canceled attempts to `canceled`. Normal executor
+cleanup is recorded independently in driver state and is distinct from
+top-level object garbage collection. Remote CAS garbage collection traces
+project refs plus `metadata.argv_ref` and `state.result_ref` roots.
 
 The shared surface exposes cache reads and invalidation through `Dml.cache`.
 Garbage collection is one top-level workflow: `Dml.gc()` computes local roots

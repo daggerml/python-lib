@@ -5,7 +5,7 @@ import pytest
 from daggerml._core import BadExecutionStatusError, CanceledExecutionError, DmlRepoError
 from daggerml._core.db import Ref
 from daggerml._core.types import ArgvNode, Dag, Index, ListDatum
-from tests._core.helpers import NoopExecutionState, local_index_ops, make_db
+from tests._core.helpers import NoopExecutionState, execution_record, local_index_ops, make_db
 
 
 def _put_index(db) -> Ref:
@@ -34,17 +34,12 @@ def _put_reserved_execution(
     state: NoopExecutionState, execution_id: str, *, lifecycle: str, argv_ref: Ref | None = None
 ) -> None:
     state.create_execution_record(
-        {
-            "execution_id": execution_id,
-            "cache_key": "ck1",
-            "lifecycle": lifecycle,
-            "updated_at": 0,
-            "created_at": 0,
-            "spawned_execution_ids": [],
-            "child_execution_ids": [],
-            "cancellation_requested_by": None,
-            "argv_ref": None if argv_ref is None else argv_ref.to,
-        }
+        execution_record(
+            execution_id,
+            cache_key="ck1",
+            lifecycle=lifecycle,
+            argv_ref=None if argv_ref is None else argv_ref.to,
+        )
     )
 
 
@@ -52,16 +47,11 @@ def test_put_literal_cancel_pending_execution_raises_without_drive(tmp_path) -> 
     db = make_db(tmp_path)
     state = NoopExecutionState()
     state.create_execution_record(
-        {
-            "execution_id": "idx",
-            "cache_key": None,
-            "lifecycle": "cancel-pending",
-            "updated_at": 0,
-            "created_at": 0,
-            "spawned_execution_ids": [],
-            "child_execution_ids": [],
-            "cancellation_requested_by": "user",
-        }
+        execution_record(
+            "idx",
+            lifecycle="cancel-pending",
+            cancelation={"requested_by": "user", "requested_at": 0},
+        )
     )
     ops = local_index_ops(state)
     index = _put_index(db)
@@ -76,16 +66,11 @@ def test_put_literal_canceled_execution_raises_without_drive(tmp_path) -> None:
     db = make_db(tmp_path)
     state = NoopExecutionState()
     state.create_execution_record(
-        {
-            "execution_id": "idx",
-            "cache_key": None,
-            "lifecycle": "canceled",
-            "updated_at": 0,
-            "created_at": 0,
-            "spawned_execution_ids": [],
-            "child_execution_ids": [],
-            "cancellation_requested_by": "user",
-        }
+        execution_record(
+            "idx",
+            lifecycle="canceled",
+            cancelation={"requested_by": "user", "requested_at": 0},
+        )
     )
     ops = local_index_ops(state)
     index = _put_index(db)
@@ -101,16 +86,7 @@ def test_put_literal_rejects_non_running_execution_states(tmp_path, lifecycle: s
     db = make_db(tmp_path)
     state = NoopExecutionState()
     state.create_execution_record(
-        {
-            "execution_id": "idx",
-            "cache_key": None,
-            "lifecycle": lifecycle,
-            "updated_at": 0,
-            "created_at": 0,
-            "spawned_execution_ids": [],
-            "child_execution_ids": [],
-            "cancellation_requested_by": None,
-        }
+        execution_record("idx", lifecycle=lifecycle)
     )
     ops = local_index_ops(state)
     index = _put_index(db)
@@ -130,7 +106,7 @@ def test_execution_aware_create_activates_pending_execution(tmp_path) -> None:
     index = ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
 
     assert index == Ref("index:exec")
-    assert state.read_execution_record("exec")["lifecycle"] == "running"
+    assert state.read_execution_record("exec")["state"]["lifecycle"] == "running"
 
 
 @pytest.mark.parametrize("lifecycle", ["running", "succeeded", "failed"])

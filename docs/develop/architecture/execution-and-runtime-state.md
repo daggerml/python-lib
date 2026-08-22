@@ -16,15 +16,24 @@ operations run against the local typed graph. Adapter-backed runnables create an
 `ArgvNode`; its normalized DaggerML datum identity is the cache key. The core then asks
 `ExecutionState` to reuse a completed cached DAG or coordinate a new execution.
 
-`ExecutionState` stores one mutable `execution/<execution-id>.json` record per
-attempt. It contains lifecycle, an embedded `{owner, ttl}` lock, adapter state,
-argv and result refs, lineage summaries, cancelation, and invalidation. Every
-mutation requires the current UUID owner and an S3 conditional update. Lock
-expiry uses S3 `LastModified + ttl <= Date`, not machine time.
+`ExecutionState` stores three exact objects per attempt:
+`execution/<execution-id>/metadata.json` for immutable identity,
+`state.json` for lifecycle, results, lineage, and controls, and `driver.json`
+for the owner lock, adapter continuation, shared retry delay, and cleanup
+outcome. State and driver use separate conditional-update domains. The driver
+lock serializes adapter calls and driver mutations only; semantic state writers
+use guarded CAS without that lock. A funk runtime can therefore publish
+`result_ref` with `result_source="runtime"` while a caller holds the driver
+lock. The caller later finalizes that state to `succeeded`; adapter failures
+atomically publish an adapter-error DAG and `failed`. Lock expiry uses S3
+`LastModified + ttl <= Date`, not machine time.
 
 `cache/<cache-key>` contains only the current execution ID from reservation
-until cancelation or invalidation conditionally deletes it. Caller/callee edges
-and adapter-owned `io/<execution-id>/` data remain separate.
+until cancelation or invalidation conditionally deletes it. All three execution
+objects exist before pointer publication; a losing reservation conditionally
+deletes only its unchanged objects. Legacy unified and partial split attempts
+are stale. Caller/callee edges and adapter-owned `io/<execution-id>/` data
+remain separate.
 
 Invalidation is rooted in explicit execution IDs, not cache keys. An explicit
 execution remains selected if its cache pointer is absent or has rebound. For a
@@ -37,10 +46,23 @@ values. That boundary validates the runtime namespace and passes only `ref.id()`
 to `IndexOps` and `ExecutionState`, whose remote records and protocols remain
 string-ID based.
 
-An adapter receives an invocation or cancellation request through an executable
-boundary. Invoke calls preserve object adapter state needed to continue running
-work; cancellation responses may omit it. Repeated calls for one execution ID
-are idempotent status checks. Cancellation first locks and CAS-selects the
+An adapter receives `invoke`, `cleanup`, or `cancel` through an executable
+boundary. Repeated `invoke` requests perform both launch and status inspection;
+there is no wire-level `poll` operation, although executors retain an internal
+`poll()` method. Invoke and cleanup return `success`, `retry`, or a nonempty
+failure code. Retry requires durable object state and may provide
+`retry_after_ms`; the caller stores a shared absolute `driver.not_before` that
+all invoke and cleanup drivers respect. Cancellation bypasses that delay.
+
+The next operation is derived from current state: `cancel-pending` selects
+cancel, an absent result selects invoke, and a result without a cleanup marker
+selects cleanup. Cleanup success or failure is recorded in `driver.cleanup`
+without changing lifecycle or result, so reusable cache results do not wait for
+resource pruning. Normal teardown belongs in idempotent cleanup rather than
+terminal invoke inspection. Cleanup remains demand-driven; there is no
+background reconciler if every caller disappears.
+
+Cancellation first locks and CAS-selects the
 complete unreferenced descendant set as `cancel-pending`, conditionally deletes
 matching cache pointers, and removes selected callers' outgoing edges. Caller
 registration uses the same callee lock, so registration either publishes a
@@ -48,5 +70,5 @@ valid edge before selection or observes `cancel-pending` and stops. After
 planning finishes, the runtime invokes each selected adapter and CAS-transitions
 the execution directly to `canceled`. It does not hold the execution lock across
 the external adapter call; it reacquires the lock for persisted adapter state and
-the terminal CAS. Adapter results remain advisory and repeated cleanup is safe
-when a driver resumes interrupted work.
+the terminal CAS. Adapter results remain advisory and repeated cancellation is
+safe when a driver resumes interrupted work.

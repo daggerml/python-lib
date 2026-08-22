@@ -10,7 +10,7 @@
 | Unknown dependency during ref listing | Configure it with `dml dep add NAME ROOT`. |
 | Invalid remote branch or tag ref | Repair or republish the malformed endpoint ref before listing it. |
 | Invalid upstream config | Repair the malformed local branch upstream metadata. |
-| Invalid adapter state | Repair or remove the malformed unified execution record; adapter state must be a JSON object. |
+| Invalid adapter state | Repair or remove the malformed split execution; `driver.json` adapter state must be a JSON object. |
 | Detached checkout cannot commit | Attach `HEAD` with `dml checkout BRANCH`. |
 | Function timeout | Inspect the runtime graph and execution boundary before retrying. |
 | Codec staging failure | Convert the value to a supported type or provide a codec. |

@@ -17,6 +17,48 @@ from daggerml._core.types import BadExecutionStatusError, CanceledExecutionError
 DEFAULT_REMOTE_ROOT = "s3://bucket/root"
 
 
+def execution_record(
+    execution_id: str,
+    *,
+    cache_key: str | None = None,
+    lifecycle: str = "running",
+    argv_ref: str | None = None,
+    created_at: int = 0,
+    updated_at: int = 0,
+    spawned_execution_ids: list[str] | None = None,
+    child_execution_ids: list[str] | None = None,
+    cancelation: dict[str, Any] | None = None,
+    invalidation: dict[str, Any] | None = None,
+    result_ref: str | None = None,
+    result_source: str | None = None,
+    adapter_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "metadata": {
+            "execution_id": execution_id,
+            "cache_key": cache_key,
+            "argv_ref": argv_ref,
+            "created_at": created_at,
+        },
+        "state": {
+            "lifecycle": lifecycle,
+            "result_ref": result_ref,
+            "result_source": result_source,
+            "spawned_execution_ids": spawned_execution_ids or [],
+            "child_execution_ids": child_execution_ids or [],
+            "cancelation": cancelation,
+            "invalidation": invalidation,
+            "updated_at": updated_at,
+        },
+        "driver": {
+            "lock": None,
+            "not_before": None,
+            "adapter_state": adapter_state,
+            "cleanup": None,
+        },
+    }
+
+
 def make_db(path: Path) -> DmlDB:
     return DmlDB(str(path), 1024 * 1024, 64 * 1024 * 1024)
 
@@ -73,36 +115,39 @@ class NoopExecutionState:
         self.cancel_calls: list[tuple[str, str | None, str]] = []
 
     def create_execution_record(self, record: dict[str, Any]) -> bool:
-        if record["execution_id"] in self.records:
+        metadata = record["metadata"]
+        execution_id = metadata["execution_id"]
+        if execution_id in self.records:
             return False
-        normalized = {
-            "lock": None,
-            "adapter_state": None,
-            "argv_ref": None,
-            "result_ref": None,
-            "cancelation": None,
-            "invalidation": None,
-            **record,
-        }
-        requested_by = normalized.pop("cancellation_requested_by", None)
-        if requested_by is not None:
-            normalized["cancelation"] = {"requested_by": requested_by, "requested_at": 0}
-        self.records[record["execution_id"]] = normalized
+        self.records[execution_id] = record
         return True
 
     def reserve_execution(self, argv_ref, execution_id=None):
         execution_id = execution_id or "reserved"
         self.create_execution_record(
             {
-                "execution_id": execution_id,
-                "cache_key": None,
-                "lifecycle": "running",
-                "updated_at": int(time.time()),
-                "created_at": int(time.time()),
-                "spawned_execution_ids": [],
-                "child_execution_ids": [],
-                "argv_ref": None if argv_ref is None else argv_ref.to,
-                "lock": {"owner": "owner", "ttl": 300.0},
+                "metadata": {
+                    "execution_id": execution_id,
+                    "cache_key": None,
+                    "argv_ref": None if argv_ref is None else argv_ref.to,
+                    "created_at": int(time.time()),
+                },
+                "state": {
+                    "lifecycle": "running",
+                    "result_ref": None,
+                    "result_source": None,
+                    "spawned_execution_ids": [],
+                    "child_execution_ids": [],
+                    "cancelation": None,
+                    "invalidation": None,
+                    "updated_at": int(time.time()),
+                },
+                "driver": {
+                    "lock": {"owner": "owner", "ttl": 300.0},
+                    "not_before": None,
+                    "adapter_state": None,
+                    "cleanup": None,
+                },
             }
         )
         return execution_id, "owner", None
@@ -113,14 +158,14 @@ class NoopExecutionState:
 
     def mark_running(self, execution_id, owner):
         record = self.read_execution_record(execution_id)
-        record["lifecycle"] = "running"
+        record["state"]["lifecycle"] = "running"
         self.update_execution_record(record)
 
     def unlock(self, execution_id, owner):
         return True
 
     def update_execution_record(self, record: dict[str, Any]) -> None:
-        self.records[record["execution_id"]] = dict(record)
+        self.records[record["metadata"]["execution_id"]] = record
 
     def read_execution_record(self, execution_id: str) -> dict[str, Any]:
         try:
@@ -130,14 +175,17 @@ class NoopExecutionState:
 
     def finish_execution(self, execution_id: str, dag: Ref, db: DmlDB) -> None:
         record = self.read_execution_record(execution_id)
-        record["lifecycle"] = "succeeded"
-        record["updated_at"] = int(time.time())
-        record["result_ref"] = dag.to
+        record["state"].update(
+            lifecycle="succeeded",
+            result_ref=dag.to,
+            result_source="runtime",
+            updated_at=int(time.time()),
+        )
         self.update_execution_record(record)
 
     def require_mutation(self, execution_id: str, db: DmlDB, *, mode: str = "activation") -> dict[str, Any]:
         record = self.read_execution_record(execution_id)
-        lifecycle = record["lifecycle"]
+        lifecycle = record["state"]["lifecycle"]
         allowed = "pending" if mode == "activation" else "running"
         action = "activated" if mode == "activation" else "mutated"
         if lifecycle == allowed:
@@ -163,16 +211,18 @@ class NoopExecutionState:
             if execution_id in nodes:
                 continue
             record = self.read_execution_record(execution_id)
-            spawned = list(record["spawned_execution_ids"])
-            children = list(record["child_execution_ids"])
+            metadata = record["metadata"]
+            state = record["state"]
+            spawned = list(state["spawned_execution_ids"])
+            children = list(state["child_execution_ids"])
             nodes[execution_id] = {
-                "execution_id": record["execution_id"],
-                "cache_key": record["cache_key"],
-                "lifecycle": record["lifecycle"],
-                "updated_at": record["updated_at"],
-                "created_at": record["created_at"],
+                "execution_id": metadata["execution_id"],
+                "cache_key": metadata["cache_key"],
+                "lifecycle": state["lifecycle"],
+                "updated_at": state["updated_at"],
+                "created_at": metadata["created_at"],
                 "cancel_requested_by": (
-                    None if record["cancelation"] is None else record["cancelation"]["requested_by"]
+                    None if state["cancelation"] is None else state["cancelation"]["requested_by"]
                 ),
                 "children": children,
                 "spawned": spawned,

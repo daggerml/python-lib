@@ -1,7 +1,4 @@
-## Purpose
-Define distinct adapter operation contracts so invocation and cancellation have separate payloads, response semantics, and executor dispatch paths.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Adapter operations SHALL use separate invoke and cancel contracts
 Adapters SHALL accept distinct `invoke`, `cleanup`, and `cancel` requests. Invoke SHALL identify execution, runnable, remote, scratch URI, cache key, and current adapter state. Cleanup SHALL carry those fields plus a non-null result ref. Cancel SHALL carry cancelation metadata and argv identity. Repeated invoke SHALL serve both initial launch and status checks; there SHALL be no poll operation. No operation SHALL directly mutate execution files.
@@ -84,8 +81,10 @@ The adapter SHALL dispatch invoke with null adapter state to executor start and 
 - **THEN** the executor leaves resources pruned and returns a stable success
 
 #### Scenario: Repeated terminal check is stable
-- **WHEN** a terminal execution is checked again after a stale caller discarded its response
+- **WHEN** terminal work is checked again after a stale caller discarded its response
 - **THEN** the adapter returns stable status and state without repeating the work
+
+## ADDED Requirements
 
 ### Requirement: Cleanup request SHALL use an explicit schema
 Cleanup SHALL accept exactly `operation = "cleanup"`, nonempty `execution_id`, nonempty `cache_key`, remote object containing nonempty `root`, runnable object, object-or-null `adapter_state`, nonempty `scratch_uri`, and syntactically typed non-null DAG `result_ref`. Unspecified fields SHALL be rejected.

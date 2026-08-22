@@ -12,9 +12,10 @@ example = "my_package.executor:ExampleExecutor"
 
 The adapter entry point must load an object with `name`, `resolve_runnable`,
 `send`, and normally `cli`. The executor entry point must load an object with
-`adapter`, `name`, `resolve_runnable`, `start`, and `poll` (and normally
-`cancel`). Classes are appropriate because `ExecutorBase.handle()` instantiates
-them.
+`adapter`, `name`, `resolve_runnable`, `start`, `poll`, `cleanup`, and `cancel`.
+`poll` is the internal status method selected by repeated invoke requests, not a
+wire operation. Cleanup accepts published-result context and must be idempotent.
+Classes are appropriate because `ExecutorBase.handle()` instantiates them.
 
 `get_adapter(name)` and `list_adapters()` trigger adapter discovery.
 `get_executor(adapter, name)` and `list_executors(adapter)` trigger executor

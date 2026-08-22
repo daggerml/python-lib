@@ -168,9 +168,8 @@ class DockerExecutor(ExecutorBase):
         )
 
         return {
-            "status": "running",
+            "status": "retry",
             "error": None,
-            "dag_id": None,
             "state": {
                 "container_id": container_id,
                 "cleanup_image": cleanup_image,
@@ -191,19 +190,17 @@ class DockerExecutor(ExecutorBase):
 
         if not isinstance(container_id, str) or not container_id:
             return {
-                "status": "failed",
+                "status": "failure",
                 "error": "docker poll: missing container_id in job state",
                 "state": None,
-                "dag_id": None,
             }
 
         docker_bin = shutil.which("docker")
         if docker_bin is None:
             return {
-                "status": "failed",
+                "status": "failure",
                 "error": "docker poll: docker executable not found",
                 "state": None,
-                "dag_id": None,
             }
 
         proc = subprocess.run(
@@ -218,31 +215,41 @@ class DockerExecutor(ExecutorBase):
             container_status = proc.stdout.strip()
 
         if container_status in ("created", "running", "paused", "restarting"):
-            return {"status": "running", "error": None, "state": state, "dag_id": None}
-
-        # Container exited
-        _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
+            return {"status": "retry", "error": None, "state": state}
 
         raw = _read_scratch_output(_scratch_uri(scratch_uri, "output.json"))
         if raw is not None:
             try:
                 result = json.loads(raw)
-                if result.get("status") in {"succeeded", "failed"}:
+                if result.get("status") in {"success", "retry"} or isinstance(result.get("error"), str):
                     return result
             except Exception as e:
                 return {
-                    "status": "failed",
+                    "status": "failure",
                     "error": f"docker poll: could not read output: {e}",
                     "state": None,
-                    "dag_id": None,
                 }
 
         return {
-            "status": "failed",
+            "status": "failure",
             "error": f"docker container {container_id} exited without output",
             "state": None,
-            "dag_id": None,
         }
+
+    def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
+        del cache_key, execution_id, runnable, remote, scratch_uri, result_ref
+        state = state if isinstance(state, dict) else {}
+        container_id = state.get("container_id")
+        docker_bin = shutil.which("docker")
+        if not isinstance(container_id, str) or not container_id or docker_bin is None:
+            return {"status": "success", "error": None, "state": state}
+        status = self._run_docker(
+            "inspect", "--format", "{{.State.Status}}", container_id, check=False, docker_bin=docker_bin
+        )
+        if status in {"created", "running", "paused", "restarting"}:
+            return {"status": "retry", "error": None, "state": state}
+        _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin)
+        return {"status": "success", "error": None, "state": state}
 
     def cancel(
         self,

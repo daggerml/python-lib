@@ -127,8 +127,7 @@ def test_contrib_script_004__start_returns_durable_running_state(monkeypatch):
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
     )
-    assert result["status"] == "running"
-    assert result["dag_id"] is None
+    assert result["status"] == "retry"
     assert result["state"]["pid"] == 123
     assert "workdir" in result["state"]
 
@@ -156,9 +155,9 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
     )
-    assert success["status"] == "succeeded"
+    assert success["status"] == "success"
     assert success["state"] == success_state
-    assert not success_dir.exists()
+    assert success_dir.exists()
 
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
@@ -179,8 +178,14 @@ def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths
             remote={"root": "s3://bucket/root"},
             scratch_uri="s3://bucket/scratch",
         )["status"]
-        == "failed"
+        == "failure"
     )
+
+    cleanup = ScriptExecutor().cleanup(
+        "ck", "exec", {}, success_state, {"root": "s3://bucket/root"}, "scratch", "dag:x"
+    )
+    assert cleanup["status"] == "success"
+    assert not success_dir.exists()
 
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()

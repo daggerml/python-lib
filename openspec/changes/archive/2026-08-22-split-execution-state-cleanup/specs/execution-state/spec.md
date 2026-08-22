@@ -1,64 +1,4 @@
-## Purpose
-Define remote execution coordination, lifecycle guards, and mutation serialization.
-
-## Requirements
-
-### Requirement: ExecutionState constructed from remote_root
-The system SHALL accept `remote_root: str` as a required configuration parameter for `ExecutionState`. Call sites that construct `ExecutionState` MUST provide a valid remote root explicitly and MUST NOT rely on optional remote-root values or `None` defaults.
-
-#### Scenario: remote_root parsed to bucket and prefix
-- **WHEN** `ExecutionState(remote_root="s3://my-bucket/my/prefix")` is constructed
-- **THEN** execution-record and cache-pointer operations target that bucket and prefix
-
-#### Scenario: call site provides explicit remote_root
-- **WHEN** code constructs `ExecutionState` for a remote-backed execution flow
-- **THEN** that call site passes a concrete `remote_root: str` value at construction time
-
-#### Scenario: optional or None remote_root defaults are not relied on
-- **WHEN** a remote-backed execution flow constructs `ExecutionState`
-- **THEN** it does not rely on an optional remote-root parameter or a `None` default to supply remote configuration
-
-### Requirement: Cancellation Phase 1 SHALL not invoke adapters
-Phase 1 SHALL determine the complete cancellation set before Phase 2 begins. For each reachable execution, it SHALL read the lifecycle and valid caller references while holding the execution's coordination lock. It SHALL skip executions that are terminal or retain a valid caller reference. It SHALL use compare-and-swap to transition each remaining active execution to `cancel-pending`; on a conflict it SHALL reread lifecycle and caller references, retry an active unreferenced execution, and skip an execution that became terminal. After selecting an execution, Phase 1 SHALL conditionally delete its matching cache pointer, enqueue its spawned executions, and idempotently remove its outgoing caller edges. It SHALL perform no adapter invocation.
-
-#### Scenario: Planning completes before adapter work
-- **WHEN** Phase 1 processes a rooted cancellation work set
-- **THEN** it SHALL determine every reachable execution selected as `cancel-pending` before Phase 2 begins
-- **AND** no invoke or cancel adapter operation is sent during Phase 1
-
-#### Scenario: Referenced execution is not selected
-- **WHEN** a reachable execution retains at least one valid caller reference
-- **THEN** Phase 1 SHALL leave its lifecycle unchanged
-- **AND** it SHALL NOT traverse or remove that execution's outgoing caller edges as part of that branch
-
-#### Scenario: Terminal race is harmless
-- **WHEN** an active cancellation candidate becomes `succeeded`, `failed`, or `canceled` before the `cancel-pending` compare-and-swap succeeds
-- **THEN** Phase 1 SHALL skip that execution without raising an execution-status error
-- **AND** it SHALL continue processing the remaining work set
-
-#### Scenario: Selected execution relinquishes dependencies
-- **WHEN** Phase 1 successfully selects execution `e1` as `cancel-pending`
-- **THEN** it SHALL enqueue every execution in `e1.spawned_execution_ids`
-- **AND** it SHALL idempotently remove every caller edge owned by `e1`
-- **AND** it SHALL conditionally delete the cache pointer only when it still names `e1`
-
-### Requirement: Cancellation Phase 2 SHALL cancel the selected set directly
-Phase 2 SHALL begin only after Phase 1 has determined the complete cancellation set. It SHALL invoke the cancel adapter for each selected execution using that execution's persisted cancellation metadata and adapter inputs, then use compare-and-swap to transition its lifecycle from `cancel-pending` to `canceled`. Phase 2 SHALL NOT use an intermediate readiness lifecycle or readiness timeout. Executions already observed as `cancel-pending` SHALL be eligible for resumed Phase 1 reconstruction and Phase 2 processing.
-
-#### Scenario: Selected adapter work advances directly to canceled
-- **WHEN** Phase 2 processes a selected `cancel-pending` execution
-- **THEN** it SHALL invoke that execution's applicable cancel adapter
-- **AND** it SHALL compare-and-swap the lifecycle directly to `canceled`
-
-#### Scenario: Interrupted planning is resumable
-- **WHEN** a cancellation attempt stops after persisting `cancel-pending`
-- **THEN** a later cancellation drive SHALL reconstruct the reachable selected work from persisted execution records
-- **AND** it SHALL idempotently repeat Phase 1 cleanup before Phase 2
-
-#### Scenario: Phase 2 completion conflicts
-- **WHEN** the compare-and-swap from `cancel-pending` to `canceled` conflicts
-- **THEN** Phase 2 SHALL reread the execution record
-- **AND** it SHALL accept an already-terminal lifecycle or retry an execution that remains `cancel-pending`
+## MODIFIED Requirements
 
 ### Requirement: ExecutionState SHALL expose a public mutation lifecycle guard
 The runtime SHALL expose a canonical mutation guard that reads `state.json`, classifies lifecycle for activation or mutation, and returns current semantic state or raises a typed execution-status error. Activation SHALL accept only `pending`; mutation SHALL accept only `running`; and `cancel-pending` or `canceled` SHALL raise `CanceledExecutionError`. The guard SHALL NOT require the driver lock merely to read or conditionally mutate semantic state.
@@ -175,8 +115,7 @@ The runtime SHALL determine driver-lock expiry using `LastModified + lock.ttl <=
 - **THEN** another caller may attempt to replace the owner by CAS
 
 #### Scenario: Expired owner remains authoritative until stolen
-- **WHEN** an adapter response arrives after the lock TTL
-- **AND** the driver still contains that caller's owner
+- **WHEN** an adapter response arrives after TTL but the driver still contains that caller's owner
 - **THEN** that caller may persist the response through owner-checked CAS
 
 ### Requirement: Cache resolution SHALL coordinate one current execution
@@ -198,6 +137,8 @@ On a cache miss, the runtime SHALL create fresh metadata, state, and driver obje
 #### Scenario: Lost claim cleans only the losing record
 - **WHEN** execution `e2` loses cache-pointer creation to `e1`
 - **THEN** its caller conditionally deletes only the unchanged objects created for `e2`
+
+## ADDED Requirements
 
 ### Requirement: Shared retry delay SHALL coordinate adapter backpressure
 An adapter `retry` response MAY include nonnegative `retry_after_ms`. The current driver owner SHALL persist `not_before` as a shared absolute timestamp derived from that delay, or from the runtime's standard retry delay when the hint is absent. Before invoke or cleanup, every caller SHALL acquire the driver lock, reread state and driver, and skip the adapter call while `not_before` remains in the future. Cancelation SHALL not be delayed by `not_before`.

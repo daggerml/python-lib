@@ -16,7 +16,7 @@ def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellatio
     class FakeRuntime:
         def read_execution_record(self, execution: Ref):
             assert execution == Ref("index:exec-1")
-            return {"lifecycle": "cancel-pending"}
+            return {"state": {"lifecycle": "cancel-pending"}}
 
         def cancel(self, execution: Ref, mode: str = "full"):
             calls.append((execution, mode))

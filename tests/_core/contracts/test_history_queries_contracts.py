@@ -9,7 +9,13 @@ import daggerml._core.dml as dml_mod
 from daggerml._core import DmlRepoError
 from daggerml._core.db import Ref
 from daggerml._core.head import Head
-from tests._core.helpers import NoopExecutionState, commit_literal_dag, local_index_ops, make_local_dml
+from tests._core.helpers import (
+    NoopExecutionState,
+    commit_literal_dag,
+    execution_record,
+    local_index_ops,
+    make_local_dml,
+)
 
 
 def test_status_reports_attached_head_branch_list_and_live_indexes(tmp_path, monkeypatch) -> None:
@@ -209,21 +215,15 @@ def test_runtime_describe_graph_defaults_to_open_local_indexes(tmp_path, monkeyp
 def test_runtime_read_execution_record_accepts_ref_and_returns_raw_payload(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     index = dml.runtime.create()
-    record = {
-        "execution_id": index.id(),
-        "cache_key": None,
-        "lifecycle": "running",
-        "updated_at": 10,
-        "created_at": 9,
-        "lock": None,
-        "adapter_state": {"job": "j1"},
-        "argv_ref": None,
-        "result_ref": None,
-        "spawned_execution_ids": ["child-1"],
-        "child_execution_ids": ["child-0"],
-        "cancelation": {"requested_by": "tester", "requested_at": 8},
-        "invalidation": None,
-    }
+    record = execution_record(
+        index.id(),
+        created_at=9,
+        updated_at=10,
+        spawned_execution_ids=["child-1"],
+        child_execution_ids=["child-0"],
+        cancelation={"requested_by": "tester", "requested_at": 8},
+        adapter_state={"job": "j1"},
+    )
     state = NoopExecutionState()
     state.create_execution_record(record)
     monkeypatch.setattr(dml_mod, "_exec_state", lambda _dml, cache_key=None: state)

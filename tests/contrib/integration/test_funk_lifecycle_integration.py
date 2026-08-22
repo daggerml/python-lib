@@ -144,6 +144,11 @@ def test_contrib_int_009__concurrent_equivalent_funks_share_one_execution_and_bo
     assert len(cache_keys) == 1
     assert len({description["execution"] for description in cache_descriptions if description is not None}) == 1
     assert _object_version_count(s3_client, marker_key) == 1
+    execution = next(description["execution"] for description in cache_descriptions if description is not None)
+    record = dml.runtime.read_execution_record(execution)
+    assert set(record) == {"metadata", "state", "driver"}
+    assert record["state"]["lifecycle"] == "succeeded"
+    assert record["state"]["result_source"] == "runtime"
 
 
 def _spawned_execution(dml, caller_index):
@@ -214,7 +219,7 @@ def test_contrib_int_010__canceling_one_dag_preserves_shared_dependency_for_anot
 
         for execution_id in exclusive_d0:
             execution = api.Ref(f"index:{execution_id}")
-            assert dml.runtime.read_execution_record(execution)["lifecycle"] == "canceled"
+            assert dml.runtime.read_execution_record(execution)["state"]["lifecycle"] == "canceled"
             assert execution not in {item["id"] for item in dml.runtime.list()}
 
         # D1 still owns f1, so both surviving leaves are explicitly released.
@@ -233,7 +238,7 @@ def test_contrib_int_010__canceling_one_dag_preserves_shared_dependency_for_anot
     assert not isinstance(outcomes["f1-d1"], BaseException)
     assert not isinstance(outcomes["f2"], BaseException)
     shared_execution = api.Ref(f"index:{shared.pop()}")
-    assert dml.runtime.read_execution_record(shared_execution)["lifecycle"] == "succeeded"
+    assert dml.runtime.read_execution_record(shared_execution)["state"]["lifecycle"] == "succeeded"
     assert outcomes["f1-d1"].value() == "f1"
     assert outcomes["f2"].value() == "f2"
 
@@ -261,6 +266,8 @@ def test_contrib_int_011__public_invalidation_removes_completed_funk_cache_and_r
     assert [item["execution_id"] for item in invalidated["invalidations"]] == [first_description["execution"].id()]
     assert first_dml.cache.describe(cache_key) is None
     assert first_dml.cache.get(cache_key) is None
+    first_record = first_dml.runtime.read_execution_record(first_description["execution"])
+    assert first_record["state"]["invalidation"]["requested_by"] == "tester"
 
     second_home = tmp_path / "second"
     second_home.mkdir()

@@ -12,6 +12,14 @@ dml runtime cancel index:<execution-id> --mode full
 
 `list` returns open runtimes in reverse creation order. Pass the complete ref it returns, including the `index:` or `frozenindex:` namespace, to runtime inspection and cancellation commands. The generated CLI converts that text to a `Ref` before invoking `Dml`; bare execution IDs are not accepted by these commands.
 
-`describe` reports the mutable graph and parent state. `read-execution-record` includes adapter state with lifecycle and refs. `describe-graph` reports reachable execution lineage; add `--visual` for a rendered view. Rendered terminal views require `pip install "daggerml[terminal]"`. `cancel` accepts `full` (the default) or `drive` mode.
+`describe` reports the mutable graph and parent state. `read-execution-record`
+returns exact `metadata`, `state`, and `driver` sections. Metadata contains
+immutable identity and argv fields; state contains lifecycle, result, lineage,
+cancelation, and invalidation; driver contains the lock, adapter continuation,
+shared retry delay, and cleanup outcome. Cleanup may remain pending or fail
+without making an otherwise reusable result unavailable. `describe-graph`
+reports reachable execution lineage; add `--visual` for a rendered view.
+Rendered terminal views require `pip install "daggerml[terminal]"`. `cancel`
+accepts `full` (the default) or `drive` mode.
 
 Lower-level `runtime create`, `put-literal`, `put-import`, `start-fn`, and `commit` exist for direct graph manipulation. Execution-aware creation uses `--execution index:<execution-id>`. Prefer `dml.new()`, `Dag`, and funks for research authoring.

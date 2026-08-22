@@ -84,6 +84,35 @@ def test_docker_cancel_preserves_adapter_state(monkeypatch) -> None:
     assert result["state"] == {"container_id": "container-1"}
 
 
+def test_docker_cleanup_retries_active_then_prunes_idempotently(monkeypatch) -> None:
+    statuses = iter(("running", "exited", "missing"))
+    cleanup_calls = []
+    monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda command: "/docker")
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: next(statuses)))
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.docker._cleanup_docker",
+        lambda container_id, image, docker_bin: cleanup_calls.append((container_id, image, docker_bin)),
+    )
+    executor = DockerExecutor()
+    kwargs = {
+        "cache_key": "ck",
+        "execution_id": "exec",
+        "runnable": {},
+        "state": {"container_id": "container-1", "cleanup_image": "image-1"},
+        "remote": {"root": "s3://bucket/root"},
+        "scratch_uri": "s3://bucket/root/exec/io/exec/",
+        "result_ref": "dag:result",
+    }
+
+    assert executor.cleanup(**kwargs)["status"] == "retry"
+    assert executor.cleanup(**kwargs)["status"] == "success"
+    assert executor.cleanup(**kwargs)["status"] == "success"
+    assert cleanup_calls == [
+        ("container-1", "image-1", "/docker"),
+        ("container-1", "image-1", "/docker"),
+    ]
+
+
 def test_lambda_handler_failure_returns_object_adapter_state() -> None:
     class BrokenExecutor(LambdaExecutorBase):
         def start(self, **kwargs):
@@ -105,6 +134,6 @@ def test_lambda_handler_failure_returns_object_adapter_state() -> None:
         None,
     )
 
-    assert result["status"] == "failed"
+    assert result["status"] == "failure"
     assert result["adapter_state"] == {"attempt": 1}
     assert "boom" in result["error"]

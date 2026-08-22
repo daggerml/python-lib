@@ -86,6 +86,19 @@ class SshExecutor(ExecutorBase):
             argv_ref=argv_ptr,
         )
 
+    def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
+        return self._send_nested(
+            cache_key=cache_key,
+            execution_id=execution_id,
+            runnable=runnable,
+            remote=remote,
+            scratch_uri=scratch_uri,
+            operation="cleanup",
+            adapter_state=state,
+            result_ref=result_ref,
+            cancel_requested_by=None,
+        )
+
     @classmethod
     def _send_nested(
         cls,
@@ -99,6 +112,7 @@ class SshExecutor(ExecutorBase):
         adapter_state: dict[str, Any] | None,
         cancel_requested_by: str | None,
         argv_ref: str | None = None,
+        result_ref: str | None = None,
     ) -> dict[str, Any]:
         sub = runnable.get("sub")
         if sub is None:
@@ -122,6 +136,8 @@ class SshExecutor(ExecutorBase):
         if operation == "cancel":
             payload["requested_by"] = cancel_requested_by
             payload["argv_ref"] = argv_ref
+        elif operation == "cleanup":
+            payload["result_ref"] = result_ref
         payload = json.dumps(payload)
         logger.debug(
             "ssh executor launch host=%s flags=%s env_files=%s adapter=%s cache_key=%s execution_id=%s has_state=%s",
@@ -150,7 +166,7 @@ class SshExecutor(ExecutorBase):
             elif stdout:
                 error = f"{error}: {stdout}"
             logger.debug("ssh executor transport failed execution_id=%s error=%s", execution_id, error)
-            return {"status": "failed", "error": error, "adapter_state": adapter_state or {}, "dag_id": None}
+            return {"status": "failure", "error": error, "adapter_state": adapter_state or {}}
         try:
             result = json.loads(stdout)
         except json.JSONDecodeError as e:
@@ -161,30 +177,22 @@ class SshExecutor(ExecutorBase):
                 stdout,
             )
             return {
-                "status": "failed",
+                "status": "failure",
                 "error": f"SSH nested adapter returned invalid JSON: {e}",
                 "adapter_state": adapter_state or {},
-                "dag_id": None,
             }
-        if result.get("status") not in {
-            "succeeded",
-            "failed",
-            "running",
-            "cancelled",
-        }:
+        if not isinstance(result.get("status"), str) or not result["status"]:
             logger.debug("ssh executor unexpected result execution_id=%s result=%r", execution_id, result)
             return {
-                "status": "failed",
+                "status": "failure",
                 "error": f"SSH nested adapter returned unexpected result: {result}",
                 "adapter_state": adapter_state or {},
-                "dag_id": None,
             }
-        if not isinstance(result.get("adapter_state"), dict):
+        if result.get("status") == "retry" and not isinstance(result.get("adapter_state"), dict):
             return {
-                "status": "failed",
+                "status": "failure",
                 "error": "SSH nested adapter response missing object adapter_state",
                 "adapter_state": adapter_state or {},
-                "dag_id": None,
             }
         logger.debug(
             "ssh executor result execution_id=%s status=%s error=%r",
@@ -229,5 +237,5 @@ class SshExecutor(ExecutorBase):
     def _remote_command(*, env_files: list[str], adapter: str) -> str:
         parts = ["set -e"]
         parts.extend(f". {shlex.quote(path)}" for path in env_files)
-        parts.append(f"exec {shlex.quote(adapter)} --poll -i - -o -")
+        parts.append(f"exec {shlex.quote(adapter)} -i - -o -")
         return "; ".join(parts)

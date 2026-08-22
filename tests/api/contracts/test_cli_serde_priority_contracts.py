@@ -84,6 +84,33 @@ def test_cache_description_serializes_ref_identities_as_json() -> None:
     assert json.loads(serialized) == {"execution": "index:e1", "dag": "dag:d1", "lifecycle": "succeeded"}
 
 
+def test_execution_record_serializes_as_exact_split_sections() -> None:
+    cli = MethodCLI(Dml, prog="dml")
+    result = {
+        "metadata": {"execution_id": "e1", "cache_key": "ck", "argv_ref": "node-argv:a1", "created_at": 1},
+        "state": {
+            "lifecycle": "succeeded",
+            "result_ref": "dag:d1",
+            "result_source": "runtime",
+            "spawned_execution_ids": [],
+            "child_execution_ids": [],
+            "cancelation": None,
+            "invalidation": None,
+            "updated_at": 2,
+        },
+        "driver": {
+            "lock": None,
+            "not_before": None,
+            "adapter_state": {"job": "j1"},
+            "cleanup": {"status": "complete", "error": None},
+        },
+    }
+
+    serialized = cli._serialize_result(dml_mod._RuntimeNamespace.read_execution_record, result)
+
+    assert json.loads(serialized) == result
+
+
 def test_cli_sp_002__ref_or_str_prefers_string(capsys) -> None:
     cli = MethodCLI(_SerdeFixture, prog="fixture")
 
