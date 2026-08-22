@@ -1,7 +1,4 @@
-## Purpose
-Define executor responsibilities and retry safety during runtime cancelation.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Executors SHALL handle runtime cancel invocation as a synchronous cancellation step
 When the runtime invokes an executor through an `AdapterCancelRequest` for a `cancel-pending` execution, the executor SHALL treat that invocation as synchronous cancellation work for the identified execution attempt. The executor cancel contract SHALL remain separate from execution-record lifecycle ownership.
@@ -15,20 +12,6 @@ When the runtime invokes an executor through an `AdapterCancelRequest` for a `ca
 - **WHEN** an executor has no nested runtime work to cancel
 - **THEN** it SHALL tear down its own external resources and return without recursive cancellation
 
-### Requirement: Nested adapter chains SHALL recurse through runtime cancel at most once per child execution
-Executor stacks that wrap nested executors SHALL ensure that only one layer in the stack calls `Dml.runtime.cancel(child)` for a given child execution while handling one cancel update.
-
-#### Scenario: Wrapper chain avoids duplicate recursive cancellation
-- **WHEN** multiple executor layers participate in cancelling the same nested execution
-- **THEN** at most one layer SHALL call `Dml.runtime.cancel(child)` for that child execution during that cancel update
-
-### Requirement: Executors SHALL tear down external resources during cancellation
-Executor-owned cancellation SHALL tear down external resources and SHALL NOT mutate the persisted execution record `state`. Script execution SHALL terminate the supervisor-managed process tree and remove its work directory. Docker execution SHALL stop and remove the container and SHALL remove any temporary loaded image. Batch execution SHALL cancel or terminate the Batch job as appropriate and SHALL deregister the temporary job definition. SSH execution SHALL return the nested adapter's cancellation result and SHALL NOT create additional remote wrapper state.
-
-#### Scenario: Batch cancellation tears down Batch resources
-- **WHEN** the Batch executor receives an `AdapterCancelRequest`
-- **THEN** it SHALL cancel or terminate the Batch job and deregister the temporary job definition
-
 ### Requirement: Cancel-path return values SHALL remain advisory only
 Executors SHALL return a success or failure indication from cancel handling, but the runtime SHALL continue to own execution-record lifecycle persistence, including the compare-and-swap from `cancel-pending` to `canceled`.
 
@@ -37,6 +20,8 @@ Executors SHALL return a success or failure indication from cancel handling, but
 - **THEN** that return SHALL NOT itself define or persist execution-record lifecycle values
 - **AND** the runtime SHALL remain responsible for the `canceled` transition
 
+## ADDED Requirements
+
 ### Requirement: Cancel adapter cleanup SHALL be safe to retry
 Executor cancellation SHALL be safe to retry when a runtime resumes an interrupted `cancel-pending` execution or concurrent cancellation drivers invoke cleanup for the same selected execution.
 
@@ -44,3 +29,10 @@ Executor cancellation SHALL be safe to retry when a runtime resumes an interrupt
 - **WHEN** the same `cancel-pending` execution receives repeated cancel requests
 - **THEN** the executor SHALL tolerate every repeated request
 - **AND** it SHALL leave the external resource stopped or in a terminal cleanup state
+
+## REMOVED Requirements
+
+### Requirement: Cancel adapter cleanup SHALL be safe after readiness timeout
+**Reason**: Cancellation no longer has a readiness lifecycle or timeout; retry safety applies to interrupted and concurrent Phase 2 drivers instead.
+
+**Migration**: Make cancel handling idempotent for repeated `cancel-pending` cleanup calls without relying on a readiness timeout.

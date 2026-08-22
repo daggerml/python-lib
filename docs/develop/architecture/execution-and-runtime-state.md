@@ -40,7 +40,13 @@ string-ID based.
 An adapter receives an invocation or cancellation request through an executable
 boundary. Invoke calls preserve object adapter state needed to continue running
 work; cancellation responses may omit it. Repeated calls for one execution ID
-are idempotent status checks. Cancellation is best-effort: deleting the current
-cache pointer prevents
-new callers from joining an execution that is being cancelled, but the adapter
-may finish stopping it later.
+are idempotent status checks. Cancellation first locks and CAS-selects the
+complete unreferenced descendant set as `cancel-pending`, conditionally deletes
+matching cache pointers, and removes selected callers' outgoing edges. Caller
+registration uses the same callee lock, so registration either publishes a
+valid edge before selection or observes `cancel-pending` and stops. After
+planning finishes, the runtime invokes each selected adapter and CAS-transitions
+the execution directly to `canceled`. It does not hold the execution lock across
+the external adapter call; it reacquires the lock for persisted adapter state and
+the terminal CAS. Adapter results remain advisory and repeated cleanup is safe
+when a driver resumes interrupted work.

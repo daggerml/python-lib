@@ -43,10 +43,12 @@ Invoke `running` responses must return object `adapter_state`; later responses
 may omit it when prior state remains usable. Cancel responses may omit or return
 null state. Malformed protocol output raises an adapter protocol error; reported
 non-success invoke outcomes are committed as cached error DAGs. Cancel returns
-`cancelled` or an error status. The runtime treats a status
-other than `cancelled` as inactive for cancellation coordination. It may have
-already revoked active ownership before this call, so cancellation confirmation
-does not prove that no backend work continues.
+`cancelled` or an error status. The runtime treats a status other than
+`cancelled` as inactive for cancellation coordination. Before this call, Phase
+1 has already selected the execution as `cancel-pending` and blocked further
+mutation. After any well-formed response, the runtime owns the CAS transition to
+`canceled`; the adapter does not persist lifecycle state. Cancellation
+confirmation does not prove that no backend work continues.
 
 `AdapterBase.cli()` supports `-i`/`-o` as `-`, local paths, or S3 URIs. Its
 `--poll` loop only repeats invoke requests while they return `running`.

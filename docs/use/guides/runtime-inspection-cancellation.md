@@ -22,4 +22,6 @@ In Python, name that identity with the `execution` parameter:
 session.runtime.cancel(execution=execution_ref, mode="full")
 ```
 
-Use `--mode drive` when DaggerML should also attempt to stop running tasks. Cancellation is coordinated through remote execution state for remote-backed functions; inspect the graph again afterwards to see lineage and terminal state.
+Full cancellation has two phases. It first walks spawned execution state, preserves work with another caller, and marks the complete unreferenced set `cancel-pending`. Only after selection finishes does it invoke cancellation for the selected adapters and compare-and-swap each execution to `canceled`.
+
+Use `--mode drive` to resume an interrupted cancellation already persisted as `cancel-pending`. Canceling an execution that finished before selection is a successful no-op. Cancellation is coordinated through remote execution state for remote-backed functions; inspect the graph again afterwards to see lineage and terminal state.

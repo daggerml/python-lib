@@ -28,8 +28,11 @@ not traverse CAS, materialize commits, or update local tracking pointers.
 
 Execution coordination is adjacent to, but separate from, CAS and project refs.
 `ExecutionState` stores embedded locks and attempt state in unified records,
-with separate lineage edges and adapter IO. Remote CAS garbage collection traces
-project refs plus execution-record `argv_ref` and `result_ref` roots.
+with separate lineage edges and adapter IO. Cancellation uses those locks to
+order caller-edge publication against the CAS transition to `cancel-pending`,
+then CAS-transitions adapter-cleaned attempts to `canceled`. Remote CAS garbage
+collection traces project refs plus execution-record `argv_ref` and `result_ref`
+roots.
 
 The shared surface exposes cache reads and invalidation through `Dml.cache`.
 Garbage collection is one top-level workflow: `Dml.gc()` computes local roots

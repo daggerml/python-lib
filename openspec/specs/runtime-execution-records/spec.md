@@ -32,7 +32,7 @@ The runtime SHALL persist the current execution for a cache key at `cache/<cache
 - **THEN** the runtime SHALL conditionally repair or remove the stale pointer before continuing
 
 ### Requirement: Runtime SHALL maintain one mutable execution record per execution id
-The runtime SHALL persist `execution/<execution_id>` with fields `execution_id`, `cache_key`, `lifecycle`, `created_at`, `updated_at`, `lock`, `adapter_state`, `argv_ref`, `result_ref`, `spawned_execution_ids`, `child_execution_ids`, `cancelation`, and `invalidation`. `execution_id` SHALL be nonempty; `cache_key` null or nonempty; timestamps non-boolean nonnegative integers with `updated_at >= created_at`; and `lock` null or exact `{owner: nonempty str, ttl: positive finite non-boolean number}`. `adapter_state` SHALL be an object or null. `argv_ref` and `result_ref` SHALL be syntactically typed `node-argv` and `dag` ref strings respectively, or null; validation SHALL NOT check whether either ref exists in storage. Lineage lists SHALL contain unique nonempty execution IDs and be disjoint. `cancelation` and `invalidation` SHALL each be null or exact objects containing nonempty `requested_by` and a non-boolean nonnegative integer `requested_at`. Lifecycle and lineage semantics SHALL remain execution-owned, and every mutation SHALL require the embedded lock owner and CAS.
+The runtime SHALL persist `execution/<execution_id>` with fields `execution_id`, `cache_key`, `lifecycle`, `created_at`, `updated_at`, `lock`, `adapter_state`, `argv_ref`, `result_ref`, `spawned_execution_ids`, `child_execution_ids`, `cancelation`, and `invalidation`. `execution_id` SHALL be nonempty; `cache_key` null or nonempty; timestamps non-boolean nonnegative integers with `updated_at >= created_at`; and `lock` null or exact `{owner: nonempty str, ttl: positive finite non-boolean number}`. `adapter_state` SHALL be an object or null. `argv_ref` and `result_ref` SHALL be syntactically typed `node-argv` and `dag` ref strings respectively, or null; validation SHALL NOT check whether either ref exists in storage. Lineage lists SHALL contain unique nonempty execution IDs and be disjoint. `cancelation` and `invalidation` SHALL each be null or exact objects containing nonempty `requested_by` and a non-boolean nonnegative integer `requested_at`. Lifecycle SHALL be one of `pending`, `running`, `succeeded`, `failed`, `cancel-pending`, or `canceled`; `cancel-requested` and `cancel-ready` SHALL NOT be accepted. Lifecycle and lineage semantics SHALL remain execution-owned, and every mutation SHALL require the embedded lock owner and CAS.
 
 #### Scenario: Fresh child record is complete and locked
 - **WHEN** the runtime reserves execution `e1` for cache key `ck1`
@@ -46,17 +46,22 @@ The runtime SHALL persist `execution/<execution_id>` with fields `execution_id`,
 - **WHEN** a caller attempts to change lifecycle, adapter state, refs, lineage, cancelation, or invalidation
 - **THEN** it SHALL hold the matching execution lock owner
 
-### Requirement: Adapter cancel dispatch SHALL target direct children that are cancel-ready
-Each runtime handling a `cancel-requested` execution SHALL wait for its direct callees to reach `cancel-ready`, invoke cancellation for those callees through an `AdapterCancelRequest` built from their execution-record `argv_ref`, persist those callees as `canceled`, and then persist its own execution as `cancel-ready`. Each record mutation SHALL hold that execution's embedded lock. The wait SHALL time out after 60 seconds, after which the runtime SHALL perform the cancel-adapter work anyway. Runtime lifecycle ownership remains outside the adapter response contract.
+#### Scenario: Cancel-pending is the only cancellation intermediate
+- **WHEN** an execution record is validated or written
+- **THEN** `cancel-pending` SHALL be accepted as the only nonterminal cancellation lifecycle
+- **AND** `cancel-requested` and `cancel-ready` SHALL be rejected
 
-#### Scenario: Parent waits for child cancel-ready before adapter cancel dispatch
-- **WHEN** execution `e0` is driving cancellation for direct child `e1`
-- **AND** `execution/e1` is still `cancel-requested`
-- **THEN** `F2(e0)` SHALL NOT invoke adapter cancellation for `e1` yet
+### Requirement: Adapter cancellation SHALL advance directly from cancel-pending to canceled
+For every adapter-backed execution in the Phase 1 cancellation set, Phase 2 SHALL build an `AdapterCancelRequest` from that execution's record, invoke the adapter synchronously, and compare-and-swap lifecycle from `cancel-pending` directly to `canceled`. If adapter invocation or lifecycle persistence is interrupted, the execution SHALL remain recoverable from `cancel-pending`, and repeated cancellation SHALL be safe.
 
-#### Scenario: Adapter cancel response does not define execution-record lifecycle names
-- **WHEN** adapter cancellation is invoked for execution `e1`
-- **THEN** the adapter response contract SHALL remain separate from execution-record-only lifecycle values such as `cancel-ready`
+#### Scenario: Adapter cancellation completes
+- **WHEN** the applicable cancel adapter returns for a `cancel-pending` execution
+- **THEN** the runtime SHALL compare-and-swap that execution directly to `canceled`
+
+#### Scenario: Cancellation resumes after interruption
+- **WHEN** adapter work is interrupted before `canceled` is persisted
+- **THEN** the execution SHALL remain `cancel-pending`
+- **AND** a later drive SHALL be able to repeat the idempotent cancel operation
 
 ### Requirement: Runtime SHALL expose descendant execution graphs from execution records
 The runtime SHALL expose an execution-record-owned graph query that accepts root execution ids and returns only the reachable descendant closure from those roots. The payload SHALL have shape `{roots: list[str], nodes: dict[str, node_payload]}` where each `node_payload` contains `execution_id`, `cache_key`, `lifecycle`, `updated_at`, `created_at`, `cancelation`, `children`, and `spawned`. `children` SHALL be derived from `child_execution_ids`, and `spawned` SHALL be derived from `spawned_execution_ids`. The graph query SHALL read only execution-record objects and SHALL include each reachable execution at most once.
@@ -112,14 +117,14 @@ The runtime SHALL replace typed terminal cache refs with plain `cache/<cache_key
 - **THEN** cache lookup reports that the result is not ready
 
 ### Requirement: Adapter operations SHALL follow the runtime-owned execution contract
-The runtime SHALL use `AdapterInvokeRequest` / `AdapterInvokeResponse` for invocation and `AdapterCancelRequest` / `AdapterCancelResponse` for cancellation. Invoke requests SHALL carry invocation data and current `adapter_state` without cancellation-only fields. Cancel requests SHALL carry `argv_ref` from the unified execution record. Cancel-path adapter responses SHALL NOT control runtime lifecycle persistence.
+The runtime SHALL use `AdapterInvokeRequest` / `AdapterInvokeResponse` for invocation and `AdapterCancelRequest` / `AdapterCancelResponse` for cancellation. Invoke requests SHALL carry invocation data and current `adapter_state` without cancellation-only fields. Cancel requests SHALL carry `argv_ref` from the unified execution record. Cancel-path adapter responses SHALL NOT control runtime lifecycle persistence. After Phase 1 has selected the complete cancellation set, Phase 2 SHALL issue the applicable cancel operation for each selected adapter-backed execution itself rather than waiting for a child-readiness lifecycle.
 
 #### Scenario: First adapter call uses null adapter state
 - **WHEN** the runtime invokes an adapter for a new execution
 - **THEN** the `AdapterInvokeRequest` SHALL include null `adapter_state`
 
 #### Scenario: Cancel update uses execution-owned target
-- **WHEN** the runtime invokes an adapter for a cancel update
+- **WHEN** the runtime invokes an adapter for a selected cancellation
 - **THEN** the runtime SHALL send an `AdapterCancelRequest` with the target execution ID
 - **AND** it SHALL include `argv_ref` from that execution's record
 
@@ -127,15 +132,15 @@ The runtime SHALL use `AdapterInvokeRequest` / `AdapterInvokeResponse` for invoc
 - **WHEN** an adapter returns from a cancel update
 - **THEN** the runtime SHALL NOT require a specific adapter success token before writing `lifecycle = "canceled"`
 
-#### Scenario: Parent cancellation targets child adapter chains only
-- **WHEN** `cancel(e1)` fans out over direct children
-- **THEN** the runtime SHALL send cancel updates only to adapter chains responsible for those child executions
-- **AND** it SHALL NOT separately send a cancel update for `e1` itself as part of that parent cancel flow
+#### Scenario: Every selected adapter-backed execution receives its own cancel update
+- **WHEN** Phase 1 selects a parent and one or more spawned adapter-backed executions
+- **THEN** Phase 2 SHALL process each selected execution's applicable cancel adapter
+- **AND** it SHALL NOT require recursive adapter cancellation to discover the selected set
 
-#### Scenario: Immediate parent is recorded for nested cancellation
-- **WHEN** root cancellation of `idx1` leads to nested `cancel(e2)` through `e1`
-- **THEN** `execution/e2.cancelation.requested_by` SHALL equal `e1`
-- **AND** it SHALL NOT replace that requester with `idx1` solely because `idx1` started the overall cancellation tree
+#### Scenario: Cancellation requester is stable across the selected set
+- **WHEN** root cancellation selects nested executions
+- **THEN** each newly selected execution's `cancelation.requested_by` SHALL identify the requester of that cancellation operation
+- **AND** a resumed drive SHALL preserve already-persisted requester metadata
 
 #### Scenario: Pending is rejected
 - **WHEN** an adapter returns `pending`
@@ -201,20 +206,21 @@ The runtime SHALL perform cancellation traversal from `spawned_execution_ids` on
 - **AND** that outcome SHALL be treated as an accepted limitation of best-effort cancellation
 
 ### Requirement: Runtime SHALL durably register a child before adapter invocation
-For an adapter-backed child execution, the runtime SHALL append the child execution ID to the caller's `spawned_execution_ids` through a successful compare-and-swap update before invoking the adapter. The runtime SHALL retry CAS conflicts with bounded backoff. If registration exhausts its retry budget, the runtime SHALL fail the launch and SHALL NOT invoke the adapter.
+For an adapter-backed child execution, the runtime SHALL publish the caller edge and append the child execution ID to the caller's `spawned_execution_ids` through successful coordinated updates before invoking the adapter. Caller registration SHALL serialize with cancellation selection for the callee and SHALL verify that the callee lifecycle still permits invocation. The runtime SHALL retry CAS conflicts with bounded backoff. If registration observes `cancel-pending` or `canceled`, or exhausts its retry budget, it SHALL fail the launch, remove any incomplete caller edge it owns, and SHALL NOT invoke the adapter.
 
-#### Scenario: Cancellation update wins child-registration contention
-- **WHEN** cancellation persists a non-running lifecycle on caller `e0` before child `e1` registration can update `e0`
+#### Scenario: Cancellation selection wins child-registration contention
+- **WHEN** cancellation persists `cancel-pending` for callee `e1` before caller registration completes
 - **THEN** registration of `e1` SHALL fail
-- **AND** the runtime SHALL NOT invoke `e1`'s adapter
+- **AND** the runtime SHALL remove its incomplete caller edge
+- **AND** it SHALL NOT invoke `e1`'s adapter
 
 #### Scenario: Child registration wins cancellation contention
-- **WHEN** registration persists `e1` in `e0`'s `spawned_execution_ids` before cancellation updates `e0`
-- **THEN** cancellation planning SHALL reread `e0`
-- **AND** it SHALL include `e1` in its direct-descendant traversal
+- **WHEN** registration completes a valid caller edge for `e1` before cancellation evaluates caller references
+- **THEN** cancellation planning SHALL observe that valid caller reference
+- **AND** it SHALL leave `e1` active
 
 #### Scenario: Child registration exhausts retries
-- **WHEN** child `e1` cannot append to caller `e0` after the bounded CAS retry budget
+- **WHEN** registration cannot complete after the bounded CAS retry budget
 - **THEN** the runtime SHALL raise a coordination failure
 - **AND** it SHALL NOT invoke `e1`'s adapter
 

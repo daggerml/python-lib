@@ -4,6 +4,8 @@ A funk is a DaggerML-packaged `Runnable`. Adding one to a DAG gives DaggerML the
 
 For a non-builtin funk, DaggerML first checks the cache identity derived from the staged runnable and normalized DaggerML data. The durable cache pointer names the current execution attempt; public cache lookup returns its result only after the unified execution record contains a reusable terminal `result_ref`. Distributed execution and cache coordination require `remote.root`.
 
+Cancellation conditionally removes a selected execution's matching cache pointer before adapter cleanup. Its execution record remains durable: `cancel-pending` means cancellation owns the attempt and no further result or index mutation is allowed, while `canceled` means the runtime completed the adapter cancellation step or found no applicable adapter work.
+
 Use `Dml.cache.get(cache_key)` to resolve the current cached DAG.
 `Dml.cache.describe(cache_key)` inspects the current pointer and returns its
 execution `Ref`, lifecycle, and reusable terminal DAG `Ref` when one exists.

@@ -285,7 +285,6 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
             stdout_sink.emit_lifecycle(event="cancel")
             stderr_sink.emit_lifecycle(event="cancel")
             proc.terminate()
-            dml.runtime.cancel(execution, mode="drive")
             break
         time.sleep(0.1)
     proc.wait()

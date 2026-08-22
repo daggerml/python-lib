@@ -142,12 +142,7 @@ class NoopExecutionState:
         action = "activated" if mode == "activation" else "mutated"
         if lifecycle == allowed:
             return record
-        if lifecycle == "cancel-requested":
-            self.cancel(execution_id, None, db, mode="drive")
-            raise CanceledExecutionError(
-                f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
-            )
-        if lifecycle in ("cancel-ready", "canceled"):
+        if lifecycle in ("cancel-pending", "canceled"):
             raise CanceledExecutionError(
                 f"Execution {execution_id} is {lifecycle} and cannot be {action}", lifecycle=lifecycle
             )

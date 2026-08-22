@@ -77,7 +77,7 @@ def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellatio
         }
     )
 
-    assert calls == [(Ref("index:exec-1"), "drive")]
+    assert calls == []
     assert result["status"] == "failed"
     assert "Worker killed by signal SIGTERM" in result["error"]
 

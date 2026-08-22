@@ -24,7 +24,9 @@ Cancellation is best-effort. The runtime can delete the execution's cache
 pointer before the adapter confirms cancellation, so the underlying job
 can still run briefly. A cancel operation receives the saved state, the
 execution-owned `argv_ref`, and `requested_by`; it must return `cancelled` or
-`failed`, not an invoke result.
+`failed`, not an invoke result. The runtime sends cancel operations only after
+it has selected the complete cancellation set as `cancel-pending`, and it owns
+the compare-and-swap to `canceled`. Executors do not persist lifecycle state.
 
 The runtime publishes successful and failed cache entries after it observes an
 invoke terminal result. Extensions must not publish those entries themselves.

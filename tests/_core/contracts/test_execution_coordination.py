@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from daggerml._core import BadExecutionStatusError
+from daggerml._core import CanceledExecutionError
 from daggerml._core.db import Ref
 from daggerml._core.exec_state import ExecutionState
 from daggerml._core.s3_cas import CasItemConflict
@@ -47,6 +47,17 @@ def test_execution_record_schema_rejects_missing_unified_fields() -> None:
     state = _state()
     with pytest.raises(DmlRepoError, match="Invalid execution record"):
         state.create_execution_record({"execution_id": "exec"})
+
+
+def test_execution_record_schema_accepts_only_cancel_pending_intermediate() -> None:
+    state = _state()
+    assert state.create_execution_record(
+        _record("pending", "cancel-pending", cancelation={"requested_by": "user", "requested_at": 1})
+    )
+
+    for execution_id, lifecycle in (("requested", "cancel-requested"), ("ready", "cancel-ready")):
+        with pytest.raises(DmlRepoError, match="Invalid execution lifecycle"):
+            state.create_execution_record(_record(execution_id, lifecycle))
 
 
 def test_embedded_lock_allows_one_parallel_owner() -> None:
@@ -393,6 +404,25 @@ def test_pre_adapter_failure_preserves_reused_execution_record() -> None:
     assert state._snapshot(state._execution_key(execution_id)) is not None
 
 
+def test_caller_registration_losing_to_cancel_pending_removes_edge_without_adapter_call(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("caller", cache_key=None))
+    assert state.create_execution_record(
+        _record("selected", "cancel-pending", cancelation={"requested_by": "user", "requested_at": 1})
+    )
+    assert state._create_cache("cache", "selected")
+    monkeypatch.setattr(state, "_call_adapter", lambda *_args, **_kwargs: pytest.fail("adapter must not run"))
+
+    with pytest.raises(CanceledExecutionError):
+        state.get_or_start_fn(
+            Ref("index:caller"), Runnable(Uri("target"), adapter="adapter"), Ref("node-argv:argv"), None
+        )
+
+    assert state.list_execution_callers("selected") == []
+    assert state.read_execution_record("caller")["spawned_execution_ids"] == []
+    assert state._read_cache("cache")[0] == "selected"
+
+
 @pytest.mark.parametrize("stdout", ["not json", "[]", "{}", '{"status": 1}'])
 def test_call_adapter_rejects_unrecoverable_malformed_output(monkeypatch, stdout) -> None:
     state = _state()
@@ -437,24 +467,29 @@ def test_graph_reads_nested_cancelation_requester() -> None:
     assert graph["nodes"]["root"]["cancel_requested_by"] == "user"
 
 
-def test_cancel_driver_leaves_cyclic_requested_execution_pending(monkeypatch) -> None:
+def test_cancel_driver_processes_cyclic_pending_execution_once(monkeypatch) -> None:
     state = _state()
     assert state.create_execution_record(
         _record(
             "loop",
-            "cancel-requested",
+            "cancel-pending",
             cancelation={"requested_by": "user", "requested_at": 1},
             spawned_execution_ids=["loop"],
         )
     )
-    monkeypatch.setattr(state, "_invoke_cancel_adapter", lambda *_: pytest.fail("cyclic execution must not dispatch"))
+    dispatched = []
+    monkeypatch.setattr(
+        state, "_invoke_cancel_adapter", lambda execution_id, *_: dispatched.append(execution_id) or "cancelled"
+    )
 
-    state._run_cancel_driver("loop", "user", None)
+    selected = state._plan_cancel(["loop"], "user")
+    state._run_cancel_driver(selected, "user", None)
 
-    assert state.read_execution_record("loop")["lifecycle"] == "cancel-requested"
+    assert dispatched == ["loop"]
+    assert state.read_execution_record("loop")["lifecycle"] == "canceled"
 
 
-def test_cancel_drive_finalizes_exclusive_requested_leaf_without_waiting_for_timeout(monkeypatch) -> None:
+def test_cancel_finalizes_selected_descendants_leaves_first(monkeypatch) -> None:
     state = _state()
     assert state.create_execution_record(_record("d0", spawned_execution_ids=["f0", "f1"]))
     assert state.create_execution_record(_record("d1", spawned_execution_ids=["f1"]))
@@ -468,53 +503,242 @@ def test_cancel_drive_finalizes_exclusive_requested_leaf_without_waiting_for_tim
         state, "_invoke_cancel_adapter", lambda execution_id, *_: dispatched.append(execution_id) or "cancelled"
     )
 
-    state.cancel("d0", "user", None, mode="full")
-    state.cancel("d0", None, None, mode="drive")
+    response = state.cancel("d0", "user", None, mode="full")
 
+    assert state.read_execution_record("d0")["lifecycle"] == "canceled"
     assert state.read_execution_record("f0")["lifecycle"] == "canceled"
     assert state.read_execution_record("f1")["lifecycle"] == "running"
     assert state.list_execution_callers("f1") == ["d1"]
-    assert dispatched == ["f0"]
+    assert dispatched == ["f0", "d0"]
+    assert response["timeout"] == []
 
 
-def test_cancel_driver_dispatches_timed_out_root_after_timed_out_children(monkeypatch) -> None:
+def test_cancel_reconsiders_shared_descendant_after_last_selected_caller_releases_it(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(
+        _record("root", cache_key=None, argv_ref=None, spawned_execution_ids=["a", "b"])
+    )
+    assert state.create_execution_record(_record("a", spawned_execution_ids=["shared"]))
+    assert state.create_execution_record(_record("b", spawned_execution_ids=["shared"]))
+    assert state.create_execution_record(_record("shared"))
+    for caller, callee in (("root", "a"), ("root", "b"), ("a", "shared"), ("b", "shared")):
+        state._record_edge(caller, callee)
+    dispatched = []
+    monkeypatch.setattr(
+        state, "_invoke_cancel_adapter", lambda execution_id, *_: dispatched.append(execution_id) or "cancelled"
+    )
+
+    state.cancel("root", "user", None)
+
+    assert dispatched == ["shared", "a", "b", "root"]
+    assert all(
+        state.read_execution_record(execution_id)["lifecycle"] == "canceled"
+        for execution_id in ("root", "a", "b", "shared")
+    )
+
+
+def test_terminal_spawned_execution_does_not_block_active_sibling_cancellation(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(
+        _record("root", cache_key=None, argv_ref=None, spawned_execution_ids=["active", "done"])
+    )
+    assert state.create_execution_record(_record("active"))
+    assert state.create_execution_record(_record("done", "succeeded", result_ref="dag:result"))
+    state._record_edge("root", "active")
+    state._record_edge("root", "done")
+    dispatched = []
+    monkeypatch.setattr(
+        state, "_invoke_cancel_adapter", lambda execution_id, *_: dispatched.append(execution_id) or "cancelled"
+    )
+
+    state.cancel("root", "user", None)
+
+    assert dispatched == ["active", "root"]
+    assert state.read_execution_record("active")["lifecycle"] == "canceled"
+    assert state.read_execution_record("done")["lifecycle"] == "succeeded"
+
+
+def test_cancel_drive_replays_cleanup_after_interrupted_phase_one(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(
+        _record(
+            "root",
+            "cancel-pending",
+            cache_key="root-key",
+            argv_ref=None,
+            cancelation={"requested_by": "user", "requested_at": 1},
+            spawned_execution_ids=["child"],
+        )
+    )
+    assert state.create_execution_record(_record("child", cache_key=None, argv_ref=None))
+    assert state._create_cache("root-key", "root")
+    state._record_edge("root", "child")
+    monkeypatch.setattr(state, "_invoke_cancel_adapter", lambda *_: "inactive")
+
+    state.cancel("root", None, None, mode="drive")
+
+    assert state._read_cache("root-key") is None
+    assert state.list_execution_callers("child") == []
+    assert state.read_execution_record("root")["lifecycle"] == "canceled"
+    assert state.read_execution_record("child")["lifecycle"] == "canceled"
+
+
+def test_cancel_preserves_cache_pointer_rebound_during_phase_one(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("selected"))
+    assert state._create_cache("cache", "selected")
+    delete_cache = state._delete_cache
+
+    def rebind_then_delete(cache_key, execution_id):
+        state._store._put(state._cache_key(cache_key), "replacement", overwrite=True)
+        return delete_cache(cache_key, execution_id)
+
+    monkeypatch.setattr(state, "_delete_cache", rebind_then_delete)
+    monkeypatch.setattr(state, "_invoke_cancel_adapter", lambda *_: "inactive")
+
+    state.cancel("selected", "user", None)
+
+    assert state._read_cache("cache")[0] == "replacement"
+    assert state.read_execution_record("selected")["lifecycle"] == "canceled"
+
+
+def test_cancel_finishes_phase_one_before_invoking_any_adapter(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(
+        _record("root", cache_key=None, argv_ref=None, spawned_execution_ids=["child"])
+    )
+    assert state.create_execution_record(_record("child"))
+    state._record_edge("root", "child")
+    events = []
+    delete_dependency = state.delete_execution_dependency
+
+    def record_delete(**kwargs):
+        events.append(("delete", kwargs["callee_execution_id"]))
+        delete_dependency(**kwargs)
+
+    def record_invoke(execution_id, *_):
+        events.append(("invoke", execution_id))
+        return "inactive"
+
+    monkeypatch.setattr(state, "delete_execution_dependency", record_delete)
+    monkeypatch.setattr(state, "_invoke_cancel_adapter", record_invoke)
+
+    state.cancel("root", "user", None)
+
+    assert events == [("delete", "child"), ("invoke", "child"), ("invoke", "root")]
+
+
+def test_concurrent_cancel_drivers_converge_on_canceled(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("root", cache_key=None, argv_ref=None))
+    dispatched = []
+    monkeypatch.setattr(
+        state, "_invoke_cancel_adapter", lambda execution_id, *_: dispatched.append(execution_id) or "inactive"
+    )
+
+    run_parallel(2, lambda _: state.cancel("root", "user", None))
+
+    assert state.read_execution_record("root")["lifecycle"] == "canceled"
+    assert 1 <= dispatched.count("root") <= 2
+
+
+def test_cancel_phase_one_retries_cas_conflict(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("root", cache_key=None, argv_ref=None))
+    wait_acquire = state._wait_acquire
+
+    def acquire_then_conflict_once(execution_id):
+        owner = wait_acquire(execution_id)
+        state._store.conflict_keys.add(state._execution_key(execution_id))
+        return owner
+
+    monkeypatch.setattr(state, "_wait_acquire", acquire_then_conflict_once)
+    monkeypatch.setattr(state, "_invoke_cancel_adapter", lambda *_: "inactive")
+
+    state.cancel("root", "user", None)
+
+    assert state.read_execution_record("root")["lifecycle"] == "canceled"
+
+
+def test_cancel_phase_one_surfaces_cas_retry_exhaustion(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("root", cache_key=None, argv_ref=None))
+    put_js = state._store._put_js
+
+    def reject_cancel_pending(key, value, **kwargs):
+        if isinstance(value, dict) and value.get("lifecycle") == "cancel-pending":
+            raise CasItemConflict("cancel conflict")
+        return put_js(key, value, **kwargs)
+
+    monkeypatch.setattr(state._store, "_put_js", reject_cancel_pending)
+
+    with pytest.raises(DmlRepoError, match="Failed to mutate execution after CAS retries"):
+        state.cancel("root", "user", None)
+
+    assert state.read_execution_record("root")["lifecycle"] == "running"
+
+
+def test_cancel_phase_one_surfaces_lock_acquisition_failure(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("root", cache_key=None, argv_ref=None))
+    monkeypatch.setattr(
+        state, "_wait_acquire", lambda *_: (_ for _ in ()).throw(DmlRepoError("lock acquisition failed"))
+    )
+
+    with pytest.raises(DmlRepoError, match="lock acquisition failed"):
+        state.cancel("root", "user", None)
+
+
+def test_cancel_adapter_exception_leaves_selected_execution_pending(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("root", cache_key=None, argv_ref=None))
+    monkeypatch.setattr(
+        state, "_invoke_cancel_adapter", lambda *_: (_ for _ in ()).throw(RuntimeError("cancel failed"))
+    )
+
+    with pytest.raises(RuntimeError, match="cancel failed"):
+        state.cancel("root", "user", None)
+
+    assert state.read_execution_record("root")["lifecycle"] == "cancel-pending"
+
+
+def test_cancel_drive_reconstructs_pending_root_and_children(monkeypatch) -> None:
     state = _state()
     root = _record(
         "root",
-        "cancel-requested",
+        "cancel-pending",
         cancelation={"requested_by": "user", "requested_at": 1},
         spawned_execution_ids=["child"],
     )
     assert state.create_execution_record(root)
     assert state.create_execution_record(
-        _record("child", "cancel-requested", cancelation={"requested_by": "user", "requested_at": 1})
+        _record("child", "cancel-pending", cancelation={"requested_by": "user", "requested_at": 1})
     )
     dispatched = []
-    monkeypatch.setattr("daggerml._core.exec_state.time.time", lambda: 61)
     monkeypatch.setattr(
         state, "_invoke_cancel_adapter", lambda execution_id, *_: dispatched.append(execution_id) or "cancelled"
     )
 
-    state._run_cancel_driver("root", "user", None)
+    state.cancel("root", None, None, mode="drive")
 
     assert dispatched == ["child", "root"]
     assert state.read_execution_record("root")["lifecycle"] == "canceled"
 
 
 @pytest.mark.parametrize("lifecycle", ["succeeded", "failed", "canceled"])
-def test_cancel_rejects_terminal_cache_entries_without_deleting_pointer(lifecycle) -> None:
+def test_cancel_accepts_terminal_cache_entries_without_deleting_pointer(lifecycle) -> None:
     state = _state()
     assert state.create_execution_record(_record("done", lifecycle, result_ref="dag:result"))
     assert state._create_cache("cache", "done")
 
-    with pytest.raises(BadExecutionStatusError):
-        state.cancel("done", "user", None)
+    response = state.cancel("done", "user", None)
 
+    assert all(not items for items in response.values())
     assert state._read_cache("cache")[0] == "done"
 
 
 @pytest.mark.parametrize("lifecycle", ["succeeded", "failed"])
-def test_cancel_revalidates_terminal_lifecycle_after_acquiring_lock(monkeypatch, lifecycle) -> None:
+def test_cancel_skips_terminal_lifecycle_after_acquiring_lock(monkeypatch, lifecycle) -> None:
     state = _state()
     assert state.create_execution_record(_record("done"))
     assert state._create_cache("cache", "done")
@@ -528,8 +752,8 @@ def test_cancel_revalidates_terminal_lifecycle_after_acquiring_lock(monkeypatch,
 
     monkeypatch.setattr(state, "_wait_acquire", finish_before_cancel_mutation)
 
-    with pytest.raises(BadExecutionStatusError):
-        state.cancel("done", "user", None)
+    response = state.cancel("done", "user", None)
 
+    assert all(not items for items in response.values())
     assert state.read_execution_record("done")["lifecycle"] == lifecycle
     assert state._read_cache("cache")[0] == "done"

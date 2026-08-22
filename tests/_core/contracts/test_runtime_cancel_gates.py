@@ -48,14 +48,14 @@ def _put_reserved_execution(
     )
 
 
-def test_put_literal_cancel_requested_execution_drives_cancel_then_raises(tmp_path) -> None:
+def test_put_literal_cancel_pending_execution_raises_without_drive(tmp_path) -> None:
     db = make_db(tmp_path)
     state = NoopExecutionState()
     state.create_execution_record(
         {
             "execution_id": "idx",
             "cache_key": None,
-            "lifecycle": "cancel-requested",
+            "lifecycle": "cancel-pending",
             "updated_at": 0,
             "created_at": 0,
             "spawned_execution_ids": [],
@@ -69,7 +69,7 @@ def test_put_literal_cancel_requested_execution_drives_cancel_then_raises(tmp_pa
     with pytest.raises(CanceledExecutionError):
         ops.put_literal(index, 42, db=db)
 
-    assert state.cancel_calls == [("idx", None, "drive")]
+    assert state.cancel_calls == []
 
 
 def test_put_literal_canceled_execution_raises_without_drive(tmp_path) -> None:
@@ -155,25 +155,24 @@ def test_execution_aware_create_rejects_missing_execution_record(tmp_path) -> No
         ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
 
 
-def test_execution_aware_create_drives_cancel_requested_before_raising(tmp_path) -> None:
+def test_execution_aware_create_rejects_cancel_pending_without_drive(tmp_path) -> None:
     db = make_db(tmp_path)
     state = NoopExecutionState()
     ops = local_index_ops(state)
-    _put_reserved_execution(state, "exec", lifecycle="cancel-requested")
+    _put_reserved_execution(state, "exec", lifecycle="cancel-pending")
     ops._remote.get_active = lambda cache_key, raw=False: {"meta": {"execution_id": "exec"}}
 
     with pytest.raises(CanceledExecutionError):
         ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
 
-    assert state.cancel_calls == [("exec", None, "drive")]
+    assert state.cancel_calls == []
 
 
-@pytest.mark.parametrize("lifecycle", ["cancel-ready", "canceled"])
-def test_execution_aware_create_raises_on_terminal_cancel_without_drive(tmp_path, lifecycle: str) -> None:
+def test_execution_aware_create_raises_on_canceled_without_drive(tmp_path) -> None:
     db = make_db(tmp_path)
     state = NoopExecutionState()
     ops = local_index_ops(state)
-    _put_reserved_execution(state, "exec", lifecycle=lifecycle)
+    _put_reserved_execution(state, "exec", lifecycle="canceled")
     ops._remote.get_active = lambda cache_key, raw=False: {"meta": {"execution_id": "exec"}}
 
     with pytest.raises(CanceledExecutionError):

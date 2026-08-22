@@ -48,8 +48,7 @@ def _graph_lifecycle_style(lifecycle: str) -> str:
         "running": "yellow",
         "succeeded": "green",
         "failed": "red",
-        "cancel-requested": "dark_goldenrod italic",
-        "cancel-ready": "dark_orange",
+        "cancel-pending": "dark_goldenrod italic",
         "canceled": "dim",
         "pending": "cyan",
     }.get(lifecycle, "white")
