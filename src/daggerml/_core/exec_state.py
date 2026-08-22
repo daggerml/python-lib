@@ -959,26 +959,36 @@ class ExecutionState:
                 if runnable is None:
                     response = {"status": "cancelled"}
                 else:
-                    response = self._call_adapter(
-                        {
-                            "operation": "cancel",
-                            "cache_key": metadata["cache_key"],
-                            "execution_id": execution_id,
-                            "argv_ref": metadata["argv_ref"],
-                            "remote": {"root": self.root_uri},
-                            "runnable": asdict(runnable),
-                            "adapter_state": driver["adapter_state"],
-                            "scratch_uri": self.adapter_scratch(execution_id),
-                            "requested_by": requested_by,
-                        }
-                    )
-                driver_update = {"not_before": self._retry_not_before(response)}
-                if isinstance(response.get("adapter_state"), dict):
-                    driver_update["adapter_state"] = response["adapter_state"]
+                    assert metadata["cache_key"] is not None
+                    assert metadata["argv_ref"] is not None
+                    request: AdapterCancelRequest = {
+                        "operation": "cancel",
+                        "cache_key": metadata["cache_key"],
+                        "execution_id": execution_id,
+                        "argv_ref": metadata["argv_ref"],
+                        "remote": {"root": self.root_uri},
+                        "runnable": asdict(runnable),
+                        "adapter_state": driver["adapter_state"],
+                        "scratch_uri": self.adapter_scratch(execution_id),
+                        "requested_by": requested_by,
+                    }
+                    response = self._call_adapter(request)
+                not_before = self._retry_not_before(response)
+                adapter_state = response.get("adapter_state")
+
+                def update_driver(
+                    item: ExecutionDriver,
+                    not_before: int | None = not_before,
+                    adapter_state: Any = adapter_state,
+                ) -> None:
+                    item["not_before"] = not_before
+                    if isinstance(adapter_state, dict):
+                        item["adapter_state"] = adapter_state
+
                 self._mutate_driver(
                     execution_id,
                     owner,
-                    lambda item, driver_update=driver_update: item.update(driver_update),
+                    update_driver,
                 )
                 if response["status"] != "cancelled":
                     return False
