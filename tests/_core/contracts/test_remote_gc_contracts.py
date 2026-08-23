@@ -37,7 +37,8 @@ def test_remote_gc_001__reachable_objects_include_nested_objects_for_liveness(tm
     remote.prune_age_seconds = 24 * 3600
     remote._store = SimpleNamespace(_key_for=lambda key: key)
 
-    objects = remote._collect_local_objects(commit_ref, db)
+    objects, missing = remote._collect_local_objects(commit_ref, db)
+    assert missing == set()
     remote._store = SimpleNamespace(
         _key_for=lambda key: key,
         _get=lambda key: objects[key],

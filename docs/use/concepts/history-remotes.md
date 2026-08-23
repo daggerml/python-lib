@@ -18,6 +18,19 @@ stored trees predate required tag data are not compatible with this format.
 
 Use `Dml.branch.get_upstream(name)` to inspect any branch's configured upstream independently of the current checkout. Upstream metadata remains branch-only.
 
+Clone and fetch can limit local commit history with `--depth N`. This never
+creates a partial research snapshot: the selected commit's tree, DAGs, nodes,
+data, and imports are complete, while only older commit parents can remain
+unavailable. DaggerML records those parent refs as local shallow-history state,
+so missing history is distinguishable from a damaged object graph.
+
+An ordinary pull of a shallow branch downloads new commits through the existing
+local tip and preserves its older boundary. Use a larger `fetch --depth N` to
+deepen selected history or `fetch --unshallow` to retrieve it completely.
+History operations that cannot prove ancestry stop with deepening guidance;
+logs identify truncated history and status leaves unknown ahead/behind counts
+unavailable rather than reporting partial values.
+
 ```bash
 dml config set remote.root s3://bucket/research
 dml push

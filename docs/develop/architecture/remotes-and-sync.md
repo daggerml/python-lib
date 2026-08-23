@@ -11,6 +11,13 @@ than being recursively flattened into one transport object. Fetching validates
 and materializes a selected manifest closure into the local database before
 writing a tracking pointer. Local branches persist an upstream branch name.
 
+Project commit fetch has a commit-aware mode for shallow history. It traverses
+each included commit's tree with the ordinary complete object materializer, but
+counts only `Commit.parents` edges toward requested depth. Exact unavailable
+parent refs are stored in versioned local shallow metadata before the tracking
+pointer is replaced. Generic DAG and execution-result materialization remains
+complete and has no depth mode.
+
 Each remote root contains one project, with direct `refs/heads/*` and
 `refs/tags/*` transport paths. Local project tracking is under
 `.dml/refs/remote/{heads,tags}`, while import-only dependencies use
@@ -40,3 +47,10 @@ Garbage collection is one top-level workflow: `Dml.gc()` computes local roots
 from HEAD, local refs, fetched refs, dependencies, and live runtime indexes,
 while `Dml.gc(remote=True)` delegates to maintenance for configured
 `remote.root`. Import-only dependency endpoints are never GC targets.
+
+Incremental fetch stops at an existing local commit unless depth expansion or
+unshallowing explicitly crosses that frontier. Ancestry checks propagate an
+unknown result when they reach declared shallow history. Non-forced publication
+may skip such a closure only after reaching the observed existing remote branch
+tip through available local ancestry; new refs and forced shallow publication
+are rejected.

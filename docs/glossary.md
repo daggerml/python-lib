@@ -11,3 +11,4 @@
 - **Codec**: a conversion from a Python value to a value DaggerML can store.
 - **Provenance**: the chain of DAG imports and function calls that produced a value.
 - **Remote**: S3-backed storage used for project synchronization and, when needed, distributed execution and cache coordination.
+- **Shallow history**: a local repository state with complete materialized commit snapshots but intentionally unavailable older commit parents recorded under `.dml/`.

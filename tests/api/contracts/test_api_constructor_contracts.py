@@ -45,6 +45,16 @@ def test_api_ctor_001__dml_constructor_and_init_expose_full_config_surface() -> 
         "user",
         "config_home",
     ]
+
+    fetch = inspect.signature(Dml.fetch).parameters
+    pull = inspect.signature(Dml.pull).parameters
+    assert list(fetch) == ["self", "revision", "dep", "depth", "unshallow"]
+    assert fetch["depth"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert fetch["depth"].default is None
+    assert fetch["unshallow"].default is False
+    assert list(pull) == ["self", "ff_only", "depth"]
+    assert pull["depth"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert pull["depth"].default is None
     assert init_params == [
         "project_home",
         "db_path",
@@ -70,6 +80,7 @@ def test_api_ctor_001__dml_constructor_and_init_expose_full_config_surface() -> 
         "remote_fetch_workers",
         "user",
         "config_home",
+        "depth",
     ]
 
 

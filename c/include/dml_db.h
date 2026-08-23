@@ -108,6 +108,8 @@ int dml_db_list_orphans(
     struct DmlDbHandle **p_handle,
     const char *const *start_refs,
     size_t start_refs_count,
+    const char *const *missing_commit_refs,
+    size_t missing_commit_refs_count,
     DmlValue **out_refs
 );
 

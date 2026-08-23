@@ -211,3 +211,48 @@ def test_dependency_config_is_strict(tmp_path, payload) -> None:
 
     with pytest.raises(DmlRepoError, match="Invalid dependency config"):
         head.get_dependency_config("models")
+
+
+def test_shallow_commit_metadata_round_trips_atomically(tmp_path) -> None:
+    head = Head(str(tmp_path))
+    commits = {Ref("commit:" + "b" * 64), Ref("commit:" + "a" * 64)}
+
+    assert head.get_shallow_commits() == set()
+    head.write_shallow_commits(commits)
+
+    assert head.get_shallow_commits() == commits
+    assert json.loads(head.shallow_path().read_text(encoding="utf-8")) == {
+        "version": 1,
+        "missing": ["commit:" + "a" * 64, "commit:" + "b" * 64],
+    }
+
+    head.write_shallow_commits(set())
+    assert head.get_shallow_commits() == set()
+    assert not head.shallow_path().exists()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"version": 2, "missing": []},
+        {"version": 1, "missing": "commit:" + "a" * 64},
+        {"version": 1, "missing": ["dag:" + "a" * 64]},
+        {"version": 1, "missing": ["commit:short"]},
+        {"version": 1, "missing": ["commit:" + "b" * 64, "commit:" + "a" * 64]},
+        {"version": 1, "missing": ["commit:" + "a" * 64, "commit:" + "a" * 64]},
+    ],
+)
+def test_shallow_commit_metadata_fails_closed(tmp_path, payload) -> None:
+    head = Head(str(tmp_path))
+    path = head.shallow_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DmlRepoError, match="Invalid shallow metadata"):
+        head.get_shallow_commits()
+
+
+def test_shallow_commit_metadata_rejects_non_commit_refs(tmp_path) -> None:
+    with pytest.raises(ValueError, match="only exact commit refs"):
+        Head(str(tmp_path)).write_shallow_commits({Ref("dag:" + "a" * 64)})

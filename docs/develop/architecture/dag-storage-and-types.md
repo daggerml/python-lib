@@ -23,11 +23,19 @@ in `.dml/db`; the filesystem stores lightweight control pointers such as
 `.dml/HEAD`, local branch refs, mutable runtime refs, remote-tracking refs, and
 `.dml/config.toml`.
 
+`.dml/shallow.json` is versioned local availability metadata containing exact
+commit refs intentionally absent behind materialized history. It does not alter
+`Commit.parents` or any content-derived identity. A materialized commit always
+retains a complete tree/DAG closure; only a declared commit parent may be absent.
+
 Object identity and reachability depend on the explicit ref graph. Local
 garbage collection starts from live pointers and removes unreachable objects;
 changes to object shape, namespace registration, or references must preserve
 that invariant. `Dml.gc()` selects this local path, while
 `Dml.gc(remote=True)` selects the separate configured-remote maintenance path.
+Native local reachability accepts declared absent commits as terminal leaves
+but still fails on missing roots, snapshots, or undeclared refs. Collection also
+removes shallow entries no longer referenced by retained objects.
 
 Tree tags are classification metadata rather than a new object type. A tag such
 as `research.v0` has no repository-defined meaning; users or external tools can

@@ -126,3 +126,33 @@ def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None
 
     parsed = cli.parser.parse_args(["gc", "--remote"])
     assert parsed.remote is True
+
+
+def test_cli_shallow_clone_fetch_and_pull_options_are_generated() -> None:
+    cli = MethodCLI(Dml, prog="dml")
+    root_subparsers = next(
+        action for action in cli.parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+
+    clone_help = root_subparsers.choices["clone"].format_help()
+    fetch_help = root_subparsers.choices["fetch"].format_help()
+    pull_help = root_subparsers.choices["pull"].format_help()
+    assert "--depth DEPTH" in clone_help
+    assert "--unshallow" not in clone_help
+    assert "--depth DEPTH" in fetch_help
+    assert "--unshallow" in fetch_help
+    assert "--dep DEP" in fetch_help
+    assert "--depth DEPTH" in pull_help
+    assert "--unshallow" not in pull_help
+
+    parsed = cli.parser.parse_args(["fetch", "main", "--dep", "models", "--depth", "2"])
+    assert parsed.revision == "main"
+    assert parsed.dep == "models"
+    assert parsed.depth == 2
+    assert parsed.unshallow is False
+
+    parsed = cli.parser.parse_args(["fetch", "main", "--unshallow"])
+    assert parsed.unshallow is True
+
+    parsed = cli.parser.parse_args(["pull", "--depth", "3"])
+    assert parsed.depth == 3

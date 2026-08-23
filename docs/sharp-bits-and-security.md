@@ -129,6 +129,20 @@ def compute_stats(dag, value):
 
 Do not run `dml admin` commands concurrently with `dml pull` or other remote synchronization against the same local repository. In particular, local garbage collection can remove an object while a pull is materializing a remote object graph, leaving the materialized graph with a missing dependency. Run administrative work only after synchronization has completed.
 
+### Shallow history limits ancestry operations
+
+A depth-limited clone or fetch contains a complete selected snapshot but may not
+contain enough history to prove merge bases, ahead/behind counts, rebase or
+revert safety, or non-fast-forward publication. DaggerML fails these operations
+with deepening guidance instead of treating absent parents as repository roots.
+Use `dml fetch --depth N BRANCH` or `dml fetch --unshallow BRANCH` before retrying.
+
+A normal non-forced push may advance the existing upstream when its observed
+tip is reachable above the shallow boundary. Creating a new remote branch,
+forcing a push, or publishing when ancestry is unknown requires complete local
+history. Older clients do not understand `.dml/shallow.json`; unshallow retained
+refs before rolling a repository back to such a client.
+
 ## Known security holes
 
 ### Runnable adapters can launch arbitrary local executables

@@ -8,7 +8,13 @@ from pathlib import Path
 from time import time
 from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict, cast, overload
 
-from daggerml._core.commit import CommitDescription, CommitDiffPayload, CommitFullDescription, CommitOps
+from daggerml._core.commit import (
+    CommitDescription,
+    CommitDiffPayload,
+    CommitFullDescription,
+    CommitOps,
+    ShallowHistoryError,
+)
 from daggerml._core.config import Config, flatten_dict
 from daggerml._core.dag import DagDescription, DagOps, NodeDescriptionPayload
 from daggerml._core.db import DmlDbKeyNotFoundError, Ref
@@ -188,6 +194,18 @@ def _revision_source(remote: bool, dep: str | None) -> tuple[bool, str | None]:
     return remote, dep
 
 
+def _validate_history_options(depth: int | None, unshallow: bool = False) -> None:
+    if depth is not None and (isinstance(depth, bool) or depth <= 0):
+        raise DmlRepoError("depth must be a positive integer")
+    if depth is not None and unshallow:
+        raise DmlRepoError("depth and unshallow cannot be selected together")
+
+
+def _publish_shallow_state(head: Head, available: set[Ref], omitted: set[Ref]) -> None:
+    shallow = head.get_shallow_commits()
+    head.write_shallow_commits((shallow - available) | omitted)
+
+
 class RefListItem(TypedDict):
     name: str
     commit: Ref
@@ -234,7 +252,9 @@ def resolve_rev(
             current = head.get_head()["commit"]
         if current is None:
             return None
-        return CommitOps().get_ancestor(current, n, db=db)
+        return CommitOps().get_ancestor(
+            current, n, db=db, missing_commits=head.get_shallow_commits()
+        )
     if revision.startswith("dml://") or revision.startswith("#"):
         raise DmlRepoError(f"Invalid revision: {revision}")
     kind = "tag" if revision.startswith("@") else "branch"
@@ -928,15 +948,29 @@ def _local_gc(dml: "Dml") -> LocalGCSummary:
     """Garbage-collect objects unreachable from repository and tracking refs."""
     t0 = time()
     head = _head_ops(dml)
-    refs = set()
-    commit = head.get_head()["commit"]
-    if commit is not None:
-        refs.add(commit)
-    refs |= {head.get_local_ref(name, kind="branch") for name in head.list_local_refs(kind="branch")}
-    refs |= {head.get_local_ref(name, kind="tag") for name in head.list_local_refs(kind="tag")}
-    refs |= set(head.iter_all_remote_tracking_refs())
-    t1 = time()
-    resp = dml._db.gc(sorted(refs))
+    with head.lock():
+        refs = set()
+        commit = head.get_head()["commit"]
+        if commit is not None:
+            refs.add(commit)
+        refs |= {head.get_local_ref(name, kind="branch") for name in head.list_local_refs(kind="branch")}
+        refs |= {head.get_local_ref(name, kind="tag") for name in head.list_local_refs(kind="tag")}
+        refs |= set(head.iter_all_remote_tracking_refs())
+        shallow = head.get_shallow_commits()
+        t1 = time()
+        resp = dml._db.gc(sorted(refs), shallow)
+        retained_shallow: set[Ref] = set()
+        with dml._db.tx(readonly=True) as txn:
+            for namespace in ("commit", "index", "frozenindex"):
+                try:
+                    objects = txn.iter(namespace)
+                    for _ref, obj in objects:
+                        retained_shallow.update(
+                            parent for parent in obj.parents if parent in shallow and not txn.exists(parent)
+                        )
+                except DmlDbKeyNotFoundError:
+                    pass
+        head.write_shallow_commits(retained_shallow)
     t2 = time()
     return {"gc-time": int(t2 - t1), "ref-enumeration-time": int(t1 - t0), "deleted": resp}
 
@@ -972,6 +1006,7 @@ class RevisionPayload(TypedDict):
 
 class LogPayload(TypedDict):
     commits: list[CommitDescription]
+    truncated: bool
 
 
 class Dml:
@@ -1080,8 +1115,10 @@ class Dml:
         remote_fetch_workers: Annotated[int | None, "Number of concurrent remote fetch workers."] = None,
         user: Annotated[str | None, "User name recorded in commits and runtime actions."] = None,
         config_home: Annotated[str | None, "Override config directory path."] = None,
+        depth: Annotated[int | None, "Positive number of commit-history generations to fetch."] = None,
     ) -> "Dml":
         """Clone one revision from the configured remote root."""
+        _validate_history_options(depth)
         Path(project_home).mkdir(parents=True, exist_ok=True)
         config = Config.init(project_home, remote_root=remote_root)
         dml = cls.from_config_vars(
@@ -1100,7 +1137,14 @@ class Dml:
         )
         _require_remote_root(dml)
         selected = revision or dml._config.default.branch_name
-        branch = selected if isinstance(selected, str) and not selected.startswith(("@", "HEAD")) else None
+        exact = selected if isinstance(selected, Ref) else None
+        if isinstance(selected, str) and re.match(r"^(?:commit:)?[0-9a-f]{64}$", selected):
+            exact = Ref(selected if selected.startswith("commit:") else f"commit:{selected}")
+        branch = (
+            selected
+            if exact is None and isinstance(selected, str) and not selected.startswith(("@", "HEAD"))
+            else None
+        )
         initial_branch = branch or dml._config.default.branch_name
         head = Head(config.project_home)
         with head.lock():
@@ -1111,9 +1155,13 @@ class Dml:
                 head.init(None, initial_branch)
             else:
                 raise DmlRepoError(f"Cannot clone into an initialized repository: {dml._config.project_home}")
-        if isinstance(selected, str) and re.match(r"^[0-9a-f]{64}$", selected):
-            raise DmlRepoError("Clone requires a branch or tag revision")
-        dml.fetch(selected if isinstance(selected, str) else None)
+        if exact is not None:
+            commit, available, omitted = _remote_ops(dml).materialize_project_commit_ref(exact, dml._db, depth=depth)
+            with head.lock():
+                _publish_shallow_state(head, available, omitted)
+                head.write_detached_head(commit)
+            return dml
+        dml.fetch(selected if isinstance(selected, str) else None, depth=depth)
         kind = "tag" if isinstance(selected, str) and selected.startswith("@") else "branch"
         name = selected[1:] if kind == "tag" and isinstance(selected, str) else selected
         assert isinstance(name, str)
@@ -1140,7 +1188,15 @@ class Dml:
                 pass
             else:
                 if head_info["commit"] is not None:
-                    ahead, behind = CommitOps().ahead_behind(head_info["commit"], upstream_ref, db=self._db)
+                    try:
+                        ahead, behind = CommitOps().ahead_behind(
+                            head_info["commit"],
+                            upstream_ref,
+                            db=self._db,
+                            missing_commits=head.get_shallow_commits(),
+                        )
+                    except ShallowHistoryError:
+                        pass
         with self._db.tx(readonly=True) as txn:
             num_indexes = 0
             for namespace in ("index", "frozenindex"):
@@ -1170,7 +1226,13 @@ class Dml:
         """Return commit history starting from one revision."""
         commit_ref = resolve_rev(_head_ops(self), revision, db=self._db, remote=remote, dep=dep)
         commit_ref = _require_resolved_commit(commit_ref, revision)
-        return {"commits": CommitOps().log(commit_ref, limit=limit, db=self._db)}
+        commits, truncated = CommitOps().log_with_truncation(
+            commit_ref,
+            limit=limit,
+            db=self._db,
+            missing_commits=_head_ops(self).get_shallow_commits(),
+        )
+        return {"commits": commits, "truncated": truncated}
 
     def show(
         self,
@@ -1182,7 +1244,11 @@ class Dml:
         """Return a full commit description for one revision."""
         commit_ref = resolve_rev(_head_ops(self), revision, db=self._db, remote=remote, dep=dep)
         commit_ref = _require_resolved_commit(commit_ref, revision)
-        return CommitOps().show(commit_ref, db=self._db)
+        return CommitOps().show(
+            commit_ref,
+            db=self._db,
+            missing_commits=_head_ops(self).get_shallow_commits(),
+        )
 
     def diff(
         self,
@@ -1197,10 +1263,19 @@ class Dml:
         commit_ref = resolve_rev(head, revision, db=self._db, remote=remote, dep=dep)
         commit_ref = _require_resolved_commit(commit_ref, revision)
         if relative_to is None:
-            return CommitOps().diff(commit_ref, db=self._db)
+            return CommitOps().diff(
+                commit_ref,
+                db=self._db,
+                missing_commits=head.get_shallow_commits(),
+            )
         rel_to_commit = resolve_rev(head, relative_to, db=self._db)
         rel_to_commit = _require_resolved_commit(rel_to_commit, relative_to)
-        return CommitOps().diff(commit_ref, rel_to_commit, db=self._db)
+        return CommitOps().diff(
+            commit_ref,
+            rel_to_commit,
+            db=self._db,
+            missing_commits=head.get_shallow_commits(),
+        )
 
     def rev_parse(
         self,
@@ -1251,6 +1326,7 @@ class Dml:
                 user=self._config.user,
                 message=message,
                 db=self._db,
+                missing_commits=head.get_shallow_commits(),
             )
             head.update_local_ref(head_info["branch"], new_commit, kind="branch")
         return self.status()
@@ -1298,6 +1374,7 @@ class Dml:
                 user=self._config.user,
                 ff_only=ff_only,
                 db=self._db,
+                missing_commits=head.get_shallow_commits(),
             )
             head.update_local_ref(head_info["branch"], new_commit)
         return self.status()
@@ -1317,14 +1394,22 @@ class Dml:
                 _require_resolved_commit(commit_ref, revision),
                 user=self._config.user,
                 db=self._db,
+                missing_commits=head.get_shallow_commits(),
             )
             head.update_local_ref(head_info["branch"], new_commit)
         return self.status()
 
     def fetch(
-        self, revision: Annotated[str | None, "Branch or @tag to fetch."] = None, /, *, dep: str | None = None
+        self,
+        revision: Annotated[str | None, "Branch or @tag to fetch."] = None,
+        /,
+        *,
+        dep: Annotated[str | None, "Named dependency endpoint to fetch from."] = None,
+        depth: Annotated[int | None, "Positive number of commit-history generations to fetch."] = None,
+        unshallow: Annotated[bool, "Fetch all history through existing shallow boundaries."] = False,
     ) -> None:
         """Fetch one branch or tag from remote.root or a named dependency."""
+        _validate_history_options(depth, unshallow)
         selector = revision or self._config.default.branch_name
         kind = "tag" if selector.startswith("@") else "branch"
         name = selector[1:] if kind == "tag" else selector
@@ -1339,18 +1424,31 @@ class Dml:
                 client=_require_s3_client(self),
                 prune_age_seconds=self._config.remote.prune_age_seconds,
             )
-        # get_ref fully validates and materializes the closure before the tracking ref changes.
-        commit = remote_ops.get_ref(kind, name, db=self._db)
-        if commit is None:
+        materialized = remote_ops.get_project_commit_ref(
+            kind,
+            name,
+            db=self._db,
+            depth=depth,
+            unshallow=unshallow,
+        )
+        if materialized is None:
             raise DmlRepoError(f"Remote {kind} ref not found: {selector}")
+        commit, available, omitted = materialized
         with head.lock():
+            _publish_shallow_state(head, available, omitted)
             if dep is None:
                 head.update_remote_tracking_ref(name, commit, kind=kind)
             else:
                 head.update_dependency_ref(dep, name, commit, kind=kind)
 
-    def pull(self, ff_only: Annotated[bool, "Whether to only allow fast-forward merges."] = True) -> StatusPayload:
+    def pull(
+        self,
+        ff_only: Annotated[bool, "Whether to only allow fast-forward merges."] = True,
+        *,
+        depth: Annotated[int | None, "Positive number of commit-history generations to fetch."] = None,
+    ) -> StatusPayload:
         """Fetch and merge the current branch's configured upstream."""
+        _validate_history_options(depth)
         head = _head_ops(self)
         head_info = head.get_head()
         if head_info["branch"] is None:
@@ -1358,7 +1456,7 @@ class Dml:
         upstream = head.get_upstream(head_info["branch"])
         if upstream is None:
             raise DmlRepoError(f"Cannot pull untracked branch: {head_info['branch']}")
-        self.fetch(upstream["branch"])
+        self.fetch(upstream["branch"], depth=depth)
         self.merge(upstream["branch"], ff_only=ff_only, remote=True)
         return self.status()
 
@@ -1384,7 +1482,14 @@ class Dml:
         else:
             set_upstream = False
         remote = _remote_ops(self)
-        remote.put_ref(commit_ref, kind="branch", name=upstream["branch"], db=self._db, force=force)
+        remote.put_ref(
+            commit_ref,
+            kind="branch",
+            name=upstream["branch"],
+            db=self._db,
+            force=force,
+            missing_commits=head.get_shallow_commits(),
+        )
         if set_upstream:
             with head.lock():
                 head.set_upstream(branch, upstream["branch"])

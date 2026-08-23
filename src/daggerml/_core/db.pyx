@@ -188,6 +188,8 @@ cdef extern from "dml_db.h":
         DmlDbHandle **p_txn,
         const char *const *start_refs,
         size_t start_refs_count,
+        const char *const *missing_commit_refs,
+        size_t missing_commit_refs_count,
         DmlValue **out_refs
     ) nogil
 
@@ -1197,11 +1199,13 @@ cdef class DmlDbTxn:
                 break
             token = next_token_obj
 
-    def list_orphans(self, list[Ref] start) -> list[Ref]:
+    def list_orphans(self, list[Ref] start, list[Ref] missing_commit_refs=None) -> list[Ref]:
         cdef Py_ssize_t count = len(start)
+        cdef Py_ssize_t missing_count = 0 if missing_commit_refs is None else len(missing_commit_refs)
         cdef Py_ssize_t i
         cdef Py_ssize_t tmp_len = 0
         cdef const char **refs = NULL
+        cdef const char **missing_refs = NULL
         cdef DmlValue *out_refs = NULL
         cdef int rc
         cdef object py_ref
@@ -1216,6 +1220,9 @@ cdef class DmlDbTxn:
                 py_ref = (<Ref>start[i]).to
                 ref_ptr = PyUnicode_AsUTF8AndSize(py_ref, &tmp_len)
                 if ref_ptr == NULL:
+                    for j in range(i):
+                        if refs[j] != NULL:
+                            free(<void*>refs[j])
                     free(<void *>refs)
                     raise MemoryError("Insufficient memory")
                 c_copy = <char*>malloc(tmp_len + 1)
@@ -1228,8 +1235,53 @@ cdef class DmlDbTxn:
                 memcpy(c_copy, ref_ptr, tmp_len)
                 c_copy[tmp_len] = '\0'
                 refs[i] = <const char*>c_copy
+        if missing_count > 0:
+            missing_refs = <const char **>calloc(missing_count, sizeof(const char *))
+            if missing_refs == NULL:
+                if refs != NULL:
+                    for j in range(count):
+                        if refs[j] != NULL:
+                            free(<void*>refs[j])
+                    free(<void *>refs)
+                raise MemoryError("Insufficient memory")
+            for i in range(missing_count):
+                py_ref = (<Ref>missing_commit_refs[i]).to
+                ref_ptr = PyUnicode_AsUTF8AndSize(py_ref, &tmp_len)
+                if ref_ptr == NULL:
+                    for j in range(i):
+                        if missing_refs[j] != NULL:
+                            free(<void*>missing_refs[j])
+                    free(<void *>missing_refs)
+                    if refs != NULL:
+                        for j in range(count):
+                            if refs[j] != NULL:
+                                free(<void*>refs[j])
+                        free(<void *>refs)
+                    raise MemoryError("Insufficient memory")
+                c_copy = <char*>malloc(tmp_len + 1)
+                if c_copy == NULL:
+                    for j in range(i):
+                        if missing_refs[j] != NULL:
+                            free(<void*>missing_refs[j])
+                    free(<void *>missing_refs)
+                    if refs != NULL:
+                        for j in range(count):
+                            if refs[j] != NULL:
+                                free(<void*>refs[j])
+                        free(<void *>refs)
+                    raise MemoryError("Insufficient memory")
+                memcpy(c_copy, ref_ptr, tmp_len)
+                c_copy[tmp_len] = '\0'
+                missing_refs[i] = <const char*>c_copy
         try:
-            rc = dml_db_list_orphans(&self._handle, refs, <size_t>count, &out_refs)
+            rc = dml_db_list_orphans(
+                &self._handle,
+                refs,
+                <size_t>count,
+                missing_refs,
+                <size_t>missing_count,
+                &out_refs,
+            )
             raise_if_error(rc, "dml_db_list_orphans")
             if out_refs == NULL:
                 return []
@@ -1240,5 +1292,10 @@ cdef class DmlDbTxn:
                     if refs[i] != NULL:
                         free(<void *>refs[i])
                 free(<void *>refs)
+            if missing_refs != NULL:
+                for i in range(missing_count):
+                    if missing_refs[i] != NULL:
+                        free(<void *>missing_refs[i])
+                free(<void *>missing_refs)
             if out_refs != NULL:
                 dml_value_free(out_refs)

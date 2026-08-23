@@ -15,6 +15,7 @@ from daggerml._core.db import Ref
 from daggerml._core.types import DmlRepoError
 
 _HEAD_ATTACHED_PREFIX = "ref: refs/local/heads/"
+_SHALLOW_VERSION = 1
 
 
 def _validate_segment(label: str, value: str) -> str:
@@ -277,6 +278,43 @@ class Head:
 
     def head_path(self) -> Path:
         return Path(self.project_home) / ".dml" / "HEAD"
+
+    def shallow_path(self) -> Path:
+        return Path(self.project_home) / ".dml" / "shallow.json"
+
+    def get_shallow_commits(self) -> set[Ref]:
+        path = self.shallow_path()
+        if not path.exists():
+            return set()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or set(payload) != {"version", "missing"}:
+                raise ValueError("expected version and missing fields")
+            if payload["version"] != _SHALLOW_VERSION:
+                raise ValueError("unsupported shallow metadata version")
+            missing = payload["missing"]
+            if not isinstance(missing, list) or missing != sorted(set(missing)):
+                raise ValueError("missing refs must be a sorted unique list")
+            if not all(isinstance(value, str) and re.fullmatch(r"commit:[0-9a-f]{64}", value) for value in missing):
+                raise ValueError("missing refs must be exact commit refs")
+            return {Ref(value) for value in missing}
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise DmlRepoError(f"Invalid shallow metadata: {path}") from exc
+
+    def write_shallow_commits(self, commits: set[Ref]) -> None:
+        values = sorted(ref.to for ref in commits)
+        if any(re.fullmatch(r"commit:[0-9a-f]{64}", value) is None for value in values):
+            raise ValueError("Shallow metadata accepts only exact commit refs")
+        path = self.shallow_path()
+        if not values:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"version": _SHALLOW_VERSION, "missing": values}
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+            json.dump(payload, tmp, separators=(",", ":"), sort_keys=True)
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, path)
 
     def local_ref_path(self, name: str, *, kind: Literal["branch", "tag"]) -> Path:
         fname = quote(_validate_ref_name(kind, name), safe="")

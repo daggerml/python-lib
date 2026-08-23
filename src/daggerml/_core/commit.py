@@ -14,6 +14,11 @@ from daggerml._core.util import now
 logger = logging.getLogger(__name__)
 
 
+class ShallowHistoryError(DmlRepoError):
+    def __init__(self, commit: Ref):
+        super().__init__(f"Commit history is shallow at {commit}; fetch with greater depth or --unshallow")
+
+
 class CommitDescription(TypedDict):
     id: Ref
     parents: list[Ref]
@@ -36,32 +41,67 @@ class CommitFullDescription(CommitDescription):
 
 class CommitOps:
     @staticmethod
+    def _get_commit(ref: Ref, *, txn: TxnWithValid, missing_commits: set[Ref] | None = None) -> Commit:
+        if not txn.exists(ref) and ref in (missing_commits or set()):
+            raise ShallowHistoryError(ref)
+        return cast(Commit, txn.get(ref))
+
+    @staticmethod
     def _entries(tree: Tree) -> dict[str, tuple[Ref, list[str]]]:
         return {name: (dag, tree.tags.get(name, [])) for name, dag in tree.dags.items()}
 
-    def _topo_sort(self, *xs, txn: TxnWithValid):
+    def _topo_sort(self, *xs, txn: TxnWithValid, missing_commits: set[Ref] | None = None):
         xs = list(xs)
         result = []
         while xs:
             x = xs.pop(0)
-            if x is not None and txn.get(x) and x not in result:
+            if x is not None and x not in result:
+                commit = self._get_commit(x, txn=txn, missing_commits=missing_commits)
                 result.append(x)
-                xs = txn.get(x).parents + xs
+                xs = commit.parents + xs
         return result
 
-    def _merge_base(self, a, b, *, txn: TxnWithValid):
-        aa = self._topo_sort(a, txn=txn)
-        ab = set(self._topo_sort(b, txn=txn))
+    def _merge_base(self, a, b, *, txn: TxnWithValid, missing_commits: set[Ref] | None = None):
+        def available(start: Ref) -> tuple[list[Ref], ShallowHistoryError | None]:
+            pending = [start]
+            result = []
+            shallow_error = None
+            while pending:
+                current = pending.pop(0)
+                if current in result:
+                    continue
+                if not txn.exists(current) and current in (missing_commits or set()):
+                    shallow_error = ShallowHistoryError(current)
+                    continue
+                commit = self._get_commit(current, txn=txn, missing_commits=missing_commits)
+                result.append(current)
+                pending.extend(commit.parents)
+            return result, shallow_error
+
+        aa, shallow_a = available(a)
+        available_b, shallow_b = available(b)
+        ab = set(available_b)
         for ref in aa:
             if ref in ab:
                 return ref
+        if shallow_a is not None:
+            raise shallow_a
+        if shallow_b is not None:
+            raise shallow_b
         raise DmlRepoError(f"No merge base found between {a.id()[:8]} and {b.id()[:8]}")
 
-    def _linear_path(self, ancestor: Ref, descendant: Ref, *, txn: TxnWithValid) -> list[Ref]:
+    def _linear_path(
+        self,
+        ancestor: Ref,
+        descendant: Ref,
+        *,
+        txn: TxnWithValid,
+        missing_commits: set[Ref] | None = None,
+    ) -> list[Ref]:
         path = []
         current = descendant
         while current != ancestor:
-            commit: Commit = txn.get(current)
+            commit = self._get_commit(current, txn=txn, missing_commits=missing_commits)
             if len(commit.parents) != 1:
                 raise DmlRepoError("Can only rebase linear history")
             path.append(current)
@@ -99,7 +139,14 @@ class CommitOps:
                     tags.pop(k, None)
         return txn.put(Tree(dags=dags, tags=tags))
 
-    def _is_ancestor(self, ancestor: Ref, descendant: Ref, *, txn: TxnWithValid) -> bool:
+    def _is_ancestor(
+        self,
+        ancestor: Ref,
+        descendant: Ref,
+        *,
+        txn: TxnWithValid,
+        missing_commits: set[Ref] | None = None,
+    ) -> bool:
         stack = [descendant]
         seen = set()
         while stack:
@@ -109,15 +156,24 @@ class CommitOps:
             if current in seen:
                 continue
             seen.add(current)
-            stack.extend(txn.get(current).parents)
+            stack.extend(self._get_commit(current, txn=txn, missing_commits=missing_commits).parents)
         return False
 
-    def is_ancestor(self, ancestor: Ref, descendant: Ref, *, db: DmlDB) -> bool:
+    def is_ancestor(
+        self,
+        ancestor: Ref,
+        descendant: Ref,
+        *,
+        db: DmlDB,
+        missing_commits: set[Ref] | None = None,
+    ) -> bool:
         """Return whether ``ancestor`` is reachable from ``descendant``."""
         with db.tx(readonly=True) as txn:
-            return self._is_ancestor(ancestor, descendant, txn=txn)
+            return self._is_ancestor(ancestor, descendant, txn=txn, missing_commits=missing_commits)
 
-    def _reachable(self, start: Ref, *, txn: TxnWithValid) -> set[Ref]:
+    def _reachable(
+        self, start: Ref, *, txn: TxnWithValid, missing_commits: set[Ref] | None = None
+    ) -> set[Ref]:
         stack = [start]
         seen: set[Ref] = set()
         while stack:
@@ -125,19 +181,26 @@ class CommitOps:
             if current in seen:
                 continue
             seen.add(current)
-            stack.extend(txn.get(current).parents)
+            stack.extend(self._get_commit(current, txn=txn, missing_commits=missing_commits).parents)
         return seen
 
     ############################################################
     ################# MERGE, REVERT, AND REBASE ################
     ############################################################
-    def diff(self, commit: Ref, relative_to: Ref | None = None, *, db: DmlDB) -> CommitDiffPayload:
+    def diff(
+        self,
+        commit: Ref,
+        relative_to: Ref | None = None,
+        *,
+        db: DmlDB,
+        missing_commits: set[Ref] | None = None,
+    ) -> CommitDiffPayload:
         # "added" means the DAG ref exists in commit but not in relative_to.
         # If relative_to is omitted, show the changes introduced by commit
         # relative to its first parent.
         result: CommitDiffPayload = {"added": {}, "removed": {}, "modified": {}}
         with db.tx(readonly=True) as txn:
-            c1_obj: Commit = txn.get(commit)
+            c1_obj = self._get_commit(commit, txn=txn, missing_commits=missing_commits)
             if relative_to is None:
                 if c1_obj.parents:
                     if len(c1_obj.parents) > 1:
@@ -145,7 +208,7 @@ class CommitOps:
                     relative_to = c1_obj.parents[0]
                 else:
                     return result
-            c2_obj: Commit = txn.get(relative_to)
+            c2_obj = self._get_commit(relative_to, txn=txn, missing_commits=missing_commits)
             c1_tree: Tree = txn.get(c1_obj.tree)
             c2_tree: Tree = txn.get(c2_obj.tree)
             for name in set(c1_tree.dags) | set(c2_tree.dags):
@@ -163,25 +226,39 @@ class CommitOps:
                     raise RuntimeError("Unexpected case in diff")
         return result
 
-    def show(self, commit: Ref, *, db: DmlDB) -> CommitFullDescription:
+    def show(
+        self, commit: Ref, *, db: DmlDB, missing_commits: set[Ref] | None = None
+    ) -> CommitFullDescription:
         with db.tx(readonly=True) as txn:
             desc = self._describe(commit, txn)
-        diff = self.diff(commit, db=db)
+        diff = self.diff(commit, db=db, missing_commits=missing_commits)
         return {**desc, "diff": diff}
 
-    def get_ancestor(self, commit: Ref, n: int, *, db: DmlDB) -> Ref | None:
+    def get_ancestor(
+        self, commit: Ref, n: int, *, db: DmlDB, missing_commits: set[Ref] | None = None
+    ) -> Ref | None:
         with db.tx(readonly=True) as txn:
             current = commit
             for _ in range(n):
-                commit_obj: Commit = txn.get(current)
+                commit_obj = self._get_commit(current, txn=txn, missing_commits=missing_commits)
                 if not commit_obj.parents:
                     return None
                 if len(commit_obj.parents) > 1:
                     logger.warning("Multiple parents found for commit; using the first one as the ancestor")
                 current = commit_obj.parents[0]
+            self._get_commit(current, txn=txn, missing_commits=missing_commits)
             return current
 
-    def merge(self, commit1: Ref | None, commit2: Ref | None, user: str, ff_only: bool = False, *, db: DmlDB) -> Ref:
+    def merge(
+        self,
+        commit1: Ref | None,
+        commit2: Ref | None,
+        user: str,
+        ff_only: bool = False,
+        *,
+        db: DmlDB,
+        missing_commits: set[Ref] | None = None,
+    ) -> Ref:
         if commit1 is None:
             if commit2 is None:
                 raise DmlRepoError("Cannot merge unresolved revisions")
@@ -193,7 +270,9 @@ class CommitOps:
         def merge_commits(txn: TxnWithValid) -> Ref:
             base_tree = None
             try:
-                c0 = self._merge_base(commit1, commit2, txn=txn)
+                c0 = self._merge_base(commit1, commit2, txn=txn, missing_commits=missing_commits)
+            except ShallowHistoryError:
+                raise
             except DmlRepoError:
                 c0 = None
                 base_tree = txn.put(Tree(dags={}, tags={}))
@@ -239,16 +318,28 @@ class CommitOps:
 
         return db.write_with_growth(merge_commits)
 
-    def revert(self, target_commit: Ref, base_commit: Ref, user: str, message: str | None = None, *, db: DmlDB) -> Ref:
+    def revert(
+        self,
+        target_commit: Ref,
+        base_commit: Ref,
+        user: str,
+        message: str | None = None,
+        *,
+        db: DmlDB,
+        missing_commits: set[Ref] | None = None,
+    ) -> Ref:
         created = now()
 
         def revert_commit(txn: TxnWithValid) -> Ref:
-            if not self._is_ancestor(target_commit, base_commit, txn=txn):
+            if not self._is_ancestor(
+                target_commit, base_commit, txn=txn, missing_commits=missing_commits
+            ):
                 raise DmlRepoError(f"Commit {target_commit.id()[:8]} is not an ancestor of {base_commit.id()[:8]}")
-            target = txn.get(target_commit)
+            target = self._get_commit(target_commit, txn=txn, missing_commits=missing_commits)
             if len(target.parents) != 1:
                 raise DmlRepoError("Can only revert commits with exactly one parent")
-            before_tree = txn.get(txn.get(target.parents[0]).tree)
+            parent = self._get_commit(target.parents[0], txn=txn, missing_commits=missing_commits)
+            before_tree = txn.get(parent.tree)
             after_tree = txn.get(target.tree)
             current_tree = txn.get(txn.get(base_commit).tree)
             dags = dict(current_tree.dags)
@@ -290,20 +381,30 @@ class CommitOps:
 
         return db.write_with_growth(revert_commit)
 
-    def rebase(self, source, target, user: str, *, db: DmlDB):
+    def rebase(
+        self,
+        source,
+        target,
+        user: str,
+        *,
+        db: DmlDB,
+        missing_commits: set[Ref] | None = None,
+    ):
         created = now()
 
         def rebase_commits(txn: TxnWithValid):
-            c0 = self._merge_base(source, target, txn=txn)
+            c0 = self._merge_base(source, target, txn=txn, missing_commits=missing_commits)
             if c0 == source:
                 return target
             if c0 == target:
                 return source
             rebased_parent = target
-            for commit_ref in self._linear_path(c0, source, txn=txn):
+            for commit_ref in self._linear_path(
+                c0, source, txn=txn, missing_commits=missing_commits
+            ):
                 commit: Commit = txn.get(commit_ref)
                 old_parent = commit.parents[0]
-                old_tree = txn.get(old_parent).tree
+                old_tree = self._get_commit(old_parent, txn=txn, missing_commits=missing_commits).tree
                 target_tree = txn.get(rebased_parent).tree
                 diff = self._diff(old_tree, commit.tree, txn=txn)
                 old_entries = self._entries(txn.get(old_tree))
@@ -448,22 +549,49 @@ class CommitOps:
         )
 
     def log(self, commit: Ref, *, limit: int = 100, db: DmlDB) -> list[CommitDescription]:
+        return self.log_with_truncation(commit, limit=limit, db=db)[0]
+
+    def log_with_truncation(
+        self,
+        commit: Ref,
+        *,
+        limit: int = 100,
+        db: DmlDB,
+        missing_commits: set[Ref] | None = None,
+    ) -> tuple[list[CommitDescription], bool]:
         to_walk = [commit]
         out = []
+        seen: set[Ref] = set()
+        truncated = False
         with db.tx(readonly=True) as txn:
             while to_walk and len(out) < limit:
                 current = to_walk.pop(0)
-                commit_obj: Commit = txn.get(current)
+                if current in seen:
+                    continue
+                seen.add(current)
+                if not txn.exists(current) and current in (missing_commits or set()):
+                    truncated = True
+                    continue
+                commit_obj = self._get_commit(current, txn=txn, missing_commits=missing_commits)
                 out.append(self._describe(current, txn))
                 to_walk.extend(commit_obj.parents)
-        return out
+        return out, truncated
 
     def describe(self, commit: Ref, *, db: DmlDB) -> CommitDescription:
         with db.tx(readonly=True) as txn:
             return self._describe(commit, txn)
 
-    def ahead_behind(self, local: Ref, upstream: Ref, *, db: DmlDB) -> tuple[int, int]:
+    def ahead_behind(
+        self,
+        local: Ref,
+        upstream: Ref,
+        *,
+        db: DmlDB,
+        missing_commits: set[Ref] | None = None,
+    ) -> tuple[int, int]:
+        if local == upstream:
+            return 0, 0
         with db.tx(readonly=True) as txn:
-            local_reachable = self._reachable(local, txn=txn)
-            upstream_reachable = self._reachable(upstream, txn=txn)
+            local_reachable = self._reachable(local, txn=txn, missing_commits=missing_commits)
+            upstream_reachable = self._reachable(upstream, txn=txn, missing_commits=missing_commits)
         return len(local_reachable - upstream_reachable), len(upstream_reachable - local_reachable)

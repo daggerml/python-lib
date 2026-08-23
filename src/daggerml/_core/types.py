@@ -941,8 +941,11 @@ class TxnWithValid:
         for ref, payload in self._txn.iter(ns, start_token=start_token):
             yield ref, self._obj_from_payload(ref, payload)
 
-    def list_orphans(self, start_refs: list[Ref]) -> list[Ref]:
-        return self._txn.list_orphans(start_refs)
+    def list_orphans(self, start_refs: list[Ref], missing_commit_refs: set[Ref] | None = None) -> list[Ref]:
+        missing = sorted(missing_commit_refs or set())
+        for ref in missing:
+            self.require(ref, "commit")
+        return self._txn.list_orphans(start_refs, missing)
 
     def get_ctx(self, ref: Ref) -> CommitCtx:
         dag = None
@@ -992,11 +995,11 @@ class DmlDB:
         with self._db.tx(readonly=readonly, create_if_missing=create_if_missing) as txn:
             yield TxnWithValid(txn)
 
-    def gc(self, refs: list[Ref]) -> dict[str, int]:
+    def gc(self, refs: list[Ref], missing_commit_refs: set[Ref] | None = None) -> dict[str, int]:
         def collect(txn: TxnWithValid) -> dict[str, int]:
             stats: dict[str, int] = {}
             roots = [*refs, *(ref for ref, _ in txn.iter("index")), *(ref for ref, _ in txn.iter("frozenindex"))]
-            for ref in txn.list_orphans(roots):
+            for ref in txn.list_orphans(roots, missing_commit_refs):
                 txn.delete(ref)
                 stats[ref.ns()] = stats.get(ref.ns(), 0) + 1
             return stats

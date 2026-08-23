@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote
 from daggerml._core.commit import CommitOps
 from daggerml._core.db import Ref
 from daggerml._core.s3_cas import CasItem, CasItemConflict, S3Remote
-from daggerml._core.types import NAMESPACES, DmlBase, DmlDB, DmlRepoError, TxnWithValid
+from daggerml._core.types import NAMESPACES, Commit, DmlBase, DmlDB, DmlRepoError, TxnWithValid
 from daggerml._core.util import uuid7
 
 if TYPE_CHECKING:
@@ -181,8 +181,14 @@ class Remote:
             raise TypeError(f"Remote CAS payload for {ref} did not decode to a DmlBase object")
         return obj
 
-    def _collect_local_objects(self, root_ref: Ref, db: DmlDB) -> dict[str, str]:
+    def _collect_local_objects(
+        self,
+        root_ref: Ref,
+        db: DmlDB,
+        missing_commits: set[Ref] | None = None,
+    ) -> tuple[dict[str, str], set[Ref]]:
         objects: dict[str, str] = {}
+        encountered_missing: set[Ref] = set()
         visited: set[Ref] = set()
         pending = [root_ref]
         with db.tx(readonly=True) as txn:
@@ -191,12 +197,15 @@ class Remote:
                 if ref in visited:
                     continue
                 visited.add(ref)
+                if not txn.exists(ref) and ref in (missing_commits or set()):
+                    encountered_missing.add(ref)
+                    continue
                 obj = txn.get(ref)
                 objects[self._cas_key(ref.id())] = self._dump_cas_object(obj)
                 deps: set[Ref] = set()
                 self._collect_direct_refs(obj, deps)
                 pending.extend(deps - visited)
-        return objects
+        return objects, encountered_missing
 
     def _plan_upload(self, objs: dict[str, str]) -> dict[str, str]:
         with ThreadPoolExecutor(max_workers=self.n_workers) as pool:
@@ -213,8 +222,20 @@ class Remote:
         t1 = time.time()
         logger.info(f"Uploaded {len(objects)} objects in {t1 - t0:.2f} seconds")
 
-    def _put_cas(self, ref: Ref, ref_path: str | CasItem | None, db: DmlDB, exists_ok: bool = True, meta=None) -> None:
-        objs = self._collect_local_objects(ref, db)
+    def _put_cas(
+        self,
+        ref: Ref,
+        ref_path: str | CasItem | None,
+        db: DmlDB,
+        exists_ok: bool = True,
+        meta=None,
+        *,
+        missing_commits: set[Ref] | None = None,
+        allow_shallow: bool = False,
+    ) -> None:
+        objs, encountered_missing = self._collect_local_objects(ref, db, missing_commits)
+        if encountered_missing and not allow_shallow:
+            raise DmlRepoError("Cannot publish shallow history; fetch with greater depth or --unshallow")
         uploads = self._plan_upload(objs)
         if uploads:
             self._upload_objects(uploads)
@@ -313,6 +334,117 @@ class Remote:
             return root_ref
 
         return db.write_with_growth(write_objects)
+
+    def _fetch_project_commit_objects(
+        self,
+        manifest: dict,
+        db: DmlDB,
+        *,
+        depth: int | None = None,
+        unshallow: bool = False,
+    ) -> tuple[Ref, list[tuple[Ref, DmlBase]], set[Ref], set[Ref]]:
+        if depth is not None and depth <= 0:
+            raise ValueError("depth must be a positive integer")
+        if depth is not None and unshallow:
+            raise ValueError("depth and unshallow cannot be selected together")
+        root_ref = self._validate_ref_payload(manifest, expected_root_ns="commit")
+        objects: list[tuple[Ref, DmlBase]] = []
+        loaded: dict[Ref, DmlBase] = {}
+        available_commits: set[Ref] = set()
+        omitted_commits: set[Ref] = set()
+
+        with db.tx(readonly=True) as txn:
+            def load(ref: Ref) -> tuple[DmlBase, bool]:
+                if ref in loaded:
+                    return loaded[ref], False
+                if txn.exists(ref):
+                    return txn.get(ref), True
+                obj = self._load_cas_object(ref, self._store._get(self._cas_key(ref.id())))
+                loaded[ref] = obj
+                objects.append((ref, obj))
+                return obj, False
+
+            def fetch_complete_closure(start: Ref) -> None:
+                pending = [start]
+                visited: set[Ref] = set()
+                while pending:
+                    ref = pending.pop()
+                    if ref in visited:
+                        continue
+                    visited.add(ref)
+                    if txn.exists(ref):
+                        continue
+                    obj, _ = load(ref)
+                    deps: set[Ref] = set()
+                    self._collect_direct_refs(obj, deps)
+                    pending.extend(deps - visited)
+
+            root_exists = txn.exists(root_ref)
+            pending_commits = [] if root_exists and depth is None and not unshallow else [(root_ref, 1)]
+            seen_commits: set[Ref] = set()
+            while pending_commits:
+                commit_ref, generation = pending_commits.pop(0)
+                if commit_ref in seen_commits:
+                    continue
+                seen_commits.add(commit_ref)
+                commit_obj, _ = load(commit_ref)
+                if not isinstance(commit_obj, Commit):
+                    raise TypeError(f"Remote project commit decoded as {type(commit_obj).__name__}")
+                available_commits.add(commit_ref)
+                fetch_complete_closure(commit_obj.tree)
+                for parent in commit_obj.parents:
+                    parent_available = txn.exists(parent) or parent in loaded
+                    if depth is not None and generation >= depth:
+                        if parent_available:
+                            available_commits.add(parent)
+                        else:
+                            omitted_commits.add(parent)
+                        continue
+                    if depth is None and not unshallow and parent_available:
+                        available_commits.add(parent)
+                        continue
+                    pending_commits.append((parent, generation + 1))
+
+        return root_ref, objects, available_commits, omitted_commits
+
+    def materialize_project_commit(
+        self,
+        manifest: dict,
+        db: DmlDB,
+        *,
+        depth: int | None = None,
+        unshallow: bool = False,
+    ) -> tuple[Ref, set[Ref], set[Ref]]:
+        """Materialize a project commit with optional bounded ancestry."""
+        root_ref, objects, available_commits, omitted_commits = self._fetch_project_commit_objects(
+            manifest,
+            db,
+            depth=depth,
+            unshallow=unshallow,
+        )
+
+        def write_objects(txn: TxnWithValid) -> Ref:
+            for ref, obj in objects:
+                if txn.exists(ref):
+                    continue
+                local_ref = txn.put(obj)
+                if local_ref != ref:
+                    raise ValueError(f"Remote CAS object identity mismatch: expected {ref}, got {local_ref}")
+            return root_ref
+
+        db.write_with_growth(write_objects)
+        return root_ref, available_commits, omitted_commits
+
+    def materialize_project_commit_ref(
+        self,
+        ref: Ref,
+        db: DmlDB,
+        *,
+        depth: int | None = None,
+    ) -> tuple[Ref, set[Ref], set[Ref]]:
+        if ref.ns() != "commit":
+            raise ValueError(f"Expected commit ref, got {ref}")
+        return self.materialize_project_commit(self._build_ref_payload(ref), db, depth=depth)
 
     def upload_object_graph(self, ref: Ref, db: DmlDB) -> None:
         """Upload a typed object graph without publishing a remote ref."""
@@ -420,27 +552,51 @@ class Remote:
         db: DmlDB,
         *,
         force: bool = False,
+        missing_commits: set[Ref] | None = None,
     ) -> str:
         """Publish a direct project ref, protecting non-forced branch updates."""
         ref_path = self._ref_key(kind, name)
         if force:
-            self._put_cas(commit, ref_path, db)
+            self._put_cas(commit, ref_path, db, missing_commits=missing_commits)
             return ref_path
         if kind == "tag":
             try:
-                self._put_cas(commit, ref_path, db, exists_ok=False)
+                self._put_cas(
+                    commit,
+                    ref_path,
+                    db,
+                    exists_ok=False,
+                    missing_commits=missing_commits,
+                )
             except CasItemConflict as exc:
                 raise DmlRepoError(f"Remote tag already exists: {name}") from exc
             return ref_path
         snapshot = self._get_ref_snapshot(ref_path, db, expected_ns="commit")
         try:
             if snapshot is None:
-                self._put_cas(commit, ref_path, db, exists_ok=False)
+                self._put_cas(
+                    commit,
+                    ref_path,
+                    db,
+                    exists_ok=False,
+                    missing_commits=missing_commits,
+                )
             else:
                 remote_commit, ref_item = snapshot
-                if not CommitOps().is_ancestor(remote_commit, commit, db=db):
+                if not CommitOps().is_ancestor(
+                    remote_commit,
+                    commit,
+                    db=db,
+                    missing_commits=missing_commits,
+                ):
                     raise DmlRepoError("Cannot push non-fast-forward branch update; pull and merge or push with force")
-                self._put_cas(commit, ref_item, db)
+                self._put_cas(
+                    commit,
+                    ref_item,
+                    db,
+                    missing_commits=missing_commits,
+                    allow_shallow=True,
+                )
         except CasItemConflict as exc:
             raise DmlRepoError("Remote branch was updated concurrently; fetch and retry") from exc
         return ref_path
@@ -472,6 +628,21 @@ class Remote:
             return self._get_path(self._ref_key(kind, name), expected_ns="commit", raw=True)
         assert db is not None, "DmlDB instance required when raw=False"
         return self._get_path(self._ref_key(kind, name), db, expected_ns="commit", raw=False)
+
+    def get_project_commit_ref(
+        self,
+        kind: Literal["tag", "branch"],
+        name: str,
+        db: DmlDB,
+        *,
+        depth: int | None = None,
+        unshallow: bool = False,
+    ) -> tuple[Ref, set[Ref], set[Ref]] | None:
+        try:
+            manifest = self._read_ref(self._ref_key(kind, name))
+        except self._store.client.exceptions.NoSuchKey:
+            return None
+        return self.materialize_project_commit(manifest, db, depth=depth, unshallow=unshallow)
 
     def delete_ref(self, kind: Literal["tag", "branch"], name: str) -> bool:
         return self._del(self._ref_key(kind, name))

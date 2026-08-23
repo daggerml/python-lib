@@ -344,6 +344,33 @@ def test_remote_materialization_grows_map_for_large_dag_payload(tmp_path):
         assert remote.materialize_ref(dag_ref, target_db) == dag_ref
 
 
+def test_project_commit_depth_follows_all_merge_parents(tmp_path):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=2, client=client)
+        source_db = make_db(tmp_path / "source-db")
+        target_db = make_db(tmp_path / "target-db")
+        with source_db.tx() as txn:
+            tree = txn.put(Tree(dags={}, tags={}))
+            base = txn.put(Commit(parents=[], tree=tree, author="alice", message="base"))
+            left = txn.put(Commit(parents=[base], tree=tree, author="alice", message="left"))
+            right = txn.put(Commit(parents=[base], tree=tree, author="alice", message="right"))
+            merged = txn.put(Commit(parents=[left, right], tree=tree, author="alice", message="merge"))
+        remote.put_ref(merged, "branch", "main", source_db)
+
+        result = remote.get_project_commit_ref("branch", "main", target_db, depth=2)
+
+        assert result is not None
+        commit, available, omitted = result
+        assert commit == merged
+        assert available == {merged, left, right}
+        assert omitted == {base}
+        with target_db.tx(readonly=True) as txn:
+            assert all(txn.exists(ref) for ref in (merged, left, right, tree))
+            assert not txn.exists(base)
+
+
 def test_remote_ref_payloads_use_typed_roots(tmp_path):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")

@@ -586,14 +586,30 @@ static int dml_dump_list_add(DmlDumpList *list, const char *key, size_t key_len,
 static int dml_dump_visit_value(
     DmlDbHandle **p_txn,
     DmlDumpList *list,
+    const DmlDumpList *missing_commit_refs,
     const DmlValue *value
 );
+
+static int dml_is_exact_commit_ref(const char *ref, size_t ref_len) {
+    static const char prefix[] = "commit:";
+    if (ref_len != sizeof(prefix) - 1 + 64 || memcmp(ref, prefix, sizeof(prefix) - 1) != 0) {
+        return 0;
+    }
+    for (size_t i = sizeof(prefix) - 1; i < ref_len; i++) {
+        if (!((ref[i] >= '0' && ref[i] <= '9') || (ref[i] >= 'a' && ref[i] <= 'f'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 static int dml_dump_add_ref(
     DmlDbHandle **p_txn,
     DmlDumpList *list,
+    const DmlDumpList *missing_commit_refs,
     const char *key,
-    size_t key_len
+    size_t key_len,
+    int allow_missing_terminal
 ) {
     const char *ns = NULL;
     const char *ident = NULL;
@@ -602,13 +618,21 @@ static int dml_dump_add_ref(
     DmlValue *value = NULL;
     int rc;
 
-    if (dml_dump_list_find(list, key, key_len) >= 0) {
+    int existing_index = dml_dump_list_find(list, key, key_len);
+    if (existing_index >= 0) {
+        if (!allow_missing_terminal && list->entries[existing_index].value == NULL) {
+            return DML_DB_ERR_NOT_FOUND;
+        }
         return 0;
     }
     if (dml_ref_split(key, key_len, &ns, &ns_len, &ident, &id_len) != 0) {
         return DML_DB_ERR_REF_INVALID;
     }
     rc = dml_db_get(p_txn, ns, ns_len, ident, id_len, 0, &value);
+    if (rc == DML_DB_ERR_NOT_FOUND && allow_missing_terminal && missing_commit_refs != NULL &&
+        dml_dump_list_find(missing_commit_refs, key, key_len) >= 0) {
+        return dml_dump_list_add(list, key, key_len, NULL);
+    }
     if (rc != 0) {
         return rc;
     }
@@ -617,7 +641,7 @@ static int dml_dump_add_ref(
         dml_value_free(value);
         return rc;
     }
-    rc = dml_dump_visit_value(p_txn, list, value);
+    rc = dml_dump_visit_value(p_txn, list, missing_commit_refs, value);
     if (rc != 0) {
         return rc;
     }
@@ -627,21 +651,29 @@ static int dml_dump_add_ref(
 static int dml_dump_visit_value(
     DmlDbHandle **p_txn,
     DmlDumpList *list,
+    const DmlDumpList *missing_commit_refs,
     const DmlValue *value
 ) {
     if (value == NULL) return 0;
     switch (value->type) {
     case DML_VALUE_REF:
-        return dml_dump_add_ref(p_txn, list, value->as.ref.data, value->as.ref.size);
+        return dml_dump_add_ref(
+            p_txn,
+            list,
+            missing_commit_refs,
+            value->as.ref.data,
+            value->as.ref.size,
+            1
+        );
     case DML_VALUE_LIST:
         for (size_t i = 0; i < value->as.list.count; i++) {
-            int rc = dml_dump_visit_value(p_txn, list, value->as.list.items[i]);
+            int rc = dml_dump_visit_value(p_txn, list, missing_commit_refs, value->as.list.items[i]);
             if (rc != 0) return rc;
         }
         return 0;
     case DML_VALUE_MAP:
         for (size_t i = 0; i < value->as.map.count; i++) {
-            int rc = dml_dump_visit_value(p_txn, list, value->as.map.entries[i].value);
+            int rc = dml_dump_visit_value(p_txn, list, missing_commit_refs, value->as.map.entries[i].value);
             if (rc != 0) return rc;
         }
         return 0;
@@ -1238,11 +1270,14 @@ int dml_db_list_orphans(
     DmlDbHandle **p_txn,
     const char *const *start_refs,
     size_t start_refs_count,
+    const char *const *missing_commit_refs,
+    size_t missing_commit_refs_count,
     DmlValue **out_refs
 ) {
     int rc = 0;
     DmlDbRegistryEntry *entry;
     DmlDumpList reachable = {0};
+    DmlDumpList allowed_missing = {0};
     DmlDumpList orphans = {0};
     MDB_dbi dbi;
     MDB_cursor *cursor = NULL;
@@ -1256,6 +1291,9 @@ int dml_db_list_orphans(
     if (start_refs_count > 0 && start_refs == NULL) {
         return DML_DB_ERR_INPUT_INVALID;
     }
+    if (missing_commit_refs_count > 0 && missing_commit_refs == NULL) {
+        return DML_DB_ERR_INPUT_INVALID;
+    }
     rc = dml_db_validate_txn(p_txn);
     if (rc != 0) return rc;
     entry = dml_db_txn_entry(p_txn);
@@ -1266,11 +1304,26 @@ int dml_db_list_orphans(
             rc = DML_DB_ERR_INPUT_INVALID;
             goto cleanup;
         }
-        size_t ref_len = strlen(start_refs[i]);
-        rc = dml_dump_add_ref(p_txn, &reachable, start_refs[i], ref_len);
-        if (rc != 0) {
+    }
+
+    for (size_t i = 0; i < missing_commit_refs_count; i++) {
+        if (missing_commit_refs[i] == NULL) {
+            rc = DML_DB_ERR_INPUT_INVALID;
             goto cleanup;
         }
+        size_t ref_len = strlen(missing_commit_refs[i]);
+        if (!dml_is_exact_commit_ref(missing_commit_refs[i], ref_len)) {
+            rc = DML_DB_ERR_INPUT_INVALID;
+            goto cleanup;
+        }
+        rc = dml_dump_list_add(&allowed_missing, missing_commit_refs[i], ref_len, NULL);
+        if (rc != 0) goto cleanup;
+    }
+
+    for (size_t i = 0; i < start_refs_count; i++) {
+        size_t ref_len = strlen(start_refs[i]);
+        rc = dml_dump_add_ref(p_txn, &reachable, &allowed_missing, start_refs[i], ref_len, 0);
+        if (rc != 0) goto cleanup;
     }
 
     for (size_t i = 0; i < entry->namespace_count; i++) {
@@ -1351,6 +1404,7 @@ int dml_db_list_orphans(
 cleanup:
     if (cursor != NULL) mdb_cursor_close(cursor);
     dml_dump_list_free(&reachable);
+    dml_dump_list_free(&allowed_missing);
     dml_dump_list_free(&orphans);
     return rc;
 }

@@ -40,7 +40,7 @@ This document describes the current C implementation under `/c`.
 - `int dml_db_exists(DmlDbHandle **p_handle, const char *ns, size_t ns_len, const char *key, size_t key_len, int *out_exists)`
 - `int dml_db_iter_keys(struct DmlDbHandle **p_handle, const char *ns, const char *start_token, DmlObjCollection *out_page)`
 - `void dml_db_free_obj_collection(DmlObjCollection *page)`
-- `int dml_db_list_orphans(struct DmlDbHandle **p_handle, const char *const *start_refs, size_t start_refs_count, DmlValue **out_refs)`
+- `int dml_db_list_orphans(struct DmlDbHandle **p_handle, const char *const *start_refs, size_t start_refs_count, const char *const *missing_commit_refs, size_t missing_commit_refs_count, DmlValue **out_refs)`
 
 ## `c/src/dml_db.c`
 
