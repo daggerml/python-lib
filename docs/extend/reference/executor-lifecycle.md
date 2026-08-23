@@ -8,7 +8,7 @@
 | `start(cache_key, execution_id, runnable, remote, scratch_uri)` | invoke with no adapter state | launch work or return terminal result |
 | `poll(cache_key, execution_id, runnable, state, remote, scratch_uri)` | invoke with adapter state | idempotently check work using durable state |
 | `cleanup(cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref)` | cleanup after result publication | idempotently prune normally completed resources |
-| `cancel(cache_key, execution_id, runnable, state, remote, scratch_uri, cancel_requested_by, argv_ptr=None)` | cancel operation | idempotently request backend stop |
+| `cancel(cache_key, execution_id, runnable, state, remote, scratch_uri, cancel_requested_by, argv_ref=None)` | cancel operation | idempotently request backend stop |
 
 `handle()` creates a new executor instance and dispatches based on `operation`
 and adapter state. `poll()` is reached by repeated invoke requests; there is no

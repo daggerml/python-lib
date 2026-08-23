@@ -242,9 +242,6 @@ class FakeRemote:
     _store = _Store()
     materialized_ref = None
 
-    def get_active(self, cache_key: str, raw: bool = False):
-        return None
-
     def materialize_ref(self, ref, db):
         return self.materialized_ref or ref
 
@@ -327,51 +324,8 @@ class FakeCasStore:
 
 
 class FakeExecutionRemote:
-    def __init__(self) -> None:
-        self.active: dict[str, dict[str, Any]] = {}
-        self.cancel_targets: dict[str, dict[str, Any]] = {}
-        self.cache: dict[str, Ref] = {}
-        self.transport: dict[str, Ref] = {}
-
     def upload_object_graph(self, ref, db) -> None:
         return None
 
     def materialize_ref(self, ref, db):
         return ref
-
-    def get_cache(self, cache_key: str, db=None):
-        return self.cache.get(cache_key)
-
-    def get_active(self, cache_key: str, raw: bool = False):
-        return self.active.get(cache_key)
-
-    def put_active(self, cache_key: str, execution_id: str, argv: Ref, db=None) -> None:
-        self.active[cache_key] = {"meta": {"execution_id": execution_id}, "argv": argv.to}
-
-    def delete_active(self, cache_key: str) -> None:
-        self.active.pop(cache_key, None)
-
-    def move_active_to_cancel_target(self, cache_key: str, execution_id: str) -> bool:
-        active = self.active.get(cache_key)
-        if active is None or active["meta"]["execution_id"] != execution_id:
-            return False
-        self.cancel_targets[execution_id] = self.active.pop(cache_key)
-        return True
-
-    def get_cancel_target(self, execution_id: str, raw: bool = False):
-        return self.cancel_targets.get(execution_id)
-
-    def delete_cancel_target(self, execution_id: str) -> None:
-        self.cancel_targets.pop(execution_id, None)
-
-    def put_cache(self, dag: Ref, active_id: str, db=None) -> None:
-        self.cache[active_id] = dag
-
-    def get_transport(self, active_id: str, db=None):
-        return None
-
-    def delete_transport(self, active_id: str) -> None:
-        self.transport.pop(active_id, None)
-
-    def put_transport(self, execution_id: str, dag: Ref, db=None) -> None:
-        self.transport[execution_id] = dag

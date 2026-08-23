@@ -6,7 +6,7 @@ without any repository logic or LMDB dependencies.
 Public API:
     Data classes - Datum, Error, Dag, Node types, Commit, Tree
     Constants - NONE
-    Type aliases - Scalar, MaybeRef*, Collection types
+    Type aliases - Scalar
     Exception - DmlRepoError
     Functions - require_ref
 
@@ -29,15 +29,8 @@ from daggerml._core.util import now
 
 logger = logging.getLogger(__name__)
 
-# Type aliases for scalar and collection data
+# Type alias for scalar data
 Scalar = Optional[Union[int, float, str, bool]]
-MaybeRef = Union[Scalar, Ref]  # Alias for MaybeRefScalar
-MaybeRefScalar = Union[Scalar, Ref]
-Collection = Union[list[Scalar], dict[str, Scalar]]
-MaybeRefList = list[MaybeRefScalar]
-MaybeRefDict = dict[str, MaybeRefScalar]
-MaybeRefCollection = Union[MaybeRefList, MaybeRefDict]
-RefCollection = Union[list[Ref], dict[str, Ref]]
 
 # Constants
 NONE = uuid4()
@@ -984,9 +977,6 @@ class DmlDB:
         return self._db.write_with_growth(
             lambda txn: fn(TxnWithValid(txn)), create_if_missing=create_if_missing
         )
-
-    def call_with_resize(self, fn: Callable[[TxnWithValid], Any]) -> Any:
-        return self.write_with_growth(fn)
 
     @contextmanager
     def tx(self, *, readonly: bool = False, create_if_missing: bool = False):

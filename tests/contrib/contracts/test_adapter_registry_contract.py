@@ -19,7 +19,7 @@ class AdapterSpec:
 
     @staticmethod
     def send(**kwargs):
-        return {"status": "running", "error": None, "state": {}}
+        return {"status": "retry", "error": None, "adapter_state": {}}
 
     @staticmethod
     def cli(argv=None):

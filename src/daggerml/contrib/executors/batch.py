@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from daggerml import Runnable, Uri
+from daggerml._core.exec_state import validate_adapter_response
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors.lambda_ import LambdaExecutorBase
 from daggerml.util import get_client
@@ -200,7 +201,11 @@ class BatchExecutor(LambdaExecutorBase):
             jobs = self._client().describe_jobs(jobs=[job_id]).get("jobs", [])
         except Exception as exc:
             if self._is_throttling(exc):
-                return {"status": "retry", "error": None, "state": state, "retry_after_ms": self._retry_after(exc)}
+                result = {"status": "retry", "error": None, "state": state}
+                retry_after = self._retry_after(exc)
+                if retry_after is not None:
+                    result["retry_after_ms"] = retry_after
+                return result
             return {"status": "failure", "error": f"batch status check failed: {exc}", "state": state}
         if not jobs:
             return {"status": "retry", "error": None, "state": state}
@@ -226,12 +231,10 @@ class BatchExecutor(LambdaExecutorBase):
                     "error": f"batch poll: could not read sub-adapter result: {e}",
                     "state": state,
                 }
-            if result.get("status") not in {"success", "retry"} and not isinstance(result.get("error"), str):
-                return {
-                    "status": "failure",
-                    "error": f"batch poll: unexpected sub-adapter result: {result}",
-                    "state": state,
-                }
+            try:
+                result = validate_adapter_response(result)
+            except DmlRepoError as exc:
+                raise DmlRepoError(f"batch poll: invalid nested adapter output: {result}") from exc
             nested_state = result.pop("adapter_state", None)
             next_state = {**state, "nested_adapter_state": nested_state} if isinstance(nested_state, dict) else state
             return {**result, "state": next_state}
@@ -273,7 +276,11 @@ class BatchExecutor(LambdaExecutorBase):
                 jobs = client.describe_jobs(jobs=[job_id]).get("jobs", [])
             except Exception as exc:
                 if self._is_throttling(exc):
-                    return {"status": "retry", "error": None, "state": state, "retry_after_ms": self._retry_after(exc)}
+                    result = {"status": "retry", "error": None, "state": state}
+                    retry_after = self._retry_after(exc)
+                    if retry_after is not None:
+                        result["retry_after_ms"] = retry_after
+                    return result
                 return {"status": "failure", "error": f"batch cleanup status check failed: {exc}", "state": state}
             if jobs and jobs[0].get("status") in PENDING_BATCH_STATUSES:
                 return {"status": "retry", "error": None, "state": state}
@@ -282,7 +289,11 @@ class BatchExecutor(LambdaExecutorBase):
                 client.deregister_job_definition(jobDefinition=job_definition)
             except Exception as exc:
                 if self._is_throttling(exc):
-                    return {"status": "retry", "error": None, "state": state, "retry_after_ms": self._retry_after(exc)}
+                    result = {"status": "retry", "error": None, "state": state}
+                    retry_after = self._retry_after(exc)
+                    if retry_after is not None:
+                        result["retry_after_ms"] = retry_after
+                    return result
                 return {"status": "failure", "error": f"batch cleanup failed: {exc}", "state": state}
         return {"status": "success", "error": None, "state": state}
 
@@ -295,9 +306,9 @@ class BatchExecutor(LambdaExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
         cancel_requested_by: str | None,
-        argv_ptr: str | None = None,
+        argv_ref: str | None = None,
     ) -> dict[str, Any]:
-        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ptr
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ref
         client = self._client()
         job_id = state.get("job_id")
         job_definition = state.get("job_definition")

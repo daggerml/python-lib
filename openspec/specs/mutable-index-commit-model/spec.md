@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define mutable commit-shaped index staging and publication behavior.
+
+## Requirements
 
 ### Requirement: Index is a mutable commit model
 The system SHALL model `Index` as a mutable subtype of `Commit` that carries the full commit-shaped history state plus the additional mutable DAG state needed during runtime staging.

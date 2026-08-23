@@ -27,6 +27,6 @@ uv run --dev --all-extras ruff check .
 
 `tests/api/`, `tests/_core/`, and `tests/contrib/` broadly follow the public,
 repository-core, and integration-extension boundaries. Contract versus
-integration placement, markers, naming, and migration requirements are
+integration placement, markers, naming, and taxonomy requirements are
 maintained in the canonical [test policy](../../CONTRIBUTING.md#testing-guidelines),
 not duplicated here.

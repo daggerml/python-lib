@@ -222,7 +222,7 @@ def test_shallow_commit_metadata_round_trips_atomically(tmp_path) -> None:
 
     assert head.get_shallow_commits() == commits
     assert json.loads(head.shallow_path().read_text(encoding="utf-8")) == {
-        "version": 1,
+        "version": 0,
         "missing": ["commit:" + "a" * 64, "commit:" + "b" * 64],
     }
 
@@ -235,12 +235,20 @@ def test_shallow_commit_metadata_round_trips_atomically(tmp_path) -> None:
     "payload",
     [
         {},
+        {"version": 0},
+        {"missing": []},
+        {"version": 0, "missing": [], "extra": True},
+        {"version": True, "missing": []},
+        {"version": False, "missing": []},
+        {"version": 0.0, "missing": []},
+        {"version": "0", "missing": []},
+        {"version": 1, "missing": []},
         {"version": 2, "missing": []},
-        {"version": 1, "missing": "commit:" + "a" * 64},
-        {"version": 1, "missing": ["dag:" + "a" * 64]},
-        {"version": 1, "missing": ["commit:short"]},
-        {"version": 1, "missing": ["commit:" + "b" * 64, "commit:" + "a" * 64]},
-        {"version": 1, "missing": ["commit:" + "a" * 64, "commit:" + "a" * 64]},
+        {"version": 0, "missing": "commit:" + "a" * 64},
+        {"version": 0, "missing": ["dag:" + "a" * 64]},
+        {"version": 0, "missing": ["commit:short"]},
+        {"version": 0, "missing": ["commit:" + "b" * 64, "commit:" + "a" * 64]},
+        {"version": 0, "missing": ["commit:" + "a" * 64, "commit:" + "a" * 64]},
     ],
 )
 def test_shallow_commit_metadata_fails_closed(tmp_path, payload) -> None:

@@ -183,12 +183,12 @@ The runtime SHALL use distinct invoke, cleanup, and cancel requests. Repeated in
 - **THEN** the runtime treats it as a failure code requiring diagnostics, not a retry status
 
 ### Requirement: Stale lock recovery SHALL preserve active execution ownership
-If the current execution lock is expired, a caller SHALL attempt to steal that execution's embedded lock by CAS and resume the same execution ID. It SHALL NOT create a replacement attempt while the cache pointer still names the existing reusable or resumable execution.
+If the current execution's `driver.json.lock` is expired, a caller SHALL attempt to steal that lock by CAS against `driver.json` and resume the same execution ID. It SHALL NOT mutate immutable `metadata.json`, conflate the lock with semantic `state.json`, or create a replacement attempt while the cache pointer still names the existing reusable or resumable execution.
 
 #### Scenario: Expired current execution resumes
-- **WHEN** `cache/ck1` contains `e1` and `e1` has an expired lock
-- **THEN** a caller MAY CAS a new owner into `execution/e1`
-- **AND** it resumes `e1`
+- **WHEN** `exec/cache/ck1` contains `e1` and `exec/execution/e1/driver.json.lock` is expired
+- **THEN** a caller MAY CAS a new owner into `driver.json.lock`
+- **AND** it resumes `e1` without replacing `metadata.json` or `state.json`
 
 ### Requirement: Failed execution SHALL be cached as a terminal result
 If invoke reports a failure code or malformed terminal output, the coordinating caller SHALL commit an error DAG, atomically store it with `result_source = "adapter-error"` and lifecycle `failed`, and retain the cache pointer. Cleanup failure SHALL NOT create an execution error DAG and SHALL NOT change execution lifecycle.

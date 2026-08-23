@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define stored node-error inspection and contextual error propagation.
+
+## Requirements
 
 ### Requirement: Core node resolution preserves terminal error refs
 Core node resolution SHALL return a pair of datum and error refs with exactly one populated, and it SHALL NOT hydrate or raise a stored terminal error while resolving a node.

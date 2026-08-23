@@ -36,7 +36,7 @@ def _adapter_request(
 
 class TrackingExecutor(ExecutorBase):
     calls: list[str] = []
-    cancel_argv_ptr: str | None = None
+    cancel_argv_ref: str | None = None
 
     def start(self, **kwargs):
         TrackingExecutor.calls.append("start")
@@ -52,8 +52,18 @@ class TrackingExecutor(ExecutorBase):
 
     def cancel(self, **kwargs):
         TrackingExecutor.calls.append("cancel")
-        TrackingExecutor.cancel_argv_ptr = kwargs["argv_ptr"]
+        TrackingExecutor.cancel_argv_ref = kwargs["argv_ref"]
         return {"status": "cancelled", "error": None}
+
+
+class ClearingExecutor(ExecutorBase):
+    def poll(self, **kwargs):
+        return {"status": "success", "state": None}
+
+
+class DualStateExecutor(ExecutorBase):
+    def poll(self, **kwargs):
+        return {"status": "success", "state": None, "adapter_state": {}}
 
 
 def test_contrib_exec_base_001__handle_routes_missing_state_to_start():
@@ -70,9 +80,21 @@ def test_contrib_exec_base_002__handle_routes_existing_state_to_poll():
     assert result["adapter_state"] == {"existing": True}
 
 
+def test_contrib_exec_base_002__explicit_null_state_is_forwarded() -> None:
+    result = ClearingExecutor.handle(**_adapter_request(operation="invoke", adapter_state={"existing": True}))
+
+    assert "adapter_state" in result
+    assert result["adapter_state"] is None
+
+
+def test_contrib_exec_base_002__dual_state_fields_are_rejected() -> None:
+    with pytest.raises(DmlRepoError, match="both state and adapter_state"):
+        DualStateExecutor.handle(**_adapter_request(operation="invoke", adapter_state={"existing": True}))
+
+
 def test_contrib_exec_base_003__cancel_operation_routes_to_cancel():
     TrackingExecutor.calls = []
-    TrackingExecutor.cancel_argv_ptr = None
+    TrackingExecutor.cancel_argv_ref = None
     result = TrackingExecutor.handle(
         **_adapter_request(
             operation="cancel",
@@ -82,7 +104,7 @@ def test_contrib_exec_base_003__cancel_operation_routes_to_cancel():
         )
     )
     assert TrackingExecutor.calls == ["cancel"]
-    assert TrackingExecutor.cancel_argv_ptr == "node-argv:target"
+    assert TrackingExecutor.cancel_argv_ref == "node-argv:target"
     assert result == {"status": "cancelled", "error": None}
 
 
@@ -105,7 +127,7 @@ def test_contrib_exec_base_004__unknown_operation_is_rejected_before_dispatch():
 
 def test_contrib_exec_base_005__cancel_requires_argv_ref():
     TrackingExecutor.calls = []
-    with pytest.raises(DmlRepoError, match="requires a non-empty argv_ref"):
+    with pytest.raises(DmlRepoError, match="requires a node-argv ref"):
         TrackingExecutor.handle(**_adapter_request(operation="cancel", adapter_state={}))
     assert TrackingExecutor.calls == []
 

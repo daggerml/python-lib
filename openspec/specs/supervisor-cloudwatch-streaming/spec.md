@@ -1,3 +1,8 @@
+## Purpose
+Define non-fatal live worker-log streaming from the supervisor to CloudWatch Logs.
+
+## Requirements
+
 ### Requirement: Supervisor streams worker stdout and stderr to CloudWatch Logs
 The supervisor SHALL stream worker `stdout` and `stderr` to AWS CloudWatch Logs while the worker process is still running, in addition to preserving local `stdout.log` and `stderr.log` files.
 

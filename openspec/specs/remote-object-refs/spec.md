@@ -4,7 +4,7 @@ Define remote pointer formats, CAS object publication, materialization, and live
 ## Requirements
 
 ### Requirement: Remote refs SHALL be typed object pointers
-Published project refs SHALL remain typed pointer payloads. Execution cache pointers SHALL instead be plain execution IDs, while typed `argv_ref` and `result_ref` values SHALL reside in unified execution records. Active, transport, and cancel-target ref families SHALL NOT be published.
+Published project refs SHALL remain typed pointer payloads. Execution cache pointers SHALL be plain execution IDs. Each execution's typed input root SHALL reside at `exec/execution/<execution_id>/metadata.json` field `argv_ref`, and its typed result root SHALL reside at `exec/execution/<execution_id>/state.json` field `result_ref`. Active, transport, cancel-target, and unified execution-record ref families SHALL NOT be published or interpreted.
 
 #### Scenario: Project branch ref payload uses typed root pointer
 - **WHEN** a remote project branch is published
@@ -14,11 +14,16 @@ Published project refs SHALL remain typed pointer payloads. Execution cache poin
 
 #### Scenario: Cache pointer contains execution identity only
 - **WHEN** execution `e1` claims cache key `ck1`
-- **THEN** `cache/ck1` contains only `e1`
+- **THEN** `exec/cache/ck1` contains only `e1`
 
 #### Scenario: Execution record carries typed roots
-- **WHEN** `execution/e1` has input and result objects
-- **THEN** its `argv_ref` and `result_ref` contain typed DaggerML refs
+- **WHEN** execution `e1` has input and result objects
+- **THEN** `exec/execution/e1/metadata.json.argv_ref` contains the typed input ref
+- **AND** `exec/execution/e1/state.json.result_ref` contains the typed result ref
+
+#### Scenario: Unified execution object is unsupported
+- **WHEN** an execution ID is represented only by a unified execution object
+- **THEN** it is not interpreted as a current execution record
 
 ### Requirement: Push SHALL publish reachable CAS objects before writing the remote ref
 The system SHALL publish a remote ref only after ensuring that the complete object graph reachable from the root typed ref is present in remote CAS. It SHALL recursively upload locally available reachable objects. If local traversal reaches a commit recorded as intentionally unavailable, non-forced branch publication SHALL proceed only when the observed existing remote branch tip was reached through available local ancestry and therefore anchors the omitted closure. Creation of a remote ref, forced publication, or publication whose existing remote tip cannot be reached before a shallow boundary SHALL fail until the history is deepened or unshallowed.
@@ -59,19 +64,27 @@ Remote object materialization SHALL recompute object identity by writing each de
 - **THEN** every reachable object is materialized without applying project commit-history depth
 
 ### Requirement: Remote liveness SHALL follow the reachable object graph
-Remote GC SHALL treat typed `argv_ref` and `result_ref` values in retained execution records as object-graph roots in addition to published project refs. It SHALL preserve execution records reachable from cache pointers or retained lineage/control policy and SHALL collect unreachable losing-attempt records according to that policy.
+Remote GC SHALL validate the exact metadata, state, and driver files for every discovered execution before deriving liveness. It SHALL treat only validated `metadata.json.argv_ref` and `state.json.result_ref` values in retained split records as object-graph roots in addition to published project refs. It SHALL preserve valid execution records reachable from cache pointers or retained lineage/control policy and SHALL collect valid unreachable losing-attempt records according to that policy. A partial, malformed, extra-field, extra-file, or unified execution shape SHALL fail validation and SHALL NOT be parsed, migrated, tolerated, or specially preserved.
 
 #### Scenario: Current running execution keeps argv live
-- **WHEN** `cache/ck1` contains `e1` and `execution/e1.argv_ref` names an argv root
+- **WHEN** `exec/cache/ck1` contains `e1` and valid `exec/execution/e1/metadata.json.argv_ref` names an argv root
 - **THEN** remote GC preserves the argv object closure
 
 #### Scenario: Terminal execution keeps result live
-- **WHEN** a retained execution has a non-null `result_ref`
+- **WHEN** a retained valid split execution has a non-null `state.json.result_ref`
 - **THEN** remote GC preserves the result DAG closure
 
 #### Scenario: Lost reservation can be collected
-- **WHEN** an execution record is not reachable from cache pointers, lineage, or retained control state
+- **WHEN** a valid split execution record is not reachable from cache pointers, lineage, or retained control state
 - **THEN** remote GC MAY collect that record and its otherwise unreachable roots
+
+#### Scenario: Partial execution fails closed
+- **WHEN** any required split execution file is absent or malformed
+- **THEN** remote GC fails validation before deleting CAS based on that execution's roots
+
+#### Scenario: Unified execution is not preserved
+- **WHEN** remote GC encounters an unsupported unified execution object
+- **THEN** it does not parse or retain that object as compatible execution state
 
 ### Requirement: Tombstones SHALL move the original ref unchanged
 Tombstones SHALL continue to preserve deleted typed project refs unchanged. Plain cache-pointer deletion and execution-record cleanup SHALL use CAS and SHALL NOT require typed-ref tombstones.

@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define centralized and resilient AWS client construction for runtime and executor operations.
+
+## Requirements
 
 ### Requirement: Configurable AWS client construction
 The system SHALL provide `get_client` as the production AWS client construction path. It SHALL resolve the AWS region using its existing precedence and SHALL accept keyword options for connection timeout, read timeout, retry attempts, retry mode, and maximum pooled connections. When an option is omitted, it SHALL preserve the existing default client policy.

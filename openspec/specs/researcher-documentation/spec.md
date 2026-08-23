@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define the documentation path for researchers using DaggerML workflows.
+
+## Requirements
 
 ### Requirement: Researcher documentation SHALL cover the research lifecycle
 The documentation SHALL provide a Use DaggerML path for researchers that covers project creation, DAG and funk authoring, execution, results, artifacts, codecs, runtime control, cache control, history, remotes, sharing, reuse, failure inspection, and cleanup at appropriate progressive levels.

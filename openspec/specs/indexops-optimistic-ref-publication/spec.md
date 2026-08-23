@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define optimistic publication and conflict retries for IndexOps mutations.
+
+## Requirements
 
 ### Requirement: IndexOps publishes index mutations through post-transaction compare-and-swap
 The system SHALL have affected `IndexOps` mutation paths derive new commits in LMDB before publishing them through `HeadOps` compare-and-swap operations on file-backed index or branch refs.

@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define documentation for engineers building DaggerML extensions and integrations.
+
+## Requirements
 
 ### Requirement: Extension documentation SHALL serve integration engineers
 The documentation SHALL provide an Extend DaggerML path for readers who implement adapters, executors, codecs, plugin registrations, remote integrations, and supporting infrastructure.

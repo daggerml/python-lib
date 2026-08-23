@@ -19,6 +19,30 @@ def make_db(path):
     return db
 
 
+def put_execution_record(store, execution_id, *, cache_key="cache", children=None):
+    store._put_js(
+        store._key_for(f"execution/{execution_id}/metadata.json"),
+        {"execution_id": execution_id, "cache_key": cache_key, "argv_ref": None, "created_at": 0},
+    )
+    store._put_js(
+        store._key_for(f"execution/{execution_id}/state.json"),
+        {
+            "lifecycle": "running",
+            "result_ref": None,
+            "result_source": None,
+            "spawned_execution_ids": [],
+            "child_execution_ids": children or [],
+            "cancelation": None,
+            "invalidation": None,
+            "updated_at": 0,
+        },
+    )
+    store._put_js(
+        store._key_for(f"execution/{execution_id}/driver.json"),
+        {"lock": None, "not_before": None, "adapter_state": None, "cleanup": None},
+    )
+
+
 def test_cache_roundtrip(tmp_path):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
@@ -107,7 +131,8 @@ def test_gc_preserves_locked_reservation_and_rereads_cache_pointer_before_deleti
         assert unlocked_metadata["execution_id"] == "unlocked"
 
 
-def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypatch):
+@pytest.mark.parametrize("conflicting_part", ["state", "driver", "metadata"])
+def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypatch, conflicting_part):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket="bucket")
@@ -144,11 +169,11 @@ def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypat
 
         def mutate_before_conditional_delete(store, key, **kwargs):
             nonlocal mutated
-            if not mutated and getattr(key, "key", key) == state_key:
+            target_key = {"state": state_key, "driver": driver_key, "metadata": metadata_key}[conflicting_part]
+            if not mutated and getattr(key, "key", key) == target_key:
                 mutated = True
-                store._put_js(
-                    state_key,
-                    {
+                if conflicting_part == "state":
+                    payload = {
                         "lifecycle": "succeeded",
                         "result_ref": result.to,
                         "result_source": "runtime",
@@ -157,8 +182,22 @@ def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypat
                         "cancelation": None,
                         "invalidation": None,
                         "updated_at": 1,
-                    },
-                )
+                    }
+                elif conflicting_part == "driver":
+                    payload = {
+                        "lock": {"owner": "new-owner", "ttl": 300.0},
+                        "not_before": None,
+                        "adapter_state": None,
+                        "cleanup": None,
+                    }
+                else:
+                    payload = {
+                        "execution_id": "unlocked",
+                        "cache_key": "unlocked-key",
+                        "argv_ref": None,
+                        "created_at": 1,
+                    }
+                store._put_js(target_key, payload)
             return original_delete(store, key, **kwargs)
 
         monkeypatch.setattr(exec_store.__class__, "_delete", mutate_before_conditional_delete)
@@ -166,7 +205,66 @@ def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypat
 
         remote.gc()
 
-        assert remote._store._exists(remote._store._key_for(f"cas/sha256/{result.id()}"))
+        result_exists = remote._store._exists(remote._store._key_for(f"cas/sha256/{result.id()}"))
+        record = ExecutionState(remote.root_uri, 1, client).read_execution_record("unlocked")
+        if conflicting_part == "state":
+            assert result_exists
+            assert record["state"]["result_ref"] == result.to
+        elif conflicting_part == "driver":
+            assert not result_exists
+            assert record["driver"]["lock"]["owner"] == "new-owner"
+        else:
+            assert not result_exists
+            assert record["metadata"]["created_at"] == 1
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ["missing-metadata", "missing-state", "missing-driver", "malformed", "extra-field", "extra-file", "unified"],
+)
+def test_remote_gc_rejects_unsupported_execution_shapes_before_cas_deletion(malformation):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=1, client=client)
+        exec_store = remote._store.__class__("s3://bucket/root/exec", client)
+        cas_key = remote._store._key_for("cas/sha256/aa/bb/orphan")
+        remote._store._put(cas_key, "orphan")
+        if malformation == "unified":
+            exec_store._put_js(exec_store._key_for("execution/exec.json"), {"result_ref": "dag:legacy"})
+        else:
+            put_execution_record(exec_store, "exec")
+            if malformation.startswith("missing-"):
+                part = malformation.removeprefix("missing-")
+                exec_store._delete(exec_store._key_for(f"execution/exec/{part}.json"))
+            elif malformation == "malformed":
+                exec_store._put(exec_store._key_for("execution/exec/state.json"), "not-json")
+            elif malformation == "extra-field":
+                payload = json.loads(exec_store._get(exec_store._key_for("execution/exec/metadata.json")))
+                payload["extra"] = True
+                exec_store._put_js(exec_store._key_for("execution/exec/metadata.json"), payload)
+            elif malformation == "extra-file":
+                exec_store._put_js(exec_store._key_for("execution/exec/legacy.json"), {})
+
+        with pytest.raises(DmlRepoError):
+            remote.gc()
+
+        assert remote._store._exists(cas_key)
+
+
+def test_remote_gc_retains_execution_lineage_from_current_pointer():
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=1, client=client)
+        exec_store = remote._store.__class__("s3://bucket/root/exec", client)
+        put_execution_record(exec_store, "parent", cache_key="parent-key", children=["child"])
+        put_execution_record(exec_store, "child", cache_key="child-key")
+        exec_store._put(exec_store._key_for("cache/parent-key"), "parent")
+
+        remote.gc()
+
+        assert exec_store._exists(exec_store._key_for("execution/child/metadata.json"))
 
 
 def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state():
@@ -181,13 +279,108 @@ def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state(
             "io_prefix": "io",
             "layout": "one-project-cas+refs+split-execution",
             "refs_prefix": "refs",
-            "schema": 2,
+            "schema": 0,
             "execution_prefix": "../exec",
         }
 
         client.put_object(Bucket="bucket", Key="nonempty/dml/refs/heads/main.json", Body=b"{}")
         with pytest.raises(DmlRepoError, match="not empty"):
             Remote("s3://bucket/nonempty", n_workers=2, client=client)
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        {"schema": 1},
+        {"schema": 2},
+        {"schema": False},
+        {"schema": True},
+        {"schema": 0.0},
+        {
+            "schema": 0,
+            "hash": "sha256",
+            "layout": "one-project-cas+refs+split-execution",
+            "refs_prefix": "refs",
+            "io_prefix": "io",
+            "cas_prefix": "cas/sha256",
+            "execution_prefix": "../exec",
+            "extra": True,
+        },
+    ],
+)
+def test_remote_descriptor_rejects_every_noncanonical_shape(descriptor):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        client.put_object(Bucket="bucket", Key="root/dml/dml.json", Body=json.dumps(descriptor).encode())
+
+        with pytest.raises(DmlRepoError, match="Unsupported remote descriptor"):
+            Remote("s3://bucket/root", n_workers=1, client=client)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "exec/cache/key",
+        "exec/execution/e/state.json",
+        "exec/io/e/output",
+        "dml/cas/sha256/aa/bb/object",
+        "dml/refs/heads/main.json",
+        "unrelated",
+    ],
+)
+def test_remote_initialization_rejects_any_undescribed_endpoint_object(key):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        client.put_object(Bucket="bucket", Key=f"root/{key}", Body=b"existing")
+
+        with pytest.raises(DmlRepoError, match="not empty"):
+            Remote("s3://bucket/root", n_workers=1, client=client)
+
+        response = client.list_objects_v2(Bucket="bucket", Prefix="root/")
+        assert [item["Key"] for item in response["Contents"]] == [f"root/{key}"]
+
+
+def test_raw_remote_ref_exposes_only_canonical_metadata():
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=1, client=client)
+        payload = {
+            "ref": {"to": "commit:" + "a" * 64},
+            "created": 0,
+            "metadata": {"source": "test"},
+        }
+        remote._store._put_js(remote._store._key_for("refs/heads/main.json"), payload)
+
+        assert remote.get_ref("branch", "main", raw=True) == payload
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"meta": {}},
+        {"extra": True},
+        {"ref": {"to": "commit:" + "a" * 64, "extra": True}},
+        {"created": True},
+    ],
+)
+def test_remote_ref_rejects_legacy_and_extra_fields(update):
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        remote = Remote("s3://bucket/root", n_workers=1, client=client)
+        payload = {
+            "ref": {"to": "commit:" + "a" * 64},
+            "created": 0,
+            "metadata": {},
+            **update,
+        }
+        remote._store._put_js(remote._store._key_for("refs/heads/main.json"), payload)
+
+        with pytest.raises(ValueError):
+            remote.get_ref("branch", "main", raw=True)
 
 
 def test_remote_inspection_is_bounded_non_mutating_and_lists_unmaterialized_tips(tmp_path, monkeypatch):
@@ -444,7 +637,7 @@ def test_remote_cas_payloads_use_tagged_json(tmp_path):
         assert scalar_payload == ["dict", {"data": ["scalar", "done"]}]
 
 
-def test_remote_gc_traces_unified_execution_refs_and_collects_losing_attempt(tmp_path):
+def test_remote_gc_traces_split_execution_refs_and_collects_losing_attempt(tmp_path):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket="bucket")

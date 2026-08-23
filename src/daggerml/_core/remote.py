@@ -26,7 +26,7 @@ _SERDE_LIST = "list"
 _SERDE_DICT = "dict"
 _SERDE_REF = "ref"
 _REMOTE_DESCRIPTOR = {
-    "schema": 2,
+    "schema": 0,
     "hash": "sha256",
     "layout": "one-project-cas+refs+split-execution",
     "refs_prefix": "refs",
@@ -101,19 +101,33 @@ class Remote:
         descriptor_key = self._store._key_for("dml.json")
         try:
             descriptor = json.loads(self._store._get(descriptor_key))
-            if descriptor != _REMOTE_DESCRIPTOR:
-                raise DmlRepoError("Unsupported remote descriptor; migrate this remote root before use")
         except self._store.client.exceptions.NoSuchKey as exc:
-            if any(self._store._iter(self._store._key_for(""))):
+            endpoint = S3Remote(self.root_uri.rstrip("/"), self._store.client)
+            if endpoint._has_any(endpoint._key_for("")):
                 raise DmlRepoError("Remote root is not empty and has no supported descriptor") from exc
             try:
                 self._store._put_js(descriptor_key, _REMOTE_DESCRIPTOR, overwrite=False)
-            except CasItemConflict as conflict:
-                descriptor = json.loads(self._store._get(descriptor_key))
-                if descriptor != _REMOTE_DESCRIPTOR:
+            except CasItemConflict:
+                try:
+                    descriptor = json.loads(self._store._get(descriptor_key))
+                    self._validate_remote_descriptor(descriptor)
+                except (TypeError, ValueError, json.JSONDecodeError, DmlRepoError) as invalid:
                     raise DmlRepoError(
                         "Unsupported remote descriptor; migrate this remote root before use"
-                    ) from conflict
+                    ) from invalid
+            return
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise DmlRepoError("Unsupported remote descriptor; migrate this remote root before use") from exc
+        self._validate_remote_descriptor(descriptor)
+
+    @staticmethod
+    def _validate_remote_descriptor(descriptor: object) -> None:
+        if (
+            not isinstance(descriptor, dict)
+            or type(descriptor.get("schema")) is not int
+            or descriptor != _REMOTE_DESCRIPTOR
+        ):
+            raise DmlRepoError("Unsupported remote descriptor; migrate this remote root before use")
 
     def _inspect_remote_descriptor(self) -> None:
         descriptor_key = self._store._key_for("dml.json")
@@ -126,8 +140,7 @@ class Remote:
             return
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise DmlRepoError("Unsupported remote descriptor; migrate this remote root before use") from exc
-        if descriptor != _REMOTE_DESCRIPTOR:
-            raise DmlRepoError("Unsupported remote descriptor; migrate this remote root before use")
+        self._validate_remote_descriptor(descriptor)
 
     def _cas_key(self, oid: str) -> str:
         aa = oid[:2]
@@ -144,14 +157,16 @@ class Remote:
         expected_root_ns: str | None = None,
         required_metadata: tuple[str, ...] = (),
     ) -> Ref:
+        if not isinstance(payload, dict) or set(payload) != {"ref", "created", "metadata"}:
+            raise ValueError("Remote ref payload must contain exactly ref, created, and metadata")
         ref_data = payload.get("ref")
-        if not isinstance(ref_data, dict):
+        if not isinstance(ref_data, dict) or set(ref_data) != {"to"}:
             raise ValueError("Remote ref payload missing object field 'ref'")
         ref_to = ref_data.get("to")
         if not isinstance(ref_to, str):
             raise ValueError("Remote ref payload missing string field 'ref.to'")
         created = payload.get("created")
-        if not isinstance(created, int):
+        if not isinstance(created, int) or isinstance(created, bool):
             raise ValueError("Remote ref payload missing integer field 'created'")
         metadata = payload.get("metadata")
         if not isinstance(metadata, dict):
@@ -467,11 +482,6 @@ class Remote:
         ref = self.materialize_manifest(manifest, db, expected_root_ns=expected_ns)
         return ref, item
 
-    def _raw_ref_view(self, payload: dict) -> dict:
-        if "meta" in payload:
-            return payload
-        return {**payload, "meta": payload["metadata"]}
-
     @overload
     def _get_path(
         self,
@@ -507,7 +517,7 @@ class Remote:
             return None
         self._validate_ref_payload(manifest, expected_root_ns=expected_ns, required_metadata=required_metadata)
         if raw:
-            return self._raw_ref_view(manifest)
+            return manifest
         assert db is not None, "DmlDB instance required to materialize manifest"
         return self.materialize_manifest(
             manifest,
@@ -679,6 +689,8 @@ class Remote:
         return sorted(tips, key=lambda item: item[0])
 
     def gc(self) -> dict[str, int]:
+        from daggerml._core.exec_state import ExecutionState
+
         live_oids: set[str] = set()
         tombstones_deleted = 0
         t1 = time.time()
@@ -694,18 +706,33 @@ class Remote:
             total_refs += 1
         exec_store = S3Remote(self.root_uri.rstrip("/") + "/exec", client=self._store.client)
         execution_prefix = exec_store._key_for("execution/")
-        execution_ids = {
-            key[len(execution_prefix) :].removesuffix("/metadata.json")
-            for key in exec_store._iter(execution_prefix)
-            if key.endswith("/metadata.json")
-        }
-        for execution_id in execution_ids:
-            metadata_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"), cas=True)
-            state_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json"), cas=True)
-            driver_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/driver.json"), cas=True)
-            metadata = json.loads(metadata_item.data)
-            state = json.loads(state_item.data)
-            driver = json.loads(driver_item.data)
+        execution_keys = list(exec_store._iter(execution_prefix))
+        parts_by_id: dict[str, set[str]] = {}
+        for key in execution_keys:
+            relative = key[len(execution_prefix) :]
+            match = re.fullmatch(r"([^/]+)/(metadata|state|driver)\.json", relative)
+            if match is None:
+                raise DmlRepoError(f"Unsupported execution object: {key}")
+            parts_by_id.setdefault(match.group(1), set()).add(match.group(2))
+        records: dict[str, tuple[Any, Any, Any, tuple[CasItem, CasItem, CasItem]]] = {}
+        for execution_id, parts in parts_by_id.items():
+            if parts != {"metadata", "state", "driver"}:
+                raise DmlRepoError(f"Incomplete execution record: {execution_id}")
+            try:
+                metadata_item = exec_store._get(
+                    exec_store._key_for(f"execution/{execution_id}/metadata.json"), cas=True
+                )
+                state_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json"), cas=True)
+                driver_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/driver.json"), cas=True)
+                metadata = ExecutionState._validate_metadata(json.loads(metadata_item.data), execution_id)
+                state = ExecutionState._validate_state(json.loads(state_item.data))
+                driver = ExecutionState._validate_driver(json.loads(driver_item.data))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise DmlRepoError(f"Invalid execution record: {execution_id}") from exc
+            records[execution_id] = (metadata, state, driver, (metadata_item, state_item, driver_item))
+
+        retained_ids: set[str] = set()
+        for execution_id, (metadata, state, driver, _) in records.items():
             cache_key = metadata.get("cache_key")
             current_execution = None
             if cache_key is not None:
@@ -714,34 +741,58 @@ class Remote:
                 except Exception as exc:
                     if not exec_store._is_missing_error(exc):
                         raise
-            retained = (
+            if (
                 current_execution == execution_id
                 or cache_key is None
                 or driver.get("lock") is not None
                 or state.get("cancelation") is not None
                 or state.get("invalidation") is not None
-            )
-            if not retained:
+            ):
+                retained_ids.add(execution_id)
+        pending = list(retained_ids)
+        while pending:
+            _, state, _, _ = records[pending.pop()]
+            for related in state["spawned_execution_ids"] + state["child_execution_ids"]:
+                if related in records and related not in retained_ids:
+                    retained_ids.add(related)
+                    pending.append(related)
+
+        for execution_id, (metadata, state, _driver, items) in records.items():
+            if execution_id not in retained_ids:
                 # Delete semantic state first so concurrent result publication
                 # conflicts before immutable metadata can become partial.
-                if all(exec_store._delete(item) for item in (state_item, driver_item, metadata_item)):
+                metadata_item, state_item, driver_item = items
+                deleted_items: list[CasItem] = []
+                for item in (state_item, driver_item, metadata_item):
+                    if exec_store._delete(item):
+                        deleted_items.append(item)
+                        continue
+                    # The three files form one logical record. Restore any parts
+                    # already deleted when a later CAS detects concurrent mutation.
+                    for deleted_item in reversed(deleted_items):
+                        try:
+                            exec_store._put(deleted_item.key, deleted_item.data, overwrite=False)
+                        except CasItemConflict:
+                            pass
+                    break
+                else:
                     continue
                 try:
-                    metadata = json.loads(
-                        exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"))
+                    metadata = ExecutionState._validate_metadata(
+                        json.loads(exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"))),
+                        execution_id,
+                    )
+                    state = ExecutionState._validate_state(
+                        json.loads(exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json")))
+                    )
+                    ExecutionState._validate_driver(
+                        json.loads(exec_store._get(exec_store._key_for(f"execution/{execution_id}/driver.json")))
                     )
                 except Exception as exc:
-                    if not exec_store._is_missing_error(exc):
-                        raise
-                try:
-                    state = json.loads(
-                        exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json"))
-                    )
-                except Exception as exc:
-                    if not exec_store._is_missing_error(exc):
-                        raise
-            for ref_field in ("argv_ref", "result_ref"):
-                value = metadata.get(ref_field) if ref_field == "argv_ref" else state.get(ref_field)
+                    if isinstance(exc, DmlRepoError) or exec_store._is_missing_error(exc):
+                        raise DmlRepoError(f"Execution record changed during GC: {execution_id}") from exc
+                    raise
+            for value in (metadata["argv_ref"], state["result_ref"]):
                 if value is not None:
                     live_oids.update(self._get_live_oids(Ref(value)))
             total_refs += 1

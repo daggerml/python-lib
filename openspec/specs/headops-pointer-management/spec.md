@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define HeadOps ownership of checkout state and branch and index pointer persistence.
+
+## Requirements
 
 ### Requirement: HeadOps owns branch and index pointer persistence
 The system SHALL route all branch and index storage creation, lookup, update, listing, and deletion through `HeadOps` public methods.

@@ -15,7 +15,7 @@ from daggerml._core.db import Ref
 from daggerml._core.types import DmlRepoError
 
 _HEAD_ATTACHED_PREFIX = "ref: refs/local/heads/"
-_SHALLOW_VERSION = 1
+_SHALLOW_VERSION = 0
 
 
 def _validate_segment(label: str, value: str) -> str:
@@ -290,7 +290,7 @@ class Head:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(payload, dict) or set(payload) != {"version", "missing"}:
                 raise ValueError("expected version and missing fields")
-            if payload["version"] != _SHALLOW_VERSION:
+            if type(payload["version"]) is not int or payload["version"] != _SHALLOW_VERSION:
                 raise ValueError("unsupported shallow metadata version")
             missing = payload["missing"]
             if not isinstance(missing, list) or missing != sorted(set(missing)):

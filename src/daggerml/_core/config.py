@@ -128,7 +128,13 @@ def coalesce(name: str, explicit: Mapping[str, object], *configs) -> object:
 def _read_json(path: Path) -> dict:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DmlRepoError(f"Invalid configuration in {path}: expected valid JSON") from exc
+    if not isinstance(data, dict):
+        raise DmlRepoError(f"Invalid configuration in {path}: <root> must be an object")
+    return data
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -167,7 +173,46 @@ def unflatten_dict(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalized_config(path: Path) -> dict[str, object]:
-    return flatten_dict(_read_json(path))
+    data = _read_json(path)
+    allowed = {
+        "config_home": None,
+        "db_path": None,
+        "project_home": None,
+        "user": None,
+        "default": {"db_map_size_headroom", "db_map_size_max", "branch_name"},
+        "remote": {"root", "fetch_workers", "prune_age_seconds"},
+    }
+    flattened: dict[str, object] = {}
+    for key, value in data.items():
+        expected = allowed.get(key)
+        if key not in allowed:
+            raise DmlRepoError(f"Invalid configuration in {path}: unsupported key {key}")
+        if expected is None:
+            if isinstance(value, dict):
+                raise DmlRepoError(f"Invalid configuration in {path}: {key} must not be an object")
+            flattened[key] = value
+            continue
+        if not isinstance(value, dict):
+            raise DmlRepoError(f"Invalid configuration in {path}: {key} must be an object")
+        for nested_key, nested_value in value.items():
+            full_key = f"{key}.{nested_key}"
+            if nested_key not in expected:
+                raise DmlRepoError(f"Invalid configuration in {path}: unsupported key {full_key}")
+            if isinstance(nested_value, dict):
+                raise DmlRepoError(f"Invalid configuration in {path}: {full_key} must not be an object")
+            flattened[full_key] = nested_value
+    for key, value in tuple(flattened.items()):
+        try:
+            if key in {"config_home", "db_path", "project_home", "user", "default.branch_name", "remote.root"}:
+                if not isinstance(value, str):
+                    raise TypeError("expected a string")
+            else:
+                if not isinstance(value, int) or isinstance(value, bool):
+                    raise TypeError("expected an integer")
+            flattened[key] = _COERCION_MAP[key](value)
+        except (TypeError, ValueError) as exc:
+            raise DmlRepoError(f"Invalid configuration in {path}: invalid value for {key}") from exc
+    return flattened
 
 
 @dataclass(frozen=True)

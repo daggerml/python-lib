@@ -1,6 +1,6 @@
 # CLI reference
 
-Run `dml --help` for the generated command surface. Global project options include `--project-home`, `--remote-root`, `--remote-project`, `--user`, and `--config-home`.
+Run `dml --help` for the generated command surface. Global project options include `--project-home`, `--remote-root`, `--user`, and `--config-home`.
 
 | Purpose | Commands |
 | --- | --- |
@@ -35,8 +35,6 @@ Use the returned execution ref with `cache invalidate EXECUTION_REF
 Invalidation accepts `index:` and `frozenindex:` refs, not cache keys or bare
 IDs. `gc` collects unreachable local objects by default; `gc --remote` collects
 configured `remote.root` state. GC does not accept dependency or dry-run
-selectors. These commands replace the removed `admin remote get-cache`, `admin
-remote invalidate-cache`, `admin remote gc`, and `admin gc` paths without
-aliases.
+selectors.
 
 Export the bundled, portable coding-agent skill with `dml admin agent-skill > SKILL.md`.

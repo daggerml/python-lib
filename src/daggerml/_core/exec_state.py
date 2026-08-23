@@ -144,6 +144,48 @@ AdapterCleanupResponse = dict[str, Any]
 AdapterCancelResponse = dict[str, Any]
 
 
+def validate_adapter_response(
+    response: object, *, success_status: Literal["success", "cancelled"] = "success"
+) -> dict[str, Any]:
+    if not isinstance(response, dict):
+        raise DmlRepoError("Adapter response must be a JSON object")
+    if set(response) - {"status", "adapter_state", "retry_after_ms", "error"}:
+        raise DmlRepoError("Adapter response contains unsupported fields")
+    status = response.get("status")
+    if not isinstance(status, str) or not status:
+        raise DmlRepoError("Adapter response must contain a non-empty status")
+    adapter_state = response.get("adapter_state")
+    if "adapter_state" in response and adapter_state is not None and not isinstance(adapter_state, dict):
+        raise DmlRepoError("Adapter response adapter_state must be an object or null")
+    if "retry_after_ms" in response:
+        retry_after_ms = response["retry_after_ms"]
+        if not isinstance(retry_after_ms, int) or isinstance(retry_after_ms, bool) or retry_after_ms < 0:
+            raise DmlRepoError("Adapter response retry_after_ms must be a nonnegative integer")
+    error = response.get("error")
+    if error is not None and not isinstance(error, str):
+        raise DmlRepoError("Adapter response error must be a string or null")
+    if status == "running":
+        raise DmlRepoError("Adapter response status 'running' is unsupported")
+    if status == "retry":
+        if not isinstance(adapter_state, dict):
+            raise DmlRepoError("Retry adapter response requires object adapter_state")
+        if error is not None:
+            raise DmlRepoError("Retry adapter response cannot contain error text")
+    elif status == success_status:
+        if error is not None:
+            raise DmlRepoError(f"Successful adapter response '{status}' cannot contain error text")
+        if "retry_after_ms" in response:
+            raise DmlRepoError(f"Successful adapter response '{status}' cannot contain retry_after_ms")
+    elif status in {"success", "cancelled"}:
+        raise DmlRepoError(f"Adapter response status '{status}' is invalid for this operation")
+    else:
+        if not isinstance(error, str) or not error:
+            raise DmlRepoError("Failed adapter response requires error text")
+        if "retry_after_ms" in response:
+            raise DmlRepoError("Failed adapter response cannot contain retry_after_ms")
+    return response
+
+
 class ExecutionGraphNode(TypedDict):
     execution_id: str
     cache_key: str | None
@@ -184,6 +226,7 @@ class ExecutionState:
     client: InitVar["boto3.client"]
     cache_key: str | None = None
     _store: S3Remote = field(init=False)
+    _owned_reservations: dict[str, dict[str, CasItem]] = field(init=False, default_factory=dict)
 
     def __post_init__(self, client) -> None:
         self._store = S3Remote(self.root_uri.rstrip("/") + "/exec", client=client)
@@ -202,7 +245,7 @@ class ExecutionState:
         return self._store._key_for(f"cache/{cache_key}")
 
     def _edge_prefix(self, callee_id: str) -> str:
-        return self._store._key_for(f"edge/{callee_id}/")
+        return self._store._key_for(f"edges/{callee_id}/")
 
     def _edge_key(self, callee_id: str, caller_id: str) -> str:
         return f"{self._edge_prefix(callee_id)}{caller_id}.json"
@@ -442,9 +485,15 @@ class ExecutionState:
             raise DmlRepoError(f"Execution record already exists for execution_id: {execution_id}")
         owner = self.acquire(execution_id)
         assert owner is not None
-        item = self._snapshot(self._execution_key(execution_id, "state"))
-        assert item is not None
-        return execution_id, owner, item
+        snapshots = {
+            part: self._snapshot(self._execution_key(execution_id, part))
+            for part in ("metadata", "state", "driver")
+        }
+        assert all(item is not None for item in snapshots.values())
+        if not hasattr(self, "_owned_reservations"):
+            self._owned_reservations = {}
+        self._owned_reservations[execution_id] = cast(dict[str, CasItem], snapshots)
+        return execution_id, owner, cast(CasItem, snapshots["state"])
 
     def _read_cache(self, cache_key: str) -> tuple[str, CasItem] | None:
         item = self._snapshot(self._cache_key(cache_key))
@@ -483,18 +532,20 @@ class ExecutionState:
 
     def _delete_reserved_execution(self, execution_id: str, owner: str) -> None:
         """Remove a reservation only while this caller still owns its driver."""
+        owned = getattr(self, "_owned_reservations", {}).get(execution_id)
+        if owned is None:
+            return
         try:
-            driver, driver_item = self._part_snapshot(execution_id, "driver")
+            driver, _ = self._part_snapshot(execution_id, "driver")
         except DmlRepoError:
             return
         if driver["lock"] is None or driver["lock"]["owner"] != owner:
             return
-        if not self._store._delete(driver_item):
+        current = {part: self._snapshot(self._execution_key(execution_id, part)) for part in owned}
+        if any(item is None or item.etag != owned[part].etag for part, item in current.items()):
             return
-        for part in ("state", "metadata"):
-            item = self._snapshot(self._execution_key(execution_id, part))
-            if item is not None:
-                self._store._delete(item)
+        if all(self._store._delete(owned[part]) for part in ("state", "driver", "metadata")):
+            self._owned_reservations.pop(execution_id, None)
 
     def _materialize(self, value: str | None, db: DmlDB) -> Ref | None:
         return None if value is None else self._remote.materialize_ref(Ref(value), db)
@@ -502,31 +553,7 @@ class ExecutionState:
     def _validate_adapter_response(
         self, response: object, *, success_status: Literal["success", "cancelled"] = "success"
     ) -> AdapterInvokeResponse:
-        if not isinstance(response, dict):
-            raise DmlRepoError("Adapter response must be a JSON object")
-        if set(response) - {"status", "adapter_state", "retry_after_ms", "error"}:
-            raise DmlRepoError("Adapter response contains unsupported fields")
-        status = response.get("status")
-        if not isinstance(status, str) or not status:
-            raise DmlRepoError("Adapter response must contain a non-empty status")
-        adapter_state = response.get("adapter_state")
-        if "adapter_state" in response and adapter_state is not None and not isinstance(adapter_state, dict):
-            raise DmlRepoError("Adapter response adapter_state must be an object or null")
-        retry_after_ms = response.get("retry_after_ms")
-        if retry_after_ms is not None and (
-            not isinstance(retry_after_ms, int)
-            or isinstance(retry_after_ms, bool)
-            or retry_after_ms < 0
-        ):
-            raise DmlRepoError("Adapter response retry_after_ms must be nonnegative")
-        error = response.get("error")
-        if error is not None and not isinstance(error, str):
-            raise DmlRepoError("Adapter response error must be a string or null")
-        if status == "retry" and not isinstance(adapter_state, dict):
-            raise DmlRepoError("Retry adapter response requires object adapter_state")
-        if status not in {success_status, "retry"} and (not isinstance(error, str) or not error):
-            raise DmlRepoError("Failed adapter response requires error text")
-        return response
+        return validate_adapter_response(response, success_status=success_status)
 
     def _retry_not_before(self, response: AdapterInvokeResponse) -> int | None:
         if response["status"] != "retry":
@@ -695,7 +722,7 @@ class ExecutionState:
 
         return self._mutate_state(execution_id, finalize)
 
-    def _record_edge(self, caller: str, callee: str) -> None:
+    def _record_edge(self, caller: str, callee: str) -> bool:
         try:
             self._store._put_js(
                 self._edge_key(callee, caller),
@@ -703,16 +730,34 @@ class ExecutionState:
                 overwrite=False,
             )
         except CasItemConflict:
-            pass
+            return False
+        return True
 
     def delete_execution_dependency(self, *, caller_execution_id: str, callee_execution_id: str) -> None:
         self._store._delete(self._edge_key(callee_execution_id, caller_execution_id))
 
     def list_execution_callers(self, callee_execution_id: str) -> list[str]:
-        return [
-            key.rsplit("/", 1)[-1].removesuffix(".json")
-            for key in self._store._iter(self._edge_prefix(callee_execution_id))
-        ]
+        callers = []
+        prefix = self._edge_prefix(callee_execution_id)
+        for key in self._store._iter(prefix):
+            caller_execution_id = key.removeprefix(prefix).removesuffix(".json")
+            try:
+                payload = json.loads(self._store._get(key))
+            except (TypeError, ValueError) as exc:
+                raise DmlRepoError(f"Invalid execution edge {key}") from exc
+            expected = {
+                "caller_execution_id": caller_execution_id,
+                "callee_execution_id": callee_execution_id,
+            }
+            if (
+                not key.endswith(".json")
+                or not caller_execution_id
+                or "/" in caller_execution_id
+                or payload != expected
+            ):
+                raise DmlRepoError(f"Invalid execution edge {key}")
+            callers.append(caller_execution_id)
+        return sorted(callers)
 
     def _update_child(self, caller: str, callee: str, *, complete: bool) -> None:
         def mutate(state: ExecutionSemanticState) -> None:
@@ -772,6 +817,7 @@ class ExecutionState:
         if owner is None:
             return None
         adapter_called = False
+        edge_created = False
         try:
             record = self.read_execution_record(execution_id)
             state = record["state"]
@@ -780,7 +826,7 @@ class ExecutionState:
                 raise CancellationError(
                     f"Execution {execution_id} is canceled", lifecycle=state["lifecycle"]
                 )
-            self._record_edge(index.id(), execution_id)
+            edge_created = self._record_edge(index.id(), execution_id)
             self._update_child(index.id(), execution_id, complete=False)
             if state["result_source"] == "runtime":
                 state = self._finalize_runtime_result(execution_id)
@@ -836,11 +882,12 @@ class ExecutionState:
             self._update_child(index.id(), execution_id, complete=True)
             return dag
         except Exception:
-            if created and not adapter_called:
-                self._delete_cache(self.cache_key, execution_id)
+            if not adapter_called and edge_created:
                 self.delete_execution_dependency(
                     caller_execution_id=index.id(), callee_execution_id=execution_id
                 )
+            if created and not adapter_called:
+                self._delete_cache(self.cache_key, execution_id)
                 self._delete_reserved_execution(execution_id, owner)
             raise
         finally:
@@ -854,20 +901,7 @@ class ExecutionState:
             execution_id = pending.pop()
             if execution_id in nodes:
                 continue
-            try:
-                record = self.read_execution_record(execution_id)
-            except DmlRepoError:
-                nodes[execution_id] = {
-                    "execution_id": execution_id,
-                    "cache_key": None,
-                    "lifecycle": "pending",
-                    "updated_at": 0,
-                    "created_at": 0,
-                    "cancel_requested_by": None,
-                    "children": [],
-                    "spawned": [],
-                }
-                continue
+            record = self.read_execution_record(execution_id)
             metadata = record["metadata"]
             state = record["state"]
             nodes[execution_id] = {
@@ -899,34 +933,42 @@ class ExecutionState:
             try:
                 record = self.read_execution_record(execution_id)
             except DmlRepoError:
+                parts = ("metadata", "state", "driver")
+                if any(self._snapshot(self._execution_key(execution_id, part)) for part in parts):
+                    raise
                 continue
-            metadata = record["metadata"]
-            if execution_id not in roots:
-                cache_key = metadata["cache_key"]
-                pointer = None if cache_key is None else self._read_cache(cache_key)
-                if pointer is None or pointer[0] != execution_id:
-                    continue
-            if metadata["cache_key"]:
-                self._delete_cache(metadata["cache_key"], execution_id)
+            owner = self._wait_acquire(execution_id)
+            try:
+                record = self.read_execution_record(execution_id)
+                metadata = record["metadata"]
+                if execution_id not in roots:
+                    cache_key = metadata["cache_key"]
+                    pointer = None if cache_key is None else self._read_cache(cache_key)
+                    if pointer is None or pointer[0] != execution_id:
+                        continue
+                if metadata["cache_key"]:
+                    self._delete_cache(metadata["cache_key"], execution_id)
 
-            def invalidate(state: ExecutionSemanticState) -> None:
-                state["invalidation"] = state["invalidation"] or {
-                    "requested_by": requested_by,
-                    "requested_at": int(time.time()),
-                }
+                def invalidate(state: ExecutionSemanticState) -> None:
+                    state["invalidation"] = state["invalidation"] or {
+                        "requested_by": requested_by,
+                        "requested_at": int(time.time()),
+                    }
 
-            state = self._mutate_state(execution_id, invalidate)
-            pending.extend(self.list_execution_callers(execution_id))
-            invalidation = state["invalidation"]
-            assert invalidation is not None
-            invalidations.append(
-                {
-                    "execution_id": execution_id,
-                    "cache_key": metadata["cache_key"],
-                    "requested_by": invalidation["requested_by"],
-                    "requested_at": invalidation["requested_at"],
-                }
-            )
+                state = self._mutate_state(execution_id, invalidate)
+                pending.extend(self.list_execution_callers(execution_id))
+                invalidation = state["invalidation"]
+                assert invalidation is not None
+                invalidations.append(
+                    {
+                        "execution_id": execution_id,
+                        "cache_key": metadata["cache_key"],
+                        "requested_by": invalidation["requested_by"],
+                        "requested_at": invalidation["requested_at"],
+                    }
+                )
+            finally:
+                self.unlock(execution_id, owner)
         return {"total_time": time.time() - started, "invalidations": invalidations}
 
     def _runnable_for_execution(self, metadata: ExecutionMetadata, db: DmlDB) -> Runnable | None:

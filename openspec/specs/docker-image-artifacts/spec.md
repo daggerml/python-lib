@@ -2,7 +2,7 @@
 
 Defines compact Docker image production and portable S3 image artifacts that execute identically to directly referenced registry images.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Example runtime images exclude build-only dependencies
 The example Docker image SHALL use a separate build environment and SHALL omit compilers, source-control tools, build-system packages, and repository source that are not required to execute the installed example workloads from its final runtime stage.

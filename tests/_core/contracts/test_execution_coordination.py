@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from datetime import timedelta
@@ -75,6 +76,37 @@ def test_split_sections_are_independently_inspectable() -> None:
     assert state._snapshot(state._execution_key("exec", "driver")).json == _record("exec")["driver"]
 
 
+def test_execution_edges_use_only_plural_exact_path() -> None:
+    state = _state()
+
+    assert state._record_edge("caller", "callee")
+
+    key = "root/exec/edges/callee/caller.json"
+    assert state._store._get(key) == '{"callee_execution_id":"callee","caller_execution_id":"caller"}'
+    assert not any("/edge/" in candidate for candidate in state._store.objects)
+    assert state.list_execution_callers("callee") == ["caller"]
+
+    state._store._put_js("root/exec/edge/other/legacy.json", {})
+    assert state.list_execution_callers("other") == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"caller_execution_id": "other", "callee_execution_id": "callee"},
+        {"caller_execution_id": "caller", "callee_execution_id": "other"},
+        {"caller_execution_id": "caller", "callee_execution_id": "callee", "extra": True},
+    ],
+)
+def test_execution_edge_reads_reject_malformed_payloads(payload) -> None:
+    state = _state()
+    state._store._put_js("root/exec/edges/callee/caller.json", payload)
+
+    with pytest.raises(DmlRepoError, match="Invalid execution edge"):
+        state.list_execution_callers("callee")
+
+
 @pytest.mark.parametrize("part", ["metadata", "state", "driver"])
 def test_direct_inspection_rejects_each_partial_split_record(part) -> None:
     state = _state()
@@ -88,9 +120,13 @@ def test_direct_inspection_rejects_each_partial_split_record(part) -> None:
 def test_driver_lock_allows_one_parallel_owner_and_stale_owner_cannot_mutate() -> None:
     state = _state()
     assert state.create_execution_record(_record("exec"))
+    metadata_etag = state._snapshot(state._execution_key("exec", "metadata")).etag
+    state_etag = state._snapshot(state._execution_key("exec", "state")).etag
     owners = run_parallel(4, lambda _: state.acquire("exec"))
     owner = next(item for item in owners if item is not None)
     assert sum(item is not None for item in owners) == 1
+    assert state._snapshot(state._execution_key("exec", "metadata")).etag == metadata_etag
+    assert state._snapshot(state._execution_key("exec", "state")).etag == state_etag
     assert not state.unlock("exec", "stale")
     assert state.unlock("exec", owner)
 
@@ -118,6 +154,16 @@ def test_reservation_loser_only_removes_its_owned_parts() -> None:
     assert state.read_execution_record(execution_id)["metadata"]["execution_id"] == execution_id
 
 
+def test_reservation_cleanup_preserves_all_parts_when_one_changed() -> None:
+    state = _state()
+    execution_id, owner, _ = state.reserve_execution(Ref("node-argv:argv"))
+    state._mutate_state(execution_id, lambda value: value.update(updated_at=1))
+
+    state._delete_reserved_execution(execution_id, owner)
+
+    assert state.read_execution_record(execution_id)["state"]["updated_at"] > 0
+
+
 def test_resolve_or_create_publishes_record_before_cache_pointer() -> None:
     state = _state()
     execution_id, owner, created = state._resolve_or_create(Ref("node-argv:argv"))
@@ -135,6 +181,28 @@ def test_invalidation_conditionally_deletes_pointer_then_marks_state() -> None:
     assert response["invalidations"][0]["execution_id"] == execution_id
     assert state._read_cache("cache") is None
     assert state.read_execution_record(execution_id)["state"]["invalidation"]["requested_by"] == "user"
+
+
+def test_invalidation_holds_driver_lock_and_does_not_rewrite_metadata(monkeypatch) -> None:
+    state = _state()
+    execution_id, owner, _ = state._resolve_or_create(Ref("node-argv:argv"))
+    assert owner is not None
+    state.unlock(execution_id, owner)
+    metadata = state._snapshot(state._execution_key(execution_id, "metadata"))
+    assert metadata is not None
+    original_mutate = state._mutate_state
+
+    def mutate(execution_id, fn):
+        assert state.read_execution_record(execution_id)["driver"]["lock"] is not None
+        return original_mutate(execution_id, fn)
+
+    monkeypatch.setattr(state, "_mutate_state", mutate)
+
+    state.invalidate_executions([execution_id], "user")
+
+    current = state._snapshot(state._execution_key(execution_id, "metadata"))
+    assert current is not None and current.etag == metadata.etag
+    assert state.read_execution_record(execution_id)["driver"]["lock"] is None
 
 
 def test_finish_publishes_result_independently_before_driver_finalizes() -> None:
@@ -270,6 +338,62 @@ def test_describe_graph_reads_split_reachable_state() -> None:
     assert graph["nodes"]["done"]["lifecycle"] == "succeeded"
 
 
+def test_describe_graph_rejects_missing_execution() -> None:
+    state = _state()
+
+    with pytest.raises(DmlRepoError, match="No execution metadata"):
+        state.describe_graph(["missing"])
+
+
+@pytest.mark.parametrize("operation", ["describe", "invalidate"])
+def test_partial_execution_records_fail_closed(operation) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("exec"))
+    state._store._delete(state._execution_key("exec", "driver"))
+
+    with pytest.raises(DmlRepoError, match="driver"):
+        if operation == "describe":
+            state.describe_graph(["exec"])
+        else:
+            state.invalidate_executions(["exec"], "user")
+
+
+def test_unified_only_cache_pointer_is_stale_and_not_parsed() -> None:
+    state = _state()
+    assert state._create_cache("cache", "legacy")
+    state._store._put_js(
+        "root/exec/execution/legacy.json",
+        {"result_ref": "dag:must-not-be-used", "argv_ref": "node-argv:must-not-be-used"},
+    )
+
+    assert state.describe_cache("cache") is None
+    assert state._read_cache("cache") is None
+    assert "root/exec/execution/legacy.json" in state._store.objects
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+def test_failed_child_registration_removes_only_attempted_artifacts(monkeypatch, reuse) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("caller", cache_key=None, argv_ref=None))
+    if reuse:
+        assert state.create_execution_record(_record("callee"))
+        assert state._create_cache("cache", "callee")
+    monkeypatch.setattr(state, "_update_child", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("fail")))
+
+    with pytest.raises(RuntimeError, match="fail"):
+        state.get_or_start_fn(
+            Ref("index:caller"), Runnable(Uri("target"), adapter="adapter"), Ref("node-argv:argv"), None
+        )
+
+    assert not any("/edges/" in key for key in state._store.objects)
+    if reuse:
+        assert state.read_execution_record("callee")["metadata"]["execution_id"] == "callee"
+        assert state._read_cache("cache")[0] == "callee"
+    else:
+        assert state._read_cache("cache") is None
+        assert not any("/execution/" in key and "caller" not in key for key in state._store.objects)
+
+
 def test_invalidation_propagates_only_to_current_callers() -> None:
     state = _state()
     for execution_id, cache_key in (("child", "child-key"), ("parent", "parent-key")):
@@ -286,15 +410,79 @@ def test_invalidation_propagates_only_to_current_callers() -> None:
     assert state._read_cache("parent-key") is None
 
 
-def test_adapter_wire_accepts_only_success_retry_and_failure(monkeypatch) -> None:
+def test_adapter_wire_rejects_retired_running_status(monkeypatch) -> None:
     state = _state()
     monkeypatch.setattr("daggerml._core.exec_state.shutil.which", lambda _: "/adapter")
     monkeypatch.setattr(
         "daggerml._core.exec_state.subprocess.run",
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout='{"status":"running"}', stderr=""),
     )
-    with pytest.raises(DmlRepoError, match="error text"):
+    with pytest.raises(DmlRepoError, match="running.*unsupported"):
         state._call_adapter({"operation": "invoke", "runnable": {"adapter": "adapter"}, "adapter_state": None})
+
+
+@pytest.mark.parametrize(
+    ("response", "success_status"),
+    [
+        ({"status": "success"}, "success"),
+        ({"status": "success", "error": None, "adapter_state": None}, "success"),
+        ({"status": "retry", "adapter_state": {}}, "success"),
+        ({"status": "retry", "adapter_state": {"attempt": 1}, "retry_after_ms": 0}, "success"),
+        ({"status": "provider-error", "error": "diagnostic"}, "success"),
+        ({"status": "cancelled"}, "cancelled"),
+        ({"status": "retry", "adapter_state": {}}, "cancelled"),
+        ({"status": "provider-error", "error": "diagnostic"}, "cancelled"),
+    ],
+)
+def test_adapter_response_matrix_accepts_exact_operation_shapes(response, success_status) -> None:
+    assert _state()._validate_adapter_response(response, success_status=success_status) == response
+
+
+@pytest.mark.parametrize(
+    ("response", "success_status"),
+    [
+        ({}, "success"),
+        ({"status": "running", "adapter_state": {}}, "success"),
+        ({"status": "success", "error": "contradiction"}, "success"),
+        ({"status": "success", "retry_after_ms": 1}, "success"),
+        ({"status": "success", "extra": True}, "success"),
+        ({"status": "retry"}, "success"),
+        ({"status": "retry", "adapter_state": {}, "error": "contradiction"}, "success"),
+        ({"status": "retry", "adapter_state": {}, "retry_after_ms": None}, "success"),
+        ({"status": "retry", "adapter_state": {}, "retry_after_ms": True}, "success"),
+        ({"status": "provider-error"}, "success"),
+        ({"status": "provider-error", "error": "diagnostic", "retry_after_ms": 1}, "success"),
+        ({"status": "cancelled"}, "success"),
+        ({"status": "success"}, "cancelled"),
+    ],
+)
+def test_adapter_response_matrix_rejects_malformed_operation_shapes(response, success_status) -> None:
+    with pytest.raises(DmlRepoError):
+        _state()._validate_adapter_response(response, success_status=success_status)
+
+
+@pytest.mark.parametrize(
+    ("operation", "response"),
+    [
+        ("invoke", {"status": "success"}),
+        ("cleanup", {"status": "success", "adapter_state": None}),
+        ("cancel", {"status": "cancelled"}),
+        ("invoke", {"status": "provider-error", "error": "diagnostic"}),
+        ("cleanup", {"status": "retry", "adapter_state": {}, "retry_after_ms": 1}),
+        ("cancel", {"status": "retry", "adapter_state": {}}),
+    ],
+)
+def test_adapter_runtime_boundary_accepts_operation_specific_responses(monkeypatch, operation, response) -> None:
+    state = _state()
+    monkeypatch.setattr("daggerml._core.exec_state.shutil.which", lambda _: "/adapter")
+    monkeypatch.setattr(
+        "daggerml._core.exec_state.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr=""),
+    )
+
+    assert state._call_adapter(
+        {"operation": operation, "runnable": {"adapter": "adapter"}, "adapter_state": None}
+    ) == response
 
 
 def test_cancel_marks_selected_execution_and_preserves_terminal_pointer() -> None:
@@ -387,7 +575,7 @@ def test_cancel_adapter_accepts_only_cancelled_as_success() -> None:
     state = _state()
 
     assert state._validate_adapter_response({"status": "cancelled"}, success_status="cancelled")
-    with pytest.raises(DmlRepoError, match="error text"):
+    with pytest.raises(DmlRepoError, match="invalid for this operation"):
         state._validate_adapter_response({"status": "success"}, success_status="cancelled")
 
 

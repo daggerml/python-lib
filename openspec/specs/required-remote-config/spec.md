@@ -1,3 +1,8 @@
+## Purpose
+Define explicit normalized remote configuration for remote-aware components.
+
+## Requirements
+
 ### Requirement: Remote-aware components require explicit remote configuration
 The system SHALL require explicit normalized endpoint configuration at the constructor or helper boundary for any runtime or ops component that performs remote-backed behavior. Project synchronization, CAS, cache, and execution coordination components MUST receive resolved `remote.root`; dependency fetch components MUST receive the selected dependency config. Components SHALL NOT resolve endpoint files or environment variables directly.
 

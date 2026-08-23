@@ -147,7 +147,7 @@ Every state or driver compare-and-swap workflow SHALL retry conflicts with bound
 - **WHEN** the bounded coordination retry deadline is exhausted
 - **THEN** the runtime raises an error rather than reporting success
 
-### Requirement: Execution mutations SHALL be serialized by embedded owner locks
+### Requirement: Driver mutations SHALL be serialized by owner locks
 Each `driver.json` SHALL contain a nullable owner lock. Lock acquisition SHALL use compare-and-swap to replace a null or expired lock with a fresh UUID4 owner. Every adapter invocation and `driver.json` mutation other than acquisition SHALL require the current owner and compare-and-swap against the latest driver object. `state.json` mutations SHALL use guarded CAS without requiring this lock. Unlock SHALL clear the lock only when the stored owner matches.
 
 #### Scenario: One driver acquires an unlocked execution

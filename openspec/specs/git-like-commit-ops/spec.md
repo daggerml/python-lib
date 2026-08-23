@@ -91,7 +91,7 @@ The system SHALL support checking out one DAG from a resolved revision into the 
 - **THEN** the system creates a new commit whose tree contains `train -> dag:a` and advances the current head
 
 #### Scenario: Checkout DAG with alias
-- **WHEN** `dml dag checkout origin/main train --as baseline_train` resolves `origin/main` to a commit containing `train -> dag:a`
+- **WHEN** DAG checkout selects fetched remote branch `main` containing `train -> dag:a` and aliases it as `baseline_train`
 - **THEN** the system creates a new commit whose tree contains `baseline_train -> dag:a` and advances the current head
 
 #### Scenario: Checkout refuses overwrite by default
@@ -110,8 +110,8 @@ The system SHALL accept every supported revision grammar form with local, remote
 - **THEN** the system resolves it as local branch `main`
 
 #### Scenario: Resolve remote-tracking branch shorthand
-- **WHEN** a command receives `origin/main` as a revision
-- **THEN** the system resolves it through the local tracking ref for remote `origin` branch `main`
+- **WHEN** a command receives `main` as a revision with `remote=True`
+- **THEN** the system resolves it through `.dml/refs/remote/heads/main`
 
 #### Scenario: Resolve first-parent ancestry from HEAD file
 - **WHEN** a command receives `HEAD~2` as a revision
@@ -141,19 +141,19 @@ The system SHALL support checking out repository state from a resolved revision 
 - **THEN** the system may create the new detached commit but does not advance any branch head and does not rewrite `.dml/HEAD`
 
 ### Requirement: Mutable project workflows require an attached branch
-The system SHALL require `.dml/HEAD` to be attached to a local branch before default project workflows mutate branch history or publish a branch tip. Default push SHALL use the current branch's configured upstream. If the current branch is untracked, default push SHALL publish to `origin/<local-branch>` and record that upstream only after publication succeeds.
+The system SHALL require `.dml/HEAD` to be attached to a local branch before default project workflows mutate branch history or publish a branch tip. Default push SHALL use the current branch's configured remote-root upstream. If the current branch is untracked, default push SHALL publish to the same branch name at `remote.root` and record that branch-only upstream after publication succeeds.
 
 #### Scenario: Push uses configured upstream
-- **WHEN** `.dml/HEAD` is attached to local branch `foo` tracking `research/main` and the user runs push
-- **THEN** the system pushes local branch `foo` to remote branch `research/main`
+- **WHEN** `.dml/HEAD` is attached to local branch `foo` tracking remote-root branch `main` and the user runs push
+- **THEN** the system pushes local branch `foo` to branch `main` at `remote.root`
 
-#### Scenario: First push establishes origin upstream
+#### Scenario: First push establishes same-name upstream
 - **WHEN** attached local branch `foo` has no upstream and the user runs push successfully
-- **THEN** the system publishes to `origin/foo`
-- **AND** configures `foo` to track `origin/foo`
+- **THEN** the system publishes branch `foo` at `remote.root`
+- **AND** configures local branch `foo` to track remote-root branch `foo`
 
 #### Scenario: Failed first push leaves branch untracked
-- **WHEN** attached local branch `foo` has no upstream and publication to `origin/foo` fails
+- **WHEN** attached local branch `foo` has no upstream and publication of remote-root branch `foo` fails
 - **THEN** `foo` remains untracked
 
 #### Scenario: Push requires attached HEAD
@@ -214,12 +214,12 @@ The system SHALL perform branch advancement in git-like commit workflows through
 The system SHALL provide repository inspection workflows for `show`, `log`, and `diff` that resolve revisions locally without performing implicit network fetches.
 
 #### Scenario: Show resolves revision locally
-- **WHEN** a user runs `dml show origin/main`
-- **THEN** the system resolves `origin/main` through existing local tracking state
+- **WHEN** a user runs `dml show main --remote`
+- **THEN** the system resolves `main` through existing remote-root tracking state
 - **AND** it does not contact the remote automatically
 
 #### Scenario: Diff resolves both revisions locally
-- **WHEN** a user runs `dml diff dml://alice/demo#main HEAD`
+- **WHEN** a user compares fetched remote branch `main` with `HEAD`
 - **THEN** the system resolves both revisions from local state only
 
 ### Requirement: Repository inspection SHALL expose shallow history safely
@@ -253,23 +253,23 @@ Merge, rebase, and revert SHALL proceed when all ancestry and merge-base facts r
 - **THEN** it fails without advancing the current branch
 
 ### Requirement: Branch creation and listing expose tracked remote workflows
-The system SHALL support `branch create [--remote REMOTE] [--revision REV] NAME`. `REMOTE` SHALL default to `origin`; the created local branch SHALL track `REMOTE/NAME`. When revision is omitted and `REMOTE/NAME` exists remotely, creation SHALL fetch that branch and initialize the local branch at its tip. Otherwise, omitted revision SHALL retain current-HEAD and unborn-branch behavior. An explicit revision SHALL always take precedence over a matching remote branch.
+The system SHALL support `branch create [--remote] [--revision REV] NAME`. Without `--remote`, revision resolution SHALL use local state. With `--remote`, revision resolution SHALL use existing remote-root tracking refs and the created branch SHALL track the same branch name at `remote.root`. Branch creation SHALL NOT fetch implicitly. An omitted revision SHALL retain current-HEAD and unborn-branch behavior.
 
 #### Scenario: Existing remote branch initializes new local branch
-- **WHEN** `dml branch create feature` is invoked and remote `origin` has branch `feature`
-- **THEN** the system fetches `origin/feature`, creates local `feature` at that commit, and configures it to track `origin/feature`
+- **WHEN** `dml branch create feature --revision feature --remote` is invoked after remote-root branch `feature` has been fetched
+- **THEN** the system creates local `feature` at the tracked commit and configures it to track remote-root branch `feature`
 
-#### Scenario: Selected remote initializes new local branch
-- **WHEN** `dml branch create --remote research feature` is invoked and remote `research` has branch `feature`
-- **THEN** the system creates local `feature` at the fetched `research/feature` commit and configures that upstream
+#### Scenario: Remote branch creation does not fetch implicitly
+- **WHEN** remote revision `feature` has not been fetched and branch creation selects remote tracking state
+- **THEN** branch creation fails without contacting `remote.root`
 
 #### Scenario: Explicit revision overrides remote tip
-- **WHEN** `dml branch create --revision HEAD~1 feature` is invoked and `origin/feature` exists
-- **THEN** local `feature` points to `HEAD~1` and tracks `origin/feature`
+- **WHEN** `dml branch create feature --revision HEAD~1` is invoked
+- **THEN** local `feature` points to `HEAD~1` without inferring a remote-root upstream
 
 #### Scenario: Missing remote branch uses current head
-- **WHEN** `dml branch create feature` is invoked, `origin/feature` does not exist, and HEAD resolves to a concrete commit
-- **THEN** local `feature` points to the current HEAD commit and tracks `origin/feature`
+- **WHEN** `dml branch create feature` is invoked and HEAD resolves to a concrete commit
+- **THEN** local `feature` points to the current HEAD commit without implicit fetch or upstream inference
 
 #### Scenario: Branch list omits unborn current branch
 - **WHEN** HEAD is attached to unborn branch `main`
@@ -322,25 +322,29 @@ The system SHALL compute commit-introduced change for `dml show` as DAG-map addi
 Git-like project command workflows SHALL be available through the shared internal `Dml` orchestration boundary, which coordinates commit, head, and remote operations while delegating concrete repository actions to lower-level ops classes.
 
 #### Scenario: Pull executes through Dml workflow
-- **WHEN** a caller invokes project pull with remote target, branch target, and user context
-- **THEN** `Dml` obtains project and remote context through `dml_context`, resolves any fuzzy selectors through its fuzzy-resolution submodule, performs remote synchronization, and applies merge behavior through internal ops
+- **WHEN** a caller invokes project pull with its current workflow inputs
+- **THEN** `Dml` obtains project and remote context through shared configuration, performs remote synchronization, and applies merge behavior through internal ops
 
 #### Scenario: Push executes through Dml workflow
-- **WHEN** a caller invokes project push with remote target and push options
-- **THEN** `Dml` obtains project and remote context through `dml_context`, performs project-aware remote push behavior through the relevant ops classes, and returns the push result through the shared boundary
+- **WHEN** a caller invokes project push with current push options
+- **THEN** `Dml` obtains project and remote context through shared configuration, performs project-aware remote push behavior through the relevant ops classes, and returns the push result through the shared boundary
 
 #### Scenario: Revert executes through Dml workflow
 - **WHEN** a caller invokes project revert with revision, branch target, and user context
-- **THEN** `Dml` resolves the revision through its fuzzy-resolution submodule and performs revert behavior through `CommitOps`
+- **THEN** `Dml` resolves the revision and performs revert behavior through repository ops
 
 #### Scenario: Checkout executes through Dml workflow
 - **WHEN** a caller invokes repository checkout with a revision value
-- **THEN** `Dml` resolves the revision through its fuzzy-resolution submodule and performs attached-vs-detached checkout behavior through the relevant ops classes
+- **THEN** `Dml` resolves the revision and performs attached-or-detached checkout behavior through repository ops
 
 #### Scenario: Init runs through Dml-owned project setup
-- **WHEN** a caller invokes repository init/bootstrap behavior
-- **THEN** `Dml` initializes project state under `.dml/` in the current location through the shared internal boundary instead of requiring a separate bootstrap entrypoint
+- **WHEN** a caller invokes repository init or bootstrap behavior
+- **THEN** `Dml` initializes project state under `.dml/` through the shared internal boundary instead of requiring a separate bootstrap entrypoint
 
 #### Scenario: Init recovers config-first partial state
-- **WHEN** `.dml/config.toml` exists but `.dml/db/` is missing at init time
-- **THEN** the Dml-owned init workflow uses `dml_context` to resolve bootstrap context, creates the missing DB state, and continues bootstrap behavior through the relevant ops classes
+- **WHEN** `.dml/config.json` contains only valid current keys but `.dml/db/` is missing at init time
+- **THEN** the Dml-owned init workflow creates the missing DB state and continues bootstrap behavior through the relevant ops classes
+
+#### Scenario: Init rejects obsolete partial config
+- **WHEN** partial project state contains `.dml/config.toml` or removed JSON keys
+- **THEN** init fails instead of interpreting or migrating the obsolete configuration

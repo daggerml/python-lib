@@ -24,7 +24,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 ### Codec module
 
-- Match: `src/daggerml/codecs.py`
+- Match: codec implementation in `src/daggerml/api.py` and `src/daggerml/contrib/codecs.py`
 - Read:
   - `docs/use/concepts/artifacts-data-codecs.md`
   - `docs/extend/reference/codec-contracts.md`

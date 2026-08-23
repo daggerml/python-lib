@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define repository bootstrap behavior when cloning from a remote root.
+
+## Requirements
 
 ### Requirement: Dml clone bootstraps from a remote root
 The system SHALL expose `Dml.clone(revision: Ref | str | None = None, /, *, project_home: str = ".", remote_root: str | None = None, depth: int | None = None, ...)`. It SHALL resolve the project endpoint exclusively through normal `remote.root` configuration precedence, require a valid resolved root, initialize the local repository, persist that resolved root, materialize the optional revision from the endpoint at the requested positive commit-history depth, and set HEAD to the resolved commit. Omitting depth SHALL materialize complete history. Branch revisions SHALL create an attached same-named local branch and upstream; tags, ancestry, and exact commits SHALL leave HEAD detached. Any accepted revision that cannot be materialized SHALL fail clone.

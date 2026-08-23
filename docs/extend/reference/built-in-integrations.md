@@ -10,9 +10,9 @@
 ## Script source injection
 
 `ScriptExecutor` accepts only `fn`, `prepop`, `extra_objs`, and `post_lines`.
-`extra_lines` is not a supported argument. It serializes the inspectable source
-of every `extra_objs` object first, then the function source, then literal
-`post_lines`, and validates the combined text as Python.
+It serializes the inspectable source of every `extra_objs` object first, then
+the function source, then literal `post_lines`, and validates the combined text
+as Python.
 
 The worker materializes that source as `_daggerml_live.py` and imports it as the
 top-level module `_daggerml_live`. The script therefore receives ordinary

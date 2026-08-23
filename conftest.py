@@ -7,6 +7,7 @@ import boto3
 import pytest
 
 import daggerml as dml
+from daggerml._core.remote import Remote
 
 
 def pytest_collection_modifyitems(items):
@@ -71,6 +72,7 @@ def s3_client(remote_env):
 @pytest.fixture
 def s3_bucket(s3_client):
     s3_client.create_bucket(Bucket="test-bucket")
+    Remote(os.environ["DML_REMOTE_ROOT"], n_workers=1, client=s3_client)
     return "test-bucket"
 
 

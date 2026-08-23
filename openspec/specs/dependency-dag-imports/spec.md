@@ -1,3 +1,8 @@
+## Purpose
+Define import-only dependency lifecycle and committed DAG loading behavior.
+
+## Requirements
+
 ### Requirement: Import-only dependency lifecycle
 The system SHALL expose `dml dep add <name> <root>`, `dml dep list`, and `dml dep delete <name>` for import-only endpoints under `.dml/refs/dep/<name>/`. Names SHALL be validated single path segments. Each dependency SHALL store v1 endpoint config containing exactly `backend` and `root` in `config.json` beside `heads/` and `tags/`; unknown fields SHALL be rejected. Endpoint identity SHALL NOT persist in DML objects.
 

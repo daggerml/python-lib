@@ -1,3 +1,8 @@
+## Purpose
+Define the public node-like predicate and its use in executor validation.
+
+## Requirements
+
 ### Requirement: is_node_like predicate exists in contrib API
 The system SHALL provide a public function `is_node_like(x)` in `daggerml.contrib.api` that returns `True` if and only if `x` is an instance of `Node`, `DelayedRef`, `DelayedLoad`, or `DelayedRunnable`.
 

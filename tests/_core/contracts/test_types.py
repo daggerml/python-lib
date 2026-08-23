@@ -10,7 +10,15 @@ import pytest
 from hypothesis import given, settings
 
 from daggerml._core.db import DmlDb as RawDmlDB
-from daggerml._core.db import DmlDbBusyError, DmlDbInvalidPathError, DmlDbMapFullError, DmlDbRegistryFullError, Ref
+from daggerml._core.db import (
+    DmlDbBusyError,
+    DmlDbInvalidPathError,
+    DmlDbInvalidTypeError,
+    DmlDbMapFullError,
+    DmlDbReadonlyTxnError,
+    DmlDbRegistryFullError,
+    Ref,
+)
 from daggerml._core.types import (
     NAMESPACES,
     Commit,
@@ -111,28 +119,6 @@ def test_txn_iter_returns_typed_objects(tmp_path) -> None:
     assert items == [(ref, ScalarDatum("value"))]
 
 
-def test_call_with_resize_wraps_typed_transaction(tmp_path) -> None:
-    db = make_db(tmp_path)
-    commit = db.init()
-    dag = Ref("dag:current")
-
-    with db.tx(readonly=True) as txn:
-        base_commit = txn.get(commit)
-
-    def write_index(txn):
-        return txn.put(Index(parents=[commit], tree=base_commit.tree, author="user", message="", dag=dag))
-
-    ref = db.call_with_resize(write_index)
-
-    with db.tx(readonly=True) as txn:
-        obj = txn.get(ref)
-
-    assert isinstance(obj, Index)
-    assert obj.parents == [commit]
-    assert obj.tree == base_commit.tree
-    assert obj.dag == dag
-
-
 def test_raw_db_write_with_growth_retries_until_commit(tmp_path) -> None:
     db = RawDmlDB(str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=64 * 1024, max_map_size=2 * 1024**2)
     with db.tx(map_size=64 * 1024, create_if_missing=True):
@@ -149,6 +135,16 @@ def test_raw_db_write_with_growth_retries_until_commit(tmp_path) -> None:
     assert attempts > 1
     with db.tx(readonly=True) as txn:
         assert txn.get(ref) == "x" * (200 * 1024)
+
+
+def test_raw_db_current_validation_and_transaction_errors_remain(tmp_path) -> None:
+    db = RawDmlDB(str(tmp_path), namespaces=sorted(NAMESPACES), map_size_headroom=64 * 1024, max_map_size=2 * 1024**2)
+    with db.tx(create_if_missing=True) as txn:
+        with pytest.raises(DmlDbInvalidTypeError):
+            txn.put(object(), ns="datum-scalar")
+    with db.tx(readonly=True) as txn:
+        with pytest.raises(DmlDbReadonlyTxnError):
+            txn.put("value", ns="datum-scalar")
 
 
 def test_raw_db_write_with_growth_retries_map_full_from_commit(tmp_path) -> None:

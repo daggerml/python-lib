@@ -89,14 +89,10 @@ cdef extern from "dml_value.h":
     ) nogil
 
 cdef extern from "dml_db.h":
-    int DML_DB_ERR_HANDLE_INVALID
-    int DML_DB_ERR_HANDLE_CLOSED
-    int DML_DB_ERR_HANDLE_FORKED
     int DML_DB_ERR_TXN_INVALID
     int DML_DB_ERR_TXN_READONLY
     int DML_DB_ERR_TXN_FORKED
     int DML_DB_ERR_INPUT_INVALID
-    int DML_DB_ERR_TYPE_INVALID
     int DML_DB_ERR_PATH_INVALID
     int DML_DB_ERR_REF_INVALID
     int DML_DB_ERR_NAMESPACE_INVALID
@@ -108,7 +104,6 @@ cdef extern from "dml_db.h":
     int DML_DB_ERR_BUSY
     int DML_DB_ERR_LMDB
     int DML_DB_ERR_INTERNAL
-    int DML_DB_ERR_ENV_REOPENED
     int DML_DB_ERR_REGISTRY_FULL
     int DML_DB_ERR_MAP_SIZE_MAX
 
@@ -377,36 +372,6 @@ class DmlDbError(Exception):
     """
     pass
 
-class DmlDbInvalidHandleError(DmlDbError):
-    """
-    Invalid database handle.
-
-    Notes
-    -----
-    Raised when a handle is NULL or uninitialized.
-    """
-    pass
-
-class DmlDbClosedError(DmlDbError):
-    """
-    Database handle is closed.
-
-    Notes
-    -----
-    Raised when operations use a closed handle.
-    """
-    pass
-
-class DmlDbForkedError(DmlDbError):
-    """
-    Database handle used after fork without reopen.
-
-    Notes
-    -----
-    Raised when a handle is reused across fork boundaries.
-    """
-    pass
-
 class DmlDbInvalidTxnError(DmlDbError):
     """
     Transaction is invalid or closed.
@@ -573,15 +538,6 @@ cdef inline object raise_if_error(int rc, str context):
     cls = RuntimeError
     if rc == 0:
         return
-    elif rc == DML_DB_ERR_HANDLE_INVALID:
-        cls = DmlDbInvalidHandleError
-        prefix = "database handle is invalid"
-    elif rc == DML_DB_ERR_HANDLE_CLOSED:
-        cls = DmlDbClosedError
-        prefix = "database handle is closed"
-    elif rc == DML_DB_ERR_HANDLE_FORKED:
-        cls = DmlDbForkedError
-        prefix = "database handle invalidated after process change"
     elif rc == DML_DB_ERR_TXN_INVALID:
         cls = DmlDbInvalidTxnError
         prefix = "invalid or closed transaction"
@@ -594,9 +550,6 @@ cdef inline object raise_if_error(int rc, str context):
     elif rc == DML_DB_ERR_INPUT_INVALID:
         cls = DmlDbInvalidInputError
         prefix = "invalid input"
-    elif rc == DML_DB_ERR_TYPE_INVALID:
-        cls = DmlDbInvalidTypeError
-        prefix = "invalid input type"
     elif rc == DML_DB_ERR_PATH_INVALID:
         cls = DmlDbInvalidPathError
         prefix = "invalid database path"
@@ -630,9 +583,6 @@ cdef inline object raise_if_error(int rc, str context):
     elif rc == DML_DB_ERR_INTERNAL:
         cls = DmlDbInternalError
         prefix = "internal database error"
-    elif rc == DML_DB_ERR_ENV_REOPENED:
-        cls = DmlDbForkedError
-        prefix = "database environment invalidated after process change"
     elif rc == DML_DB_ERR_REGISTRY_FULL:
         cls = DmlDbRegistryFullError
         prefix = "database registry is full"
@@ -987,9 +937,6 @@ cdef class DmlDb:
                     return fn(txn)
             except DmlDbMapFullError:
                 self.resize(create_if_missing=create_if_missing)
-
-    def call_with_resize(self, fn, bint create_if_missing=False):
-        return self.write_with_growth(fn, create_if_missing=create_if_missing)
 
 cdef class DmlDbTxn:
     """Daggerml database transaction handle."""

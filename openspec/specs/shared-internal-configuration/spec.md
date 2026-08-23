@@ -1,3 +1,8 @@
+## Purpose
+Define the canonical configuration model shared by the Python API and CLI.
+
+## Requirements
+
 ### Requirement: API and CLI use one shared internal configuration model
 The system SHALL resolve configuration through one canonical internal configuration model owned by `_internal`. Both `daggerml.api` and the CLI SHALL use that shared internal resolver rather than maintaining frontend-specific configuration semantics.
 
@@ -21,7 +26,7 @@ The system SHALL expose one shared internal resolver that supports `project/runt
 - **THEN** the resolver applies `explicit > environment variables > global config > defaults` without requiring a project config file
 
 ### Requirement: Canonical config parameters are reduced to one normalized set
-The system SHALL normalize supported configuration inputs into canonical internal parameters including `project.home`, `db.path`, `remote.root`, `user`, `default_branch`, hooks, `config_home`, and ephemeral `execution.id`. The canonical model SHALL NOT include project URI identity or named ordinary remotes.
+The system SHALL normalize supported configuration inputs into the exact canonical internal parameters owned by the current resolver. The canonical model SHALL NOT include project URI identity, named ordinary remotes, removed environment inputs, or unknown parameters. Persisted global and project configuration SHALL reject unsupported keys instead of ignoring or preserving them.
 
 #### Scenario: Remote root is the sole project endpoint parameter
 - **WHEN** project configuration is resolved
@@ -29,36 +34,38 @@ The system SHALL normalize supported configuration inputs into canonical interna
 
 #### Scenario: Branch and revision source are not config parameters
 - **WHEN** remote-backed configuration is resolved
-- **THEN** checkout branch and local/remote/dependency revision selection remain operation state rather than canonical config
+- **THEN** checkout branch and local, remote, or dependency revision selection remain operation state rather than canonical config
 
-#### Scenario: Execution identity remains canonical runtime state
-- **WHEN** execution-aware runtime code resolves session configuration
-- **THEN** the canonical internal model includes `execution.id`
-- **THEN** the canonical model includes ephemeral `execution.id`
+#### Scenario: Unknown persisted key is rejected
+- **WHEN** global or project JSON contains a key outside the canonical persisted configuration set
+- **THEN** resolution fails with an error identifying the unsupported key and source file
+
+#### Scenario: Removed project identity is rejected
+- **WHEN** persisted configuration contains `remote.project`, `remote.remotes`, or another removed project-identity field
+- **THEN** resolution fails instead of ignoring, preserving, or translating it
 
 ### Requirement: Multiple config sources normalize into the shared internal model
-The system SHALL treat explicit arguments, environment variables, project-local config, and global config as sources that feed the shared internal configuration model. Source-specific loading may differ, but normalization and precedence MUST be centralized in the shared internal resolver. Ephemeral runtime fields such as `execution.id` SHALL resolve from explicit input, then environment, then `null`, and SHALL NOT be loaded from project-local or global config files.
+The system SHALL treat explicit arguments, currently supported environment variables, project-local `.dml/config.json`, and global `<config_home>/config.json` as sources that feed the shared internal configuration model. Each persisted source SHALL be validated before precedence resolution. Source-specific loading may differ, but normalization and precedence MUST be centralized in the shared internal resolver. Ephemeral runtime fields SHALL NOT be loaded from persisted configuration.
 
 #### Scenario: Project-local and global config feed shared resolution
 - **WHEN** a frontend resolves configuration for an operation in a project directory
-- **THEN** project-local `.dml/config.json` and any applicable global config inputs are loaded as sources for the same shared internal resolution path
+- **THEN** project-local `.dml/config.json` and applicable global JSON config are validated and loaded through the same shared resolution path
 
 #### Scenario: Environment values are normalized centrally
-- **WHEN** configuration is resolved from environment variables
+- **WHEN** configuration is resolved from supported environment variables
 - **THEN** the shared internal resolver, not the frontend, maps those values into the canonical internal configuration model
 
-#### Scenario: Execution identity is explicit-or-env only
-- **WHEN** `execution.id` is resolved
-- **THEN** the shared internal resolver applies `explicit > environment > null`
-- **AND** it does not load `execution.id` from project-local or global config files
+#### Scenario: Removed environment variable has no compatibility mapping
+- **WHEN** an environment variable from a removed configuration model is present
+- **THEN** it does not populate, alias, or override any canonical parameter
 
 #### Scenario: Init project layout creation delegates to shared internal helper
-- **WHEN** the shared `Dml` init/bootstrap workflow must create missing project layout artifacts for a local project
-- **THEN** it delegates filesystem bootstrap work to shared internal project-layout helper logic instead of duplicating directory and config-file writes across orchestration helpers
+- **WHEN** the shared `Dml` init workflow must create missing project layout artifacts
+- **THEN** it delegates filesystem bootstrap work to shared project-layout logic instead of duplicating JSON config writes
 
 #### Scenario: Init resolves explicit options through shared resolver
-- **WHEN** a caller provides init-time options for project/runtime configuration
-- **THEN** the shared `Dml` init/bootstrap workflow resolves them through the shared internal resolver before mutating project state
+- **WHEN** a caller provides init-time configuration options
+- **THEN** the shared `Dml` init workflow resolves them through the shared internal resolver before mutating project state
 
 ### Requirement: Dml exposes a canonical config-var construction path
 The system SHALL expose a `Dml` construction path that accepts the flattened canonical config-var keys used by the shared internal resolver, while the Python constructor surface uses Python-friendly keyword names.
@@ -70,25 +77,6 @@ The system SHALL expose a `Dml` construction path that accepts the flattened can
 #### Scenario: Python constructor does not require dot-notation kwargs
 - **WHEN** a caller constructs `Dml` through Python keyword arguments
 - **THEN** the caller uses Python-friendly parameter names rather than canonical dot-notation keys
-
-### Requirement: Project URI is normalized and exposes helper accessors
-The system SHALL normalize and canonicalize local `remote.project` as an optional branchless project identity through shared revision URI utilities. Resolved configuration SHALL treat checkout state as repository state owned by `.dml/HEAD` rather than as a selector embedded in config.
-
-#### Scenario: Local project URI remains branchless when configured
-- **WHEN** `remote.project` is resolved for local project configuration
-- **THEN** shared configuration preserves canonical branchless form `dml://<owner>/<project>`
-
-#### Scenario: Local project configuration may omit project URI
-- **WHEN** local project configuration omits `remote.project`
-- **THEN** shared configuration resolves successfully without deriving project identity from other inputs
-
-#### Scenario: Tag or branch selector is not accepted for local project config
-- **WHEN** local project configuration provides `remote.project` with a branch or tag selector
-- **THEN** configuration resolution fails instead of translating that selector into checkout state
-
-#### Scenario: Project helper accessors do not expose current checkout branch
-- **WHEN** resolved configuration includes `remote.project`
-- **THEN** helper accessors expose project identity only and do not treat config as the source of the active branch or detached commit
 
 ### Requirement: DB path can be overridden but defaults from project home
 The system SHALL resolve `db.path` with the same precedence as other `project/runtime` parameters, and when no higher-precedence value is provided it SHALL default to `<project.home>/.dml/db/`.
@@ -117,7 +105,7 @@ The system SHALL document only those public `Dml` workflows that remain unavaila
 - **THEN** both frontends use the same shared internal configuration rules for that capability
 
 ### Requirement: CLI explicit override names mirror canonical config parameters
-The CLI SHALL name explicit configuration override flags after the canonical parameters they populate in the shared internal resolver whenever those parameters are exposed directly to users.
+The CLI SHALL name explicit configuration override flags after the current canonical parameters they populate. It SHALL NOT expose aliases or flags for removed configuration parameters.
 
 #### Scenario: Project-home flag maps to canonical parameter
 - **WHEN** the CLI resolves an explicit local project path override
@@ -129,6 +117,6 @@ The CLI SHALL name explicit configuration override flags after the canonical par
 - **THEN** it reads that value from a flag named after `remote.root`
 - **AND** it forwards the value into shared resolution as `remote.root`
 
-#### Scenario: Existing canonical names remain unchanged
-- **WHEN** the CLI exposes other explicit config-shaped overrides such as `--remote-project` or `--config-home`
-- **THEN** those flags continue using the established canonical names rather than introducing alternate aliases
+#### Scenario: Removed override has no alias
+- **WHEN** CLI arguments are generated from current workflows
+- **THEN** removed names such as `--remote-project` are not accepted or displayed

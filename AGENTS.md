@@ -4,5 +4,5 @@
 - In your final summary/PR notes, list the docs you consulted.
 - For contributor workflow rules and test layout, see `CONTRIBUTING.md`.
 - For OpenSpec planning and spec-governance material, see `openspec/README.md`.
-- When a function runs through the script executor (`@api.funkify(uri="script", ...)`), only the function source and explicitly injected `extra_objs`/`extra_lines` are available in the worker; module-level imports/globals are not.
+- When a function runs through the script executor (`@api.funkify(uri="script", ...)`), only the function source and explicitly injected `extra_objs`/`post_lines` are available in the worker; module-level imports/globals are not.
 - Keep script-executed functions self-contained: import dependencies inside the function body or inject them explicitly, or runtime `NameError` failures can appear at the call site.

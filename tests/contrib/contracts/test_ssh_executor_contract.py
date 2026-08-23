@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
+from daggerml._core.types import DmlRepoError
 from daggerml.contrib.executors.ssh import SshExecutor
 
 
@@ -20,7 +23,7 @@ def test_ssh_poll_forwards_adapter_state_on_nested_wire(monkeypatch) -> None:
 
     def run(command, *, input, capture_output, check, text):
         calls.append((command, json.loads(input)))
-        response = {"status": "running", "error": None, "adapter_state": {"poll": 2}, "dag_id": None}
+        response = {"status": "retry", "error": None, "adapter_state": {"poll": 2}}
         return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
 
     monkeypatch.setattr("daggerml.contrib.executors.ssh.subprocess.run", run)
@@ -58,7 +61,7 @@ def test_ssh_cancel_forwards_argv_ref_on_nested_wire(monkeypatch) -> None:
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec/",
         cancel_requested_by="user",
-        argv_ptr="node-argv:abc",
+        argv_ref="node-argv:abc",
     )
 
     payload = calls[0][1]
@@ -66,7 +69,6 @@ def test_ssh_cancel_forwards_argv_ref_on_nested_wire(monkeypatch) -> None:
     assert payload["adapter_state"] == {"job": "running"}
     assert payload["argv_ref"] == "node-argv:abc"
     assert "state" not in payload
-    assert "argv_ptr" not in payload
 
 
 def test_ssh_cancel_with_null_requester_remains_cancel_operation(monkeypatch) -> None:
@@ -87,7 +89,7 @@ def test_ssh_cancel_with_null_requester_remains_cancel_operation(monkeypatch) ->
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec/",
         cancel_requested_by=None,
-        argv_ptr="node-argv:abc",
+        argv_ref="node-argv:abc",
     )
 
     assert payloads[0]["operation"] == "cancel"
@@ -110,7 +112,53 @@ def test_ssh_cancel_preserves_nested_retry(monkeypatch) -> None:
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec/",
         cancel_requested_by="user",
-        argv_ptr="node-argv:abc",
+        argv_ref="node-argv:abc",
+    )
+
+    assert result == response
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"status": "running", "adapter_state": {}},
+        {"status": "retry", "error": None},
+        {"status": "provider-error"},
+        {"status": "success", "error": "contradiction"},
+    ],
+)
+def test_ssh_nested_malformed_response_raises_protocol_error(monkeypatch, response) -> None:
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.ssh.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr=""),
+    )
+
+    with pytest.raises(DmlRepoError, match="unexpected result"):
+        SshExecutor().poll(
+            cache_key="ck",
+            execution_id="exec",
+            runnable=_runnable(),
+            state={"poll": 1},
+            remote={"root": "s3://bucket/root"},
+            scratch_uri="s3://bucket/root/exec/io/exec/",
+        )
+
+
+def test_ssh_nested_provider_failure_preserves_diagnostics(monkeypatch) -> None:
+    response = {"status": "provider-error", "error": "backend unavailable", "adapter_state": {}}
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.ssh.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr=""),
+    )
+
+    result = SshExecutor().poll(
+        cache_key="ck",
+        execution_id="exec",
+        runnable=_runnable(),
+        state={},
+        remote={"root": "s3://bucket/root"},
+        scratch_uri="s3://bucket/root/exec/io/exec/",
     )
 
     assert result == response

@@ -79,14 +79,14 @@ The runtime SHALL retain separate caller-edge objects for reverse lineage and or
 - **THEN** `e1` may remain in `e0`'s spawned execution summary
 
 ### Requirement: Failed child registration SHALL roll back unrealized caller edges
-When a launch writes a caller edge but fails to register the child in the caller's locked execution record, it SHALL remove that edge before surfacing failure. If the launch created a fresh execution but lost or failed cache-pointer publication, it SHALL conditionally delete only its unchanged execution record. Reused current executions and their cache pointers SHALL remain intact.
+When a launch writes `exec/edges/<child>/<caller>.json` but fails to register the child by CAS-updating the caller's `state.json` lineage arrays, it SHALL remove that edge before surfacing failure. If the launch created a fresh execution but lost or failed cache-pointer publication, it SHALL conditionally delete only its unchanged owned `metadata.json`, `state.json`, and `driver.json` objects. Reused current executions, their split records, and their cache pointers SHALL remain intact. No singular edge path or unified execution object SHALL be consulted.
 
 #### Scenario: Fresh registration failure cleans owned artifacts
-- **WHEN** fresh execution `e1` cannot be registered under caller `e0`
-- **THEN** the runtime removes edge `e1 <- e0`
-- **AND** it conditionally removes only fresh artifacts still owned by that launch
+- **WHEN** fresh execution `e1` cannot be registered in caller `e0`'s `state.json`
+- **THEN** the runtime removes `exec/edges/e1/e0.json`
+- **AND** it conditionally removes only unchanged split artifacts still owned by that launch
 
 #### Scenario: Reused execution survives registration failure
 - **WHEN** registration fails after resolving shared current execution `e1`
-- **THEN** the runtime removes only the attempted caller edge
-- **AND** it preserves `execution/e1` and its cache pointer
+- **THEN** the runtime removes only attempted edge `exec/edges/e1/e0.json`
+- **AND** it preserves all `exec/execution/e1/` split files and its cache pointer

@@ -43,7 +43,7 @@ def square(dag, number):
     return number.value() ** 2
 ```
 
-Script workers receive function source, not module globals. Import dependencies inside the funk, or inject inspectable helpers with `extra_objs` and source lines with `extra_lines`. Remote-backed execution and cache coordination require `remote.root`.
+Script workers receive function source, not module globals. Import dependencies inside the funk, or inject inspectable helpers with `extra_objs` and source lines with `post_lines`. Remote-backed execution and cache coordination require `remote.root`.
 
 ```python
 # Wrong: this module-level import is unavailable in the script worker.
@@ -103,7 +103,7 @@ Never run administrative work while pulling or synchronizing the same project:
 ```bash
 # Do not run these concurrently.
 dml pull
-dml admin gc
+dml gc
 ```
 
 ## Boundaries

@@ -111,7 +111,7 @@ def compute_stats(dag, value):
     return variance(value.value())
 ```
 
-Note that we must include both `mean` and `variance`. One can include other things like `import numpy as np` via `extra_lines`:
+Note that we must include both `mean` and `variance`. One can include other things like `import numpy as np` via `post_lines`:
 
 ```python
 # foo/bar.py
@@ -120,14 +120,14 @@ import numpy as np
 def variance(vals):
     return np.variance(vals)
 
-@api.funkify(extra_objs=(variance,), extra_lines=["import numpy as np"])
+@api.funkify(extra_objs=(variance,), post_lines=["import numpy as np"])
 def compute_stats(dag, value):
     return variance(value.value())
 ```
 
 ### Do not run administrative work while pulling
 
-Do not run `dml admin` commands concurrently with `dml pull` or other remote synchronization against the same local repository. In particular, local garbage collection can remove an object while a pull is materializing a remote object graph, leaving the materialized graph with a missing dependency. Run administrative work only after synchronization has completed.
+Do not run maintenance commands such as `dml gc` concurrently with `dml pull` or other remote synchronization against the same local repository. In particular, local garbage collection can remove an object while a pull is materializing a remote object graph, leaving the materialized graph with a missing dependency. Run maintenance work only after synchronization has completed.
 
 ### Shallow history limits ancestry operations
 

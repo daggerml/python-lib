@@ -1,3 +1,8 @@
+## Purpose
+Define the audience, organization, and boundaries of human-facing project documentation.
+
+## Requirements
+
 ### Requirement: `docs/` SHALL be reserved for human-facing project documentation
 The repository SHALL treat `docs/` as the human-facing project documentation surface that describes DaggerML as it exists, while agent-facing change-planning artifacts remain in `openspec/` and maintainer workflow rules live outside `docs/`.
 

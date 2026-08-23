@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define read-only node projections and provenance-context traversal.
+
+## Requirements
 
 ### Requirement: Committed DAG collection traversal SHALL return read-only projections when no persisted node exists for the selected subvalue
 The public API SHALL expose a read-only `Projection` object for committed-DAG dict/list traversal whenever a selected subvalue does not correspond to a standalone persisted node ref.

@@ -5,6 +5,7 @@ from typing import Any
 from warnings import warn
 
 from daggerml import Ref
+from daggerml._core.exec_state import validate_adapter_response
 from daggerml.api import DmlRepoError, _entry_points
 
 
@@ -52,7 +53,7 @@ class ExecutorBase:
         return {"status": "success", "error": None}
 
     def cancel(
-        self, cache_key, execution_id, runnable, state, remote, scratch_uri, cancel_requested_by, argv_ptr=None
+        self, cache_key, execution_id, runnable, state, remote, scratch_uri, cancel_requested_by, argv_ref=None
     ) -> dict[str, Any]:
         raise NotImplementedError("This executor does not support cancellation")
 
@@ -116,8 +117,14 @@ class ExecutorBase:
             raise DmlRepoError("adapter_state must be an object or null")
         requested_by = payload.get("requested_by")
         argv_ref = payload.get("argv_ref")
-        if operation == "cancel" and (not isinstance(argv_ref, str) or not argv_ref):
-            raise DmlRepoError("Cancel operation requires a non-empty argv_ref")
+        try:
+            valid_argv_ref = isinstance(argv_ref, str) and Ref(argv_ref).ns() == "node-argv"
+        except (TypeError, ValueError):
+            valid_argv_ref = False
+        if operation == "cancel" and not valid_argv_ref:
+            raise DmlRepoError("Cancel operation requires a node-argv ref")
+        if operation == "cancel" and requested_by is not None and not isinstance(requested_by, str):
+            raise DmlRepoError("Cancel operation requested_by must be a string or null")
         try:
             valid_result_ref = isinstance(payload.get("result_ref"), str) and Ref(payload["result_ref"]).ns() == "dag"
         except (TypeError, ValueError):
@@ -134,7 +141,7 @@ class ExecutorBase:
                 remote=remote,
                 scratch_uri=scratch_uri,
                 cancel_requested_by=requested_by,
-                argv_ptr=argv_ref,
+                argv_ref=argv_ref,
             )
         elif operation == "cleanup":
             result = executor.cleanup(
@@ -163,12 +170,16 @@ class ExecutorBase:
                 remote=remote,
                 scratch_uri=scratch_uri,
             )
-        state = result.pop("state", None)
-        if isinstance(state, dict):
-            result["adapter_state"] = state
-        elif not isinstance(result.get("adapter_state"), dict):
-            result.pop("adapter_state", None)
-        return result
+        if not isinstance(result, dict):
+            raise DmlRepoError("Executor response must be a JSON object")
+        if "state" in result and "adapter_state" in result:
+            raise DmlRepoError("Executor response cannot contain both state and adapter_state")
+        if "state" in result:
+            result["adapter_state"] = result.pop("state")
+        return validate_adapter_response(
+            result,
+            success_status="cancelled" if operation == "cancel" else "success",
+        )
 
 
 ################################################################################

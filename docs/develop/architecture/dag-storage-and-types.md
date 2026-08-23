@@ -21,12 +21,13 @@ a particular object family.
 which wraps the native LMDB implementation under `c/`. Database objects live
 in `.dml/db`; the filesystem stores lightweight control pointers such as
 `.dml/HEAD`, local branch refs, mutable runtime refs, remote-tracking refs, and
-`.dml/config.toml`.
+`.dml/config.json`.
 
-`.dml/shallow.json` is versioned local availability metadata containing exact
-commit refs intentionally absent behind materialized history. It does not alter
-`Commit.parents` or any content-derived identity. A materialized commit always
-retains a complete tree/DAG closure; only a declared commit parent may be absent.
+`.dml/shallow.json` is exact version-0 local availability metadata containing a
+sorted, unique list of exact commit refs intentionally absent behind
+materialized history. It does not alter `Commit.parents` or any content-derived
+identity. A materialized commit always retains a complete tree/DAG closure;
+only a declared commit parent may be absent.
 
 Object identity and reachability depend on the explicit ref graph. Local
 garbage collection starts from live pointers and removes unreachable objects;

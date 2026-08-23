@@ -1,3 +1,8 @@
+## Purpose
+Keep authoring helpers and tests free of type-checking no-op casts.
+
+## Requirements
+
 ### Requirement: Contrib authoring helpers SHALL not use `cast(..., Any)` no-ops
 The system SHALL preserve the current `api.dagclass`, `api.run`, and `api.funkify` behavior without using `cast(..., Any)` in their implementation.
 

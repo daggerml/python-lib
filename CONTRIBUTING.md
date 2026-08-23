@@ -83,8 +83,7 @@ This section is for contributors maintaining or restructuring the test suite.
 - `tests/integration/`: multi-component or infrastructure-dependent tests.
 - `tests/_core/contracts/`: fast, isolated tests for `daggerml._core` contracts.
 - `tests/_core/integration/`: multi-component or infrastructure-dependent tests for `daggerml._core`.
-- Existing folders such as `tests/_internal/` and `tests/contrib/` may remain during migration, but new or refactored suites should target `tests/contracts/` or `tests/integration/`.
-- Subsystem-owned suites such as `tests/_core/` may keep `contracts/` and `integration/` subdirectories under the subsystem root when the subsystem API is stable enough to warrant marker-based selection.
+- Subsystem-owned suites such as `tests/_core/`, `tests/api/`, and `tests/contrib/` keep `contracts/` and `integration/` subdirectories under the subsystem root.
 
 #### File naming
 
@@ -111,12 +110,11 @@ This section is for contributors maintaining or restructuring the test suite.
 - Contract tests in `tests/contracts/` should stay unmarked and fast by default.
 - Tests under `tests/_core/` are marked `@pytest.mark.core` by `tests/_core/conftest.py` and remain included in default pytest runs.
 
-#### Migration policy
+#### Taxonomy maintenance
 
-- Migration is full replacement, not indefinite dual maintenance.
-- When a legacy test is superseded by a new contract-structured test, remove the legacy test in the same change set or immediately after parity is confirmed.
-- During migration, preserve traceability by carrying canonical contract IDs into new parameterized case IDs.
-- The end state is for all maintained tests to align to this taxonomy.
+- Keep each maintained behavior in one taxonomy-aligned location.
+- Remove a superseded or duplicate test when its replacement coverage is added.
+- Preserve canonical contract IDs in replacement parameterized case IDs where applicable.
 
 ## Migration Rollout Policy
 

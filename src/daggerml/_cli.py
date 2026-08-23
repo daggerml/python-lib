@@ -194,31 +194,24 @@ class PrettyArgumentParser(argparse.ArgumentParser):
 
 class _GroupedSubParsersAction(argparse._SubParsersAction):
     class _GroupedChoicePseudoAction(argparse._SubParsersAction._ChoicesPseudoAction):
-        def __init__(self, name: str, aliases: tuple[str, ...], help: str | None, category: str) -> None:
-            super().__init__(name, aliases, help)
+        def __init__(self, name: str, help: str | None, category: str) -> None:
+            super().__init__(name, (), help)
             self.category = category
 
     def add_parser(self, name: str, *, category: str = "command", **kwargs: Any):
         if kwargs.get("prog") is None:
             kwargs["prog"] = f"{self._prog_prefix} {name}"
 
-        aliases = tuple(kwargs.pop("aliases", ()))
-
         if name in self._name_parser_map:
             raise argparse.ArgumentError(self, f"conflicting subparser: {name}")
-        for alias in aliases:
-            if alias in self._name_parser_map:
-                raise argparse.ArgumentError(self, f"conflicting subparser alias: {alias}")
 
         if "help" in kwargs:
             help_text = kwargs.pop("help")
-            choice_action = self._GroupedChoicePseudoAction(name, aliases, help_text, category)
+            choice_action = self._GroupedChoicePseudoAction(name, help_text, category)
             self._choices_actions.append(choice_action)
 
         parser = self._parser_class(**kwargs)
         self._name_parser_map[name] = parser
-        for alias in aliases:
-            self._name_parser_map[alias] = parser
         return parser
 
 

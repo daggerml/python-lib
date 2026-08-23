@@ -20,11 +20,11 @@ class ExecutorSpec:
 
     @staticmethod
     def start(**kwargs):
-        return {"status": "running", "error": None, "state": {}}
+        return {"status": "retry", "error": None, "adapter_state": {}}
 
     @staticmethod
     def poll(**kwargs):
-        return {"status": "running", "error": None, "state": {}}
+        return {"status": "retry", "error": None, "adapter_state": {}}
 
     @staticmethod
     def cleanup(**kwargs):

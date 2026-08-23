@@ -65,6 +65,6 @@ for an unmarked reusable terminal result. Pass one or more `index:` or
 not invalidation targets. `runtime.cancel(execution=Ref(...), max_retries=3)`
 names its execution argument explicitly and likewise requires a `Ref`.
 
-Cache and remote GC require `remote.root`; local GC does not. Remote GC never targets import-only dependencies. The removed `session.admin.remote` and `session.admin.gc` paths have no compatibility aliases.
+Cache and remote GC require `remote.root`; local GC does not. Remote GC never targets import-only dependencies.
 
 For the higher-level `daggerml.contrib.api` helpers, including `funkify`, `ref`, `load`, `dagclass`, and `run`, see [author a DAG](../guides/author-a-dag.md).

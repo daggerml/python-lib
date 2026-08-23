@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define the documentation path for contributors developing DaggerML itself.
+
+## Requirements
 
 ### Requirement: Contributor documentation SHALL provide a Develop DaggerML path
 The documentation SHALL provide a Develop DaggerML path for contributors changing DaggerML itself, including development setup, testing, codebase orientation, and stable architecture documentation.

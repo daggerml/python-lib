@@ -1,3 +1,8 @@
+## Purpose
+Define normalized initialization inputs for local and remote-backed repositories.
+
+## Requirements
+
 ### Requirement: Init accepts optional remote capabilities
 The init operation MUST accept optional `remote_root`. It MUST allow that value to be omitted for local-only repository bootstrap and MUST NOT accept `remote_project`.
 

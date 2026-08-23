@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 
+import pytest
+
 from daggerml._cli import MethodCLI
 from daggerml._core import Dml, Ref
 
@@ -126,6 +128,36 @@ def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None
 
     parsed = cli.parser.parse_args(["gc", "--remote"])
     assert parsed.remote is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        ["admin", "remote", "get-cache", "cache-key"],
+        ["admin", "remote", "invalidate-cache", "index:e1"],
+        ["admin", "gc"],
+        ["admin", "remote", "gc"],
+    ],
+)
+def test_cli_removed_maintenance_routes_are_rejected(route) -> None:
+    cli = MethodCLI(Dml, prog="dml")
+
+    with pytest.raises(SystemExit, match="2"):
+        cli.parser.parse_args(route)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        ["cache", "get", "cache-key"],
+        ["cache", "invalidate", "index:e1"],
+        ["gc"],
+        ["gc", "--remote"],
+        ["admin", "agent-skill"],
+    ],
+)
+def test_cli_canonical_maintenance_routes_are_accepted(route) -> None:
+    MethodCLI(Dml, prog="dml").parser.parse_args(route)
 
 
 def test_cli_shallow_clone_fetch_and_pull_options_are_generated() -> None:

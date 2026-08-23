@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from daggerml import Uri
+from daggerml._core.types import DmlRepoError
 from daggerml.contrib.executors.batch import BatchExecutor
 from daggerml.util import get_client
 
@@ -178,3 +181,25 @@ def test_contrib_batch_cancel_reports_backend_failure(monkeypatch):
 
     assert result["status"] == "failure"
     assert "terminate failed" in result["error"]
+
+
+def test_contrib_batch_poll_rejects_diagnosticless_nested_failure(monkeypatch):
+    class Client:
+        def describe_jobs(self, **kwargs):
+            return {"jobs": [{"status": "SUCCEEDED"}]}
+
+    monkeypatch.setattr(BatchExecutor, "_client", lambda self: Client())
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.batch._read_scratch_output",
+        lambda uri: json.dumps({"status": "provider-error"}),
+    )
+
+    with pytest.raises(DmlRepoError, match="invalid nested adapter output"):
+        BatchExecutor().poll(
+            cache_key="ck",
+            execution_id="exec",
+            runnable={},
+            state={"job_id": "job-1"},
+            remote={"root": "s3://bucket/root"},
+            scratch_uri="s3://bucket/root/exec/io/exec/",
+        )

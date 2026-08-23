@@ -46,7 +46,7 @@ def test_agent_skill_002__has_portable_metadata_and_required_guidance() -> None:
         "the funk source imports NumPy in its worker",
         "    import numpy as np",
         "extra_objs",
-        "extra_lines",
+        "post_lines",
         "remote.root",
         "@api.dagclass",
         "Dagclasses compose",

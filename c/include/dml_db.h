@@ -1,5 +1,5 @@
-#ifndef DAGGERML_DML_CORE2_H
-#define DAGGERML_DML_CORE2_H
+#ifndef DAGGERML_DML_DB_H
+#define DAGGERML_DML_DB_H
 
 #include <stddef.h>
 
@@ -18,28 +18,23 @@ typedef struct DmlObjCollection {
 
 enum {
     DML_DB_OK = 0,
-    DML_DB_ERR_HANDLE_INVALID = -1,
-    DML_DB_ERR_HANDLE_CLOSED = -2,
-    DML_DB_ERR_HANDLE_FORKED = -3,
-    DML_DB_ERR_TXN_INVALID = -4,
-    DML_DB_ERR_TXN_READONLY = -5,
-    DML_DB_ERR_TXN_FORKED = -6,
-    DML_DB_ERR_INPUT_INVALID = -7,
-    DML_DB_ERR_TYPE_INVALID = -8,
-    DML_DB_ERR_PATH_INVALID = -9,
-    DML_DB_ERR_REF_INVALID = -10,
-    DML_DB_ERR_NAMESPACE_INVALID = -11,
-    DML_DB_ERR_NOT_FOUND = -12,
-    DML_DB_ERR_KEY_EXISTS = -13,
-    DML_DB_ERR_MSGPACK = -14,
-    DML_DB_ERR_NOMEM = -15,
-    DML_DB_ERR_MAP_FULL = -16,
-    DML_DB_ERR_BUSY = -17,
-    DML_DB_ERR_LMDB = -18,
-    DML_DB_ERR_INTERNAL = -19,
-    DML_DB_ERR_ENV_REOPENED = -20,
-    DML_DB_ERR_REGISTRY_FULL = -21,
-    DML_DB_ERR_MAP_SIZE_MAX = -22
+    DML_DB_ERR_TXN_INVALID = -1,
+    DML_DB_ERR_TXN_READONLY = -2,
+    DML_DB_ERR_TXN_FORKED = -3,
+    DML_DB_ERR_INPUT_INVALID = -4,
+    DML_DB_ERR_PATH_INVALID = -5,
+    DML_DB_ERR_REF_INVALID = -6,
+    DML_DB_ERR_NAMESPACE_INVALID = -7,
+    DML_DB_ERR_NOT_FOUND = -8,
+    DML_DB_ERR_KEY_EXISTS = -9,
+    DML_DB_ERR_MSGPACK = -10,
+    DML_DB_ERR_NOMEM = -11,
+    DML_DB_ERR_MAP_FULL = -12,
+    DML_DB_ERR_BUSY = -13,
+    DML_DB_ERR_LMDB = -14,
+    DML_DB_ERR_INTERNAL = -15,
+    DML_DB_ERR_REGISTRY_FULL = -16,
+    DML_DB_ERR_MAP_SIZE_MAX = -17
 };
 
 int dml_db_txn_open(
@@ -49,9 +44,9 @@ int dml_db_txn_open(
     const int readonly,
     const int create_if_missing,
     size_t map_size,
-    DmlDbHandle **out_handle
+    DmlDbHandle **out_txn
 );
-int dml_db_txn_close(DmlDbHandle **p_handle, const int commit);
+int dml_db_txn_close(DmlDbHandle **p_txn, const int commit);
 int dml_db_resize(
     const char *path,
     const char *const *namespaces,
@@ -63,7 +58,7 @@ int dml_db_resize(
 );
 
 int dml_db_put(
-    DmlDbHandle **p_handle,
+    DmlDbHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -74,7 +69,7 @@ int dml_db_put(
     DmlValue **out_ref
 );
 int dml_db_get(
-    DmlDbHandle **p_handle,
+    DmlDbHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -83,14 +78,14 @@ int dml_db_get(
     DmlValue **out_value
 );
 int dml_db_del(
-    DmlDbHandle **p_handle,
+    DmlDbHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
     size_t key_len
 );
 int dml_db_exists(
-    DmlDbHandle **p_handle,
+    DmlDbHandle **p_txn,
     const char *ns,
     size_t ns_len,
     const char *key,
@@ -98,14 +93,14 @@ int dml_db_exists(
     int *out_exists
 );
 int dml_db_iter_keys(
-    struct DmlDbHandle **p_handle,
+    struct DmlDbHandle **p_txn,
     const char *ns,
     const char *start_token,
     DmlObjCollection *out_page
 );
 void dml_db_free_obj_collection(DmlObjCollection *page);
 int dml_db_list_orphans(
-    struct DmlDbHandle **p_handle,
+    struct DmlDbHandle **p_txn,
     const char *const *start_refs,
     size_t start_refs_count,
     const char *const *missing_commit_refs,

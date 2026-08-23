@@ -1,5 +1,5 @@
 ## Purpose
-Define contract-testing taxonomy, canonical identifier practices, and migration guardrails so maintained tests stay non-duplicative, traceable, and fast-path friendly.
+Define contract-testing taxonomy and canonical identifier practices so maintained tests stay non-duplicative, traceable, and fast-path friendly.
 
 ## Requirements
 
@@ -18,6 +18,17 @@ The repository SHALL organize maintained tests by contract intent with distinct 
 - **WHEN** a maintained test primarily targets `daggerml._core`
 - **THEN** it is placed under `tests/_core/contracts/` or `tests/_core/integration/` according to contract or integration intent
 
+### Requirement: Maintained tests use one steady-state taxonomy
+The repository SHALL keep each maintained contract or integration behavior in its current subsystem-owned test location and SHALL remove superseded, duplicate, migration-only, and alias-only tests. Archived migration evidence SHALL NOT impose an active ledger or dual-suite requirement.
+
+#### Scenario: Maintained contract has one owner
+- **WHEN** a behavior is covered by the current contract or integration taxonomy
+- **THEN** no superseded legacy suite duplicates that behavior
+
+#### Scenario: Historical ledger remains archival only
+- **WHEN** contributors update current tests
+- **THEN** they follow the current taxonomy and contract IDs without updating an archived migration ledger
+
 ### Requirement: Core tests are marker-selectable by subsystem
 The repository SHALL mark tests collected under `tests/_core/` with a registered `core` pytest marker while keeping those tests included in default pytest selection.
 
@@ -32,21 +43,6 @@ The repository SHALL mark tests collected under `tests/_core/` with a registered
 #### Scenario: Default selection includes core tests
 - **WHEN** contributors run pytest without marker exclusion
 - **THEN** tests collected from `tests/_core/` remain included by default
-
-### Requirement: Core test migration preserves existing coverage content
-The `_core` test reorganization SHALL preserve the existing test suite content during relocation.
-
-#### Scenario: No tests are added during relocation
-- **WHEN** `_core` tests are moved into `tests/_core/`
-- **THEN** the change does not introduce additional test cases beyond the existing `_core` test cases
-
-#### Scenario: No tests are deleted during relocation
-- **WHEN** `_core` tests are moved into `tests/_core/`
-- **THEN** every existing `_core` test case remains represented in the reorganized suite
-
-#### Scenario: Test bodies preserve behavior
-- **WHEN** `_core` tests are renamed or moved
-- **THEN** their assertions, parametrization, generated-input bounds, and behavioral coverage remain unchanged
 
 ### Requirement: Core fixtures are local to the core test subtree
 Shared fixtures and support objects used only by `_core` tests SHALL live under `tests/_core/` rather than in a top-level test fixture module.
@@ -106,32 +102,6 @@ Integration tests SHALL be marked `@pytest.mark.slow` so they can be excluded fr
 #### Scenario: Fast test selection excludes integration tests
 - **WHEN** contributors run `pytest -m "not slow"`
 - **THEN** tests marked `slow` are excluded and the remaining suite represents the fast-path contract checks
-
-### Requirement: Legacy test suite is fully migrated and superseded tests are removed
-The repository SHALL fully migrate maintained tests to the target taxonomy and remove superseded legacy tests after parity. Duplicate revision and source-selection parsing checks SHALL be removed after centralized matrix coverage exists.
-
-#### Scenario: Duplicate revision parsing checks are removed
-- **WHEN** revision grammar and source-selection forms are covered by the centralized matrix
-- **THEN** workflow tests retain only operational invariants
-
-#### Scenario: External-process tests remain slow
-- **WHEN** a test requires subprocesses, polling, or remote roundtrips
-- **THEN** it remains classified as slow
-
-### Requirement: Migration ledger governs parity and removal
-The repository SHALL track migration progress in a ledger that maps canonical contract IDs from legacy tests to migrated tests and records parity evidence before legacy removal.
-
-#### Scenario: Batch plan records concrete suite order and risk
-- **WHEN** migration planning is established
-- **THEN** the ledger records bounded batch order with risk levels and exit criteria for each batch
-
-#### Scenario: Contract mapping is explicit for each migrated suite
-- **WHEN** a suite is selected for migration
-- **THEN** the ledger records canonical contract IDs and old/new test file mappings for that suite
-
-#### Scenario: Legacy test removal requires parity evidence
-- **WHEN** a legacy suite is proposed for removal
-- **THEN** the ledger includes passing evidence for targeted migrated suites, `pytest -m "not slow"`, and full `pytest` prior to removal
 
 ### Requirement: Core tests cover meaningful contracts only
 Maintained tests for `daggerml._core` SHALL verify behavior that is contractually important, failure-prone, or concurrency-sensitive, and SHALL avoid trivial parser or delegation examples that do not exercise meaningful risk.
@@ -272,14 +242,3 @@ Maintained integration tests for `daggerml.api` SHALL use a live initialized `Dm
 #### Scenario: Live API integration does not duplicate core contract coverage
 - **WHEN** a behavior is already covered by `_core` contract or integration tests
 - **THEN** public API integration tests assert only the user-visible wrapper workflow needed to prove the API layer composes correctly with live `Dml`
-
-### Requirement: Core rewrite removes superseded legacy tests after parity
-The `_core` rewrite SHALL replace legacy `tests/_core/*` coverage with taxonomy-aligned contract and integration tests, and SHALL remove superseded legacy tests after parity is demonstrated.
-
-#### Scenario: Legacy core tests are removed after contract parity
-- **WHEN** a legacy `_core` test's meaningful behavior is represented by a new contract or integration test
-- **THEN** the legacy test is removed rather than maintained in parallel
-
-#### Scenario: Core rewrite preserves fast-path feedback
-- **WHEN** contributors run the rewritten fast `_core` test selection on the maintainer machine
-- **THEN** the selection completes in under 2 seconds, excluding tests that are explicitly classified as slow by the taxonomy

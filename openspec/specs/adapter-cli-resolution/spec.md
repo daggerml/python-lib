@@ -1,4 +1,7 @@
-## ADDED Requirements
+## Purpose
+Define how symbolic adapter names resolve to concrete command-line identities before execution.
+
+## Requirements
 
 ### Requirement: Runtime adapter execution SHALL use only concrete command-line adapter identities
 Any runnable that reaches adapter execution SHALL carry an adapter value that is directly command-line-callable from the runtime environment or is an explicit executable path. Runtime adapter execution SHALL NOT reinterpret that value as symbolic sugar, SHALL NOT consult the adapter registry to repair it, and SHALL NOT fall back to Python import-based `cli()` invocation.
@@ -44,7 +47,7 @@ Author-facing APIs MAY accept symbolic adapter names as sugar, but the adapter r
 - **AND** runtime execution treats that resolved command as canonical for that runnable
 
 ### Requirement: Builtin execution SHALL use an explicit empty-adapter exception
-The only runtime execution path that MAY accept `adapter = ""` is the explicit builtin-function branch where the runtime detects builtin execution directly and does not shell out to an adapter process.
+The runtime SHALL accept `adapter = ""` only in the explicit builtin-function branch where it detects builtin execution directly and does not shell out to an adapter process.
 
 #### Scenario: Builtin function bypasses adapter execution
 - **WHEN** runtime execution handles a builtin function such as `get` or `concat`

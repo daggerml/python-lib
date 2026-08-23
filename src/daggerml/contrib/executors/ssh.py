@@ -7,6 +7,7 @@ import subprocess
 from typing import Any, TypedDict, cast
 
 from daggerml import Runnable, Uri
+from daggerml._core.exec_state import validate_adapter_response
 from daggerml.api import DmlRepoError
 from daggerml.contrib.api import is_node_like
 from daggerml.contrib.executors._base import ExecutorBase
@@ -72,7 +73,7 @@ class SshExecutor(ExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
         cancel_requested_by: str | None,
-        argv_ptr: str | None = None,
+        argv_ref: str | None = None,
     ) -> dict[str, Any]:
         return self._send_nested(
             cache_key=cache_key,
@@ -83,7 +84,7 @@ class SshExecutor(ExecutorBase):
             operation="cancel",
             adapter_state=state,
             cancel_requested_by=cancel_requested_by,
-            argv_ref=argv_ptr,
+            argv_ref=argv_ref,
         )
 
     def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
@@ -181,19 +182,14 @@ class SshExecutor(ExecutorBase):
                 "error": f"SSH nested adapter returned invalid JSON: {e}",
                 "adapter_state": adapter_state or {},
             }
-        if not isinstance(result.get("status"), str) or not result["status"]:
+        try:
+            result = validate_adapter_response(
+                result,
+                success_status="cancelled" if operation == "cancel" else "success",
+            )
+        except DmlRepoError as exc:
             logger.debug("ssh executor unexpected result execution_id=%s result=%r", execution_id, result)
-            return {
-                "status": "failure",
-                "error": f"SSH nested adapter returned unexpected result: {result}",
-                "adapter_state": adapter_state or {},
-            }
-        if result.get("status") == "retry" and not isinstance(result.get("adapter_state"), dict):
-            return {
-                "status": "failure",
-                "error": "SSH nested adapter response missing object adapter_state",
-                "adapter_state": adapter_state or {},
-            }
+            raise DmlRepoError(f"SSH nested adapter returned unexpected result: {exc}") from exc
         logger.debug(
             "ssh executor result execution_id=%s status=%s error=%r",
             execution_id,

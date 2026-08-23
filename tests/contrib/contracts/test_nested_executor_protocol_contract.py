@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
+from daggerml._core.types import DmlRepoError
 from daggerml.contrib.executors.docker import DockerExecutor
 from daggerml.contrib.executors.lambda_ import LambdaExecutorBase
 from daggerml.contrib.executors.script import ScriptExecutor
@@ -78,11 +81,33 @@ def test_docker_cancel_preserves_adapter_state(monkeypatch) -> None:
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec/",
         cancel_requested_by="user",
-        argv_ptr="node-argv:abc",
+        argv_ref="node-argv:abc",
     )
 
     assert result["state"] == {"container_id": "container-1"}
     assert result["status"] == "failure"
+
+
+def test_docker_poll_rejects_malformed_nested_response(monkeypatch) -> None:
+    monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda command: "/docker")
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.docker.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="exited", stderr=""),
+    )
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.docker._read_scratch_output",
+        lambda uri: json.dumps({"status": "provider-error"}),
+    )
+
+    with pytest.raises(DmlRepoError, match="invalid nested adapter output"):
+        DockerExecutor().poll(
+            cache_key="ck",
+            execution_id="exec",
+            runnable={},
+            state={"container_id": "container-1"},
+            remote={"root": "s3://bucket/root"},
+            scratch_uri="s3://bucket/root/exec/io/exec/",
+        )
 
 
 def test_docker_cleanup_retries_active_then_prunes_idempotently(monkeypatch) -> None:

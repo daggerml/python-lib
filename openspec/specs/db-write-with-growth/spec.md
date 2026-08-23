@@ -4,7 +4,7 @@ Define replayable local LMDB writes that grow the map through commit or terminal
 ## Requirements
 
 ### Requirement: Replayable local writes grow the map until terminal outcome
-The typed DB layer SHALL provide an internal `write_with_growth(fn)` operation for replayable local write functions. It SHALL execute `fn` in a write transaction and return its result only after that transaction commits.
+The typed DB layer SHALL provide `write_with_growth(fn)` as the sole growth-aware write operation for replayable local write functions. It SHALL execute `fn` in a write transaction and return its result only after that transaction commits. The DB layer SHALL NOT expose a `call_with_resize` alias or another compatibility name for this operation.
 
 #### Scenario: Map-full during a write operation
 - **WHEN** `fn` or its transaction commit reports map-full before the configured maximum map size is reached
@@ -22,6 +22,11 @@ The typed DB layer SHALL provide an internal `write_with_growth(fn)` operation f
 #### Scenario: Map-full at configured maximum
 - **WHEN** a write reports map-full and the current map is already at the configured maximum map size
 - **THEN** the DB layer SHALL raise a terminal capacity error that identifies the database path, current map size, and configured maximum
+
+#### Scenario: Removed resize alias is unavailable
+- **WHEN** a caller inspects the supported typed or raw DB facade
+- **THEN** `write_with_growth` is the only growth-aware write entry point
+- **AND** `call_with_resize` is not exposed
 
 ### Requirement: Retried write functions are local and replayable
 The `fn` passed to `write_with_growth` SHALL contain only deterministic local database work that is safe to repeat after its transaction aborts. Core mutation flows SHALL keep external side effects outside `fn`.

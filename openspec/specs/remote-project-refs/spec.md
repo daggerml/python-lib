@@ -16,23 +16,23 @@ The system SHALL store branch and tag refs directly under `refs/{heads,tags}/` w
 - **THEN** its ref path is `refs/tags/v1.0.json`
 
 ### Requirement: Remote descriptor rejects incompatible layouts
-The system SHALL store a versioned descriptor at each one-project endpoint root. First publication to a truly empty root SHALL conditionally create the current descriptor before other remote state. Missing descriptors on non-empty roots and unsupported or legacy descriptors SHALL be rejected before reading or mutating refs.
+The system SHALL store the exact current descriptor at each one-project endpoint root with `schema` set to the non-boolean integer `0`. First publication SHALL inspect the entire endpoint root, including sibling project and execution prefixes, and conditionally create the descriptor only when no object exists anywhere under that root. A present descriptor SHALL match the exact version-0 shape. A missing descriptor on a non-empty root or any malformed, extra-field, boolean, nonzero, or otherwise unsupported descriptor SHALL fail before reading or mutating remote state.
 
 #### Scenario: Current descriptor is accepted
-- **WHEN** an endpoint descriptor declares the supported one-project layout version
-- **THEN** remote operations may use its direct refs, CAS, cache, and execution paths
+- **WHEN** an endpoint descriptor exactly declares schema integer `0` and the current one-project layout fields
+- **THEN** remote operations may use its direct refs, CAS, cache, execution, edge, and IO paths
 
 #### Scenario: First push initializes empty root
-- **WHEN** first publication observes a root with no descriptor or DML transport state
-- **THEN** it conditionally creates the current descriptor and proceeds only if that initialization wins any race
+- **WHEN** first publication observes no descriptor and no object anywhere under the endpoint root
+- **THEN** it conditionally creates the exact version-0 descriptor and proceeds only if that initialization wins any race
 
 #### Scenario: Missing descriptor on non-empty root is rejected
-- **WHEN** a root has DML transport state but no descriptor
-- **THEN** remote operations fail without modifying that root
+- **WHEN** the descriptor is absent but an object exists under the endpoint execution prefix
+- **THEN** initialization fails without writing a descriptor or changing that object
 
 #### Scenario: Legacy descriptor is rejected
-- **WHEN** an endpoint identifies the prior owner/project layout
-- **THEN** the operation fails with migration guidance before reading or writing project refs
+- **WHEN** a descriptor has another version, a boolean version, a missing or extra field, or another field value
+- **THEN** remote operations fail without parsing, migrating, or modifying endpoint state
 
 ### Requirement: Remote root is the sole project endpoint
 The system SHALL use resolved `remote.root` for project synchronization, CAS, cache, execution coordination, and remote maintenance. Named dependencies SHALL be import-only endpoints and SHALL NOT replace `remote.root` for these operations.
@@ -65,275 +65,194 @@ Depth-limited fetch SHALL update a local tracking ref only after every included 
 - **AND** no invalid shallow boundary is exposed through that ref
 
 ### Requirement: Branch heads are mutable and project tags are immutable
-The system SHALL allow project branch head refs to move through safe update operations. The system SHALL reject a non-forced attempt to overwrite an existing project tag ref and SHALL allow a forced attempt to replace it.
+The system SHALL allow direct endpoint branch head refs to move through safe update operations. The system SHALL reject a non-forced attempt to overwrite an existing tag ref and SHALL allow a forced attempt to replace it.
 
 #### Scenario: Branch head update
-- **WHEN** a push safely advances project `alice/demo` branch `main`
-- **THEN** the existing `refs/projects/alice/demo/heads/main.json` ref may be replaced by the new branch head payload
+- **WHEN** a push safely advances branch `main`
+- **THEN** `refs/heads/main.json` may be replaced by the new branch head payload
 
 #### Scenario: Tag overwrite rejected
-- **WHEN** `refs/projects/alice/demo/tags/v1.0.json` already exists
+- **WHEN** `refs/tags/v1.0.json` already exists
 - **THEN** publishing tag `v1.0` fails without changing the existing tag ref
 
 #### Scenario: Forced tag overwrite succeeds
-- **WHEN** `refs/projects/alice/demo/tags/v1.0.json` already exists and push requests force
+- **WHEN** `refs/tags/v1.0.json` already exists and push requests force
 - **THEN** publishing tag `v1.0` replaces the existing tag ref with the requested commit
 
 ### Requirement: Project refs use typed object ref payloads
-The system SHALL encode project branch and tag refs as typed remote ref payloads containing `ref.to`, `created`, and `metadata`.
-
-Project branch and tag refs SHALL point to `commit` objects and SHALL fail before writing the ref if the target object is missing or is not a `commit` root.
-
-Project ref `metadata` remains unconstrained in this change.
+The system SHALL encode direct endpoint branch and tag refs as typed remote ref payloads containing exactly `ref.to`, `created`, and `metadata`. Branch and tag refs SHALL point to `commit` objects and SHALL fail before writing if the target object is missing or is not a commit root.
 
 #### Scenario: Project branch ref payload
-- **WHEN** project `alice/demo` branch `main` is written
-- **THEN** `refs/projects/alice/demo/heads/main.json` contains `ref.to = "commit:<oid>"`, integer `created`, and object `metadata`
+- **WHEN** branch `main` is written
+- **THEN** `refs/heads/main.json` contains `ref.to = "commit:<oid>"`, integer `created`, and object `metadata`
 
 #### Scenario: Project tag ref payload
-- **WHEN** project `alice/demo` tag `v1.0` is written
-- **THEN** `refs/projects/alice/demo/tags/v1.0.json` contains `ref.to = "commit:<oid>"`, integer `created`, and object `metadata`
+- **WHEN** tag `v1.0` is written
+- **THEN** `refs/tags/v1.0.json` contains `ref.to = "commit:<oid>"`, integer `created`, and object `metadata`
 
 #### Scenario: Project ref root validation fails closed
-- **WHEN** a project branch or tag ref would point to a missing object or a non-`commit` root
+- **WHEN** a branch or tag ref would point to a missing object or a non-commit root
 - **THEN** the write fails without creating or updating the project ref
 
 ### Requirement: Shared remote CAS
-The system SHALL store immutable CAS objects in a shared remote CAS under `cas/sha256/<aa>/<bb>/<oid>` independent of owner, project, or branch.
+The system SHALL store immutable CAS objects under `cas/sha256/<aa>/<bb>/<oid>` for the sole project endpoint, independent of branch or tag.
 
 #### Scenario: Two projects reference same object
-- **WHEN** two project refs point to commit graphs that include the same CAS object
+- **WHEN** two endpoint refs point to commit graphs that include the same CAS object
 - **THEN** the remote stores that CAS object at one shared CAS path
 
 ### Requirement: Global DML config
-The system SHALL load global DML config from `$DML_CONFIG_HOME/config.toml`, `$XDG_CONFIG_HOME/dml/config.toml`, or `~/.config/dml/config.toml` in that precedence order.
+The system SHALL load global DML configuration as JSON from `<config_home>/config.json`, where `config_home` resolves from explicit input, `DML_CONFIG_HOME`, `XDG_CONFIG_HOME/dml`, then `~/.config/dml`. It SHALL NOT read a TOML compatibility path.
+
+#### Scenario: DML config home wins over fallback
+- **WHEN** explicit config home is absent and `DML_CONFIG_HOME` is set
+- **THEN** the system reads global config from `$DML_CONFIG_HOME/config.json`
 
 #### Scenario: DML config home wins
-- **WHEN** `DML_CONFIG_HOME` is set
-- **THEN** the system reads global config from `$DML_CONFIG_HOME/config.toml`
+- **WHEN** `config_home` is provided explicitly or through `DML_CONFIG_HOME`
+- **THEN** the system reads global config from the resolved `<config_home>/config.json`
 
 #### Scenario: XDG config home fallback
-- **WHEN** `DML_CONFIG_HOME` is unset and `XDG_CONFIG_HOME` is set
-- **THEN** the system reads global config from `$XDG_CONFIG_HOME/dml/config.toml`
+- **WHEN** explicit config home and `DML_CONFIG_HOME` are absent and `XDG_CONFIG_HOME` is set
+- **THEN** the system reads global config from `$XDG_CONFIG_HOME/dml/config.json`
 
 #### Scenario: Default config fallback
-- **WHEN** neither `DML_CONFIG_HOME` nor `XDG_CONFIG_HOME` is set
-- **THEN** the system reads global config from `~/.config/dml/config.toml`
+- **WHEN** no explicit, DML, or XDG config home is set
+- **THEN** the system reads global config from `~/.config/dml/config.json`
 
 ### Requirement: Global user defaults
-The system SHALL use global config for user defaults and bootstrap hook configuration.
+The system SHALL use supported global JSON configuration for the current user and default branch name without deriving owner/project identity.
 
 #### Scenario: Default project owner
-- **WHEN** global config contains `[user].name = "alice"` and `dml init demo` omits an owner
-- **THEN** the project owner is `alice`
+- **WHEN** global JSON config contains a supported `user` value
+- **THEN** the resolved user is that value without deriving or persisting project-owner identity
 
 #### Scenario: Default branch
-- **WHEN** global config contains `[defaults].branch = "main"` and `dml init demo` omits a branch
-- **THEN** the initial branch is `main`
+- **WHEN** global JSON config contains `default.branch_name = "main"`
+- **THEN** the default branch is `main`
 
 ### Requirement: Local remote config
-The system SHALL store project-local config under `.dml/config.toml` containing branchless project identity and remote storage settings. The current checkout branch MUST NOT be stored in local config.
+The system SHALL store project-local configuration at `.dml/config.json` using only supported current keys. `remote.root` SHALL be the sole project endpoint setting. Local config SHALL NOT contain project URI, owner, project name, named remotes, checkout branch, or removed compatibility fields, and unknown persisted keys SHALL be rejected.
 
 #### Scenario: Resolve origin main
-- **WHEN** local config defines project identity `dml://alice/demo` and the attached local branch is `main`
-- **THEN** `dml push` resolves the default remote target as project owner `alice`, project `demo`, and branch `main`
+- **WHEN** local config contains `remote.root` and local HEAD is attached to `main`
+- **THEN** push resolves direct endpoint branch `main` without an `origin` alias or project identity
 
 #### Scenario: Project fields are stored
-- **WHEN** local project config is written for project `alice/demo`
-- **THEN** `.dml/config.toml` contains `[project].uri = "dml://alice/demo"` and does not contain branch-selection fields
+- **WHEN** local project configuration is written
+- **THEN** `.dml/config.json` contains only supported current keys and no project URI, owner, or name fields
 
 #### Scenario: Remote fields are stored
-- **WHEN** local project config records the remote storage URI for project `alice/demo`
-- **THEN** `.dml/config.toml` contains the configured `[remote]` fields and no local checkout branch field
+- **WHEN** local project configuration records its endpoint
+- **THEN** `.dml/config.json` contains supported `remote.root` JSON and no named-remote or checkout fields
 
 #### Scenario: Reject branch-qualified local project URI
-- **WHEN** local config would store `dml://alice/demo#main` or `dml://alice/demo@v1`
-- **THEN** config validation fails without writing the selector-bearing URI
+- **WHEN** local JSON contains a project URI, whether branchless or selector-qualified
+- **THEN** configuration validation fails without preserving or translating it
 
 ### Requirement: Config waterfall precedence
-The system SHALL resolve configurable values using explicit CLI/API arguments first, environment variables second, and config file values last. Checkout-state selection is not part of this waterfall and SHALL be resolved from `.dml/HEAD`.
+The system SHALL resolve current configurable values using explicit API or CLI arguments, supported environment variables, project JSON, global JSON, then defaults. Checkout-state selection SHALL remain outside this waterfall and resolve from `.dml/HEAD`.
 
 #### Scenario: Explicit value wins over environment
-- **WHEN** a command receives an explicit mutable branch argument and environment variables also provide configuration inputs
-- **THEN** the command uses the explicit branch argument for that mutable branch target
+- **WHEN** an explicit canonical value and its supported environment variable are both provided
+- **THEN** resolution uses the explicit value
 
 #### Scenario: Environment does not override checkout state
-- **WHEN** a command omits an explicit branch argument and environment variables are resolved
-- **THEN** the command still derives the current checkout from `.dml/HEAD` rather than from configuration environment variables
+- **WHEN** supported configuration environment variables are resolved
+- **THEN** checkout still derives from `.dml/HEAD`
 
 #### Scenario: Config used as fallback for non-checkout values
-- **WHEN** a command omits explicit overrides and no matching environment value is set
-- **THEN** the command uses configured values such as `remote.project`, `remote.root`, or `default_branch` but not a config-derived current branch
+- **WHEN** explicit and environment values are absent
+- **THEN** resolution uses supported project JSON, global JSON, then default values
 
 #### Scenario: Remote storage env vars override config
-- **WHEN** `DML_REMOTE_BUCKET` or `DML_REMOTE_PREFIX` is set for a remote operation
-- **THEN** the command uses the environment value instead of the configured remote storage field
+- **WHEN** supported `DML_REMOTE_ROOT` and persisted `remote.root` are both present
+- **THEN** resolution uses `DML_REMOTE_ROOT`
 
 ### Requirement: Supported DML environment variables
-The system SHALL support only the DML environment variables defined for the project model and SHALL treat hook context variables as output-only process context. `DML_BRANCH` is not a supported environment variable.
+The system SHALL support only `DML_CONFIG_HOME`, `DML_DB_PATH`, `DML_DEFAULT_DB_MAP_SIZE_HEADROOM`, `DML_DEFAULT_DB_MAP_SIZE_MAX`, `DML_DEFAULT_BRANCH_NAME`, `DML_REMOTE_PRUNE_AGE_SECONDS`, `DML_PROJECT_HOME`, `DML_REMOTE_ROOT`, `DML_REMOTE_FETCH_WORKERS`, and `DML_USER` as current configuration inputs. Retired `DML_DEFAULT_BRANCH`, `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, `DML_REMOTE_PROJECT`, `DML_REMOTE_NAME`, `DML_BRANCH`, `DML_REMOTE`, `DML_REMOTE_BUCKET`, `DML_REMOTE_PREFIX`, `DML_REPO`, `DML_DYNAMODB_TABLE`, `DML_REMOTE_CACHE`, and `DML_HOOK` SHALL NOT influence resolution, act as aliases, or be synthesized as hook context.
 
 #### Scenario: Global config home override
 - **WHEN** `DML_CONFIG_HOME` is set
-- **THEN** the global DML config directory resolves from `DML_CONFIG_HOME`
+- **THEN** it supplies the canonical global config directory
 
 #### Scenario: Existing user env remains supported
-- **WHEN** `DML_USER` is set and an owner is omitted
-- **THEN** the system uses `DML_USER` as the default project owner
+- **WHEN** `DML_USER` is set
+- **THEN** it supplies the canonical user value without project-owner semantics
 
 #### Scenario: DML_BRANCH is rejected as unsupported
-- **WHEN** `DML_BRANCH` is set during project or runtime command resolution
-- **THEN** the system does not use it as checkout state or branch selection input
+- **WHEN** `DML_BRANCH` is set
+- **THEN** it does not affect checkout or configuration resolution
 
 #### Scenario: Project env overrides config
-- **WHEN** `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, or `DML_REMOTE_PROJECT` is set
-- **THEN** the corresponding project config value is overridden for that command
+- **WHEN** removed project-identity variables are set
+- **THEN** they do not override or populate any canonical config value
 
 #### Scenario: Remote env overrides config
-- **WHEN** `DML_REMOTE_ROOT`, `DML_REMOTE_BUCKET`, or `DML_REMOTE_PREFIX` is set
-- **THEN** the corresponding remote selection or storage value is overridden for that command
+- **WHEN** `DML_REMOTE_ROOT` is set
+- **THEN** it supplies the canonical `remote.root` value
 
 #### Scenario: Hook context env is provided by DML
-- **WHEN** a hook command runs
-- **THEN** DML sets `DML_HOOK`, `DML_PROJECT_HOME`, and, for clone hooks, `DML_REMOTE_NAME`
+- **WHEN** a current operation executes without a hook capability
+- **THEN** no retired hook, project-name, project-owner, or named-remote context contract is synthesized
 
 ### Requirement: Project commands use project-local state and current env names only
-The system SHALL resolve project-local state from the project directory and SHALL use only the current supported environment variable surface for git-like project operations.
+The system SHALL resolve project-local state from `<project-directory>/.dml/config.json`, `.dml/HEAD`, local refs, and `.dml/db/`, and SHALL use only current supported environment variables.
 
 #### Scenario: Project config comes from the project directory
-- **WHEN** a project command resolves project-local config
-- **THEN** it reads from `<project-directory>/.dml/config.toml`
+- **WHEN** a project command resolves local config
+- **THEN** it reads `<project-directory>/.dml/config.json`
 
 #### Scenario: DML_REPO is not used for project database
-- **WHEN** a project command opens the local object database
-- **THEN** it uses `<project-directory>/.dml/db/` and does not use `DML_REPO`
+- **WHEN** a project command opens the object database
+- **THEN** it uses `<project-directory>/.dml/db/` and does not consult `DML_REPO`
 
 #### Scenario: DML_REMOTE_ROOT is not used for named remotes
-- **WHEN** a remote project command resolves remote storage
-- **THEN** it uses named remote bucket/prefix config or `DML_REMOTE_BUCKET` and `DML_REMOTE_PREFIX`, not `DML_REMOTE_ROOT`
+- **WHEN** a project command requires remote storage
+- **THEN** it uses `DML_REMOTE_ROOT` as canonical `remote.root` and does not construct a named remote
 
 #### Scenario: Removed execution/cache env vars are ignored
-- **WHEN** `DML_DYNAMODB_TABLE` or `DML_REMOTE_CACHE` is set during a git-like project operation
-- **THEN** the operation does not use those values
+- **WHEN** removed execution or cache environment variables are set
+- **THEN** they do not affect the current project command
 
 ### Requirement: Project directory initialization
-The system SHALL initialize local project state under `<project-directory>/.dml/` for `init`.
+The system SHALL initialize current local project state under `<project-directory>/.dml/` without creating obsolete configuration or synthetic history.
 
 #### Scenario: Init creates DML directory
-- **WHEN** `dml init demo` succeeds
-- **THEN** the system creates `demo/.dml/`, `demo/.dml/config.toml`, `.dml/HEAD`, and local database storage under `demo/.dml/db/`
+- **WHEN** initialization succeeds
+- **THEN** it creates `.dml/config.json`, `.dml/HEAD`, `.dml/refs/`, and `.dml/db/` using only current formats
 
 #### Scenario: Init refuses existing child directory
-- **WHEN** `dml init demo` runs and `demo/` already exists
-- **THEN** init fails and instructs the user to initialize that directory with `dml init --here demo`
+- **WHEN** child-directory initialization targets an existing directory
+- **THEN** it fails without altering that directory and directs the caller to initialize in place
 
 #### Scenario: Init here creates DML directory in current directory
-- **WHEN** `dml init --here demo` succeeds from the current directory
-- **THEN** the system creates `.dml/`, `.dml/config.toml`, `.dml/HEAD`, and local database storage under `.dml/db/`
+- **WHEN** in-place initialization succeeds
+- **THEN** it creates the current `.dml/` layout in that directory
 
 #### Scenario: Init here uses provided project name
-- **WHEN** `dml init --here demo` succeeds from directory `workdir`
-- **THEN** the local project name is `demo`
+- **WHEN** obsolete project-name input is supplied to in-place initialization
+- **THEN** no project identity is persisted or inferred from that name
 
 #### Scenario: Init creates DML gitignore
-- **WHEN** `dml init demo` succeeds
-- **THEN** the system writes `demo/.dml/.gitignore` containing `*`
+- **WHEN** initialization succeeds
+- **THEN** it creates the current `.dml/.gitignore` policy for local mutable state
 
 #### Scenario: Init creates unborn attached HEAD
-- **WHEN** `dml init demo` succeeds
-- **THEN** the system creates `demo/.dml/`, `demo/.dml/config.toml`, `.dml/HEAD`, and local database storage under `demo/.dml/db/`
-- **AND** `.dml/HEAD` is attached to the default branch
-- **AND** the corresponding local branch ref file does not exist yet
+- **WHEN** a repository is initialized before its first commit
+- **THEN** `.dml/HEAD` is attached to the default branch and the corresponding local branch ref does not exist yet
 
 #### Scenario: Init does not create initial empty commit
-- **WHEN** `dml init demo` succeeds
-- **THEN** local storage does not contain a synthetic initial empty commit solely to materialize the branch tip
+- **WHEN** initialization succeeds
+- **THEN** local storage does not contain a synthetic empty commit solely to materialize the branch tip
+
+#### Scenario: Obsolete config is not created
+- **WHEN** initialization writes project configuration
+- **THEN** it does not create `.dml/config.toml` or any project-identity compatibility field
 
 #### Scenario: Detached init without commit is rejected
-- **WHEN** init is requested in detached mode before any commit exists
-- **THEN** init fails because detached HEAD requires a concrete commit
-
-### Requirement: Init shell hooks
-The system SHALL support `post-init` shell hooks from global DML config that run in the project directory after `.dml/` exists.
-
-#### Scenario: Init hook succeeds
-- **WHEN** a `post-init` hook command is configured and `dml init demo` runs
-- **THEN** the hook command runs in the `demo` project directory after `demo/.dml/` exists
-
-#### Scenario: Init here hook succeeds
-- **WHEN** a `post-init` hook command is configured and `dml init --here demo` runs
-- **THEN** the hook command runs in the current directory after `.dml/` exists
-
-#### Scenario: Hooks run in configured order
-- **WHEN** multiple `post-init` hook commands are configured and `dml init demo` runs
-- **THEN** the hook commands run in their configured list order
-
-#### Scenario: Init no-hooks skips hooks
-- **WHEN** `dml init --no-hooks demo` runs
-- **THEN** no `post-init` hook commands run
-
-#### Scenario: Hook environment omits removed branch env
-- **WHEN** a `post-init` hook command runs
-- **THEN** the process environment includes `DML_HOOK`, `DML_PROJECT_HOME`, `DML_PROJECT_NAME`, `DML_PROJECT_OWNER`, and `DML_CONFIG_HOME`, and does not include `DML_BRANCH`
-
-### Requirement: DML URIs track fetched remote refs
-The system SHALL track fetched remote branches and tags locally by configured remote name and branch or tag name. A remote-tracking selector SHALL use `<remote-name>/<branch-name>` for branches and `<remote-name>@<tag-name>` for tags.
-
-#### Scenario: Store fetched branch tracking ref
-- **WHEN** `dml fetch origin` fetches remote branch `main`
-- **THEN** local storage tracks it as `origin/main` pointing to the resolved commit
-
-#### Scenario: Store fetched tag tracking ref
-- **WHEN** `dml fetch origin` fetches remote tag `v1.0`
-- **THEN** local storage tracks it as `origin@v1.0` pointing to the resolved commit
-
-#### Scenario: Tracking ref stores commit pointer
-- **WHEN** a fetched remote ref is persisted locally
-- **THEN** the persisted tracking ref contains the resolved commit pointer
-
-#### Scenario: Remote tracking selector resolves locally
-- **WHEN** a user-facing command receives `origin/main`
-- **THEN** the command resolves it locally through the tracking ref for `origin/main`
-
-### Requirement: Remote operations parse DML URIs
-The system SHALL parse and canonicalize DML revision URIs through one centralized shared revision URI parser/stringifier boundary before deriving remote project ref paths.
-
-#### Scenario: Push parses branch URI through shared parser
-- **WHEN** push targets canonical URI `dml://alice/demo#main`
-- **THEN** remote operations derive `refs/projects/alice/demo/heads/main.json` from the shared parsed revision object
-
-#### Scenario: Fetch parses tag URI through shared parser
-- **WHEN** fetch targets canonical URI `dml://alice/demo@v1.0`
-- **THEN** remote operations derive `refs/projects/alice/demo/tags/v1.0.json` from the shared parsed revision object
-
-#### Scenario: Branch/tag capability checks remain operation-specific
-- **WHEN** a mutation operation targets the wrong selector type (branch op with tag URI, or tag op with branch URI)
-- **THEN** the operation fails at method boundary capability checks even though URI parsing/canonicalization succeeds
-
-### Requirement: Project creation owner default
-The system SHALL default project owner to the configured current user when project creation omits an owner.
-
-#### Scenario: Create project without owner
-- **WHEN** the configured user is `alice` and project `demo` is created without an explicit owner
-- **THEN** the project URI is `dml://alice/demo`
-
-### Requirement: Fetch updates remote-tracking heads
-The system SHALL fetch all branch and tag refs for a configured named remote, materialize each referenced commit closure locally, and update the corresponding local remote-tracking refs. `fetch` SHALL accept at most one optional remote name and SHALL default to `origin`. A branch- or tag-qualified DML project URI SHALL instead fetch only that addressed ref and update its URI-keyed tracking ref.
-
-#### Scenario: Fetch default origin
-- **WHEN** `dml fetch` succeeds and `origin` has branches `main` and `feature` plus tag `v1`
-- **THEN** local tracking refs for `origin/main`, `origin/feature`, and `origin@v1` are updated
-
-#### Scenario: Fetch selected remote
-- **WHEN** `dml fetch research` succeeds
-- **THEN** it updates tracking refs for every branch and tag in remote `research` without updating other remotes
-
-#### Scenario: Unknown remote fails
-- **WHEN** `dml fetch unknown` is requested
-- **THEN** the command fails without changing local tracking refs
-
-#### Scenario: Fetch explicit project ref
-- **WHEN** `dml fetch dml://alice/research#main` succeeds
-- **THEN** local storage updates the URI-keyed tracking ref for `dml://alice/research#main` without requiring a configured named remote
+- **WHEN** initialization is requested in detached mode before any commit exists
+- **THEN** initialization fails because detached HEAD requires a concrete commit
 
 ### Requirement: Pull fetches and merges the configured upstream
 The system SHALL implement branch pull as fetching the current attached branch's configured upstream branch from `remote.root` followed by merge of that upstream tracking ref into the current branch. Pull SHALL accept an optional positive history depth and no positional remote or branch argument. Pull without depth SHALL fetch new remote commits until it reaches locally available history while preserving any older shallow boundary. Pull SHALL fail without advancing the branch when the fetched history is insufficient to prove the required merge relationship.
@@ -388,17 +307,6 @@ The system SHALL expose a keyword-only `force` option on `Dml.push()` that defau
 #### Scenario: Force push overwrites a ref
 - **WHEN** force is requested for a branch or tag push
 - **THEN** push overwrites the remote ref with the local commit without remote-tip validation or conditional-write checks
-
-### Requirement: Project sync requires a configured named remote
-The system SHALL require a configured named remote before default project-addressed synchronization. `origin` SHALL be the default named remote for `fetch` and for first publication of an untracked branch.
-
-#### Scenario: Default sync without origin
-- **WHEN** a repository has remote storage but no remote named `origin` and default fetch or first branch publication is requested
-- **THEN** the operation fails with a descriptive error stating that `origin` is required
-
-#### Scenario: Named upstream does not require origin
-- **WHEN** the current branch tracks `research/main` and remote `research` is configured
-- **THEN** pull and push use `research` without requiring `origin`
 
 ### Requirement: Branch and tag enumeration SHALL select local, fetched, or endpoint refs
 The system SHALL enumerate branches and tags from exactly one source selected independently by `remote` and `dep`. With neither selector it SHALL use local refs; with only `remote` it SHALL use refs at configured `remote.root`; with only `dep` it SHALL use locally fetched refs for that dependency; and with both selectors it SHALL use refs at that dependency's configured endpoint. An unknown dependency or a required but unconfigured endpoint SHALL fail with a descriptive configuration error.
