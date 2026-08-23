@@ -16,7 +16,15 @@ def _run(*cmd: str) -> None:
     )
 
 
-@api.funkify(uri="script", adapter="local", extra_objs=(_run,))
+def _gzip_file(source: str, destination: str) -> None:
+    import gzip
+    import shutil
+
+    with open(source, "rb") as src, gzip.open(destination, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+
+
+@api.funkify(uri="script", adapter="local", extra_objs=(_run, _gzip_file))
 def docker_build(dag, context_tarball, build_flags=(), repo=None):
     from contextlib import chdir
     from tempfile import TemporaryDirectory
@@ -42,7 +50,9 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
                 return dag.put(Uri(remote_image), name="remote-image")
             image_tar = "./image.tar"
             _run("docker", "save", "-o", str(image_tar), local_image)
-            return store.put(filepath=str(image_tar), suffix=".tar")
+            compressed_image_tar = "./image.tar.gz"
+            _gzip_file(image_tar, compressed_image_tar)
+            return store.put(filepath=compressed_image_tar, suffix=".tar.gz")
 
 
 __all__ = ["docker_build"]

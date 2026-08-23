@@ -34,11 +34,13 @@ wrap a `sub` runnable.
 ## Docker, SSH, and Batch
 
 Docker, SSH, and Batch require a nested `sub` runnable. Docker requires an
-image and optionally flags; it can load an image tar from an S3 URI. SSH requires
-a non-empty host and accepts flags and environment files. Batch requires a
-Lambda URI and image, with optional CPU, memory, and GPU values; its deployment
-also needs `CPU_QUEUE` or `GPU_QUEUE` and `BATCH_TASK_ROLE_ARN` environment
-configuration.
+image and optionally flags; it can load a gzip-compressed image tar from an S3
+URI. `docker_build` creates that compressed S3 artifact when no registry
+repository is given, while repository builds are tagged and pushed directly.
+SSH requires a non-empty host and accepts flags and environment files. Batch
+requires a Lambda URI and image, with optional CPU, memory, and GPU values; its
+deployment also needs `CPU_QUEUE` or `GPU_QUEUE` and `BATCH_TASK_ROLE_ARN`
+environment configuration.
 
 ## Dataframe codecs and S3Store
 
