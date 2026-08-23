@@ -40,9 +40,22 @@ jobs:
         run: uv sync --group dev --all-extras
       - name: pytest
         run: uv run pytest .
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: pip install uv==0.11.7
+      - name: Sync dependencies
+        run: uv sync --group dev --all-extras
       - name: Run examples
-        # FIXME: we have to skip on macos because of moto timeouts.
-        if: matrix.os != 'macos-latest'
         run: bash ./examples/run-all-examples.sh
   sanitize:
     runs-on: ubuntu-latest
