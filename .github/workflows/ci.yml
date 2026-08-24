@@ -95,6 +95,8 @@ jobs:
         run: uv sync --group dev
       - name: Run Ruff
         run: uv run ruff check --output-format=github .
+      - name: Run Pyright
+        run: uv run pyright --project .
   publish:
     needs: ["test", "lint", "sanitize", "examples"]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
