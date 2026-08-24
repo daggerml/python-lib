@@ -11,7 +11,7 @@ Run `dml --help` for the generated command surface. Global project options inclu
 | Runtimes | `runtime list|describe|freeze|unfreeze|read-execution-record|describe-graph|cancel` |
 | Remote cache | `cache get`, `cache describe`, `cache invalidate` |
 | Cleanup | `gc [--remote]` |
-| Agent guidance | `admin agent-skill` |
+| Agent guidance | `skills authoring|repository|inspection` |
 | Error inspection | `dag get-node NODE_REF`, `dag get-error ERROR_REF` |
 
 Commands print successful scalar values or compact JSON to standard output. Parse errors exit with code 2; other errors print `error: ...` to standard error. The CLI is for administration, not for passing live callables. Current authoring tooling creates DAGs and funks in Python.
@@ -37,4 +37,4 @@ IDs. `gc` collects unreachable local objects by default; `gc --remote` collects
 configured `remote.root` state. GC does not accept dependency or dry-run
 selectors.
 
-Export the bundled, portable coding-agent skill with `dml admin agent-skill > SKILL.md`.
+Export one bundled, portable coding-agent skill with `dml skills authoring > SKILL.md`, `dml skills repository > SKILL.md`, or `dml skills inspection > SKILL.md`.

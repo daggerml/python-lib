@@ -22,6 +22,7 @@ When a concept is not listed here, treat it as unresolved rather than guessing f
 | Extension runtime lifecycle | `docs/extend/reference/adapter-operations.md`, `docs/extend/reference/executor-lifecycle.md`, `docs/develop/architecture/execution-and-runtime-state.md` | Adapter/executor pairing, execution-state transitions, and deployment-specific execution behavior. |
 | Extension plugin packaging and discovery | `docs/extend/reference/plugin-api.md` | Adapter, executor, and codec plugin packaging and discovery behavior. |
 | Extension S3 utility behavior | `docs/use/guides/artifacts.md`, `docs/extend/reference/codec-contracts.md` | `S3Store`, artifact URI behavior, and dataframe serialization. |
+| Bundled agent skills | `openspec/specs/bundled-agent-skills/spec.md` | Portable `authoring`, `repository`, and `inspection` guidance resources. |
 
 ## Handoffs
 

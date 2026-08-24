@@ -6,7 +6,7 @@ DaggerML keeps user-facing entrypoints thin and centralizes repository rules in
 1. `daggerml.api` provides Python DAG and node wrappers; `_cli.py` provides the
    `dml` command.
 2. `Dml` in `_core/dml.py` resolves configuration, opens the local database, and
-   exposes namespaces for runtime, DAG, history, configuration, and administration.
+    exposes namespaces for runtime, DAG, history, configuration, and bundled skills.
 3. `Head`, `CommitOps`, `DagOps`, and `IndexOps` implement repository behavior.
 4. `DmlDB`, the Cython database wrapper, and the typed objects in `types.py`
    persist the local graph.

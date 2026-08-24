@@ -976,12 +976,23 @@ def _local_gc(dml: "Dml") -> LocalGCSummary:
 
 
 @dataclass(frozen=True)
-class _AdminNamespace:
+class _SkillsNamespace:
     _dml: "Dml"
 
-    def agent_skill(self) -> str:
-        """Print the bundled coding-agent skill as portable Markdown."""
-        return resources.files("daggerml").joinpath("SKILL.md").read_text(encoding="utf-8").removesuffix("\n")
+    def _read(self, name: str) -> str:
+        return resources.files("daggerml._core").joinpath("skills", name).read_text(encoding="utf-8").removesuffix("\n")
+
+    def authoring(self) -> str:
+        """Print the bundled DAG-authoring skill as portable Markdown."""
+        return self._read("authoring.md")
+
+    def repository(self) -> str:
+        """Print the bundled repository-management skill as portable Markdown."""
+        return self._read("repository.md")
+
+    def inspection(self) -> str:
+        """Print the bundled graph-inspection skill as portable Markdown."""
+        return self._read("inspection.md")
 
 
 class StatusPayload(TypedDict):
@@ -1540,6 +1551,6 @@ class Dml:
         return _DagNamespace(self)
 
     @property
-    def admin(self) -> Annotated[_AdminNamespace, "Administrative support commands."]:
-        """Expose remaining repository administration commands."""
-        return _AdminNamespace(self)
+    def skills(self) -> Annotated[_SkillsNamespace, "Bundled agent-guidance exports."]:
+        """Expose bundled agent-guidance exports."""
+        return _SkillsNamespace(self)

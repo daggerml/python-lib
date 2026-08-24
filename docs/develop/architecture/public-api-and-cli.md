@@ -9,7 +9,7 @@ delegate all repository operations to `dml.Dml`.
 
 `dml.Dml` is the public runtime-orchestration object in `_core/dml.py`. Its
 namespaces group operations such as `runtime`, `dag`, `commit`, `config`, and
-`admin`. The public wrappers should not duplicate history, storage, cache, or
+`skills`. The public wrappers should not duplicate history, storage, cache, or
 remote rules: those belong in the core operation modules.
 
 `codecs.py` converts supported Python values to and from the typed datum graph.

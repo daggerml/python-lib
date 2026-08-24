@@ -81,8 +81,7 @@ def test_cache_surface_has_exact_runtime_metadata_and_no_admin_aliases(tmp_path,
     assert get_args(describe_hints["cache_key"])[0] is str
     assert CacheDescription in get_args(describe_hints["return"])
     assert get_args(invalidate_hints["executions"])[0] is Ref
-    assert not hasattr(dml.admin, "remote")
-    assert not hasattr(dml.admin, "gc")
+    assert not hasattr(dml, "admin")
     assert not hasattr(dml.cache, "get_cache")
     assert not hasattr(dml.cache, "invalidate_cache")
 

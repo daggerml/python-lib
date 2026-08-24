@@ -28,21 +28,26 @@ def test_cli_namespace_help_002__root_help_lists_commands_before_namespaces() ->
     assert "commands:" in root_help
     assert "namespaces:" in root_help
     assert "checkout            Check out a different revision." in root_help
-    assert "admin               Administrative support commands." in root_help
+    assert "skills              Bundled agent-guidance exports." in root_help
     assert root_help.index("commands:") < root_help.index("namespaces:")
 
 
-def test_cli_namespace_help_003__nested_help_lists_commands_before_namespaces() -> None:
+def test_cli_namespace_help_003__skills_help_lists_commands_before_namespaces() -> None:
     cli = MethodCLI(Dml, prog="dml")
 
     subparsers = next(action for action in cli.parser._actions if isinstance(action, argparse._SubParsersAction))
-    admin_help = subparsers.choices["admin"].format_help()
+    skills_help = subparsers.choices["skills"].format_help()
+    skills_subparsers = next(
+        action for action in subparsers.choices["skills"]._actions if isinstance(action, argparse._SubParsersAction)
+    )
 
-    assert "commands:" in admin_help
-    assert "agent-skill" in admin_help
-    assert "namespaces:" not in admin_help
-    assert "gc" not in admin_help
-    assert "remote" not in admin_help
+    assert "commands:" in skills_help
+    assert set(skills_subparsers.choices) == {
+        "authoring",
+        "repository",
+        "inspection",
+    }
+    assert "namespaces:" not in skills_help
 
 
 def test_cli_dependency_commands_and_branch_create_options_are_generated() -> None:
@@ -119,12 +124,7 @@ def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None
     assert "--dep" not in gc_help
     assert "--dry-run" not in gc_help
 
-    admin = root_subparsers.choices["admin"]
-    admin_subparsers = next(
-        action for action in admin._actions if isinstance(action, argparse._SubParsersAction)
-    )
-    assert "remote" not in admin_subparsers.choices
-    assert "gc" not in admin_subparsers.choices
+    assert "admin" not in root_subparsers.choices
 
     parsed = cli.parser.parse_args(["gc", "--remote"])
     assert parsed.remote is True
@@ -137,6 +137,7 @@ def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None
         ["admin", "remote", "invalidate-cache", "index:e1"],
         ["admin", "gc"],
         ["admin", "remote", "gc"],
+        ["admin", "agent-skill"],
     ],
 )
 def test_cli_removed_maintenance_routes_are_rejected(route) -> None:
@@ -153,7 +154,9 @@ def test_cli_removed_maintenance_routes_are_rejected(route) -> None:
         ["cache", "invalidate", "index:e1"],
         ["gc"],
         ["gc", "--remote"],
-        ["admin", "agent-skill"],
+        ["skills", "authoring"],
+        ["skills", "repository"],
+        ["skills", "inspection"],
     ],
 )
 def test_cli_canonical_maintenance_routes_are_accepted(route) -> None:
