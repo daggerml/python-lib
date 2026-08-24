@@ -1,22 +1,4 @@
-## Purpose
-Define remote execution coordination, lifecycle guards, and mutation serialization.
-
-## Requirements
-
-### Requirement: ExecutionState constructed from remote_root
-The system SHALL accept `remote_root: str` as a required configuration parameter for `ExecutionState`. Call sites that construct `ExecutionState` MUST provide a valid remote root explicitly and MUST NOT rely on optional remote-root values or `None` defaults.
-
-#### Scenario: remote_root parsed to bucket and prefix
-- **WHEN** `ExecutionState(remote_root="s3://my-bucket/my/prefix")` is constructed
-- **THEN** execution-record and cache-pointer operations target that bucket and prefix
-
-#### Scenario: call site provides explicit remote_root
-- **WHEN** code constructs `ExecutionState` for a remote-backed execution flow
-- **THEN** that call site passes a concrete `remote_root: str` value at construction time
-
-#### Scenario: optional or None remote_root defaults are not relied on
-- **WHEN** a remote-backed execution flow constructs `ExecutionState`
-- **THEN** it does not rely on an optional remote-root parameter or a `None` default to supply remote configuration
+## MODIFIED Requirements
 
 ### Requirement: Cancellation Phase 1 SHALL not invoke adapters
 Phase 1 SHALL determine the complete cancellation set before Phase 2 begins. For each reachable execution, it SHALL read lifecycle and valid caller references while holding the execution driver lock. It SHALL skip `succeeded`, `failed`, and `canceled` executions. It SHALL skip a `pending` or `running` execution that retains a valid caller reference. It SHALL reconstruct an existing `cancel-pending` execution into the selected set without rewriting its lifecycle or requiring incoming edges to be absent. It SHALL use compare-and-swap to transition only `pending` or `running` unreferenced executions to `cancel-pending`; after any conflict it SHALL reread lifecycle and caller references before retrying. After selecting an execution, Phase 1 SHALL conditionally delete its matching cache pointer, enqueue its spawned executions, and idempotently remove its outgoing caller edges. It SHALL perform no adapter invocation.
@@ -121,34 +103,6 @@ The runtime SHALL expose a canonical mutation guard that reads `state.json`, cla
 - **WHEN** activation or general mutation reads an otherwise unsupported lifecycle
 - **THEN** it SHALL raise `BadExecutionStatusError`
 
-### Requirement: Execution coordination retries SHALL not silently abandon CAS mutations
-Every state or driver compare-and-swap workflow SHALL retry conflicts with bounded exponential backoff and jitter while its latest semantic preconditions remain valid. Each retry SHALL reread the object it intends to mutate. Retry exhaustion SHALL be observable as an error rather than success, and a later caller SHALL be able to resume from durable state.
-
-#### Scenario: State conflict is retried from latest semantics
-- **WHEN** result, lifecycle, lineage, or control state CAS conflicts
-- **THEN** the runtime rereads state and retries only while the intended transition remains valid
-
-#### Scenario: Driver conflict checks ownership
-- **WHEN** a driver mutation conflicts
-- **THEN** the caller rereads driver state and continues only if it still owns the lock
-
-#### Scenario: Exhaustion is observable and resumable
-- **WHEN** a bounded retry deadline is exhausted
-- **THEN** the operation raises a coordination error
-- **AND** another caller can resume from the persisted files
-
-#### Scenario: Registration conflict is retried from the latest record
-- **WHEN** a child-registration state CAS conflicts
-- **THEN** the runtime rereads current semantic state and reevaluates lifecycle before retrying
-
-#### Scenario: Cancellation conflict is re-evaluated
-- **WHEN** a cancellation state CAS conflicts
-- **THEN** the runtime rereads lifecycle and valid caller references before retrying
-
-#### Scenario: Exhaustion is observable to the caller
-- **WHEN** the bounded coordination retry deadline is exhausted
-- **THEN** the runtime raises an error rather than reporting success
-
 ### Requirement: Driver mutations SHALL be serialized by owner locks
 Each `driver.json` SHALL contain a nullable owner lock. Lock acquisition SHALL use compare-and-swap to replace a null or expired lock with a fresh UUID4 owner. Every adapter invocation and `driver.json` mutation other than acquisition SHALL require the current owner and compare-and-swap against the latest driver object. Every lifecycle or control mutation in `state.json` SHALL also require and verify the current driver owner before its guarded state CAS. Result publication and caller lineage summary mutations SHALL use guarded state CAS without requiring this lock. Unlock SHALL clear the lock only when the stored owner matches.
 
@@ -176,50 +130,6 @@ Each `driver.json` SHALL contain a nullable owner lock. Lock acquisition SHALL u
 - **WHEN** owner `o1` attempts to unlock after owner `o2` steals the lock
 - **THEN** the runtime SHALL not clear `o2`'s lock
 
-### Requirement: Lock expiry SHALL use S3 response time
-The runtime SHALL determine driver-lock expiry using `LastModified + lock.ttl <= Date`, where both timestamps come from the same `driver.json` response. It SHALL NOT use caller wall-clock time for lock expiry. Expiry SHALL permit lock stealing but SHALL NOT revoke an unchanged owner by itself.
-
-#### Scenario: Driver timestamps report an expired lock
-- **WHEN** a driver response has `LastModified + lock.ttl <= Date`
-- **THEN** another caller may attempt to replace the lock owner by CAS
-
-#### Scenario: Owner mutation refreshes the lease basis
-- **WHEN** the lock owner successfully mutates driver state
-- **THEN** subsequent expiry checks use the updated driver object timestamps
-
-#### Scenario: Owner mutation refreshes lease basis
-- **WHEN** the lock owner successfully mutates driver state
-- **THEN** subsequent expiry checks use the updated driver object timestamps
-
-#### Scenario: S3 timestamps report an expired lock
-- **WHEN** a driver response has `LastModified + lock.ttl <= Date`
-- **THEN** another caller may attempt to replace the owner by CAS
-
-#### Scenario: Expired owner remains authoritative until stolen
-- **WHEN** an adapter response arrives after the lock TTL
-- **AND** the driver still contains that caller's owner
-- **THEN** that caller may persist the response through owner-checked CAS
-
-### Requirement: Cache resolution SHALL coordinate one current execution
-On a cache miss, the runtime SHALL create fresh metadata, state, and driver objects for one UUID7 execution before conditionally creating `cache/<cache_key>` containing only that execution ID. If pointer creation conflicts, the runtime SHALL conditionally delete only its unchanged three new objects and reread the winner. UUID ordering SHALL NOT select the winner.
-
-#### Scenario: Concurrent cache miss has one winner
-- **WHEN** multiple callers prepare different three-object executions for one absent cache key
-- **THEN** conditional cache-pointer creation selects exactly one current execution
-- **AND** losers remove only unchanged objects they created
-
-#### Scenario: Complete execution exists before pointer publication
-- **WHEN** cache pointer creation succeeds for `e1`
-- **THEN** all three required execution objects for `e1` already exist
-
-#### Scenario: Execution exists before pointer publication
-- **WHEN** a caller successfully creates `cache/ck1` containing `e1`
-- **THEN** all three execution objects for `e1` already exist
-
-#### Scenario: Lost claim cleans only the losing record
-- **WHEN** execution `e2` loses cache-pointer creation to `e1`
-- **THEN** its caller conditionally deletes only the unchanged objects created for `e2`
-
 ### Requirement: Shared retry delay SHALL coordinate adapter backpressure
 An adapter `retry` response MAY include nonnegative `retry_after_ms`. The current driver owner SHALL persist `not_before` as a shared absolute timestamp derived from that delay, or from the runtime's standard retry delay when the hint is absent. Before invoke, cleanup, or cancellation, every caller SHALL acquire the driver lock, reread state and driver, and skip the adapter call while `not_before` remains in the future.
 
@@ -236,6 +146,8 @@ An adapter `retry` response MAY include nonnegative `retry_after_ms`. The curren
 #### Scenario: Cancellation respects delay
 - **WHEN** cancellation selects an execution whose not-before is in the future
 - **THEN** cancellation coordination SHALL wait until that timestamp before invoking cancel
+
+## ADDED Requirements
 
 ### Requirement: State CAS authority SHALL be validated on every attempt
 Every execution-state CAS retry SHALL reread the latest state, reevaluate the operation's allowed source lifecycle, and confirm whether the changed fields require the current driver lock. CAS exhaustion SHALL remain observable. A stale writer SHALL not restore an earlier lifecycle or mutate an absorbing terminal lifecycle.

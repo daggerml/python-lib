@@ -10,7 +10,7 @@ import pytest
 
 from daggerml._core.db import Ref
 from daggerml._core.exec_state import ExecutionState
-from daggerml._core.types import DmlRepoError, Runnable, Uri
+from daggerml._core.types import CanceledExecutionError, DmlRepoError, Runnable, Uri
 from tests._core.helpers import FakeCasStore, FakeExecutionRemote, run_parallel
 
 
@@ -192,9 +192,9 @@ def test_invalidation_holds_driver_lock_and_does_not_rewrite_metadata(monkeypatc
     assert metadata is not None
     original_mutate = state._mutate_state
 
-    def mutate(execution_id, fn):
+    def mutate(execution_id, fn, **kwargs):
         assert state.read_execution_record(execution_id)["driver"]["lock"] is not None
-        return original_mutate(execution_id, fn)
+        return original_mutate(execution_id, fn, **kwargs)
 
     monkeypatch.setattr(state, "_mutate_state", mutate)
 
@@ -215,7 +215,7 @@ def test_finish_publishes_result_independently_before_driver_finalizes() -> None
     assert record["state"]["result_source"] == "runtime"
     assert record["state"]["lifecycle"] == "running"
     assert record["driver"] == driver
-    state._finalize_runtime_result("exec")
+    state._finalize_runtime_result("exec", "driver")
     assert state.read_execution_record("exec")["state"]["lifecycle"] == "succeeded"
 
 
@@ -233,18 +233,20 @@ def test_runtime_publication_wins_cancelation_race() -> None:
     assert state.create_execution_record(_record("exec", result_ref="dag:result"))
     assert state._create_cache("cache", "exec")
 
-    assert state._plan_cancel(["exec"], "user") == []
+    assert state._plan_cancel(["exec"], "user") == ["exec"]
 
     record = state.read_execution_record("exec")
-    assert record["state"]["lifecycle"] == "succeeded"
+    assert record["state"]["lifecycle"] == "cancel-pending"
     assert record["state"]["result_ref"] == "dag:result"
-    assert record["state"]["cancelation"] is None
-    assert state._read_cache("cache")[0] == "exec"
+    assert record["state"]["cancelation"]["requested_by"] == "user"
+    assert state._read_cache("cache") is None
 
 
 def test_invoke_failure_is_reused_as_cached_adapter_error(monkeypatch) -> None:
     state = _state()
     assert state.create_execution_record(_record("caller", cache_key=None, argv_ref=None))
+    assert state.create_execution_record(_record("callee"))
+    assert state._create_cache("cache", "callee")
     calls = []
 
     def call_adapter(request):
@@ -582,6 +584,107 @@ def test_cancel_adapter_accepts_only_cancelled_as_success() -> None:
 def test_state_mutation_retries_cas_conflict(monkeypatch) -> None:
     state = _state()
     assert state.create_execution_record(_record("exec"))
+    owner = state.acquire("exec")
+    assert owner is not None
     state._store.conflict_keys.add(state._execution_key("exec", "state"))
-    state._mutate_state("exec", lambda value: value.update(lifecycle="cancel-pending"))
+    state._mutate_state("exec", lambda value: value.update(lifecycle="cancel-pending"), owner=owner)
     assert state.read_execution_record("exec")["state"]["lifecycle"] == "cancel-pending"
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "allowed"),
+    [
+        ("pending", "running", True),
+        ("pending", "cancel-pending", True),
+        ("running", "succeeded", True),
+        ("running", "failed", True),
+        ("running", "cancel-pending", True),
+        ("cancel-pending", "canceled", True),
+        ("pending", "failed", False),
+        ("succeeded", "running", False),
+        ("failed", "cancel-pending", False),
+        ("canceled", "running", False),
+    ],
+)
+def test_execution_state_authority_enforces_lifecycle_transition_matrix(source, target, allowed) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("exec", source))
+    owner = state.acquire("exec")
+    assert owner is not None
+
+    if allowed:
+        state._mutate_state("exec", lambda value: value.update(lifecycle=target), owner=owner)
+        assert state.read_execution_record("exec")["state"]["lifecycle"] == target
+    else:
+        with pytest.raises(DmlRepoError):
+            state._mutate_state("exec", lambda value: value.update(lifecycle=target), owner=owner)
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "mutation", "raises"),
+    [
+        ("running", lambda value: value.update(result_ref="dag:result", result_source="runtime"), False),
+        ("running", lambda value: value.update(spawned_execution_ids=["child"]), False),
+        (
+            "cancel-pending",
+            lambda value: value.update(spawned_execution_ids=[], child_execution_ids=["child"]),
+            False,
+        ),
+        ("pending", lambda value: value.update(result_ref="dag:result", result_source="runtime"), True),
+        ("succeeded", lambda value: value.update(spawned_execution_ids=["child"]), True),
+    ],
+)
+def test_execution_state_authority_limits_lock_free_result_and_lineage(lifecycle, mutation, raises) -> None:
+    state = _state()
+    spawned = ["child"] if lifecycle == "cancel-pending" else []
+    assert state.create_execution_record(_record("exec", lifecycle, spawned_execution_ids=spawned))
+
+    if raises:
+        with pytest.raises(CanceledExecutionError):
+            state._mutate_state("exec", mutation)
+    else:
+        state._mutate_state("exec", mutation)
+
+
+def test_execution_state_authority_rejects_lost_driver_owner() -> None:
+    state = _state()
+    assert state.create_execution_record(_record("exec"))
+    owner = state.acquire("exec")
+    assert owner is not None
+    driver, item = state._part_snapshot("exec", "driver")
+    driver["lock"] = {"owner": "replacement", "ttl": 300.0}
+    state._store._put_js(item, driver)
+
+    with pytest.raises(DmlRepoError, match="ownership lost"):
+        state._mutate_state("exec", lambda value: value.update(lifecycle="failed"), owner=owner)
+
+
+@pytest.mark.parametrize("lifecycle", ["pending", "running", "cancel-pending", "succeeded", "failed", "canceled"])
+def test_cancel_planning_uses_exact_lifecycle_selection_matrix(lifecycle) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("exec", lifecycle))
+    before = state._snapshot(state._execution_key("exec", "state")).etag
+
+    selected = state._plan_cancel(["exec"], "user")
+    record = state.read_execution_record("exec")
+    if lifecycle in {"pending", "running"}:
+        assert selected == ["exec"]
+        assert record["state"]["lifecycle"] == "cancel-pending"
+    elif lifecycle == "cancel-pending":
+        assert selected == ["exec"]
+        assert state._snapshot(state._execution_key("exec", "state")).etag == before
+    else:
+        assert selected == []
+        assert record["state"]["lifecycle"] == lifecycle
+
+
+@pytest.mark.parametrize("lifecycle", ["pending", "running", "succeeded", "failed"])
+def test_cancel_driver_warns_and_drops_unexpected_lifecycle(monkeypatch, caplog, lifecycle) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("exec", lifecycle))
+    monkeypatch.setattr(state, "_call_adapter", lambda *_: pytest.fail("adapter must not run"))
+
+    with caplog.at_level("WARNING"):
+        state._run_cancel_driver(["exec"], "user", None, max_retries=0)
+
+    assert "exec" in caplog.text and lifecycle in caplog.text

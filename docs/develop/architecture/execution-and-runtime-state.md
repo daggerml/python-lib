@@ -21,12 +21,23 @@ operations run against the local typed graph. Adapter-backed runnables create an
 `state.json` for lifecycle, results, lineage, and controls, and `driver.json`
 for the owner lock, adapter continuation, shared retry delay, and cleanup
 outcome. State and driver use separate conditional-update domains. The driver
-lock serializes adapter calls and driver mutations only; semantic state writers
-use guarded CAS without that lock. A funk runtime can therefore publish
+lock serializes adapter calls, driver mutations, and state lifecycle or control
+writes; semantic state uses guarded CAS on every write. A funk runtime can therefore publish
 `result_ref` with `result_source="runtime"` while a caller holds the driver
 lock. The caller later finalizes that state to `succeeded`; adapter failures
 atomically publish an adapter-error DAG and `failed`. Lock expiry uses S3
 `LastModified + ttl <= Date`, not machine time.
+
+State authority is deliberately narrow. Result publication may change only the
+inseparable `result_ref` and `result_source` pair while lifecycle is `running`.
+Caller registration may add only `spawned_execution_ids` while the caller is
+`running`. Normal terminal-child bookkeeping may move an ID from `spawned` to
+`children` while the caller is `running` or `cancel-pending`; it persists that
+move before the caller observes cancellation. Every other state change verifies
+the current driver owner before its CAS attempt. The only lifecycle transitions
+are `pending -> running`, `pending|running -> cancel-pending`, `running ->
+succeeded|failed`, and `cancel-pending -> canceled`; terminal lifecycles are
+absorbing.
 
 `cache/<cache-key>` contains only the current execution ID from reservation
 until cancelation or invalidation conditionally deletes it. All three execution
@@ -66,9 +77,14 @@ Cancellation first locks and CAS-selects the
 complete unreferenced descendant set as `cancel-pending`, conditionally deletes
 matching cache pointers, and removes selected callers' outgoing edges. Caller
 registration uses the same callee lock, so registration either publishes a
-valid edge before selection or observes `cancel-pending` and stops. After
+valid edge and the caller's spawned summary before selection or observes
+`cancel-pending` and stops. A rejected fresh registration removes only its
+attempted edge, matching cache pointer, and unchanged reservation records;
+shared argument objects and reused records survive. After
 planning finishes, the runtime invokes selected adapters concurrently. Each
 request waits for `driver.not_before` and holds its execution lock across the
 external call and response persistence. Only `cancelled` CAS-transitions the
 execution to `canceled`; retry and failure remain `cancel-pending` for bounded,
-idempotent retries.
+idempotent retries. Phase 2 accepts already `canceled` work, but logs the
+execution identity and drops any unexpected `pending`, `running`, `succeeded`,
+or `failed` work without sending an invalid cancel request.

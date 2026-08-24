@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import random
 import shutil
@@ -36,6 +37,7 @@ COORDINATION_CAS_BACKOFF_SECONDS = 0.01
 COORDINATION_CAS_MAX_BACKOFF_SECONDS = 1.0
 EXECUTION_LIFECYCLES = Literal["pending", "running", "succeeded", "failed", "cancel-pending", "canceled"]
 GRAPH_LIFECYCLES = EXECUTION_LIFECYCLES
+logger = logging.getLogger(__name__)
 
 
 class ExecutionLock(TypedDict):
@@ -402,17 +404,63 @@ class ExecutionState:
         raise DmlRepoError(message)
 
     def _mutate_state(
-        self, execution_id: str, mutate: Callable[[ExecutionSemanticState], None]
+        self, execution_id: str, mutate: Callable[[ExecutionSemanticState], None], *, owner: str | None = None,
+        retry: bool = True,
     ) -> ExecutionSemanticState:
         def action() -> ExecutionSemanticState:
             state, item = self._part_snapshot(execution_id, "state")
+            original = cast(ExecutionSemanticState, json.loads(json.dumps(state)))
             mutate(state)
+            changed = {key for key in state if key != "updated_at" and state[key] != original[key]}
+            lifecycle = original["lifecycle"]
+            transition = (lifecycle, state["lifecycle"])
+            lock_free_fields = {
+                frozenset(): {"pending", "running", "succeeded", "failed", "cancel-pending", "canceled"},
+                frozenset({"result_ref", "result_source"}): {"running"},
+                frozenset({"spawned_execution_ids"}): {"running"},
+                frozenset({"spawned_execution_ids", "child_execution_ids"}): {"running", "cancel-pending"},
+            }
+            changed_fields = frozenset(changed)
+            if changed_fields in lock_free_fields:
+                if lifecycle not in lock_free_fields[changed_fields]:
+                    raise CancellationError(
+                        f"Execution {execution_id} cannot accept lock-free state mutation",
+                        lifecycle=lifecycle,
+                    )
+            else:
+                if owner is None:
+                    raise DmlRepoError(f"Driver lock ownership required for state mutation: {execution_id}")
+                driver, _ = self._part_snapshot(execution_id, "driver")
+                if driver["lock"] is None or driver["lock"]["owner"] != owner:
+                    raise DmlRepoError(f"Driver lock ownership lost: {execution_id}")
+                allowed = {
+                    ("pending", "running"),
+                    ("pending", "cancel-pending"),
+                    ("running", "succeeded"),
+                    ("running", "failed"),
+                    ("running", "cancel-pending"),
+                    ("cancel-pending", "canceled"),
+                }
+                if transition[0] != transition[1] and transition not in allowed:
+                    raise BadExecutionStatusError(
+                        f"Invalid execution lifecycle transition: {transition[0]} -> {transition[1]}",
+                        lifecycle=lifecycle,
+                    )
+                if lifecycle == "cancel-pending" and changed - {"lifecycle"}:
+                    raise CancellationError(
+                        f"Execution {execution_id} is cancellation-owned", lifecycle=lifecycle
+                    )
             state["updated_at"] = int(time.time())
             self._validate_state(state)
             self._store._put_js(item, state)
             return state
 
-        return cast(ExecutionSemanticState, self._retry(action, f"Failed to mutate execution state: {execution_id}"))
+        if retry:
+            return cast(
+                ExecutionSemanticState,
+                self._retry(action, f"Failed to mutate execution state: {execution_id}"),
+            )
+        return action()
 
     def acquire(self, execution_id: str, ttl: float = LOCK_TTL) -> str | None:
         owner = uuid4().hex
@@ -697,7 +745,7 @@ class ExecutionState:
         raise AssertionError("execution mutation guard returned an invalid activation state")
 
     def mark_running(self, execution_id: str, owner: str) -> None:
-        self._mutate_state(execution_id, lambda state: state.update(lifecycle="running"))
+        self._mutate_state(execution_id, lambda state: state.update(lifecycle="running"), owner=owner)
         self.unlock(execution_id, owner)
 
     def finish_execution(self, execution_id: str, dag: Ref, db: DmlDB) -> None:
@@ -713,14 +761,14 @@ class ExecutionState:
 
         self._mutate_state(execution_id, publish)
 
-    def _finalize_runtime_result(self, execution_id: str) -> ExecutionSemanticState:
+    def _finalize_runtime_result(self, execution_id: str, owner: str) -> ExecutionSemanticState:
         def finalize(state: ExecutionSemanticState) -> None:
             if state["lifecycle"] in ("cancel-pending", "canceled"):
                 raise CancellationError(f"Execution {execution_id} is canceled", lifecycle=state["lifecycle"])
-            if state["lifecycle"] in ("pending", "running") and state["result_source"] == "runtime":
+            if state["lifecycle"] == "running" and state["result_source"] == "runtime":
                 state["lifecycle"] = "succeeded"
 
-        return self._mutate_state(execution_id, finalize)
+        return self._mutate_state(execution_id, finalize, owner=owner)
 
     def _record_edge(self, caller: str, callee: str) -> bool:
         try:
@@ -771,7 +819,9 @@ class ExecutionState:
             else:
                 state["spawned_execution_ids"] = sorted({*state["spawned_execution_ids"], callee})
 
-        self._mutate_state(caller, mutate)
+        state = self._mutate_state(caller, mutate)
+        if complete and state["lifecycle"] == "cancel-pending":
+            raise CancellationError(f"Execution {caller} is canceled", lifecycle="cancel-pending")
 
     def _call_adapter(
         self, request: AdapterInvokeRequest | AdapterCancelRequest | AdapterCleanupRequest
@@ -829,7 +879,7 @@ class ExecutionState:
             edge_created = self._record_edge(index.id(), execution_id)
             self._update_child(index.id(), execution_id, complete=False)
             if state["result_source"] == "runtime":
-                state = self._finalize_runtime_result(execution_id)
+                state = self._finalize_runtime_result(execution_id, owner)
                 self._update_child(index.id(), execution_id, complete=True)
                 return self._materialize(state["result_ref"], db)
             if driver["not_before"] is not None and driver["not_before"] > int(time.time() * 1000):
@@ -866,7 +916,7 @@ class ExecutionState:
                 self._mutate_driver(execution_id, owner, lambda d: d.update(adapter_state=adapter_state))
                 state = self.read_execution_record(execution_id)["state"]
                 if state["result_source"] == "runtime":
-                    state = self._finalize_runtime_result(execution_id)
+                    state = self._finalize_runtime_result(execution_id, owner)
                     self._update_child(index.id(), execution_id, complete=True)
                     return self._materialize(state["result_ref"], db)
             dag = self._error_dag(
@@ -877,6 +927,7 @@ class ExecutionState:
                 lambda value: value.update(
                     lifecycle="failed", result_ref=dag.to, result_source="adapter-error"
                 ),
+                owner=owner,
             )
             self._mutate_driver(execution_id, owner, lambda value: value.update(adapter_state=adapter_state))
             self._update_child(index.id(), execution_id, complete=True)
@@ -941,6 +992,8 @@ class ExecutionState:
             try:
                 record = self.read_execution_record(execution_id)
                 metadata = record["metadata"]
+                if record["state"]["lifecycle"] == "cancel-pending":
+                    continue
                 if execution_id not in roots:
                     cache_key = metadata["cache_key"]
                     pointer = None if cache_key is None else self._read_cache(cache_key)
@@ -955,7 +1008,7 @@ class ExecutionState:
                         "requested_at": int(time.time()),
                     }
 
-                state = self._mutate_state(execution_id, invalidate)
+                state = self._mutate_state(execution_id, invalidate, owner=owner)
                 pending.extend(self.list_execution_callers(execution_id))
                 invalidation = state["invalidation"]
                 assert invalidation is not None
@@ -987,7 +1040,15 @@ class ExecutionState:
             owner = self._wait_acquire(execution_id)
             try:
                 record = self.read_execution_record(execution_id)
-                if record["state"]["lifecycle"] != "cancel-pending":
+                lifecycle = record["state"]["lifecycle"]
+                if lifecycle == "canceled":
+                    return True
+                if lifecycle != "cancel-pending":
+                    logger.warning(
+                        "Dropping cancellation work for execution %s with unexpected lifecycle %s",
+                        execution_id,
+                        lifecycle,
+                    )
                     return True
                 not_before = record["driver"]["not_before"]
                 delay = 0 if not_before is None else (not_before - int(time.time() * 1000)) / 1000
@@ -1034,7 +1095,18 @@ class ExecutionState:
                 )
                 if response["status"] != "cancelled":
                     return False
-                self._mutate_state(execution_id, lambda state: state.update(lifecycle="canceled"))
+
+                def complete_cancel(state: ExecutionSemanticState) -> None:
+                    if state["lifecycle"] == "cancel-pending":
+                        state["lifecycle"] = "canceled"
+                    elif state["lifecycle"] not in {"canceled"}:
+                        logger.warning(
+                            "Dropping cancellation completion for execution %s with unexpected lifecycle %s",
+                            execution_id,
+                            state["lifecycle"],
+                        )
+
+                self._mutate_state(execution_id, complete_cancel, owner=owner)
                 return True
             finally:
                 if owner:
@@ -1057,35 +1129,43 @@ class ExecutionState:
                     continue
                 raise
             try:
-                record = self.read_execution_record(execution_id)
-                metadata = record["metadata"]
-                state = record["state"]
-                if state["lifecycle"] in ("succeeded", "failed", "canceled"):
-                    complete.add(execution_id)
-                    continue
-                if state["lifecycle"] != "cancel-pending":
-                    if self.list_execution_callers(execution_id):
-                        continue
-
-                    def mark_pending(item: ExecutionSemanticState) -> None:
-                        if item["lifecycle"] in ("succeeded", "failed", "canceled"):
-                            return
-                        if item["result_source"] == "runtime":
-                            item["lifecycle"] = "succeeded"
-                            return
-                        if item["lifecycle"] != "cancel-pending":
-                            item["lifecycle"] = "cancel-pending"
-                            item["cancelation"] = {
-                                "requested_by": requested_by,
-                                "requested_at": int(time.time()),
-                            }
-
-                    state = self._mutate_state(execution_id, mark_pending)
-                    if state["lifecycle"] != "cancel-pending":
+                for attempt in range(COORDINATION_CAS_ATTEMPTS):
+                    record = self.read_execution_record(execution_id)
+                    metadata = record["metadata"]
+                    state = record["state"]
+                    expected_lifecycle = state["lifecycle"]
+                    if state["lifecycle"] in ("succeeded", "failed", "canceled"):
                         complete.add(execution_id)
+                        break
+                    if state["lifecycle"] == "cancel-pending":
+                        break
+                    if self.list_execution_callers(execution_id):
+                        break
+
+                    def mark_pending(
+                        item: ExecutionSemanticState, expected_lifecycle: EXECUTION_LIFECYCLES = expected_lifecycle
+                    ) -> None:
+                        if item["lifecycle"] != expected_lifecycle:
+                            raise CasItemConflict
+                        item["lifecycle"] = "cancel-pending"
+                        item["cancelation"] = {
+                            "requested_by": requested_by,
+                            "requested_at": int(time.time()),
+                        }
+
+                    try:
+                        state = self._mutate_state(execution_id, mark_pending, owner=owner, retry=False)
+                    except CasItemConflict as exc:
+                        if attempt + 1 == COORDINATION_CAS_ATTEMPTS:
+                            raise DmlRepoError(f"Failed to plan cancellation: {execution_id}") from exc
                         continue
+                    break
+                else:
+                    raise AssertionError("unreachable cancellation planning loop")
             finally:
                 self.unlock(execution_id, owner)
+            if execution_id in complete or state["lifecycle"] != "cancel-pending":
+                continue
             selected.append(execution_id)
             selected_ids.add(execution_id)
             if metadata["cache_key"] is not None:

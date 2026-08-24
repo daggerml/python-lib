@@ -1,7 +1,4 @@
-## Purpose
-Define manual invalidation and cancelation controls for runtime executions.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Manual invalidation SHALL target execution identity
 Manual invalidation SHALL accept one or more execution identities as explicit roots. It SHALL queue, deduplicate, lock, mark, and compute reverse caller propagation using execution IDs. Cache keys and cache pointers SHALL NOT supply replacement traversal identities.
@@ -43,13 +40,6 @@ For each selected execution outside `cancel-pending`, the runtime SHALL acquire 
 - **THEN** it SHALL leave that execution state unchanged
 - **AND** it SHALL not delete or reinterpret cancellation-owned state
 
-### Requirement: Invalidation SHALL write execution tombstones and drop affected cache refs
-Invalidation state SHALL be stored once in exact `state.json.invalidation` as `{requested_by, requested_at}`. Readers SHALL reject an invalidated execution even when an interrupted workflow has not yet deleted its cache pointer. Separate invalidation tombstone objects and unified execution records SHALL NOT be created or read.
-
-#### Scenario: Marked execution is immediately unusable
-- **WHEN** `exec/execution/e1/state.json.invalidation` is non-null while `exec/cache/ck1` still contains `e1`
-- **THEN** cache lookup treats `ck1` as invalidated
-
 ### Requirement: Manual cancellation SHALL run one resumable two-phase workflow
 Manual cancellation SHALL first reconstruct and complete the reachable `cancel-pending` set without invoking adapters, then drive every selected execution that remains `cancel-pending` with bounded retries. Every invocation SHALL resume persisted `cancel-pending` work without a separate drive mode, and the persisted field name SHALL remain `cancelation`. If Phase 2 observes a selected execution as `canceled`, it SHALL treat it as concurrent completion. If it observes `pending`, `running`, `succeeded`, or `failed`, it SHALL warn and stop driving that execution without invoking its cancel adapter.
 
@@ -69,16 +59,3 @@ Manual cancellation SHALL first reconstruct and complete the reachable `cancel-p
 - **WHEN** Phase 2 observes selected work outside `cancel-pending` or `canceled`
 - **THEN** it SHALL warn and drop that work from the current drive set
 - **AND** manual cancellation SHALL continue processing the remaining set
-
-### Requirement: Mutation-time cancellation rendezvous SHALL happen outside LMDB
-When a local index mutation detects a non-active local index lifecycle, the mutation path SHALL release or abort its LMDB transaction before joining the single runtime cancellation workflow. A mutation path that sees a non-active local index SHALL use runtime cancellation as the synchronization point rather than requiring caller-managed thread or process handling.
-
-#### Scenario: Inactive mutation gate joins drive mode outside LMDB
-- **WHEN** a mutating index workflow sees local index lifecycle `inactive`
-- **THEN** it SHALL abort or leave its LMDB transaction before calling `runtime.cancel(...)`
-- **AND** it SHALL raise `_core.CancellationError` after that cancellation rendezvous returns
-
-#### Scenario: Terminal local tombstone fails immediately
-- **WHEN** a mutating index workflow sees local index lifecycle `canceled`
-- **THEN** it SHALL abort or leave its LMDB transaction
-- **AND** it SHALL raise `_core.CancellationError` without attempting cancellation again

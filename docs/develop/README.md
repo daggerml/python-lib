@@ -11,6 +11,11 @@ Python and command-line surfaces.
 3. [Orient yourself in the codebase](codebase-map.md).
 4. Read the [contributor guide](contributing.md) before opening a pull request.
 
+## Investigations
+
+- [Flaky CI: execution cancellation and Docker over SSH](flaky-ci-investigation-2026-08-23.md):
+  observed failures, concurrency findings, and recommended stabilization work.
+
 ## Architecture
 
 - [System overview](architecture/system-overview.md): layers and the principal data flows.
