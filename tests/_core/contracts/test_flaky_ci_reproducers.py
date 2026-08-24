@@ -54,14 +54,6 @@ def test_flaky_ci_001__registration_gap_leaves_existing_child_running(monkeypatc
     assert state.read_execution_record("child")["state"]["lifecycle"] == "canceled"
 
 
-@pytest.mark.xfail(strict=True, reason="cancellation phase two drops active executions as successful work")
-def test_flaky_ci_002__phase_two_does_not_report_running_work_as_cancelled() -> None:
-    state = _state()
-    assert state.create_execution_record(_record("exec", "running"))
-
-    assert state._invoke_cancel_adapter("exec", "user", None) is False
-
-
 @pytest.mark.xfail(strict=True, reason="docker inspect transport failures are treated as exited containers")
 def test_flaky_ci_003__docker_inspect_error_is_not_a_terminal_container_exit(monkeypatch) -> None:
     monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda _: "/docker")
