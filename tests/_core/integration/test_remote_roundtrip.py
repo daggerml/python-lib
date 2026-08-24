@@ -121,12 +121,8 @@ def test_gc_preserves_locked_reservation_and_rereads_cache_pointer_before_deleti
 
         remote.gc()
 
-        locked_metadata = json.loads(
-            exec_store._get(exec_store._key_for("execution/locked/metadata.json"))
-        )
-        unlocked_metadata = json.loads(
-            exec_store._get(exec_store._key_for("execution/unlocked/metadata.json"))
-        )
+        locked_metadata = json.loads(exec_store._get(exec_store._key_for("execution/locked/metadata.json")))
+        unlocked_metadata = json.loads(exec_store._get(exec_store._key_for("execution/unlocked/metadata.json")))
         assert locked_metadata["execution_id"] == "locked"
         assert unlocked_metadata["execution_id"] == "unlocked"
 
@@ -508,9 +504,10 @@ def test_remote_materialization_skips_cas_fetch_for_local_root(tmp_path, monkeyp
 
         monkeypatch.setattr(remote._store, "_get", fail_unexpected_cas_fetch)
 
-        assert remote.materialize_manifest(
-            {"ref": {"to": root_ref.to}, "created": 0, "metadata": {}}, target_db
-        ) == root_ref
+        assert (
+            remote.materialize_manifest({"ref": {"to": root_ref.to}, "created": 0, "metadata": {}}, target_db)
+            == root_ref
+        )
 
 
 @pytest.mark.slow
@@ -585,12 +582,14 @@ def test_remote_ref_payloads_use_typed_roots(tmp_path):
         state = ExecutionState("s3://bucket/root", 2, cache_key=argv_value.id(), client=client)
         execution_id, owner, _ = state.reserve_execution(argv_node, execution_id="exec-1")
         assert state._create_cache(argv_value.id(), execution_id)
+        state.mark_running(execution_id, owner)
         state._mutate_state(
             execution_id,
-            lambda record: record.update(
-                lifecycle="succeeded", result_ref=dag_ref.to, result_source="runtime"
-            ),
+            lambda record: record.update(result_ref=dag_ref.to, result_source="runtime"),
         )
+        owner = state.acquire(execution_id)
+        assert owner is not None
+        state._finalize_runtime_result(execution_id, owner)
         state.unlock(execution_id, owner)
         remote.put_ref(commit_ref, "branch", "main", source_db)
 
@@ -652,12 +651,14 @@ def test_remote_gc_traces_split_execution_refs_and_collects_losing_attempt(tmp_p
         state = ExecutionState("s3://bucket/root", 2, cache_key="current", client=client)
         execution_id, owner, _ = state.reserve_execution(argv, execution_id="current-exec")
         assert state._create_cache("current", execution_id)
+        state.mark_running(execution_id, owner)
         state._mutate_state(
             execution_id,
-            lambda record: record.update(
-                lifecycle="succeeded", result_ref=dag_ref.to, result_source="runtime"
-            ),
+            lambda record: record.update(result_ref=dag_ref.to, result_source="runtime"),
         )
+        owner = state.acquire(execution_id)
+        assert owner is not None
+        state._finalize_runtime_result(execution_id, owner)
         state.unlock(execution_id, owner)
         losing = ExecutionState("s3://bucket/root", 2, cache_key="lost", client=client)
         _, losing_owner, _ = losing.reserve_execution(argv, execution_id="losing-exec")
