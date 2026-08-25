@@ -43,6 +43,18 @@ def put_execution_record(store, execution_id, *, cache_key="cache", children=Non
     )
 
 
+def test_execution_state_from_execution_id_builds_default_s3_client():
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="bucket")
+        state = ExecutionState("s3://bucket/root", 1, cache_key="cache", client=client)
+        put_execution_record(state._store, "exec")
+
+        restored = ExecutionState.from_execution_id("exec", root_uri="s3://bucket/root", n_workers=1)
+
+        assert restored.cache_key == "cache"
+
+
 def test_cache_roundtrip(tmp_path):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")

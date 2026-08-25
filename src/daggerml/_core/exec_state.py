@@ -27,6 +27,7 @@ from daggerml._core.types import (
     Runnable,
 )
 from daggerml._core.util import uuid7
+from daggerml.util import get_client
 
 if TYPE_CHECKING:
     import boto3
@@ -236,6 +237,7 @@ class ExecutionState:
 
     @classmethod
     def from_execution_id(cls, execution_id: str, *, root_uri: str, n_workers: int, client=None) -> ExecutionState:
+        client = client or get_client("s3")
         state = cls(root_uri, n_workers, client=client)
         cache_key = state.read_execution_record(execution_id)["metadata"]["cache_key"]
         return cls(root_uri, n_workers, cache_key=cache_key, client=client)
