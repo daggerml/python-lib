@@ -5,7 +5,7 @@ from typing import Any
 from warnings import warn
 
 from daggerml import Ref
-from daggerml._core.exec_state import validate_adapter_response
+from daggerml._core import validate_adapter_response
 from daggerml.api import DmlRepoError, _entry_points
 
 

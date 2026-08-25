@@ -29,6 +29,15 @@ nonnegative hint used to set shared `driver.not_before`. Invoke success is valid
 only after the runtime has published a result, otherwise the caller records a
 protocol-error DAG.
 
+Adapter and executor implementations can validate operation responses with the
+canonical public facade entry point:
+
+```python
+from daggerml._core import validate_adapter_response
+```
+
+Do not import the `_core` implementation module that defines it.
+
 ## Cleanup
 
 ```python

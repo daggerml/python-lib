@@ -10,7 +10,7 @@ from typing import Any, cast
 from urllib.parse import urlparse
 
 from daggerml import Runnable, Uri
-from daggerml._core.exec_state import validate_adapter_response
+from daggerml._core import validate_adapter_response
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.s3 import S3Store, is_s3_uri

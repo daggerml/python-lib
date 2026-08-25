@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from daggerml import Runnable, Uri
-from daggerml._core.exec_state import validate_adapter_response
+from daggerml._core import validate_adapter_response
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors.lambda_ import LambdaExecutorBase
 from daggerml.util import get_client

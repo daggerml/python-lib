@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 
-from daggerml import Runnable, Uri
+from daggerml import Ref, Runnable, Uri
 from daggerml.contrib.adapters import AdapterBase
 
 
@@ -44,6 +44,7 @@ def test_contrib_adapter_001__cli_passes_plain_payload_and_returns_raw_result(tm
 
 def test_contrib_adapter_002__cli_polling_reuses_persisted_state_between_polls(tmp_path, monkeypatch):
     calls = []
+    inspected = {}
 
     class PollingAdapter(AdapterBase):
         @classmethod
@@ -71,14 +72,21 @@ def test_contrib_adapter_002__cli_polling_reuses_persisted_state_between_polls(t
     input_path = tmp_path / "input.json"
     output_path = tmp_path / "output.json"
     input_path.write_text(payload)
-    class State:
-        def read_execution_record(self, execution_id):
+    class Runtime:
+        def read_execution_record(self, execution):
+            inspected["execution"] = execution
             return {"state": {"result_ref": "dag:result"}}
 
-    monkeypatch.setattr("daggerml.contrib.adapters.ExecutionState.from_execution_id", lambda *args, **kwargs: State())
+    class Dml:
+        def __init__(self, *, remote_root):
+            inspected["remote_root"] = remote_root
+            self.runtime = Runtime()
+
+    monkeypatch.setattr("daggerml.contrib.adapters.Dml", Dml)
     assert PollingAdapter.cli(["--poll", "-i", str(input_path), "-o", str(output_path)]) == 0
     persisted = json.loads(output_path.read_text())
     assert persisted["status"] == "success"
+    assert inspected == {"remote_root": "s3://bucket/root", "execution": Ref("index:exec")}
     assert calls[1]["adapter_state"] == {"token": "abc"}
     assert calls[2]["operation"] == "cleanup"
     assert calls[2]["result_ref"] == "dag:result"

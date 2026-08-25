@@ -14,6 +14,7 @@ from .exec_state import (
     ExecutionMetadata,
     ExecutionRecord,
     ExecutionSemanticState,
+    validate_adapter_response,
 )
 from .serde import dml_dumps, dml_loads
 from .types import BadExecutionStatusError, CanceledExecutionError, Error, Ref, Runnable, Uri
@@ -41,4 +42,5 @@ __all__ = [
     "Ref",
     "Runnable",
     "Uri",
+    "validate_adapter_response",
 ]

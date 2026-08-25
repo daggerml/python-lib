@@ -3,6 +3,11 @@
 DaggerML keeps user-facing entrypoints thin and centralizes repository rules in
 `daggerml._core`.
 
+`daggerml._core` is a strict application boundary. Modules outside that
+namespace may import its package-level exports, but must not import `_core`
+implementation submodules. When another namespace needs a core-owned contract,
+expose it deliberately from `daggerml._core` instead of bypassing the facade.
+
 1. `daggerml.api` provides Python DAG and node wrappers; `_cli.py` provides the
    `dml` command.
 2. `Dml` in `_core/dml.py` resolves configuration, opens the local database, and

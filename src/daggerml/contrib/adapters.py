@@ -10,13 +10,8 @@ from typing import Any
 from urllib.parse import urlparse
 from warnings import warn
 
-from daggerml import Runnable
-from daggerml._core.exec_state import (
-    AdapterCancelResponse,
-    AdapterCleanupResponse,
-    AdapterInvokeResponse,
-    ExecutionState,
-)
+from daggerml import Dml, Ref, Runnable
+from daggerml._core import AdapterCancelResponse, AdapterCleanupResponse, AdapterInvokeResponse
 from daggerml.api import DmlRepoError, _entry_points
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 from daggerml.util import get_client
@@ -83,9 +78,9 @@ class AdapterBase:
             time.sleep(0.1)
             result = cls.send(**payload)
         if args.poll and payload.get("operation") == "invoke" and result.get("status") == "success":
-            record = ExecutionState.from_execution_id(
-                payload["execution_id"], root_uri=payload["remote"]["root"], n_workers=1
-            ).read_execution_record(payload["execution_id"])
+            record = Dml(remote_root=payload["remote"]["root"]).runtime.read_execution_record(
+                Ref(f"index:{payload['execution_id']}")
+            )
             result_ref = record["state"]["result_ref"]
             if result_ref is None:
                 raise DmlRepoError("Successful nested invoke did not publish a result")
