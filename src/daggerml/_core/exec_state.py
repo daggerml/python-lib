@@ -611,69 +611,74 @@ class ExecutionState:
         delay = response.get("retry_after_ms", int(COORDINATION_CAS_BACKOFF_SECONDS * 1000))
         return int(time.time() * 1000) + cast(int, delay)
 
+    def _drive_cleanup_owned(
+        self, execution_id: str, owner: str, db: DmlDB, runnable: Runnable | None = None
+    ) -> None:
+        record = self.read_execution_record(execution_id)
+        metadata = record["metadata"]
+        state = record["state"]
+        driver = record["driver"]
+        if state["result_ref"] is None or driver["cleanup"] is not None:
+            return
+        if driver["not_before"] is not None and driver["not_before"] > int(time.time() * 1000):
+            return
+        runnable = runnable or self._runnable_for_execution(metadata, db)
+        if metadata["cache_key"] is None or runnable is None:
+            return
+        response = self._validate_adapter_response(
+            self._call_adapter(
+                {
+                    "operation": "cleanup",
+                    "cache_key": metadata["cache_key"],
+                    "execution_id": execution_id,
+                    "remote": {"root": self.root_uri},
+                    "runnable": asdict(runnable),
+                    "adapter_state": driver["adapter_state"],
+                    "scratch_uri": self.adapter_scratch(execution_id),
+                    "result_ref": state["result_ref"],
+                }
+            )
+        )
+        current = self.read_execution_record(execution_id)["driver"]
+        if current["lock"] is None or current["lock"]["owner"] != owner:
+            return
+        adapter_state = response.get("adapter_state", current["adapter_state"])
+        if response["status"] == "success":
+            self._mutate_driver(
+                execution_id,
+                owner,
+                lambda item: item.update(
+                    adapter_state=adapter_state,
+                    not_before=None,
+                    cleanup={"status": "complete", "error": None},
+                ),
+            )
+        elif response["status"] == "retry":
+            self._mutate_driver(
+                execution_id,
+                owner,
+                lambda item: item.update(
+                    adapter_state=adapter_state,
+                    not_before=self._retry_not_before(response),
+                ),
+            )
+        else:
+            self._mutate_driver(
+                execution_id,
+                owner,
+                lambda item: item.update(
+                    adapter_state=adapter_state,
+                    not_before=None,
+                    cleanup={"status": "failed", "error": response["error"]},
+                ),
+            )
+
     def _drive_cleanup(self, execution_id: str, db: DmlDB) -> None:
         owner = self.acquire(execution_id)
         if owner is None:
             return
         try:
-            record = self.read_execution_record(execution_id)
-            metadata = record["metadata"]
-            state = record["state"]
-            driver = record["driver"]
-            if state["result_ref"] is None or driver["cleanup"] is not None:
-                return
-            if driver["not_before"] is not None and driver["not_before"] > int(time.time() * 1000):
-                return
-            runnable = self._runnable_for_execution(metadata, db)
-            if metadata["cache_key"] is None or runnable is None:
-                return
-            response = self._validate_adapter_response(
-                self._call_adapter(
-                    {
-                        "operation": "cleanup",
-                        "cache_key": metadata["cache_key"],
-                        "execution_id": execution_id,
-                        "remote": {"root": self.root_uri},
-                        "runnable": asdict(runnable),
-                        "adapter_state": driver["adapter_state"],
-                        "scratch_uri": self.adapter_scratch(execution_id),
-                        "result_ref": state["result_ref"],
-                    }
-                )
-            )
-            current = self.read_execution_record(execution_id)["driver"]
-            if current["lock"] is None or current["lock"]["owner"] != owner:
-                return
-            adapter_state = response.get("adapter_state", current["adapter_state"])
-            if response["status"] == "success":
-                self._mutate_driver(
-                    execution_id,
-                    owner,
-                    lambda item: item.update(
-                        adapter_state=adapter_state,
-                        not_before=None,
-                        cleanup={"status": "complete", "error": None},
-                    ),
-                )
-            elif response["status"] == "retry":
-                self._mutate_driver(
-                    execution_id,
-                    owner,
-                    lambda item: item.update(
-                        adapter_state=adapter_state,
-                        not_before=self._retry_not_before(response),
-                    ),
-                )
-            else:
-                self._mutate_driver(
-                    execution_id,
-                    owner,
-                    lambda item: item.update(
-                        adapter_state=adapter_state,
-                        not_before=None,
-                        cleanup={"status": "failed", "error": response["error"]},
-                    ),
-                )
+            self._drive_cleanup_owned(execution_id, owner, db)
         finally:
             self.unlock(execution_id, owner)
 
@@ -883,6 +888,7 @@ class ExecutionState:
             if state["result_source"] == "runtime":
                 state = self._finalize_runtime_result(execution_id, owner)
                 self._update_child(index.id(), execution_id, complete=True)
+                self._drive_cleanup_owned(execution_id, owner, db, runnable)
                 return self._materialize(state["result_ref"], db)
             if driver["not_before"] is not None and driver["not_before"] > int(time.time() * 1000):
                 return None
@@ -920,6 +926,7 @@ class ExecutionState:
                 if state["result_source"] == "runtime":
                     state = self._finalize_runtime_result(execution_id, owner)
                     self._update_child(index.id(), execution_id, complete=True)
+                    self._drive_cleanup_owned(execution_id, owner, db, runnable)
                     return self._materialize(state["result_ref"], db)
             dag = self._error_dag(
                 str(response.get("error") or "Adapter failed before publishing a result"), argv_node, db
@@ -933,6 +940,7 @@ class ExecutionState:
             )
             self._mutate_driver(execution_id, owner, lambda value: value.update(adapter_state=adapter_state))
             self._update_child(index.id(), execution_id, complete=True)
+            self._drive_cleanup_owned(execution_id, owner, db, runnable)
             return dag
         except Exception:
             if not adapter_called and edge_created:

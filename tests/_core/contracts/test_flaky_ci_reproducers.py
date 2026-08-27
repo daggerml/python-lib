@@ -105,7 +105,6 @@ def test_flaky_ci_004__nested_cleanup_failure_still_publishes_diagnostics(tmp_pa
     assert "cleanup failed" in json.loads(output_path.read_text())["error"]
 
 
-@pytest.mark.xfail(strict=True, reason="fresh runtime success returns before outer executor cleanup")
 def test_flaky_ci_005__fresh_success_drives_outer_cleanup(monkeypatch) -> None:
     state = _state()
     assert state.create_execution_record(_record("caller", cache_key=None, argv_ref=None))

@@ -67,11 +67,13 @@ all invoke, cleanup, and cancellation drivers respect.
 
 The next operation is derived from current state: `cancel-pending` selects
 cancel, an absent result selects invoke, and a result without a cleanup marker
-selects cleanup. Cleanup success or failure is recorded in `driver.cleanup`
-without changing lifecycle or result, so reusable cache results do not wait for
-resource pruning. Normal teardown belongs in idempotent cleanup rather than
-terminal invoke inspection. Cleanup remains demand-driven; there is no
-background reconciler if every caller disappears.
+selects cleanup. Before returning a fresh or cached terminal result, its caller
+gives eligible required cleanup one coordinated drive. Cleanup success or
+failure is recorded in `driver.cleanup` and is not repeated; retry state and
+backpressure remain pending without changing lifecycle or result. Normal
+teardown belongs in idempotent cleanup rather than terminal invoke inspection.
+Cleanup remains demand-driven; there is no background reconciler if every
+caller disappears.
 
 Cancellation first locks and CAS-selects the
 complete unreferenced descendant set as `cancel-pending`, conditionally deletes

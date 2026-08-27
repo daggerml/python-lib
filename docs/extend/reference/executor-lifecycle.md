@@ -26,6 +26,8 @@ Retry may include a delay hint and requires durable state; failure requires
 diagnostics. Cleanup returns retry while required finalization remains active,
 must be harmless when repeated after a lost response, and must not publish a
 result or change lifecycle. Normal teardown cannot live only in terminal
-`poll()`, because independent result publication can stop further invokes.
+`poll()`, because independent result publication can stop further invokes. The
+runtime gives required cleanup one eligible call before returning either a fresh
+or cached terminal result, without waiting for cleanup retries to finish.
 Cancellation has its own response contract described in [Adapter
 operations](adapter-operations.md).

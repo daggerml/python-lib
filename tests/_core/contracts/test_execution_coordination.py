@@ -262,13 +262,15 @@ def test_invoke_failure_is_reused_as_cached_adapter_error(monkeypatch) -> None:
     first = state.get_or_start_fn(
         Ref("index:caller"), Runnable(Uri("target"), adapter="adapter"), Ref("node-argv:argv"), None
     )
+    assert first == Ref("dag:error")
+    assert calls == ["invoke", "cleanup"]
     second = state.get_or_start_fn(
         Ref("index:caller"), Runnable(Uri("target"), adapter="adapter"), Ref("node-argv:argv"), None
     )
 
     execution_id = state._read_cache("cache")[0]
     record = state.read_execution_record(execution_id)
-    assert first == second == Ref("dag:error")
+    assert second == Ref("dag:error")
     assert calls == ["invoke", "cleanup"]
     assert record["state"]["lifecycle"] == "failed"
     assert record["state"]["result_source"] == "adapter-error"
@@ -296,10 +298,40 @@ def test_shared_retry_delay_defers_cleanup_and_invoke(monkeypatch) -> None:
     assert state.read_execution_record("exec")["driver"]["cleanup"] is None
 
 
+def test_fresh_result_returns_after_cleanup_retry_is_persisted(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("caller", cache_key=None, argv_ref=None))
+    assert state.create_execution_record(_record("child"))
+    assert state._create_cache("cache", "child")
+    calls = []
+
+    def call_adapter(request):
+        calls.append(request["operation"])
+        if request["operation"] == "invoke":
+            state.finish_execution("child", Ref("dag:result"), None)
+            return {"status": "success", "adapter_state": {"invoke": "complete"}}
+        return {"status": "retry", "adapter_state": {"cleanup": "pending"}, "retry_after_ms": 1000}
+
+    monkeypatch.setattr(state, "_call_adapter", call_adapter)
+
+    result = state.get_or_start_fn(
+        Ref("index:caller"), Runnable(Uri("target"), adapter="adapter"), Ref("node-argv:argv"), None
+    )
+
+    driver = state.read_execution_record("child")["driver"]
+    assert result == Ref("dag:result")
+    assert calls == ["invoke", "cleanup"]
+    assert driver["adapter_state"] == {"cleanup": "pending"}
+    assert driver["not_before"] > int(time.time() * 1000)
+    assert driver["cleanup"] is None
+
+
 @pytest.mark.parametrize(
     ("updates", "adapter_calls"),
     [
+        ({}, 1),
         ({"lock": {"owner": "other", "ttl": 300.0}}, 0),
+        ({"cleanup": {"status": "complete", "error": None}}, 0),
         ({"cleanup": {"status": "failed", "error": "cleanup failed"}}, 0),
     ],
 )
@@ -309,6 +341,7 @@ def test_cached_result_is_reusable_with_pending_or_failed_cleanup(monkeypatch, u
     assert state._create_cache("cache", "exec")
     calls = []
     monkeypatch.setattr(state, "_call_adapter", lambda request: calls.append(request) or {"status": "success"})
+    monkeypatch.setattr(state, "_runnable_for_execution", lambda *_: Runnable(Uri("target"), adapter="adapter"))
 
     assert state.get_cached_result("cache", None) == Ref("dag:result")
 

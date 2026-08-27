@@ -56,7 +56,9 @@ Do not import the `_core` implementation module that defines it.
 Cleanup without a typed DAG result is rejected. Success records cleanup
 complete, retry leaves it pending and persists continuation/backpressure, and a
 failure code records diagnostics. No cleanup outcome changes lifecycle or the
-published result.
+published result. The runtime gives required, eligible cleanup one call before
+returning either a freshly established or cached terminal result; it does not
+wait synchronously for cleanup retries.
 
 ## Cancel
 
