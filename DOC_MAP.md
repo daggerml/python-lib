@@ -129,6 +129,16 @@ Use this file to identify which project docs to read before editing a code path,
   - `docs/getting-started.md` when changing onboarding
   - the target audience landing page under `docs/use/`, `docs/extend/`, or `docs/develop/` when changing an audience path
 
+### Local research dashboard
+
+- Match: `src/daggerml/dashboard/**`, `dashboard-ui/**`
+- Read:
+  - `docs/develop/architecture/dashboard.md`
+  - `docs/develop/architecture/system-overview.md`
+  - `docs/develop/architecture/execution-and-runtime-state.md`
+  - `docs/develop/architecture/remotes-and-sync.md`
+  - `docs/sharp-bits-and-security.md`
+
 ## Topic Rules (Apply In Addition To Path Rules)
 
 - If changing adapter behavior:

@@ -145,6 +145,39 @@ refs before rolling a repository back to such a client.
 
 ## Known security holes
 
+### Dashboard remote binding exposes repository metadata
+
+`dml-dashboard` binds to loopback by default. Keep that default when possible:
+the dashboard can expose source, repository metadata, logs, remote resource
+identifiers, and execution controls to the browser.
+
+A non-loopback binding requires `--allow-remote` and uses an ephemeral bearer
+token printed at startup. Treat that token like a password, do not put the
+token-bearing URL in shared logs, and use a trusted network or an authenticated
+reverse proxy. The token protects the dashboard application; it does not repair
+the known trust limitations of persisted DaggerML objects or executor inputs.
+
+Dashboard responses redact credential-like fields, environment values,
+authorization data, and presigned URL query parameters. SSH environment-file
+contents are never displayed. Script reads are constrained to resources derived
+from persisted execution state; log reads use only canonical CloudWatch streams
+derived from trusted persisted cache keys and never read executor-local files.
+Rendered scripts and CloudWatch logs can still contain secrets written by user
+code.
+
+Home exposes project paths already stored in the dashboard's registered-project
+configuration. It shows shortened path context and discloses the full
+registered path on pointer hover, keyboard focus, and through assistive
+technology. Aggregate requests cannot supply or resolve arbitrary paths. A
+project read failure is reduced to a bounded, project-scoped diagnostic without
+exception text, tracebacks, credentials, or additional internal paths.
+
+Project routes carry a registered project ID and concrete commit ID, not a
+filesystem path. Invalid, unknown, unavailable, or out-of-revision requests
+must retain that requested scope while rendering only their safe dashboard
+error; they must not fall back to `HEAD` or disclose other repository paths or
+resources.
+
 ### Runnable adapters can launch arbitrary local executables
 
 The `adapter` field is persisted in each runnable. When the runnable executes, the runtime passes that field to `shutil.which()` and then launches the returned path with `subprocess.run()`. It does not check that the field names a registered adapter executable. An absolute path is accepted as well as a name resolved through `PATH`.

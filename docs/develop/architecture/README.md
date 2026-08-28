@@ -10,3 +10,4 @@ coordination.
 - [DAG storage and types](dag-storage-and-types.md)
 - [Execution and runtime state](execution-and-runtime-state.md)
 - [Remotes and sync](remotes-and-sync.md)
+- [Local research dashboard](dashboard.md)

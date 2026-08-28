@@ -73,7 +73,7 @@ jobs:
       - name: Build with ASAN + UBSAN
         env:
           CMAKE_ARGS: "-DDML_ENABLE_ASAN=ON -DDML_ENABLE_UBSAN=ON"
-        run: uv sync --group dev
+        run: uv sync --group dev --all-extras
       - name: Run tests with sanitizers
         env:
           ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1"
@@ -97,8 +97,27 @@ jobs:
         run: uv run ruff check --output-format=github .
       - name: Run Pyright
         run: uv run pyright --project .
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard-ui/package-lock.json
+      - name: Install dashboard dependencies
+        working-directory: dashboard-ui
+        run: npm ci
+      - name: Test dashboard
+        working-directory: dashboard-ui
+        run: npm test
+      - name: Build dashboard assets
+        working-directory: dashboard-ui
+        run: npm run build
   publish:
-    needs: ["test", "lint", "sanitize", "examples"]
+    needs: ["test", "lint", "sanitize", "examples", "dashboard"]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     name: Upload release to PyPI
     runs-on: ubuntu-latest
@@ -108,6 +127,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard-ui/package-lock.json
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -119,6 +144,11 @@ jobs:
       - name: Install hatch
         run: |
           pip install hatch
+      - name: Build dashboard assets
+        working-directory: dashboard-ui
+        run: |
+          npm ci
+          npm run build
       - name: Build and publish
         env:
           HATCH_INDEX_USER: __token__

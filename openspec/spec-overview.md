@@ -20,9 +20,14 @@ When a concept is not listed here, treat it as unresolved rather than guessing f
 | Codec encoding and import/export behavior | `docs/extend/reference/codec-contracts.md`, `docs/use/concepts/artifacts-data-codecs.md` | Codec registry behavior, encoding rules, and import/export semantics. |
 | Extension authoring API | `docs/use/guides/author-a-dag.md`, `docs/extend/concepts/extension-model.md` | `daggerml.contrib.api` decorators, delayed actions, and execution helpers. |
 | Extension runtime lifecycle | `docs/extend/reference/adapter-operations.md`, `docs/extend/reference/executor-lifecycle.md`, `docs/develop/architecture/execution-and-runtime-state.md` | Adapter/executor pairing, execution-state transitions, and deployment-specific execution behavior. |
-| Extension plugin packaging and discovery | `docs/extend/reference/plugin-api.md` | Adapter, executor, and codec plugin packaging and discovery behavior. |
+| Extension plugin packaging and discovery | `docs/extend/reference/plugin-api.md` | Adapter, executor, codec, and custom dashboard plugin packaging and discovery behavior. |
 | Extension S3 utility behavior | `docs/use/guides/artifacts.md`, `docs/extend/reference/codec-contracts.md` | `S3Store`, artifact URI behavior, and dataframe serialization. |
 | Bundled agent skills | `openspec/specs/bundled-agent-skills/spec.md` | Portable `authoring`, `repository`, and `inspection` guidance resources. |
+| Local research dashboard | `docs/develop/architecture/dashboard.md` | Dashboard launcher, local HTTP API, read-only projections, cancellation confirmation, redaction, executor introspection, and packaged frontend assets. |
+| Dashboard revision navigation | `openspec/specs/dashboard-revision-navigation/spec.md` | Home, canonical project-and-commit routes, revision-scoped reads, refs, and current-versus-historical presentation. |
+| Dashboard public API boundary | `openspec/specs/dashboard-public-api-boundary/spec.md` | Allowed core imports and the dashboard's public plugin surface. |
+| Dashboard value and runnable inspection | `openspec/specs/dashboard-value-runnable-inspection/spec.md` | Inspector value, runnable, script, and log semantics. |
+| Custom DAG dashboards | `openspec/specs/custom-dag-dashboards/spec.md` | Plugin discovery, compatibility, rendering, caching, and declarative result behavior. |
 
 ## Handoffs
 

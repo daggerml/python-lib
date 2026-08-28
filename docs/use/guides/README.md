@@ -9,4 +9,5 @@
 - [Inspect and cancel runtimes](runtime-inspection-cancellation.md)
 - [Refresh cached work](refresh-cache.md)
 - [Inspect a completed DAG](inspect-a-completed-dag.md)
+- [Provide custom DAG dashboards](custom-dag-dashboards.md)
 - [Share and reuse research](share-reuse.md)

@@ -38,3 +38,20 @@ configured `remote.root` state. GC does not accept dependency or dry-run
 selectors.
 
 Export one bundled, portable coding-agent skill with `dml skills querying > SKILL.md`, `dml skills authoring > SKILL.md`, `dml skills repository > SKILL.md`, or `dml skills extensions > SKILL.md`. Use `querying` for data extraction, DAG traversal, provenance, and persisted errors; use `repository` for cache inspection and invalidation.
+
+## Local dashboard
+
+Install the dashboard extra and launch it from a DaggerML project:
+
+```bash
+pip install "daggerml[dashboard]"
+dml-dashboard
+```
+
+The standalone dashboard launcher accepts `--config-home` (with
+`--config-dir` as an alias), `--host`, `--port`, and `--no-open`. It discovers
+projects from that configuration directory and does not accept a project-path
+argument. It defaults to `127.0.0.1:8765` and opens a browser. A
+non-loopback host is refused unless `--allow-remote` is supplied; that mode
+requires the ephemeral bearer token printed at startup. An uninitialized
+configuration opens a diagnostic empty state.

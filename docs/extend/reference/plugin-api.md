@@ -36,4 +36,22 @@ example = "my_package.codecs:literal_codecs"
 ```
 
 Unlike adapter and executor plugins, this entry point loads a zero-argument
-callable and calls it. Its return value is an iterable of `(priority, codec)`
+callable and calls it. Its return value is an iterable of `(priority, codec)`.
+
+## Custom dashboard entry points
+
+```toml
+[project.entry-points."daggerml.dashboards"]
+research = "my_package.dashboards:dashboards"
+```
+
+The entry point loads a zero-argument provider returning an ordered iterable of
+`daggerml.dashboard.Dashboard` values. Each definition has a unique namespaced
+name, exact required intrinsic DAG tags, an optional eager flag and cache
+version, and a render function. Discovery sorts entry points by name and value,
+then preserves provider order. A provider failure is isolated; a later
+duplicate name is rejected while the first definition remains registered.
+
+Render functions receive a committed public `Dag` and return
+`PlotlyDashboardResult` or `VegaLiteDashboardResult`. Those result types contain
+plain JSON and do not require Plotly or Altair in the plugin environment.

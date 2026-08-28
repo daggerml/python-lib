@@ -31,3 +31,17 @@ Core execution coordination and remote sync use S3 through `boto3`. Most
 contract tests are local; integration tests may require their declared test
 fixtures or external-service emulation. Start with a focused local test before
 attempting a remote integration scenario.
+
+## Working on the dashboard
+
+Install all Python extras before running dashboard server or packaging tests:
+
+```bash
+uv sync --dev --all-extras
+```
+
+The React/TypeScript source and its package-manager commands live under
+`dashboard-ui/`. Production distribution builds must compile that source and
+include the resulting static assets under `src/daggerml/dashboard/`. Verify both
+wheel and source-distribution contents when changing the frontend build; an
+installed `dml-dashboard` must not require Node.js.

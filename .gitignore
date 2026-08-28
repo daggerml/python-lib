@@ -25,6 +25,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+/src/daggerml/dashboard/static/
 develop-eggs/
 dist/
 downloads/

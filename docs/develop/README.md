@@ -23,6 +23,8 @@ Python and command-line surfaces.
 - [DAG storage and types](architecture/dag-storage-and-types.md): persisted objects, refs, and local storage.
 - [Execution and runtime state](architecture/execution-and-runtime-state.md): mutable DAG construction, caching, and execution coordination.
 - [Remotes and sync](architecture/remotes-and-sync.md): S3 transport, project sync, and remote cache state.
+- [Local research dashboard](architecture/dashboard.md): local server, browser
+  workbench, read model, versioned API, and cancellation boundary.
 
 This is contributor-facing product documentation. Repository workflow policy,
 agent instructions, edit maps, and change-planning governance remain in their
