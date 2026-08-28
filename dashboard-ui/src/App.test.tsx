@@ -85,6 +85,7 @@ describe("canonical dashboard routes", () => {
 
     const selector = await screen.findByRole("combobox", { name: "Select custom dashboard" });
     expect(api.customDashboard).not.toHaveBeenCalled();
+    await screen.findByRole("option", { name: "acme.metrics" });
     fireEvent.change(selector, { target: { value: "acme.metrics" } });
     await waitFor(() => expect(api.customDashboard).toHaveBeenCalledWith(
       { project: "project-1", revision: "abc123" }, "dag:one", "acme.metrics",
@@ -150,7 +151,9 @@ describe("canonical dashboard routes", () => {
     history.replaceState(null, "", "/projects/project-1/commits/abc123/dags/dag%3Aone?dashboard=acme.metrics");
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Refresh custom dashboard" }));
+    const refresh = await screen.findByRole("button", { name: "Refresh custom dashboard" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    fireEvent.click(refresh);
     await waitFor(() => expect(api.refreshCustomDashboard).toHaveBeenCalledWith(
       { project: "project-1", revision: "abc123" }, "dag:one", "acme.metrics",
     ));
