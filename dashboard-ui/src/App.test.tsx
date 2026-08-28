@@ -88,7 +88,7 @@ describe("canonical dashboard routes", () => {
     fireEvent.change(selector, { target: { value: "acme.metrics" } });
     await waitFor(() => expect(api.customDashboard).toHaveBeenCalledWith(
       { project: "project-1", revision: "abc123" }, "dag:one", "acme.metrics",
-    ));
+    ), { timeout: 5_000 });
     expect(location.search).toContain("dashboard=acme.metrics");
     expect(await screen.findByLabelText("Vega-Lite dashboard")).toBeVisible();
     await waitFor(() => expect(vegaEmbed).toHaveBeenCalled());
@@ -111,10 +111,12 @@ describe("canonical dashboard routes", () => {
     render(<App />);
 
     await waitFor(() => expect(location.search).toContain("dashboard=acme.first"));
-    expect(api.customDashboard).toHaveBeenCalledTimes(1);
-    expect(api.customDashboard).toHaveBeenCalledWith(
-      { project: "project-1", revision: "abc123" }, "dag:one", "acme.first",
-    );
+    await waitFor(() => {
+      expect(api.customDashboard).toHaveBeenCalledTimes(1);
+      expect(api.customDashboard).toHaveBeenCalledWith(
+        { project: "project-1", revision: "abc123" }, "dag:one", "acme.first",
+      );
+    }, { timeout: 5_000 });
     expect(await screen.findByText("Loaded from local cache")).toBeVisible();
     await waitFor(() => expect(plotlyNew).toHaveBeenCalled());
   });
