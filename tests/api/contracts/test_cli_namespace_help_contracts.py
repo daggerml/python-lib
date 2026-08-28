@@ -44,8 +44,9 @@ def test_cli_namespace_help_003__skills_help_lists_commands_before_namespaces() 
     assert "commands:" in skills_help
     assert set(skills_subparsers.choices) == {
         "authoring",
+        "extensions",
+        "querying",
         "repository",
-        "inspection",
     }
     assert "namespaces:" not in skills_help
 
@@ -138,6 +139,7 @@ def test_cli_cache_and_gc_surfaces_are_generated_without_admin_aliases() -> None
         ["admin", "gc"],
         ["admin", "remote", "gc"],
         ["admin", "agent-skill"],
+        ["skills", "inspection"],
     ],
 )
 def test_cli_removed_maintenance_routes_are_rejected(route) -> None:
@@ -154,9 +156,10 @@ def test_cli_removed_maintenance_routes_are_rejected(route) -> None:
         ["cache", "invalidate", "index:e1"],
         ["gc"],
         ["gc", "--remote"],
+        ["skills", "querying"],
         ["skills", "authoring"],
         ["skills", "repository"],
-        ["skills", "inspection"],
+        ["skills", "extensions"],
     ],
 )
 def test_cli_canonical_maintenance_routes_are_accepted(route) -> None:

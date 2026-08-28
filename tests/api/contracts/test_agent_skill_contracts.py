@@ -9,20 +9,27 @@ from daggerml._cli import MethodCLI
 from daggerml._core import Dml
 
 SKILLS = {
+    "querying": {
+        "description": "Extract data, traverse DAGs and provenance, and capture persisted errors.",
+        "guidance": ("`dag.result`", "`Projection`", "root=False", "NodeError"),
+        "max_examples": 2,
+    },
     "authoring": {
         "description": "Build reproducible DaggerML DAGs and script-backed funks.",
-        "guidance": ("`dag.call()`", "extra_objs", "post_lines", "normalized DaggerML input identity"),
+        "guidance": ("`dag.require", "`.value()`", "extra_objs", "normalized DaggerML input identity"),
         "max_examples": 2,
     },
     "repository": {
-        "description": "Manage DaggerML history, references, remotes, dependencies, and garbage collection.",
-        "guidance": ("managed `.dml/`", "--unshallow", "concurrently with fetch, pull, or push"),
-        "max_examples": 1,
+        "description": (
+            "Set up and manage DaggerML projects, history, remotes, dependencies, cache, and garbage collection."
+        ),
+        "guidance": ("managed `.dml/`", "--unshallow", "cache describe", "exact `execution` ref"),
+        "max_examples": 2,
     },
-    "inspection": {
-        "description": "Inspect committed graphs, open runtimes, executions, errors, provenance, and cache state.",
-        "guidance": ("frozen runtime", "describe_graph", "cache.invalidate"),
-        "max_examples": 1,
+    "extensions": {
+        "description": "Build and test DaggerML adapters, executors, codecs, and integration plugins.",
+        "guidance": ("transport boundary", "`poll`", "validate_adapter_response", "daggerml.codecs"),
+        "max_examples": 2,
     },
 }
 
@@ -39,6 +46,11 @@ def test_agent_skill_001__skills_help_and_commands_export_bundled_resources(
     cli = MethodCLI(Dml, prog="dml")
     subparsers = next(action for action in cli.parser._actions if isinstance(action, argparse._SubParsersAction))
 
+    skills_parser = subparsers.choices["skills"]
+    skill_subparsers = next(
+        action for action in skills_parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    assert set(skill_subparsers.choices) == set(SKILLS)
     skills_help = subparsers.choices["skills"].format_help()
     assert name in skills_help
     assert "Print the bundled" in skills_help
@@ -51,7 +63,7 @@ def test_agent_skill_002__resources_are_portable_compact_and_topic_specific(name
     skill = _skill(name)
 
     assert skill.startswith(f"---\nname: daggerml-{name}\ndescription: {contract['description']}\n---\n")
-    assert len(skill.split()) <= 250
+    assert len(skill.split()) <= 1000
     assert skill.count("```") <= contract["max_examples"] * 2
     assert "](" not in skill
     for text in contract["guidance"]:

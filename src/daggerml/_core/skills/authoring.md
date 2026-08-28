@@ -5,16 +5,31 @@ description: Build reproducible DaggerML DAGs and script-backed funks.
 
 # DaggerML Authoring
 
-Use Python to author computations. A `Dag` is mutable until `commit()`, then
-immutable and inspectable.
+## Create And Commit A DAG
 
-## Author DAGs
+`dml.new(name, message=...)` creates a mutable DAG. Stage data and functions,
+record calls, then explicitly commit one node as the terminal result. Successful
+exit from a `with` block does not commit automatically. A committed DAG is
+immutable; load it with `dml.load(name)` and read its terminal node through
+`.result`.
 
-Use `dag.put()` for storable values, `dag.call()` for funks, and
-`dag.require("other-dag")` for a prior committed result. Name inspectable values
-and calls, then commit the terminal node. Materialize nodes with `.value()`.
-Pass same-session nodes, projections, and required DAG results directly: the
-codec preserves imports and access paths.
+## Put And Get Data
+
+`dag.put(value, name=...)` stages a value and returns its node. Assignment is a
+short form for staging named data: `dag.foo = value` and `dag["foo"] = value`.
+Use item syntax for names that collide with `Dag` attributes or methods.
+
+Read named nodes with `dag.foo` or `dag["foo"]`; inspect available names with
+`dag.keys()` and their nodes with `dag.values()`. A name is a label, not a copy.
+`dag.result` is available only on a committed DAG and means its terminal node; a
+node named `"result"` is just `dag["result"]`.
+
+Keep nodes in the graph. Nodes can be staged inside lists or dictionaries,
+passed to functions, or indexed. Call `.value()` only for inspection or when
+ordinary Python code needs concrete data. Collection-valued nodes support normal
+key, index, and slice access: `dag.foo["bar"]` returns another node in the same
+DAG, and `dag.foo["bar"].value() == dag.foo.value()["bar"]`. Pass the selected
+node directly into calls or other collections to avoid materializing the parent.
 
 ```python
 import daggerml as dml
@@ -22,39 +37,123 @@ from daggerml.contrib import api
 
 
 @api.funkify
-def summarize(dag, numbers, divisor):
-    logger.info("Summarizing %s", numbers.value())  # injected logger
-    print(type(dag))  # `daggerml.api.Dag` instance
-    print(numbers[0].value())  # indexed graph node
-    print(numbers[1:].value())  # list nodes support slices
-    sum_ = dag.put(sum(numbers.value()), name="sum")
-    return sum_.value() / divisor.value()
+def square(dag, number):
+    return number.value() ** 2
 
-with dml.new("summary") as dag:
-    values = dag.put([2, 3, 5], name="values")
-    result = dag.call(summarize, values, 2, name="summary")
-    print(result.context().sum.value())  # 10
+
+with dml.new("squares", message="square an input") as dag:
+    number = dag.put(3, name="number")
+    dag["metadata"] = {"unit": "meters"}
+
+    assert dag.number == number
+    assert dag["metadata"].value() == {"unit": "meters"}
+
+    direct = dag.call(square, number, name="direct")
+    dag.square = square
+    result = dag.square(direct, name="squared-again")
     dag.commit(result)
 
-dml.load("summary").summary.value()  # 5.0
-dml.load("summary").summary.context().result.value()  # 5.0
+assert dml.load("squares").result.value() == 81
 ```
+
+## Call Functions
+
+Call a funk directly with `dag.call(fn, *args, name=...)`, or stage it as a node
+and call that node: `dag.fn = fn; dag.fn(*args, name=...)`. `dag.put(fn,
+name="fn")` is the explicit equivalent of assignment. In both forms, arguments
+may be literals, nodes, projections, or nested collections containing them, and
+the returned node records the call result. The call's `name=` labels that result;
+it does not name the function.
+
+Pass node-like arguments unchanged to nested funks. Do not call `.value()`
+between graph calls: that materializes and restages a copy instead of preserving
+the dependency edge. Write calls in their logical order without trying to stage,
+schedule, or deduplicate them: DaggerML ensures a given funk and normalized
+arguments run only once and reuses the cached result thereafter.
+
+## Load Nodes From Other DAGs
+
+There are two general forms: `dag.require(...)`, or load a committed DAG and
+stage one of its nodes with `dag.put(...)`, item assignment, or attribute
+assignment.
+
+With `dag.require(dag_name, name=...)`, the source DAG's terminal result is
+imported. `dag.require(dag_name, node_name, name=...)` always imports the named
+node. Therefore `dag.require("other-dag", "result")` imports
+`dml.load("other-dag")["result"]`, not `dml.load("other-dag").result`.
+`name=` labels the imported node in the target DAG; it does not select or rename
+the source node.
+
+For `source = dml.load("other-dag")`, `dag.require("other-dag")` is equivalent
+to `dag.put(source.result)`. `dag.require("other-dag", "bar", name="foo")` is
+equivalent to `dag.put(source["bar"], name="foo")` or
+`dag.foo = source["bar"]`.
+
+`dag.require(source)` also accepts a loaded committed `Dag`; its second argument
+selects a named node. This form preserves an explicit revision, fetched remote,
+or dependency selected when loading `source`. The loaded DAG must belong to the
+target DAG's `Dml` session. Importing an uncommitted DAG or a node from another
+open runtime fails.
 
 ## Author Funks
 
-`@api.funkify` packages delayed work. Its worker receives node-like arguments,
-so materialize inputs before using them. Script workers receive only function
-source plus injected `extra_objs` or `post_lines`, not module globals. Import
-dependencies inside the funk, and package behavior-affecting helpers. `logger`
-is injected for logging.
+`@api.funkify` packages delayed work. Worker arguments are node-like: materialize
+with `.value()` for arithmetic, iteration, or library calls, but pass them
+unchanged to nested funks. Other funks must be explicit through arguments,
+`prepop`, or dagclass members.
 
-## Sharp Bits
+Script workers receive rendered function source plus `extra_objs` and
+`post_lines`, not module globals, closures, module imports, constants, or
+transitive helpers. Import dependencies inside the function and inject all
+behavior-affecting helper source. `prepop` creates named nodes on the worker DAG;
+`api.ref("name")` resolves configuration from an already-named authoring node.
+`logger` is injected.
 
-`remote.root` is required for adapter-backed execution and cache coordination.
+## Compose A Dagclass
+
+```python
+@api.funkify
+def add(dag, left, right):
+    return left.value() + right.value()
+
+
+@api.dagclass
+class Pipeline:
+    add = add
+    offset = 23
+
+    def prepare(self, value):
+        self.foo = 23
+        return self.add(value, self.foo)
+
+    def main(self, value):
+        self.prepare(value)
+        return self.add(value, self.offset)
+
+
+assert type(Pipeline().main) is type(add)
+api.run(Pipeline(), 19, name="answer")
+```
+
+A dagclass is compiled composition syntax, not a normal stateful class. The
+compiler resolves direct `self.add`, `self.offset`, and `self.prepare`
+references to declared members and packages each method as an isolated funk.
+When `prepare` executes, `self` is that invocation's worker `Dag`; setting
+`self.foo = 23` creates a node only there. It does not mutate the `Pipeline`
+instance and has no effect on `main` or any later method execution. Referencing
+`self.foo` from `main` would therefore require a declared class member named
+`foo`; it cannot observe the assignment performed by `prepare`.
+
+## Manage Cache Identity
+
 Cache reuse keys on the staged runnable and normalized DaggerML input identity.
-Include all behavior in the packaged function boundary; otherwise helper edits
-can silently reuse an old result.
-
-For implementation detail, inspect installed `daggerml.api`,
-`daggerml.contrib.api`, `daggerml._core.index`, and
-`daggerml._core.exec_state`.
+Chunk expensive input work when independently reusable chunk results will avoid
+recomputing the whole dataset, but do not create funks without a meaningful
+reuse boundary. A leaf funk should accept only arguments it uses: unrelated
+arguments cause cache misses unless intentionally supplied as a cache breaker.
+Editable imported package code is not automatically part of that identity, so
+pin environments and package changing helpers. Put supported complex values
+directly and let installed codecs normalize them; the included pandas and polars
+DataFrame codecs persist Parquet artifacts automatically. For other files,
+directories, bytes, or JSON artifacts, store them with
+`daggerml.contrib.s3.S3Store` and put the returned `Uri` in the DAG.

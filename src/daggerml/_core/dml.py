@@ -990,9 +990,13 @@ class _SkillsNamespace:
         """Print the bundled repository-management skill as portable Markdown."""
         return self._read("repository.md")
 
-    def inspection(self) -> str:
-        """Print the bundled graph-inspection skill as portable Markdown."""
-        return self._read("inspection.md")
+    def querying(self) -> str:
+        """Print the bundled data-querying skill as portable Markdown."""
+        return self._read("querying.md")
+
+    def extensions(self) -> str:
+        """Print the bundled extension-development skill as portable Markdown."""
+        return self._read("extensions.md")
 
 
 class StatusPayload(TypedDict):

@@ -1,16 +1,4 @@
-## Purpose
-
-Provide concise, task-focused portable guidance that lets coding agents use DaggerML correctly without receiving an unrelated general-purpose skill.
-
-## Requirements
-
-### Requirement: DaggerML SHALL bundle four focused agent skills
-DaggerML SHALL bundle portable Markdown skills named `querying`, `authoring`, `repository`, and `extensions`. Each document SHALL begin with YAML frontmatter naming the skill and describing its purpose, contain no more than 1000 words, and be independently useful when exported without the other skill documents or repository-local documentation and examples. A skill MAY direct readers to installed source modules for deeper investigation.
-
-#### Scenario: A user exports one focused skill
-- **WHEN** a user exports one named bundled skill
-- **THEN** the output is one complete Markdown document with YAML frontmatter
-- **AND** the output does not include the other three skill documents or require repository-local documentation
+## MODIFIED Requirements
 
 ### Requirement: Authoring skill SHALL guide reproducible DAG construction
 The `authoring` skill SHALL concisely cover DAG construction and explicit commit lifecycle; named data staging and retrieval; collection access; direct and staged function calls; importing committed results and named nodes; dagclass composition; script-worker source boundaries; helper injection; provenance-preserving node reuse; cache identity; and complex-data normalization through installed codecs or artifact storage. It SHALL direct agents to pass nodes, projections, required results, and function-call results directly into funks and graph structures instead of materializing them prematurely. It SHALL explain that `.value()` is for inspection or concrete Python computation and include an example that passes a node directly at the authoring boundary before materializing it inside a funk. It SHALL include at most two examples and all operational guidance needed for these workflows without links to repository documentation or examples.
@@ -20,7 +8,17 @@ The `authoring` skill SHALL concisely cover DAG construction and explicit commit
 - **THEN** it is directed to preserve graph identity by passing graph objects directly between funks
 - **AND** it sees `.value()` used where worker-side Python computation requires concrete data
 - **AND** it is directed to make imports or helper source available to the worker
-- **AND** it is warned that cache reuse is based on staged runnable and normalized DaggerML input identity
+- **AND** it is warned that cache reuse is based on the staged runnable and normalized DaggerML input identity
+
+## ADDED Requirements
+
+### Requirement: DaggerML SHALL bundle four focused agent skills
+DaggerML SHALL bundle portable Markdown skills named `querying`, `authoring`, `repository`, and `extensions`. Each document SHALL begin with YAML frontmatter naming the skill and describing its purpose, contain no more than 1000 words, and be independently useful when exported without the other skill documents or repository-local documentation and examples. A skill MAY direct readers to installed source modules for deeper investigation.
+
+#### Scenario: A user exports one focused skill
+- **WHEN** a user exports one named bundled skill
+- **THEN** the output is one complete Markdown document with YAML frontmatter
+- **AND** the output does not include the other three skill documents or require repository-local documentation
 
 ### Requirement: Repository skill SHALL guide project and shared-state management
 The `repository` skill SHALL concisely cover project initialization and configuration, status and history inspection, branches and tags, revision-changing operations, remote synchronization, import-only dependencies, shallow-history boundaries, safe garbage collection, and cache inspection and control. It SHALL direct agents to validate cache identity and retain the exact execution ref before intentional invalidation. It SHALL state that managed `.dml/` state is not for manual modification, include at most two minimal command sequences, and provide all operational guidance without links to repository documentation or examples.
@@ -59,3 +57,20 @@ The `extensions` skill SHALL distinguish adapters as transport boundaries, execu
 - **WHEN** an agent writes or wraps an executor
 - **THEN** it is directed to preserve operation context and implement retry-safe, idempotent lifecycle behavior
 - **AND** it is directed to validate contracts and plugin discovery before infrastructure-dependent testing
+
+## REMOVED Requirements
+
+### Requirement: DaggerML SHALL bundle three focused agent skills
+**Reason**: The export set expands to four task-oriented skills and replaces the mixed-purpose `inspection` boundary.
+
+**Migration**: Consumers SHALL use the four-skill export set: `querying`, `authoring`, `repository`, and `extensions`.
+
+### Requirement: Repository skill SHALL guide Git-like research management
+**Reason**: Repository guidance now also owns project setup, configuration, and cache inspection and control.
+
+**Migration**: Consumers SHALL continue using `repository`; the exported skill gains the broader project and shared-state contract.
+
+### Requirement: Inspection skill SHALL guide durable and in-progress graph analysis
+**Reason**: The skill mixed data querying with cache and execution operations. Data extraction and graph/error traversal move to `querying`; cache inspection and invalidation move to `repository`.
+
+**Migration**: Consumers SHALL replace `dml skills inspection` with `dml skills querying` for data traversal and use `dml skills repository` for cache operations.

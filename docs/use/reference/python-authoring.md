@@ -33,7 +33,7 @@ This behavior is codec-driven, so the same projection can appear directly, insid
 
 Frozen DAGs remain uncommitted: named-node lookup, `keys()`, `values()`, and `argv` inspect their partial DAG, while `result` remains unavailable. Mutation methods are not implicitly unfrozen; call `unfreeze()` on the original wrapper before authoring further changes. To resume from a frozen runtime in another process, call `dml.resume(frozen, name=..., message=..., tags=...)`; all three metadata arguments are required because freezing does not preserve them (`tags=None` is an explicit no-tags choice).
 
-`dml.Dml(project_home=".")` opens an existing project. `dml.Dml.init(...)` initializes one programmatically, but researcher workflows should use `dml init` instead. `dml.Dml` also exposes low-level history, runtime, and skill-export namespaces; prefer the CLI for repository operations. Use `session.skills.authoring()`, `session.skills.repository()`, or `session.skills.inspection()` to retrieve a bundled portable agent skill.
+`dml.Dml(project_home=".")` opens an existing project. `dml.Dml.init(...)` initializes one programmatically, but researcher workflows should use `dml init` instead. `dml.Dml` also exposes low-level history, runtime, and skill-export namespaces; prefer the CLI for repository operations. Use `session.skills.querying()`, `session.skills.authoring()`, `session.skills.repository()`, or `session.skills.extensions()` to retrieve a bundled portable agent skill. Querying covers data traversal and persisted errors; repository guidance owns cache inspection and invalidation.
 
 Low-level ref inspection returns names with exact commit tips:
 
