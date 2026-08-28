@@ -45,6 +45,17 @@ with dml.new("squares") as dag:
     dag.commit(result)
 ```
 
+Declare durable classification tags for every DAG produced by a script funk:
+
+```python
+@api.funkify(tags=["candidate", "research.v0"])
+def score(dag, records):
+    return {"count": len(records.value())}
+```
+
+The result DAG retains normalized tags even when it is returned from cache or
+used without a name in a commit tree.
+
 Funk arguments are node-like in the worker, so read input with `.value()`. Calling a staged funk records a function-call node. Script-backed funks execute in a separate worker and receive the function source, not module globals. The worker imports that source from `_daggerml_live.py` as module `_daggerml_live`, with normal Python module metadata. Import dependencies inside the function body or inject them explicitly.
 
 The worker injects a DEBUG logger named `_daggerml_live`; code can use either `logger` or `logging.getLogger(__name__)`. Its records go to worker stderr for supervisor capture. This configuration is isolated to the live module and does not enable DEBUG output from third-party dependency loggers.

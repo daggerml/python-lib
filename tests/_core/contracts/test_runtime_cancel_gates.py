@@ -12,7 +12,7 @@ def _put_index(db) -> Ref:
     commit_ref = db.init()
     with db.tx(create_if_missing=True) as txn:
         base_commit = txn.get(commit_ref)
-        dag_ref = txn.put(Dag(nodes=[], names={}))
+        dag_ref = txn.put(Dag(nodes=[], names={}, tags=[]))
         return txn.put(
             Index(
                 parents=[commit_ref],

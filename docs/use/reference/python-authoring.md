@@ -6,9 +6,9 @@ Import DaggerML with its conventional namespace:
 import daggerml as dml
 ```
 
-- `dml.new(name="", message="", dml=None) -> Dag`: create an open DAG runtime.
+- `dml.new(name="", message="", tags=None, dml=None) -> Dag`: create an open DAG runtime with optional opaque tags.
 - `dml.load(name, dml=None, *, revision="HEAD", remote=False, dep=None) -> Dag`: load a committed named DAG from local, fetched remote, or fetched dependency state.
-- `dml.resume(frozen, *, name, message, tags, dml=None) -> Dag`: unfreeze a frozen runtime and reconstruct its authoring wrapper with explicit commit metadata.
+- `dml.resume(frozen, *, name, message, dml=None) -> Dag`: unfreeze a frozen runtime and reconstruct its authoring wrapper with explicit commit metadata.
 - `dml.temporary(**kw)`: context manager for an initialized temporary project.
 - `Dag.put(value, name=None)`: stage a value and return a node.
 - `Dag.call(fn, *args, name=None, timeout=-1)`: call a runnable and return its result node.
@@ -29,9 +29,9 @@ selected = dag.put(ctx.node_name["my_key"]["my_key1"])
 
 This behavior is codec-driven, so the same projection can appear directly, inside a list or dictionary, or as a function argument. It does not copy the projected Python value into a new literal.
 
-`Dag(tags=None)` accepts an optional list of tags for a named DAG. On a successful `commit`, DaggerML adds each tag to the named tree entry in the provided order. Tag mutations occur after the DAG commit and are not atomic with it: a tag-mutation error propagates while the DAG commit (and any earlier tag mutations) remains published.
+`dml.new(tags=...)` assigns opaque tags to the DAG itself. Tags are normalized to unique lexicographically sorted strings and are committed atomically with the DAG, including error DAGs. `Dag.tags` exposes the stored list for both live and loaded DAGs. Use `Dml.runtime.add_tag(index, tag)` or `remove_tag(index, tag)` only while an index is active; completed and frozen DAGs cannot be retagged.
 
-Frozen DAGs remain uncommitted: named-node lookup, `keys()`, `values()`, and `argv` inspect their partial DAG, while `result` remains unavailable. Mutation methods are not implicitly unfrozen; call `unfreeze()` on the original wrapper before authoring further changes. To resume from a frozen runtime in another process, call `dml.resume(frozen, name=..., message=..., tags=...)`; all three metadata arguments are required because freezing does not preserve them (`tags=None` is an explicit no-tags choice).
+Frozen DAGs remain uncommitted: named-node lookup, `keys()`, `values()`, and `argv` inspect their partial DAG, while `result` remains unavailable. Mutation methods are not implicitly unfrozen; call `unfreeze()` on the original wrapper before authoring further changes. To resume from a frozen runtime in another process, call `dml.resume(frozen, name=..., message=...)`; the frozen DAG already retains its tags.
 
 `dml.Dml(project_home=".")` opens an existing project. `dml.Dml.init(...)` initializes one programmatically, but researcher workflows should use `dml init` instead. `dml.Dml` also exposes low-level history, runtime, and skill-export namespaces; prefer the CLI for repository operations. Use `session.skills.querying()`, `session.skills.authoring()`, `session.skills.repository()`, or `session.skills.extensions()` to retrieve a bundled portable agent skill. Querying covers data traversal and persisted errors; repository guidance owns cache inspection and invalidation.
 

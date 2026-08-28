@@ -81,6 +81,17 @@ def test_contrib_script_001__script_kwargs_capture_fn_name_and_require_parameter
         ScriptExecutor._script_kwargs({"fn": bad})
 
 
+def test_contrib_script_001a__script_kwargs_normalize_tags():
+    def fn(dag):
+        return 1
+
+    kwargs, _ = ScriptExecutor._script_kwargs({"fn": fn, "tags": ["research.v0", "candidate", "candidate"]})
+
+    assert kwargs["tags"] == ["candidate", "research.v0"]
+    with pytest.raises(DmlRepoError, match="tags must be a list of strings"):
+        ScriptExecutor._script_kwargs({"fn": fn, "tags": "candidate"})
+
+
 def test_contrib_script_002__rendered_source_rejects_pathological_wrapped_functions():
     def fn(dag):
         return 1
@@ -229,6 +240,36 @@ def test_script_worker_dag_creation_uses_cache_key_and_execution_id(monkeypatch,
     assert result["status"] == "failed"
     assert "stop after DAG creation" in result["error"]
     assert "Traceback" in result["error"]
+
+
+def test_script_worker_dag_creation_passes_declared_tags(monkeypatch, tmp_path):
+    calls = {}
+    tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))
+
+    @contextmanager
+    def fake_temporary(**kwargs):
+        yield tmpdml
+
+    def fake_new(**kwargs):
+        calls["new"] = kwargs
+        raise RuntimeError("stop after DAG creation")
+
+    monkeypatch.setattr(script_mod.dml, "temporary", fake_temporary)
+    monkeypatch.setattr(script_mod.dml, "new", fake_new)
+
+    script_mod.run_payload(
+        execution_id="exec-1",
+        cache_key="cache-1",
+        remote_root="s3://bucket/root",
+        tags=["candidate", "research.v0"],
+    )
+
+    assert calls["new"] == {
+        "dml": tmpdml,
+        "cache_key": "cache-1",
+        "execution_id": "exec-1",
+        "tags": ["candidate", "research.v0"],
+    }
 
 
 def test_contrib_script_006__cancel_without_launch_state_is_still_cancelled():

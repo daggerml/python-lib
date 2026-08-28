@@ -68,8 +68,10 @@ def test_cache_roundtrip(tmp_path):
             argv_node = txn.put(ArgvNode(value=argv_value))
             value = txn.put(ScalarDatum("done"))
             result = txn.put(LiteralNode(value=value))
-            dag_ref = txn.put(Dag(nodes=[argv_node, result], names={"result": result}, result=result, argv=argv_node))
-            tree = txn.put(Tree(dags={"main": dag_ref}, tags={}))
+            dag_ref = txn.put(
+                Dag(nodes=[argv_node, result], names={"result": result}, tags=[], result=result, argv=argv_node)
+            )
+            tree = txn.put(Tree(dags={"main": dag_ref}))
             commit_ref = txn.put(Commit(parents=[], tree=tree, author="alice", message="snapshot"))
 
         remote.upload_object_graph(dag_ref, source_db)
@@ -477,7 +479,7 @@ def test_manifest_fetch_precedes_replayable_local_write(tmp_path, monkeypatch):
             argv = txn.put(ArgvNode(value=argv_value))
             value = txn.put(ScalarDatum("done"))
             result = txn.put(LiteralNode(value=value))
-            dag_ref = txn.put(Dag(nodes=[argv, result], names={"result": result}, result=result, argv=argv))
+            dag_ref = txn.put(Dag(nodes=[argv, result], names={"result": result}, tags=[], result=result, argv=argv))
         remote.upload_object_graph(dag_ref, source_db)
 
         in_local_write = False
@@ -538,7 +540,7 @@ def test_remote_materialization_grows_map_for_large_dag_payload(tmp_path):
             for i in range(12):
                 value = txn.put(ScalarDatum(f"{i:05d}" + "x" * (900 * 1024 - 5)))
                 nodes.append(txn.put(LiteralNode(value=value)))
-            return txn.put(Dag(nodes=nodes, names={}, result=nodes[-1], argv=argv))
+            return txn.put(Dag(nodes=nodes, names={}, tags=[], result=nodes[-1], argv=argv))
 
         dag_ref = source_db.write_with_growth(write_large_dag)
         remote.upload_object_graph(dag_ref, source_db)
@@ -554,7 +556,7 @@ def test_project_commit_depth_follows_all_merge_parents(tmp_path):
         source_db = make_db(tmp_path / "source-db")
         target_db = make_db(tmp_path / "target-db")
         with source_db.tx() as txn:
-            tree = txn.put(Tree(dags={}, tags={}))
+            tree = txn.put(Tree(dags={}))
             base = txn.put(Commit(parents=[], tree=tree, author="alice", message="base"))
             left = txn.put(Commit(parents=[base], tree=tree, author="alice", message="left"))
             right = txn.put(Commit(parents=[base], tree=tree, author="alice", message="right"))
@@ -585,8 +587,10 @@ def test_remote_ref_payloads_use_typed_roots(tmp_path):
             argv_node = txn.put(ArgvNode(value=argv_value))
             value = txn.put(ScalarDatum("done"))
             result = txn.put(LiteralNode(value=value))
-            dag_ref = txn.put(Dag(nodes=[argv_node, result], names={"result": result}, result=result, argv=argv_node))
-            tree = txn.put(Tree(dags={"main": dag_ref}, tags={}))
+            dag_ref = txn.put(
+                Dag(nodes=[argv_node, result], names={"result": result}, tags=[], result=result, argv=argv_node)
+            )
+            tree = txn.put(Tree(dags={"main": dag_ref}))
             commit_ref = txn.put(Commit(parents=[], tree=tree, author="alice", message="snapshot"))
 
         remote.upload_object_graph(argv_node, source_db)
@@ -628,7 +632,9 @@ def test_remote_cas_payloads_use_tagged_json(tmp_path):
             argv_node = txn.put(ArgvNode(value=argv_value))
             value = txn.put(ScalarDatum("done"))
             result = txn.put(LiteralNode(value=value))
-            dag_ref = txn.put(Dag(nodes=[argv_node, result], names={"result": result}, result=result, argv=argv_node))
+            dag_ref = txn.put(
+                Dag(nodes=[argv_node, result], names={"result": result}, tags=[], result=result, argv=argv_node)
+            )
 
         remote.upload_object_graph(dag_ref, source_db)
 
@@ -643,6 +649,7 @@ def test_remote_cas_payloads_use_tagged_json(tmp_path):
                 "names": ["dict", {"result": ["ref", result.to]}],
                 "nodes": ["list", [["ref", argv_node.to], ["ref", result.to]]],
                 "result": ["ref", result.to],
+                "tags": ["list", []],
             },
         ]
         assert scalar_payload == ["dict", {"data": ["scalar", "done"]}]
@@ -657,7 +664,7 @@ def test_remote_gc_traces_split_execution_refs_and_collects_losing_attempt(tmp_p
         with source_db.tx() as txn:
             argv = txn.put(ArgvNode(value=txn.put(ListDatum([]))))
             result = txn.put(LiteralNode(value=txn.put(ScalarDatum("done"))))
-            dag_ref = txn.put(Dag(nodes=[argv, result], names={}, result=result, argv=argv))
+            dag_ref = txn.put(Dag(nodes=[argv, result], names={}, tags=[], result=result, argv=argv))
         remote.upload_object_graph(dag_ref, source_db)
 
         state = ExecutionState("s3://bucket/root", 2, cache_key="current", client=client)
@@ -695,7 +702,9 @@ def test_remote_pull_rejects_cas_identity_mismatch(tmp_path):
             argv_node = txn.put(ArgvNode(value=argv_value))
             value = txn.put(ScalarDatum("done"))
             result = txn.put(LiteralNode(value=value))
-            dag_ref = txn.put(Dag(nodes=[argv_node, result], names={"result": result}, result=result, argv=argv_node))
+            dag_ref = txn.put(
+                Dag(nodes=[argv_node, result], names={"result": result}, tags=[], result=result, argv=argv_node)
+            )
 
         remote.upload_object_graph(dag_ref, source_db)
         remote._store._put(remote._cas_key(value.id()), remote._dump_cas_object(ScalarDatum("different")))
@@ -712,7 +721,7 @@ def test_deleting_ref_moves_original_payload_to_tombstone(tmp_path):
         source_db = make_db(tmp_path / "source-db")
 
         with source_db.tx() as txn:
-            tree = txn.put(Tree(dags={}, tags={}))
+            tree = txn.put(Tree(dags={}))
             commit_ref = txn.put(Commit(parents=[], tree=tree, author="alice", message="snapshot"))
 
         branch_path = remote.put_ref(commit_ref, "branch", "main", source_db)
@@ -732,7 +741,7 @@ def test_non_forced_branch_push_ref_rejects_create_and_update_races(tmp_path, mo
         remote = Remote("s3://bucket/root", n_workers=2, client=client)
         db = make_db(tmp_path / "db")
         with db.tx() as txn:
-            tree = txn.put(Tree(dags={}, tags={}))
+            tree = txn.put(Tree(dags={}))
             base = txn.put(Commit(tree=tree, parents=[], author="alice", message="base"))
             candidate = txn.put(Commit(tree=tree, parents=[base], author="alice", message="candidate"))
             racer = txn.put(Commit(tree=tree, parents=[base], author="bob", message="racer"))

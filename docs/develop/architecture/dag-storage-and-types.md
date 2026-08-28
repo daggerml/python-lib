@@ -11,10 +11,9 @@ a particular object family.
   persisted runnable specifications.
 - `LiteralNode`, `ArgvNode`, `KwargvNode`, `ImportNode`, and `FnNode` connect
   values and computation within a DAG.
-- `Dag` contains nodes, names, and exactly one terminal result or error when
-  finished.
-- `Tree` maps names to DAG refs and can attach opaque string-tag lists to those
-  named entries; `Commit` snapshots a tree and history parents.
+- `Dag` contains nodes, names, normalized opaque tags, and exactly one terminal
+  result or error when finished.
+- `Tree` maps names to DAG refs; `Commit` snapshots a tree and history parents.
 - `Error` is persisted data, so failed work remains inspectable in the graph.
 
 `DmlDB` provides typed transactions over the Cython extension in `db.pyx`,
@@ -38,8 +37,8 @@ Native local reachability accepts declared absent commits as terminal leaves
 but still fails on missing roots, snapshots, or undeclared refs. Collection also
 removes shallow entries no longer referenced by retained objects.
 
-Tree tags are classification metadata rather than a new object type. A tag such
+DAG tags are classification metadata rather than a new object type. A tag such
 as `research.v0` has no repository-defined meaning; users or external tools can
-interpret it as a schema convention. Tags are required in persisted tree data,
-so repositories written before this field was added are not compatible with the
-current v0 storage format.
+interpret it as a schema convention. Tags are required in persisted DAG data and
+are unique and lexicographically sorted, so this v0 format is incompatible with
+repositories that use the former tree-owned tag representation.

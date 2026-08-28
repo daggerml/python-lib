@@ -23,7 +23,6 @@ class CommitDescription(TypedDict):
     id: Ref
     parents: list[Ref]
     dags: dict[str, Ref]
-    tags: dict[str, list[str]]
     author: str
     message: str
     created: str
@@ -47,8 +46,8 @@ class CommitOps:
         return cast(Commit, txn.get(ref))
 
     @staticmethod
-    def _entries(tree: Tree) -> dict[str, tuple[Ref, list[str]]]:
-        return {name: (dag, tree.tags.get(name, [])) for name, dag in tree.dags.items()}
+    def _entries(tree: Tree) -> dict[str, Ref]:
+        return dict(tree.dags)
 
     def _topo_sort(self, *xs, txn: TxnWithValid, missing_commits: set[Ref] | None = None):
         xs = list(xs)
@@ -126,18 +125,12 @@ class CommitOps:
     def _patch(self, tree: Ref, *diffs, txn: TxnWithValid) -> Ref:
         tree_obj: Tree = txn.get(tree)
         dags = dict(tree_obj.dags)
-        tags = dict(tree_obj.tags)
         for diff in diffs:
             for k, _v in diff["rem"].items():
                 dags.pop(k, None)
-                tags.pop(k, None)
-            for k, (dag, dag_tags) in diff["add"].items():
+            for k, dag in diff["add"].items():
                 dags[k] = dag
-                if dag_tags:
-                    tags[k] = dag_tags
-                else:
-                    tags.pop(k, None)
-        return txn.put(Tree(dags=dags, tags=tags))
+        return txn.put(Tree(dags=dags))
 
     def _is_ancestor(
         self,
@@ -275,7 +268,7 @@ class CommitOps:
                 raise
             except DmlRepoError:
                 c0 = None
-                base_tree = txn.put(Tree(dags={}, tags={}))
+                base_tree = txn.put(Tree(dags={}))
             if c0 == commit1:
                 return commit2
             if c0 == commit2:
@@ -343,7 +336,6 @@ class CommitOps:
             after_tree = txn.get(target.tree)
             current_tree = txn.get(txn.get(base_commit).tree)
             dags = dict(current_tree.dags)
-            tags = dict(current_tree.tags)
             conflicts = []
             before_entries = self._entries(before_tree)
             after_entries = self._entries(after_tree)
@@ -358,16 +350,11 @@ class CommitOps:
                     continue
                 if before_entry is None:
                     dags.pop(name, None)
-                    tags.pop(name, None)
                 else:
-                    dags[name], before_tags = before_entry
-                    if before_tags:
-                        tags[name] = before_tags
-                    else:
-                        tags.pop(name, None)
+                    dags[name] = before_entry
             if conflicts:
                 raise DmlRepoError(f"Revert conflicts: {sorted(set(conflicts))}")
-            new_tree = txn.put(Tree(dags=dags, tags=tags))
+            new_tree = txn.put(Tree(dags=dags))
             new_commit = txn.put(
                 Commit(
                     parents=[base_commit],
@@ -445,7 +432,7 @@ class CommitOps:
             if dag.ns() != "dag":
                 raise DmlRepoError(f"Input '{dag.to}' is not a DAG ref")
             if commit is None:
-                tree = Tree(dags={name: dag}, tags={})
+                tree = Tree(dags={name: dag})
                 parents = []
             else:
                 tree = cast(Tree, txn.get(txn.get(commit).tree))
@@ -453,7 +440,6 @@ class CommitOps:
             if name in tree.dags:
                 logger.warning(f"DAG name '{name}' already exists in commit; it will be overwritten")
             tree.dags[name] = dag
-            tree.tags.pop(name, None)
             new_commit = txn.put(
                 Commit(
                     parents=parents,
@@ -473,7 +459,6 @@ class CommitOps:
             if name not in ctx.tree.dags:
                 raise DmlRepoError(f"DAG '{name}' not found in branch commit tree")
             ctx.tree.dags = {k: v for k, v in ctx.tree.dags.items() if k != name}
-            ctx.tree.tags = {k: v for k, v in ctx.tree.tags.items() if k != name}
             ctx.commit.tree = txn.put(ctx.tree)
             ctx.commit.author = user
             ctx.commit.parents = [commit]
@@ -483,44 +468,6 @@ class CommitOps:
 
         return db.write_with_growth(delete)
 
-    def _update_dag_tag(self, commit: Ref, name: str, tag: str, user: str, *, add: bool, db: DmlDB) -> Ref:
-        action = "Add" if add else "Remove"
-        created = now()
-
-        def update(txn: TxnWithValid) -> Ref:
-            ctx = txn.get_ctx(commit)
-            if name not in ctx.tree.dags:
-                raise DmlRepoError(f"DAG '{name}' not found in branch commit tree")
-            tags = list(ctx.tree.tags.get(name, []))
-            if add:
-                if tag in tags:
-                    return commit
-                tags.append(tag)
-            else:
-                if tag not in tags:
-                    return commit
-                tags.remove(tag)
-            if tags:
-                ctx.tree.tags[name] = tags
-            else:
-                ctx.tree.tags.pop(name, None)
-            return txn.put(
-                Commit(
-                    parents=[commit],
-                    tree=txn.put(ctx.tree),
-                    author=user,
-                    message=f"{action} tag '{tag}' for DAG '{name}'",
-                    created=created,
-                )
-            )
-
-        return db.write_with_growth(update)
-
-    def add_dag_tag(self, commit: Ref, name: str, tag: str, user: str, *, db: DmlDB) -> Ref:
-        return self._update_dag_tag(commit, name, tag, user, add=True, db=db)
-
-    def remove_dag_tag(self, commit: Ref, name: str, tag: str, user: str, *, db: DmlDB) -> Ref:
-        return self._update_dag_tag(commit, name, tag, user, add=False, db=db)
 
     def get_dag(self, commit: Ref, name: str, *, db: DmlDB) -> Optional[Ref]:
         with db.tx(readonly=True) as txn:
@@ -541,7 +488,6 @@ class CommitOps:
                 "id": commit.id(),
                 "parents": ctx.commit.parents,
                 "dags": ctx.tree.dags,
-                "tags": ctx.tree.tags,
                 "author": ctx.commit.author,
                 "message": ctx.commit.message,
                 "created": ctx.commit.created,

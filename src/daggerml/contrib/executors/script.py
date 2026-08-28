@@ -45,7 +45,7 @@ class ScriptExecutor(ExecutorBase):
 
     @classmethod
     def _script_kwargs(cls, kwargs: dict) -> tuple[dict, str]:
-        allowed = {"fn", "prepop", "extra_objs", "post_lines"}
+        allowed = {"fn", "prepop", "extra_objs", "post_lines", "tags"}
         unknown = sorted(set(kwargs.keys()) - allowed)
         if unknown:
             bad = ", ".join(unknown)
@@ -54,11 +54,17 @@ class ScriptExecutor(ExecutorBase):
         prepop = kwargs.get("prepop", {})
         extra_objs = list(kwargs.get("extra_objs", []))
         post_lines = list(kwargs.get("post_lines", []))
+        tags = kwargs.get("tags", [])
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise DmlRepoError("script tags must be a list of strings")
         params = list(inspect.signature(fn).parameters.values())
         if not params:
             raise DmlRepoError("script fn must include at least one parameter")
         script = cls._render_script(fn, extra_objs=extra_objs, post_lines=post_lines)
-        return {"prepop": prepop, "fn_name": fn.__name__}, script
+        resolved = {"prepop": prepop, "fn_name": fn.__name__}
+        if tags:
+            resolved["tags"] = sorted(set(tags))
+        return resolved, script
 
     @classmethod
     def _render_script(cls, fn, extra_objs: list, post_lines: list[str]) -> str:
@@ -98,27 +104,31 @@ class ScriptExecutor(ExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
     ) -> AdapterInvokeResponse:
-        del runnable, scratch_uri
+        del scratch_uri
+        tags = runnable.get("kwargs", {}).get("tags")
         workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{execution_id}-"))
         payload_path = workdir / "supervisor-input.json"
         result_path = workdir / "result.json"
         stdout_path = workdir / "stdout.log"
         stderr_path = workdir / "stderr.log"
+        cmd = [
+            sys.executable,
+            "-m",
+            "daggerml.contrib.executors.script",
+            "--execution-id",
+            execution_id,
+            "--cache-key",
+            cache_key,
+            "--remote-root",
+            remote["root"],
+        ]
+        if tags:
+            cmd.extend(["--tags", json.dumps(tags, separators=(",", ":"))])
         payload = {
             "version": 0,
             "cache_key": cache_key,
             "execution_id": execution_id,
-            "cmd": [
-                sys.executable,
-                "-m",
-                "daggerml.contrib.executors.script",
-                "--execution-id",
-                execution_id,
-                "--cache-key",
-                cache_key,
-                "--remote-root",
-                remote["root"],
-            ],
+            "cmd": cmd,
             "remote": remote,
             "env": {},
         }
@@ -252,10 +262,15 @@ def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def run_payload(*, execution_id: str, cache_key: str, remote_root: str) -> dict[str, Any]:
+def run_payload(
+    *, execution_id: str, cache_key: str, remote_root: str, tags: list[str] | None = None
+) -> dict[str, Any]:
     with dml.temporary(remote_root=remote_root) as tmpdml, chdir(tmpdml._config.project_home):
         try:
-            with dml.new(dml=tmpdml, cache_key=cache_key, execution_id=execution_id) as dag:
+            new_kwargs = {"dml": tmpdml, "cache_key": cache_key, "execution_id": execution_id}
+            if tags:
+                new_kwargs["tags"] = tags
+            with dml.new(**new_kwargs) as dag:
                 runnable_node, *arg_nodes = dag.argv
                 runnable = runnable_node.value().innermost()
                 for key, value in runnable.kwargs.get("prepop", {}).items():
@@ -301,8 +316,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execution-id", required=True)
     parser.add_argument("--cache-key", required=True)
     parser.add_argument("--remote-root", required=True)
+    parser.add_argument("--tags", default="[]")
     args = parser.parse_args(argv or sys.argv[1:])
-    result = run_payload(execution_id=args.execution_id, cache_key=args.cache_key, remote_root=args.remote_root)
+    result = run_payload(
+        execution_id=args.execution_id,
+        cache_key=args.cache_key,
+        remote_root=args.remote_root,
+        tags=json.loads(args.tags),
+    )
     encoded = json.dumps(result, separators=(",", ":"), sort_keys=True)
     if args.output == "-":
         sys.stdout.write(encoded)

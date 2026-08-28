@@ -70,6 +70,14 @@ class IndexOps:
     def _require_mutation(self, index: Ref, db: DmlDB, *, mode: Literal["activation", "mutation"] = "mutation") -> None:
         self.exec_state().require_mutation(index.id(), db, mode=mode)
 
+    @staticmethod
+    def _normalize_tags(tags: list[str] | None) -> list[str]:
+        if tags is None:
+            return []
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise DmlRepoError("DAG tags must be a list of strings")
+        return sorted(set(tags))
+
     def _update_dag(self, index: Ref, node: Ref, name: Optional[str], ctx, txn) -> Ref:
         if node not in ctx.dag.nodes:
             raise DmlRepoError("Fin node must be part of DAG.")
@@ -85,6 +93,7 @@ class IndexOps:
         commit: Ref | None,
         cache_key: str | None = None,
         execution_id: str | None = None,
+        tags: list[str] | None = None,
         *,
         db: DmlDB,
     ) -> Ref:
@@ -111,13 +120,13 @@ class IndexOps:
             nodes: list[Ref] = [argv] if argv is not None else []
             parents: list[Ref] = []
             if commit is None:
-                base_tree = txn.put(Tree(dags={}, tags={}))
+                base_tree = txn.put(Tree(dags={}))
             else:
                 base_commit: Commit = txn.get(commit)
                 base_tree = base_commit.tree
                 parents = [commit]
             # create db state
-            dag_ref = txn.put(Dag(nodes=nodes, names={}, argv=argv))
+            dag_ref = txn.put(Dag(nodes=nodes, names={}, tags=self._normalize_tags(tags), argv=argv))
             return txn.put(
                 Index(
                     parents=parents,
@@ -236,7 +245,7 @@ class IndexOps:
         args = [txn.get(x).unroll(txn) for x in argv_refs[1:]]
         fn_uri = runnable.target.uri
         fn_argv_node_ref = txn.put(ArgvNode(value=txn.put(ListDatum(argv_refs))))
-        fndag = Dag(nodes=[fn_argv_node_ref], names={}, argv=fn_argv_node_ref)
+        fndag = Dag(nodes=[fn_argv_node_ref], names={}, tags=[], argv=fn_argv_node_ref)
         try:
             bi_fn = BUILTIN_FNS.get(fn_uri.split(":", 1)[-1])
             if bi_fn is None:
@@ -334,6 +343,27 @@ class IndexOps:
             return self._update_dag(index, node_ref, name, ctx, txn)
 
         return db.write_with_growth(set_node_name)
+
+    def update_tags(self, index: Ref, tag: str, *, add: bool, db: DmlDB) -> Ref:
+        self._require_mutation(index, db)
+        if not isinstance(tag, str):
+            raise DmlRepoError("DAG tag must be a string")
+
+        def update(txn) -> Ref:
+            if not isinstance(txn.get(index), Index):
+                raise DmlRepoError(f"Runtime is not an active index: {index}")
+            ctx = txn.get_ctx(index)
+            tags = set(ctx.dag.tags)
+            if add:
+                tags.add(tag)
+            else:
+                tags.discard(tag)
+            ctx.dag.tags = sorted(tags)
+            cast(Index, ctx.commit).dag = txn.put(ctx.dag)
+            txn.put(ctx.commit, to=index)
+            return cast(Index, ctx.commit).dag
+
+        return db.write_with_growth(update)
 
     def start_fn(self, index: Ref, argv: list[Ref], name: Optional[str] = None, *, db: DmlDB) -> Optional[Ref]:
         self._require_mutation(index, db)

@@ -79,7 +79,7 @@ def test_require_ref_enforces_namespace_hierarchy() -> None:
 
 def test_object_validation_rejects_invalid_graph_shapes() -> None:
     with pytest.raises(TypeError, match="cannot have both result and error"):
-        Dag(nodes=[], names={}, result=Ref("node-literal:ok"), error=Ref("error:bad"))._validate()
+        Dag(nodes=[], names={}, tags=[], result=Ref("node-literal:ok"), error=Ref("error:bad"))._validate()
     with pytest.raises(TypeError, match="keys must be strings"):
         DictDatum({1: Ref("datum-scalar:x")})._validate()  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="expected namespace hierarchy"):
@@ -88,7 +88,7 @@ def test_object_validation_rejects_invalid_graph_shapes() -> None:
 
 def test_dag_result_error_invariants() -> None:
     node = Ref("node-literal:x")
-    dag = Dag(nodes=[node], names={"answer": node}, result=node)
+    dag = Dag(nodes=[node], names={"answer": node}, tags=[], result=node)
 
     assert dag.nameof(node) == "answer"
     assert dag.is_finished()
@@ -260,9 +260,9 @@ def test_raw_db_open_with_map_size_does_not_resize_active_environment(tmp_path) 
 def test_get_ctx_loads_dag_from_index_but_not_from_commit(tmp_path) -> None:
     db = make_db(tmp_path)
     with db.tx(create_if_missing=True) as txn:
-        dag_ref = txn.put(Dag(nodes=[], names={}))
-        committed_tree = txn.put(Tree(dags={}, tags={}))
-        staged_tree = txn.put(Tree(dags={"staged": dag_ref}, tags={}))
+        dag_ref = txn.put(Dag(nodes=[], names={}, tags=[]))
+        committed_tree = txn.put(Tree(dags={}))
+        staged_tree = txn.put(Tree(dags={"staged": dag_ref}))
         commit_ref = txn.put(Commit(parents=[], tree=committed_tree, author="a", message="m"))
         index_ref = txn.put(Index(parents=[commit_ref], tree=staged_tree, author="b", message="", dag=dag_ref))
 

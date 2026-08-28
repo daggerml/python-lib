@@ -858,7 +858,7 @@ class ExecutionState:
     def _error_dag(self, message: str, argv: Ref, db: DmlDB) -> Ref:
         def persist(txn):
             error = txn.put(Error(message, "fn-call", "adapter-error"))
-            return txn.put(Dag(nodes=[argv], names={}, argv=argv, error=error))
+            return txn.put(Dag(nodes=[argv], names={}, tags=[], argv=argv, error=error))
 
         dag = db.write_with_growth(persist)
         self._remote.upload_object_graph(dag, db)

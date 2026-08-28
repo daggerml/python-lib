@@ -8,9 +8,9 @@ A `Dml` instance without a configured `remote.root` supports read-only inspectio
 
 ### Reconstructing a frozen DAG can lose commit metadata
 
-Freezing preserves the runtime index and its partial graph, but not the in-memory metadata on its Python `Dag` wrapper. `dml.resume()` therefore requires explicit `name`, `message`, and `tags` arguments; it does not restore them from the frozen token. Supplying `tags=None` explicitly means that the later commit has no tags.
+Freezing preserves the runtime index, its partial graph, and its DAG tags, but not the in-memory name and message metadata on its Python `Dag` wrapper. `dml.resume()` therefore requires explicit `name` and `message` arguments; it restores tags from the frozen DAG.
 
-Prefer retaining the original `Dag` instance and calling `unfreeze()` on it. If reconstruction is necessary, call `dml.resume(frozen, name=..., message=..., tags=...)` before committing; do not assume metadata can be recovered from the frozen index or freeze message.
+Prefer retaining the original `Dag` instance and calling `unfreeze()` on it. If reconstruction is necessary, call `dml.resume(frozen, name=..., message=...)` before committing; do not assume the name or message can be recovered from the frozen index or freeze message.
 
 ### Dagclass dependency inference does not analyze control flow or item access
 

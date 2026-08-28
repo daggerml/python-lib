@@ -94,6 +94,7 @@ def fake_dml(refs):
         "result": refs.result,
         "argv": refs.argv,
         "cache_key": None,
+        "tags": [],
     }
     dml.dag.describe_node.return_value = {
         "id": refs.imported,

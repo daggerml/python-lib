@@ -75,14 +75,17 @@ def new(
     message="",
     cache_key: str | None = None,
     execution_id: str | None = None,
-    tags: list | None = None,
+    tags: list[str] | None = None,
     dml: Dml | None = None,
 ) -> "Dag":
     """Create a new DAG using the active or provided Dml runtime."""
     runtime = dml or get_default_dml()
     execution = Ref(f"index:{execution_id}") if execution_id is not None else None
-    index_id = runtime.runtime.create(cache_key=cache_key, execution=execution)
-    return Dag(dml=runtime, token=index_id, name=name, message=message, tags=tags)
+    create_kwargs = {"cache_key": cache_key, "execution": execution}
+    if tags is not None:
+        create_kwargs["tags"] = tags
+    index_id = runtime.runtime.create(**create_kwargs)
+    return Dag(dml=runtime, token=index_id, name=name, message=message)
 
 
 def load(
@@ -106,13 +109,12 @@ def resume(
     *,
     name: str,
     message: str,
-    tags: list[str] | None,
     dml: Dml | None = None,
 ) -> "Dag":
     """Resume a frozen DAG runtime with explicitly supplied commit metadata."""
     runtime = dml or get_default_dml()
     index_id = runtime.runtime.unfreeze(frozen)
-    return Dag(dml=runtime, token=index_id, name=name, message=message, tags=tags)
+    return Dag(dml=runtime, token=index_id, name=name, message=message)
 
 
 @contextmanager
@@ -341,7 +343,6 @@ class Dag:
     ref: Optional[Ref] = None
     name: str = ""  # DAG name for commit
     message: str = ""  # Commit message
-    tags: list[str] | None = None
 
     def __repr__(self):
         to = self.ref.to if self.ref else (self.token.to if self.token is not None else "NA")
@@ -379,6 +380,11 @@ class Dag:
         if self.ref is not None:
             return self.ref
         return cast(Ref, self.dml.runtime.describe(self._require_index_ref())["dag"])
+
+    @property
+    def tags(self) -> list[str]:
+        """Return the normalized tags stored on this DAG."""
+        return list(self.dml.dag.describe(self._read_dag_ref())["tags"])
 
     def _put_literal(self, value: Any, *, name: Optional[str] = None) -> Ref:
         index_id = self._require_index_ref()
@@ -616,9 +622,6 @@ class Dag:
             value = value.ref
         self.ref = self.dml.runtime.commit(self._require_index_ref(), value, message=self.message, name=self.name)
         self.token = None  # Clear the working index since it's now committed
-        if self.tags:
-            for tag in self.tags:
-                self.dml.dag.add_tag(self.name, tag)
 
     def freeze(self, message: str | None = None) -> "Dag":
         """Freeze this uncommitted DAG's runtime index for read-only inspection."""

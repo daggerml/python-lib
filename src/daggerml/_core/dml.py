@@ -403,18 +403,38 @@ class _RuntimeNamespace:
         self,
         cache_key: Annotated[str | None, "Cache key to reuse execution results."] = None,
         execution: Annotated[Ref | None, "Runtime ref for adapter-coordinated runs."] = None,
+        tags: Annotated[list[str] | None, "Opaque tags to store on the created DAG."] = None,
     ) -> Ref:
         """Create a new mutable runtime index."""
         if (cache_key is None) != (execution is None):
             raise DmlRepoError("both cache_key and execution must be provided or neither")
         execution_id = _require_runtime_ref(execution, allow_frozen=False).id() if execution is not None else None
+        create_kwargs = {
+            "commit": _head_ops(self._dml).get_head()["commit"],
+            "cache_key": cache_key,
+            "execution_id": execution_id,
+            "db": self._dml._db,
+        }
+        if tags is not None:
+            create_kwargs["tags"] = tags
         return _index_ops(self._dml).create(
             self._dml._config.user,
-            commit=_head_ops(self._dml).get_head()["commit"],
-            cache_key=cache_key,
-            execution_id=execution_id,
-            db=self._dml._db,
+            **create_kwargs,
         )
+
+    @_retry_runtime_mutation
+    def add_tag(
+        self, index: Annotated[Ref, "Active runtime index to tag."], tag: Annotated[str, "Opaque tag to add."]
+    ) -> Ref:
+        """Add a tag to an active runtime DAG."""
+        return _index_ops(self._dml).update_tags(index, tag, add=True, db=self._dml._db)
+
+    @_retry_runtime_mutation
+    def remove_tag(
+        self, index: Annotated[Ref, "Active runtime index to untag."], tag: Annotated[str, "Opaque tag to remove."]
+    ) -> Ref:
+        """Remove a tag from an active runtime DAG."""
+        return _index_ops(self._dml).update_tags(index, tag, add=False, db=self._dml._db)
 
     @_retry_runtime_mutation
     def put_literal(
@@ -703,43 +723,6 @@ class _DagNamespace:
             head.update_local_ref(head_info["branch"], new_commit)
         return new_commit
 
-    def add_tag(self, dag: Annotated[str, "Named DAG to tag."], tag: Annotated[str, "Opaque tag to add."]) -> Ref:
-        """Add an opaque tag to a named DAG on the current branch."""
-        head = _head_ops(self._dml)
-        with head.lock():
-            head_info = head.get_head()
-            if not head_info["branch"]:
-                raise DmlRepoError("Cannot add DAG tag when HEAD is detached")
-            new_commit = CommitOps().add_dag_tag(
-                _require_resolved_commit(head_info["commit"], "HEAD"),
-                dag,
-                tag,
-                user=self._dml._config.user,
-                db=self._dml._db,
-            )
-            head.update_local_ref(head_info["branch"], new_commit)
-        return new_commit
-
-    def remove_tag(
-        self,
-        dag: Annotated[str, "Named DAG to untag."],
-        tag: Annotated[str, "Opaque tag to remove."],
-    ) -> Ref:
-        """Remove an opaque tag from a named DAG on the current branch."""
-        head = _head_ops(self._dml)
-        with head.lock():
-            head_info = head.get_head()
-            if not head_info["branch"]:
-                raise DmlRepoError("Cannot remove DAG tag when HEAD is detached")
-            new_commit = CommitOps().remove_dag_tag(
-                _require_resolved_commit(head_info["commit"], "HEAD"),
-                dag,
-                tag,
-                user=self._dml._config.user,
-                db=self._dml._db,
-            )
-            head.update_local_ref(head_info["branch"], new_commit)
-        return new_commit
 
 
 @dataclass(frozen=True)

@@ -50,6 +50,11 @@ def wait_for_release(dag, started_key, release_key, value):
             return dag.put(value.value(), name="result")
 
 
+@funkify(adapter="local", uri="script", tags=["research.v0", "candidate", "candidate"])
+def tagged_identity(dag, value):
+    return value.value()
+
+
 def _configure_real_runtime(monkeypatch, home, *, user="tester"):
     """Create one isolated real repository with the script-runtime test codecs."""
     monkeypatch.setenv("DML_DEFAULT_DB_MAP_SIZE_MAX", str(64 * 1024 * 1024))
@@ -102,6 +107,23 @@ def _object_version_count(s3_client, key: str) -> int:
     """Return all non-delete S3 versions for an execution-body marker."""
     response = s3_client.list_object_versions(Bucket="test-bucket", Prefix=key)
     return sum(version["Key"] == key for version in response.get("Versions", []))
+
+
+@pytest.mark.slow
+def test_contrib_int_008__tagged_funk_results_survive_cache_reuse(tmp_path, monkeypatch, remote_env, s3_bucket):
+    del remote_env, s3_bucket
+    home = tmp_path / "tagged-funk"
+    home.mkdir()
+    dml = _configure_real_runtime(monkeypatch, home)
+    dag = api.new("tagged", dml=dml)
+    fn = dag.put(tagged_identity, name="fn")
+
+    first = fn(7, sleep=lambda: 0, timeout=60_000)
+    second = fn(7, sleep=lambda: 0, timeout=60_000)
+
+    first_dag = first.context().ref
+    assert second.context().ref == first_dag
+    assert dml.dag.describe(first_dag)["tags"] == ["candidate", "research.v0"]
 
 
 @pytest.mark.slow

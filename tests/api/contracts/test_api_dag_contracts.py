@@ -197,53 +197,23 @@ def test_api_dag_017__commit_handles_raw_node_and_error_values(dag, fake_dml, re
     fake_dml.runtime.commit.assert_called_with(refs.index, err, message="msg", name="demo")
 
 
-def test_api_dag_025__commit_adds_provided_tags_in_order_after_commit(fake_dml, refs):
-    dag = api.Dag(
-        dml=fake_dml,
-        token=refs.index,
-        name="demo",
-        message="msg",
-        tags=["research.v0", "candidate"],
+def test_api_dag_025__new_initializes_runtime_tags(fake_dml, refs):
+    dag = api.new(dml=fake_dml, tags=["research.v0", "candidate", "candidate"])
+
+    fake_dml.runtime.create.assert_called_once_with(
+        cache_key=None,
+        execution=None,
+        tags=["research.v0", "candidate", "candidate"],
     )
-
-    dag.commit(42)
-
-    assert dag.ref == refs.dag
-    assert dag.token is None
-    fake_dml.dag.add_tag.assert_has_calls([call("demo", "research.v0"), call("demo", "candidate")])
-
-
-@pytest.mark.parametrize("tags", [None, []], ids=["omitted", "empty"])
-def test_api_dag_026__commit_without_tags_skips_tag_mutation(fake_dml, refs, tags):
-    dag = api.Dag(dml=fake_dml, token=refs.index, name="demo", message="msg", tags=tags)
-
-    dag.commit(42)
-
-    fake_dml.dag.add_tag.assert_not_called()
-
-
-def test_api_dag_027__commit_failure_skips_tag_mutation(dag, fake_dml, refs):
-    dag.tags = ["research.v0"]
-    fake_dml.runtime.commit.side_effect = DmlRepoError("commit failed")
-
-    with pytest.raises(DmlRepoError, match="commit failed"):
-        dag.commit(refs.scalar)
-
-    assert dag.ref is None
     assert dag.token == refs.index
-    fake_dml.dag.add_tag.assert_not_called()
 
 
-def test_api_dag_028__tag_failure_propagates_after_committed_state(dag, fake_dml, refs):
-    dag.tags = ["research.v0"]
-    fake_dml.dag.add_tag.side_effect = DmlRepoError("tag failed")
+def test_api_dag_026__tags_are_read_from_underlying_dag(dag, fake_dml, refs):
+    fake_dml.dag.describe.return_value["tags"] = ["candidate", "research.v0"]
 
-    with pytest.raises(DmlRepoError, match="tag failed"):
-        dag.commit(refs.scalar)
-
-    assert dag.ref == refs.dag
-    assert dag.token is None
-    fake_dml.dag.add_tag.assert_called_once_with("demo", "research.v0")
+    assert dag.tags == ["candidate", "research.v0"]
+    fake_dml.runtime.describe.assert_called_once_with(refs.index)
+    fake_dml.dag.describe.assert_called_once_with(refs.dag)
 
 
 def test_api_dag_018__context_manager_commits_exceptions(dag):

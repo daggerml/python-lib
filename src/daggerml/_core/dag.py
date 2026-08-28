@@ -14,6 +14,7 @@ class DagDescription(TypedDict):
     result: Ref | None
     argv: Ref | None
     cache_key: str | None
+    tags: list[str]
 
 
 class _NodeDescription(TypedDict):
@@ -53,6 +54,7 @@ class DagOps:
                     "result": dag.result,
                     "argv": dag.argv,
                     "cache_key": dag.cache_key(txn) if dag.argv is not None else None,
+                    "tags": dag.tags,
                 },
             )
 

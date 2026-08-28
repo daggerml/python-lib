@@ -12,7 +12,7 @@ def _put_shallow_history(db):
     missing = Ref("commit:" + "a" * 64)
 
     def write(txn):
-        tree = txn.put(Tree(dags={}, tags={}))
+        tree = txn.put(Tree(dags={}))
         root = txn.put(Commit(parents=[missing], tree=tree, author="user", message="shallow"))
         orphan = txn.put(ScalarDatum("orphan"))
         return root, tree, orphan

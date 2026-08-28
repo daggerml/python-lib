@@ -8,7 +8,7 @@ def test_is_ancestor_traverses_all_merge_parents(tmp_path) -> None:
     db_path.mkdir()
     db = make_db(db_path)
     with db.tx(create_if_missing=True) as txn:
-        tree = txn.put(Tree(dags={}, tags={}))
+        tree = txn.put(Tree(dags={}))
         base = txn.put(Commit(tree=tree, parents=[], author="alice", message="base"))
         left = txn.put(Commit(tree=tree, parents=[base], author="alice", message="left"))
         right = txn.put(Commit(tree=tree, parents=[base], author="alice", message="right"))

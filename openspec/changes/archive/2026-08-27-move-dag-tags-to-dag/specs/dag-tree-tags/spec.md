@@ -1,8 +1,4 @@
-## Purpose
-
-Allow researchers to classify immutable DAGs with durable opaque tags.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: DAGs store normalized intrinsic tags
 Each DAG SHALL store a required list of opaque string tags. The list SHALL contain no duplicates and SHALL be sorted in lexicographic order. Tags SHALL be part of the DAG's immutable persisted content and SHALL remain associated with that DAG when it is published as an execution result, imported, checked out, or referenced under another name.
@@ -36,3 +32,25 @@ Public DAG wrappers for both active and loaded DAGs SHALL expose the tags of the
 #### Scenario: Failed DAG retains initialized tags
 - **WHEN** an active DAG initialized with tags commits an error result
 - **THEN** the persisted error DAG retains those tags
+
+## REMOVED Requirements
+
+### Requirement: Tree stores tags for named DAG entries
+**Reason**: Tags must survive publication and use of an unnamed execution-result DAG, which a tree-entry mapping cannot represent.
+**Migration**: Read tags from each DAG description instead of from its containing tree. Create DAGs with their tags before execution.
+
+### Requirement: Tags follow tree-entry history
+**Reason**: Tags now follow immutable DAG identity rather than a mutable name in history.
+**Migration**: Use the DAG ref's tags as its classification. Re-run a completed DAG with different initial tags instead of changing a named tree entry.
+
+### Requirement: History inspection exposes tree tags
+**Reason**: Commit trees no longer own tags.
+**Migration**: Inspect each DAG ref returned by commit inspection to obtain its tags.
+
+### Requirement: Users can add and remove DAG-entry tags
+**Reason**: Completed DAGs are immutable and tags are no longer a branch-local named-entry annotation.
+**Migration**: Use runtime tag operations while an index is active. To classify a completed DAG differently, run it again with the desired tags.
+
+### Requirement: Public DAG wrappers can assign tags on commit
+**Reason**: Tags are initialized on the active DAG and committed atomically as DAG content, not applied later as tree mutations.
+**Migration**: Continue passing tags to public DAG creation; do not rely on post-commit tag mutation or mutation-error handling.

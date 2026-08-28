@@ -188,7 +188,7 @@ def test_api_live_012__context_projection_materializes_as_import_and_access_node
 
 
 def test_api_live_010__frozen_dag_can_be_reconstructed_resumed_and_committed(live_dml):
-    original = api.new("resumed", dml=live_dml)
+    original = api.new("resumed", dml=live_dml, tags=["reviewed"])
     original.put({"status": "done"}, name="implementation")
     original.freeze("awaiting review")
 
@@ -196,7 +196,6 @@ def test_api_live_010__frozen_dag_can_be_reconstructed_resumed_and_committed(liv
         original.token,
         name="resumed",
         message="complete review",
-        tags=["reviewed"],
         dml=live_dml,
     )
     approval = resumed.put("approved", name="review")
@@ -208,8 +207,8 @@ def test_api_live_010__frozen_dag_can_be_reconstructed_resumed_and_committed(liv
     assert completed.review.value() == "approved"
     assert completed.result.value() == "approved"
     commit = live_dml.show()
-    assert commit["tags"] == {"resumed": ["reviewed"]}
-    assert live_dml.show(commit["parents"][0])["message"] == "complete review"
+    assert completed.tags == ["reviewed"]
+    assert commit["message"] == "complete review"
 
 
 def test_node_context_happy_path(live_dml):
