@@ -154,7 +154,7 @@ jobs:
           npm ci
           npm run build
       - name: Build wheel
-        uses: pypa/cibuildwheel@v3
+        uses: pypa/cibuildwheel@v3.2.1
         env:
           CIBW_BUILD: "${{ matrix.python.identifier }}-*"
           CIBW_ARCHS: auto
