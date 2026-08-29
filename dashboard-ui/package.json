@@ -1,0 +1,33 @@
+{
+  "name": "@daggerml/dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.8.5",
+    "d3": "^7.9.0",
+    "lucide-react": "^0.468.0",
+    "plotly.js-dist-min": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vega-embed": "^7.1.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/d3": "^7.4.3",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^4.1.10"
+  }
+}

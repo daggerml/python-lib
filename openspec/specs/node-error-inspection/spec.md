@@ -1,0 +1,75 @@
+## Purpose
+Define stored node-error inspection and contextual error propagation.
+
+## Requirements
+
+### Requirement: Core node resolution preserves terminal error refs
+Core node resolution SHALL return a pair of datum and error refs with exactly one populated, and it SHALL NOT hydrate or raise a stored terminal error while resolving a node.
+
+#### Scenario: Resolve a successful function node
+- **WHEN** a function node refers to a child DAG with a result
+- **THEN** resolution returns the result datum ref and no error ref
+
+#### Scenario: Resolve a failed function node
+- **WHEN** a function node refers to a child DAG with an error ref
+- **THEN** resolution returns no datum ref and that error ref without loading or raising the error object
+
+### Requirement: DAG inspection materializes stored errors on request
+The public DAG query surface SHALL return a hydrated stored `Error` when a requested node resolves to an error ref, and it SHALL provide a query to load a validated error ref directly.
+
+#### Scenario: Inspect a failed node
+- **WHEN** a caller invokes `dml.dag.get_node()` for a node resolving to an error ref
+- **THEN** the query returns the hydrated raw `Error` represented by that ref
+
+#### Scenario: Inspect an error ref directly
+- **WHEN** a caller invokes `dml.dag.get_error()` with an `error:*` ref
+- **THEN** the query returns the hydrated raw `Error`
+
+#### Scenario: Reject a non-error ref
+- **WHEN** a caller invokes `dml.dag.get_error()` with a ref outside the `error` namespace
+- **THEN** the query raises a validation error
+
+### Requirement: High-level failed node access raises contextual NodeError
+The public API SHALL raise a transient `NodeError` when high-level node creation or value materialization reaches a stored error, and that exception SHALL retain the failed node ref and return its failed function-DAG context.
+
+#### Scenario: Load a failed named node
+- **WHEN** a caller accesses a named node that resolves to a stored error
+- **THEN** the API raises `NodeError` with the requested node ref and the stored error fields
+
+#### Scenario: Materialize a failed node
+- **WHEN** a caller invokes `.value()` on a node that resolves to a stored error
+- **THEN** the API raises `NodeError` with the node ref and the stored error fields
+
+#### Scenario: Inspect failed function context
+- **WHEN** a caller invokes `.context()` on a raised `NodeError`
+- **THEN** it returns the function DAG that recorded the terminal error without materializing a result node
+
+### Requirement: Errors cannot be consumed as execution inputs
+Function invocation and cache-key computation SHALL require datum refs and SHALL reject an error ref with a new library error before creating an argv node, call node, cache key, or execution. Stored errors are execution artifacts, not core-library exceptions.
+
+#### Scenario: Invoke with a failed node ref
+- **WHEN** a function invocation input resolves to an error ref
+- **THEN** the invocation raises a new library error and no new function call or execution is created
+
+### Requirement: Persisted errors are canonical base Error instances
+The transaction storage boundary SHALL convert an `Error` subclass to a newly created exact base `Error` before persistence, retaining only the persisted error fields.
+
+#### Scenario: Persist a transient NodeError
+- **WHEN** a transient `NodeError` is supplied for persistence
+- **THEN** the stored object is an exact base `Error` with matching message, origin, type, and stack
+- **AND** it contains no transient node or DAG context fields
+
+### Requirement: DAG result access raises terminal errors
+The public `Dag.result` accessor SHALL raise the persisted `Error` when a committed DAG has a terminal error ref instead of a result ref.
+
+#### Scenario: Access the result of a failed committed DAG
+- **WHEN** a caller accesses `Dag.result` for a committed DAG whose description has an `error` ref and no `result` ref
+- **THEN** the accessor SHALL hydrate that ref through the public DAG error query and raise the resulting `Error`
+
+#### Scenario: Access the result of a successful committed DAG
+- **WHEN** a caller accesses `Dag.result` for a committed DAG whose description has a `result` ref and no `error` ref
+- **THEN** the accessor SHALL return the node represented by the result ref without hydrating or raising an error
+
+#### Scenario: Access the result of an unfinished committed DAG
+- **WHEN** a caller accesses `Dag.result` for a committed DAG whose description has neither an `error` ref nor a `result` ref
+- **THEN** the accessor SHALL raise the existing repository error indicating that the DAG has not been committed yet

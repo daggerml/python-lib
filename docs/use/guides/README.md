@@ -1,0 +1,13 @@
+# Research guides
+
+- [Author a DAG](author-a-dag.md)
+- [Run Docker workloads](docker-workloads.md)
+- [Run work remotely](remote-execution.md)
+- [Manage artifacts](artifacts.md)
+- [Write a custom codec](custom-codecs.md)
+- [Use a temporary project](temporary-projects.md)
+- [Inspect and cancel runtimes](runtime-inspection-cancellation.md)
+- [Refresh cached work](refresh-cache.md)
+- [Inspect a completed DAG](inspect-a-completed-dag.md)
+- [Provide custom DAG dashboards](custom-dag-dashboards.md)
+- [Share and reuse research](share-reuse.md)

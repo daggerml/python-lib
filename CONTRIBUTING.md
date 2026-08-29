@@ -3,6 +3,12 @@
 Thank you for your interest in contributing! We welcome contributions via pull
 requests and appreciate your help in improving this project.
 
+## Contributor Workflow References
+
+- `AGENTS.md`: agent-specific working notes and script-executor caveats.
+- `DOC_MAP.md`: which project docs to read before editing a given code path.
+- `openspec/README.md`: change-planning artifacts and current OpenSpec spec surfaces.
+
 ## Reporting Issues
 
 - Search [existing issues](https://github.com/daggerml/python-lib/issues) before submitting a new one.
@@ -18,7 +24,7 @@ requests and appreciate your help in improving this project.
 1. Create a new branch for your feature or bugfix (with the github issue in the name).
 2. Clone the repository and set it up:
    ```bash
-   git clone --recurse-submodules https://github.com/daggerml/python-lib.git
+   git clone https://github.com/daggerml/python-lib.git
    ```
 3. Make your changes in the new branch.
 4. Write or update tests as needed.
@@ -37,30 +43,87 @@ requests and appreciate your help in improving this project.
 
 - Add or update unit tests for any new features or bug fixes.
 - Use [pytest](https://pytest.org/) for running tests.
-- The testing requirements are included in the `test` feature for the library.
-  - You can run tests using [hatch](https://hatch.pypa.io/):
-    ```
-    hatch run pytest .
-    ```
-  - If you're using vscode, you can create a venv with the `test` feature and run tests with the command palette:
-    ```
-    Python: Run Tests
-    ```
-  - Or install the `test` feature with pip and run tests:
-    ```
-    pip install -e </path/to/library>[test]
-    pytest .
-    ```
+- Standard local dev command pattern is:
+  ```bash
+  uv run --dev <python command>
+  ```
+- When a command needs optional dependencies, include all extras:
+  ```bash
+  uv run --dev --all-extras <python command>
+  ```
+- Run tests with:
+  ```bash
+  uv run --dev --all-extras pytest .
+  ```
+- Run lint with:
+  ```bash
+  uv run --dev --all-extras ruff check --fix .
+  ```
 - We mark tests with `@pytest.mark.slow` for those that take longer to run. You can run only the fast tests with:
   ```
-  pytest -m "not slow" .
+  uv run --dev --all-extras pytest -m "not slow" .
   ```
-- We mark tests that require `daggerml-cli` to be installed with `@pytest.mark.needs_dml`. You can exclude those tests with:
+- CI continues to run the full suite (`uv run pytest .`) to preserve complete coverage while local quick loops use `-m "not slow"`.
+- We mark tests under `tests/_core/` with `@pytest.mark.core`. Core tests are included by default. You can select or skip them with:
   ```
-  pytest -m "not needs_dml" .
+  uv run --dev --all-extras pytest -m core .
+  uv run --dev --all-extras pytest -m "not core" .
   ```
 - Run all tests locally before submitting a pull request:
 - Ensure your code passes all tests and does not decrease code coverage.
 - If your changes introduce new dependencies, please update `pyproject.toml`, but we prefer to keep the dependencies to a minimum.
+
+### Test taxonomy and naming
+
+This section is for contributors maintaining or restructuring the test suite.
+
+#### Directory layout
+
+- `tests/contracts/`: fast, isolated tests that verify one documented requirement or invariant.
+- `tests/integration/`: multi-component or infrastructure-dependent tests.
+- `tests/_core/contracts/`: fast, isolated tests for `daggerml._core` contracts.
+- `tests/_core/integration/`: multi-component or infrastructure-dependent tests for `daggerml._core`.
+- Subsystem-owned suites such as `tests/_core/`, `tests/api/`, and `tests/contrib/` keep `contracts/` and `integration/` subdirectories under the subsystem root.
+
+#### File naming
+
+- Contract tests should use `test_<surface>_<contract>.py`.
+- Integration tests should use `test_<surface>_<scenario>_integration.py`.
+- Avoid generic names such as `test_core.py` when a more specific contract surface is known.
+
+#### Function naming and contract IDs
+
+- Prefer `test_<contract_id_slug>__<behavior>()` where practical.
+- Example: `test_exec_lc_003__resume_uses_launch_state()`.
+- Specify canonical contract IDs directly as literal strings.
+- Use uppercase category prefixes and numeric suffixes such as `ADP-OUT-001`, `EXEC-LC-003`, and `EST-LOCK-004`.
+- For parameterized cases, include the canonical ID in `id=`, for example `id="EXEC-LC-003:resume-uses-launch-state"`.
+
+#### Lifecycle parameterization
+
+- Tests that exercise a lifecycle should prefer one parameterized test per contract family over multiple near-duplicate tests.
+- Make lifecycle stages explicit in case IDs, for example `kickoff`, `resume`, `terminal-succeeded`, and `terminal-failed`.
+
+#### Marker policy
+
+- Integration tests that require external processes, polling loops, remote roundtrips, or significant runtime orchestration must be marked `@pytest.mark.slow`.
+- Contract tests in `tests/contracts/` should stay unmarked and fast by default.
+- Tests under `tests/_core/` are marked `@pytest.mark.core` by `tests/_core/conftest.py` and remain included in default pytest runs.
+
+#### Taxonomy maintenance
+
+- Keep each maintained behavior in one taxonomy-aligned location.
+- Remove a superseded or duplicate test when its replacement coverage is added.
+- Preserve canonical contract IDs in replacement parameterized case IDs where applicable.
+
+## Migration Rollout Policy
+
+When migrating storage or execution paths, use phased rollouts with tests at each phase:
+
+1. Implement the new destination path first and test it.
+2. Write to both old and new paths and test.
+3. Read from the new path and test.
+4. Stop writing to the old path and test.
+5. Remove the old path and test.
 
 Thank you for helping make this project better!

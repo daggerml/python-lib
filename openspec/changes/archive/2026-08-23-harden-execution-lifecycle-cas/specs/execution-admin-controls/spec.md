@@ -1,0 +1,61 @@
+## MODIFIED Requirements
+
+### Requirement: Manual invalidation SHALL target execution identity
+Manual invalidation SHALL accept one or more execution identities as explicit roots. It SHALL queue, deduplicate, lock, mark, and compute reverse caller propagation using execution IDs. Cache keys and cache pointers SHALL NOT supply replacement traversal identities.
+
+Each explicit root whose exact split execution record exists SHALL remain selected even when its cache pointer is absent or names a replacement execution. A caller reached through an execution edge SHALL be selected only when its `metadata.json.cache_key` has a current pointer that still names that caller execution. If that pointer is absent or names another execution, the runtime SHALL prune that caller branch without selecting the historical caller, the replacement execution, or callers above the historical caller.
+
+For each selected execution outside `cancel-pending`, the runtime SHALL acquire `driver.json.lock`, CAS-delete the cache pointer only if it still contains that execution ID, and then CAS invalidation metadata into `state.json.invalidation`. It SHALL NOT rewrite immutable `metadata.json` or interpret a unified execution object. Cacheless explicit roots SHALL be marked without cache-pointer deletion. An execution already in `cancel-pending` SHALL not receive invalidation or other control-state updates; cancellation retains authority over that record.
+
+#### Scenario: Explicit root remains selected after pointer rebound
+- **WHEN** invalidation explicitly targets execution `e1` and `exec/cache/ck1` now contains `e2`
+- **THEN** it SHALL preserve `exec/cache/ck1`
+- **AND** it SHALL store invalidation metadata in `exec/execution/e1/state.json` when `e1` is not `cancel-pending`
+- **AND** it SHALL NOT select `e2`
+
+#### Scenario: Current caller propagates by execution edge
+- **WHEN** caller edge `p1 -> e1` exists and `exec/cache/ck-p` contains `p1`
+- **AND** invalidation targets `e1`
+- **THEN** it SHALL select `p1` directly by that edge
+- **AND** it SHALL NOT rediscover `p1` through its cache key
+
+#### Scenario: Rebound historical caller prunes propagation
+- **WHEN** caller edge `p1 -> e1` exists and `exec/cache/ck-p` contains `p2`
+- **AND** invalidation targets `e1`
+- **THEN** it SHALL NOT invalidate `p1` or `p2`
+- **AND** it SHALL NOT traverse callers above `p1`
+
+#### Scenario: Selected execution deletes pointer before marking
+- **WHEN** selected execution `e1` is still named by `exec/cache/ck1`
+- **AND** its lifecycle is not `cancel-pending`
+- **THEN** it SHALL conditionally delete `exec/cache/ck1` before storing invalidation metadata in `state.json`
+
+#### Scenario: Cacheless explicit root is marked
+- **WHEN** invalidation explicitly targets existing execution `e1` whose metadata has no cache key
+- **AND** its lifecycle is not `cancel-pending`
+- **THEN** it SHALL store invalidation metadata in `state.json` without attempting cache-pointer deletion
+
+#### Scenario: Cancel-pending remains cancellation-owned
+- **WHEN** invalidation reaches an execution whose lifecycle is `cancel-pending`
+- **THEN** it SHALL leave that execution state unchanged
+- **AND** it SHALL not delete or reinterpret cancellation-owned state
+
+### Requirement: Manual cancellation SHALL run one resumable two-phase workflow
+Manual cancellation SHALL first reconstruct and complete the reachable `cancel-pending` set without invoking adapters, then drive every selected execution that remains `cancel-pending` with bounded retries. Every invocation SHALL resume persisted `cancel-pending` work without a separate drive mode, and the persisted field name SHALL remain `cancelation`. If Phase 2 observes a selected execution as `canceled`, it SHALL treat it as concurrent completion. If it observes `pending`, `running`, `succeeded`, or `failed`, it SHALL warn and stop driving that execution without invoking its cancel adapter.
+
+#### Scenario: Planning precedes adapter work
+- **WHEN** cancellation selects multiple reachable executions
+- **THEN** it SHALL finish Phase 1 for the complete selected set before invoking any cancel adapter
+
+#### Scenario: Repeated call resumes persisted work
+- **WHEN** cancellation starts from an execution already in `cancel-pending`
+- **THEN** it SHALL reconstruct its selected descendants and run the same two phases
+
+#### Scenario: Exhausted work remains resumable
+- **WHEN** Phase 2 exhausts retries for an execution
+- **THEN** that execution SHALL remain `cancel-pending` for a later cancellation call
+
+#### Scenario: Lifecycle drift does not invoke cancellation
+- **WHEN** Phase 2 observes selected work outside `cancel-pending` or `canceled`
+- **THEN** it SHALL warn and drop that work from the current drive set
+- **AND** manual cancellation SHALL continue processing the remaining set

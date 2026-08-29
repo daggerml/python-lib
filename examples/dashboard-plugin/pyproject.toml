@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daggerml-example-dashboards"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["daggerml"]
+
+[project.entry-points."daggerml.dashboards"]
+example = "example_dashboard_plugin:dashboards"
+
+[tool.setuptools.packages.find]
+where = ["src"]

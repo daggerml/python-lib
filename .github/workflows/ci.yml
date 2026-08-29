@@ -6,59 +6,235 @@ on:
     tags:
       - "v*" # Semantic version tags
   pull_request:
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
       matrix:
-        py: ["3.9", "3.10", "3.11", "3.12", "3.13"]
-    runs-on: ubuntu-latest
+        py: ["3.11", "3.12", "3.13", "3.14"]
+        os: [ubuntu-latest, macos-latest]
+        exclude:
+          # Only test the first and latest stable Pythons on macOS to keep CI fast
+          # - os: macos-latest
+          #   py: "3.11"
+          - os: macos-latest
+            py: "3.12"
+          - os: macos-latest
+            py: "3.13"
+          # - os: macos-latest
+          #   py: "3.14"
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # full history
           fetch-tags: true # redundant in v4, but explicit
-          submodules: "recursive"
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.py }}
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install submodules/daggerml_cli/
-          pip install .[dev]
+      - name: Install uv
+        run: pip install uv==0.11.7
+      - name: Sync dependencies
+        run: uv sync --group dev --all-extras
       - name: pytest
-        run: python -m pytest -m "not slow" .
+        run: uv run pytest .
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: pip install uv==0.11.7
+      - name: Sync dependencies
+        run: uv sync --group dev --all-extras
+      - name: Run examples
+        run: bash ./examples/run-all-examples.sh
+  sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: pip install uv==0.11.7
+      - name: Build with ASAN + UBSAN
+        env:
+          CMAKE_ARGS: "-DDML_ENABLE_ASAN=ON -DDML_ENABLE_UBSAN=ON"
+        run: uv sync --group dev --all-extras
+      - name: Run tests with sanitizers
+        env:
+          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: |
+          LIBASAN=$(gcc -print-file-name=libasan.so)
+          LD_PRELOAD="$LIBASAN" uv run pytest .
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Install ruff
-        run: pip install ruff
+      - name: Install uv
+        run: pip install uv==0.11.7
+      - name: Sync dependencies
+        run: uv sync --group dev --all-extras
       - name: Run Ruff
-        run: ruff check --output-format=github .
+        run: uv run ruff check --output-format=github .
+      - name: Run Pyright
+        run: uv run pyright --project .
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard-ui/package-lock.json
+      - name: Install dashboard dependencies
+        working-directory: dashboard-ui
+        run: npm ci
+      - name: Test dashboard
+        working-directory: dashboard-ui
+        run: npm test
+      - name: Build dashboard assets
+        working-directory: dashboard-ui
+        run: npm run build
+  build-wheels:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - version: "3.11"
+            identifier: cp311
+          - version: "3.12"
+            identifier: cp312
+          - version: "3.13"
+            identifier: cp313
+          - version: "3.14"
+            identifier: cp314
+        platform:
+          - id: linux
+            os: ubuntu-latest
+          - id: macos
+            os: macos-latest
+    name: Build Python ${{ matrix.python.version }} wheel for ${{ matrix.platform.id }}
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard-ui/package-lock.json
+      - name: Build dashboard assets
+        working-directory: dashboard-ui
+        run: |
+          npm ci
+          npm run build
+      - name: Build wheel
+        uses: pypa/cibuildwheel@v3
+        env:
+          CIBW_BUILD: "${{ matrix.python.identifier }}-*"
+          CIBW_ARCHS: auto
+          CIBW_TEST_COMMAND: python -c "import daggerml._core.db"
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform.id }}-${{ matrix.python.identifier }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+          retention-days: 1
+  build-sdist:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard-ui/package-lock.json
+      - name: Build dashboard assets
+        working-directory: dashboard-ui
+        run: |
+          npm ci
+          npm run build
+      - name: Build source distribution
+        run: |
+          pip install hatch
+          hatch build --target sdist
+      - name: Upload source distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
   publish:
-    needs: ["test", "lint"]
+    needs: ["test", "lint", "sanitize", "examples", "dashboard", "build-wheels", "build-sdist"]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     name: Upload release to PyPI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - name: Download source distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-3.13-publish-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-3.13-
+            ${{ runner.os }}-pip-
       - name: Install hatch
         run: |
           pip install hatch
-      - name: Build and publish
+      - name: Publish distributions
         env:
           HATCH_INDEX_USER: __token__
           HATCH_INDEX_AUTH: ${{ secrets.PYPI_TOKEN }}
-        run: |
-          hatch build
-          hatch publish
+        run: hatch publish

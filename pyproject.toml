@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core>=0.11", "setuptools-scm>=8", "Cython>=3.0"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "daggerml"
@@ -10,31 +10,50 @@ authors = [
 ]
 description = "DaggerML"
 readme = "README.md"
-requires-python = ">=3.9"
-license = "MIT"
+requires-python = ">=3.11"
+license = {text = "MIT"}
 keywords = []
 classifiers = [
-  "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Development Status :: 4 - Beta",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = []
+dependencies = ["boto3"]
 
 [project.optional-dependencies]
-cli = ["daggerml-cli>=0.0.38"]
-dev = [
-  "pytest",
-  "pytest-cov",
-  "moto[all,server]",
+terminal = [
+  "rich",
 ]
+dashboard = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.32,<1",
+]
+
+[project.scripts]
+dml = "daggerml._cli:cli"
+dml-dashboard = "daggerml.dashboard.cli:main"
+dml-local-adapter = "daggerml.contrib.adapters:LocalAdapter.cli"
+dml-lambda-adapter = "daggerml.contrib.adapters:LambdaAdapter.cli"
+
+[project.entry-points."daggerml.contrib.adapters"]
+local = "daggerml.contrib.adapters:LocalAdapter"
+lambda = "daggerml.contrib.adapters:LambdaAdapter"
+
+[project.entry-points."daggerml.contrib.executors"]
+batch = "daggerml.contrib.executors:BatchExecutor"
+script = "daggerml.contrib.executors:ScriptExecutor"
+docker = "daggerml.contrib.executors:DockerExecutor"
+ssh = "daggerml.contrib.executors:SshExecutor"
+
+[project.entry-points."daggerml.codecs"]
+"daggerml.contrib" = "daggerml.contrib.codecs:literal_codecs"
+daggerml = "daggerml.api:codecs"
 
 [project.urls]
 Homepage = "https://daggerml.com"
@@ -43,60 +62,53 @@ Issues = "https://github.com/daggerml/python-lib/issues"
 Source = "https://github.com/daggerml/python-lib"
 License = "https://github.com/daggerml/python-lib/blob/master/LICENSE"
 
+[tool.scikit-build]
+wheel.packages = ["src/daggerml"]
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+sdist.include = [
+  "src/daggerml/__about__.py",
+  "src/daggerml/_core/skills/*.md",
+  "src/daggerml/dashboard/static/**",
+]
+
+[tool.setuptools_scm]
+write_to = "src/daggerml/__about__.py"
+tag_regex = "^v(?P<version>[0-9]+(?:\\.[0-9]+)*[a-zA-Z0-9\\.\\-]*)$"
+
+[[tool.scikit-build.generate]]
+path = "daggerml/__about__.py"
+location = "install"
+template = "__version__ = \"${version}\"\n"
+
+[tool.uv]
+cache-keys = [
+  { file = "c/**/*.c" },
+  { file = "c/**/*.h" },
+  { file = "src/**/*.pyx" },
+  { file = "src/**/*.pxd" },
+]
+
 [tool.pytest.ini_options]
 pythonpath = "tests/"
 minversion = "6.0"
-addopts = "-ra --ignore=submodules/"
+addopts = "-ra --import-mode=importlib --ignore=./ignore/ --doctest-modules"
 testpaths = [
   "tests",
   "src/daggerml",
 ]
 markers = [
+  "contrib: marks tests for daggerml.contrib (select with '-m contrib' or deselect with '-m \"not contrib\"')",
+  "core: marks tests for daggerml._core (select with '-m core' or deselect with '-m \"not core\"')",
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
   "serial",
 ]
 
-[tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.version.raw-options]
-version_scheme = "only-version"   # use tag as version
-local_scheme = "no-local-version"  # pypi does not support local-schemes
-tag_regex = "^v(?P<version>[0-9]+\\.[0-9]+\\.[0-9]+(?:[-\\.][a-zA-Z0-9]+)*)$"
-version_file = "src/daggerml/__about__.py"  # write version info to this file
-relative_to = "{root:uri}"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/daggerml"]
-artifacts = [
-  "src/daggerml/__about__.py"  # add to hatch build because it's git ignored
-]
-
-[tool.hatch.envs.default]
-python="3.10"
-features = ["dev"]
-dependencies = ["twine"]
-pre-install-commands = [
-  "pip install -e {root:uri}/submodules/daggerml_cli",
-]
-
-[tool.hatch.envs.default.scripts]
-test = 'pytest . {args}'
-coverage-report = 'pytest --cov-report term-missing --cov=daggerml tests/'
-dml-build = "hatch build && twine upload -r {args:testpypi} dist/*"
-
-[tool.hatch.envs.test-all]
-template = "default"
-
-[[tool.hatch.envs.test-all.matrix]]
-python = ["3.9", "3.10", "3.11", "3.12", "3.13"]
-
 [tool.ruff]
-target-version = "py39"
+target-version = "py313"
 line-length = 120
 
 [tool.ruff.lint]
-select = ["E", "F", "B", "I", "PGH004"]
+select = ["E", "F", "B", "I", "PGH004", "W"]
 ignore = []
 unfixable = ["B"]
 
@@ -107,7 +119,8 @@ known-first-party = ["daggerml"]
 ban-relative-imports = "all"
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401", "E402"]
+"src/daggerml/__init__.py" = ["F401", "E402"]
+"src/daggerml/_internal/__init__.py" = ["F401", "E402"]
 # Tests can use magic values, assertions, and relative imports
 "tests/**/*" = ["PLR2004", "S101", "TID252"]
 
@@ -132,10 +145,26 @@ exclude_lines = [
 
 [tool.pyright]
 include = ["src"]
+exclude = ["tests"]
 defineConstant = { DEBUG = true }
 typeCheckingMode = "basic"
 reportGeneralTypeIssues = false
 reportMissingImports = "error"
+reportMissingModuleSource = false
 reportMissingTypeStubs = false
 reportOptionalCall = false
 reportOptionalMemberAccess = false
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28",
+    # Starlette TestClient warns that its httpx fallback is deprecated.
+    "httpx2>=2.12",
+    "hypothesis>=6.141.1",
+    "moto[all,server]>=5.1.20,<5.2.0",  # max version because moto s3 bug
+    "polars>=1.39.0",
+    "pyright>=1.1.409",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.10",
+]
