@@ -102,9 +102,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: dashboard-ui/package-lock.json
       - name: Install dashboard dependencies
@@ -143,9 +143,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: dashboard-ui/package-lock.json
       - name: Build dashboard assets
@@ -160,7 +160,7 @@ jobs:
           CIBW_ARCHS: auto
           CIBW_TEST_COMMAND: python -c "import daggerml._core.db"
       - name: Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.platform.id }}-${{ matrix.python.identifier }}
           path: wheelhouse/*.whl
@@ -179,9 +179,9 @@ jobs:
         with:
           python-version: "3.13"
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
           cache-dependency-path: dashboard-ui/package-lock.json
       - name: Build dashboard assets
@@ -194,7 +194,7 @@ jobs:
           pip install hatch
           hatch build --target sdist
       - name: Upload source distribution
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: dist/*.tar.gz
@@ -212,18 +212,18 @@ jobs:
         with:
           python-version: "3.13"
       - name: Download wheels
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheel-*
           path: dist
           merge-multiple: true
       - name: Download source distribution
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: sdist
           path: dist
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-3.13-publish-${{ hashFiles('**/pyproject.toml') }}
