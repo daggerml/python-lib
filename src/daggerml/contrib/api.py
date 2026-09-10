@@ -41,11 +41,7 @@ class _DagclassAnalyzer:
             self.dependencies.append(name)
 
     def _scan(self, node: ast.AST) -> None:
-        if (
-            isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "self"
-        ):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
             if isinstance(node.ctx, ast.Load):
                 self._add_dependency(node.attr)
             elif isinstance(node.ctx, ast.Store):
@@ -61,9 +57,7 @@ class _DagclassAnalyzer:
             bad = ", ".join(sorted(reserved_assignments))
             raise DmlRepoError(f"Cannot assign to reserved dagclass names: {bad}")
         dependencies = [
-            name
-            for name in self.dependencies
-            if name not in self.assignments and name not in _DAGCLASS_RESERVED_NAMES
+            name for name in self.dependencies if name not in self.assignments and name not in _DAGCLASS_RESERVED_NAMES
         ]
         for name in dependencies:
             if name not in self.member_names:
@@ -407,11 +401,9 @@ def run(instance, *args, name: str | None = None, entrypoint: str | None = None,
         raise DmlRepoError("api.run entrypoint must be DelayedRunnable")
     run_name = name or _default_run_name(instance)
     dml = core_api.get_default_dml()
-    dag = core_api.new(dml=dml, name=run_name, message=run_name)
-    for member_name, member_value in _iter_dagclass_members(instance):
-        dag.put(member_value, name=member_name)
-    result = dag.call(fn, *args, name=_DAGCLASS_CALL_NODE_NAME, **kwargs)
-    dag.commit(result)
+    with core_api.new(dml=dml, name=run_name, message=run_name) as dag:
+        result = dag.call(fn, *args, name=_DAGCLASS_CALL_NODE_NAME, **kwargs)
+        dag.commit(result)
 
 
 @overload
