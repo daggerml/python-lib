@@ -33,7 +33,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import dagMark from "./assets/daggerml-dag-mark.png";
 import { api, subscribeToEvents, subscribeToLogs } from "./api";
 import { FlowGraph } from "./components/FlowGraph";
@@ -547,7 +547,7 @@ export default function App() {
         <div className="page">
           {routeInvalid && <Problem title="Page not found" detail="This dashboard location is not available." />}
            {!routeInvalid && page === "home" && <HomePage data={status.data} loading={status.loading} error={status.error} onSelect={openSelection} onProject={selectProject} onProjectsChanged={() => { status.reload(); projects.reload(); }} />}
-           {!routeInvalid && page === "docs" && <DocsPage pageId={docsPage} onNavigate={(id, hash) => navigate("docs", { docsPage: id, hash })} />}
+           {!routeInvalid && page === "docs" && <DocsPage pageId={docsPage} theme={theme} onNavigate={(id, hash) => navigate("docs", { docsPage: id, hash })} />}
           {!routeInvalid && page === "unborn" && <PageHeader eyebrow="Project workspace" title={selectedProject?.name ?? projectId ?? "Project"} description="This repository has no commit at HEAD yet." />}
           {!routeInvalid && page === "overview" && <OverviewPage data={overview.data} commits={commits.data?.items ?? []} historyBounded={Boolean(commits.data?.next_cursor)} dags={dags.data?.items ?? []} runs={runs.data ?? []} liveIndexes={projectLive} loading={overview.loading} error={overview.error} select={openSelection} navigate={navigate} projectId={selectedProjectId} onCommit={changeCommit} />}
           {!routeInvalid && page === "dags" && scope && <DagsPage key={`${commitId}:${contextDagId}:${graphFilter ?? ""}`} scope={scope} dags={dags.data?.items ?? []} liveIndexes={dags.data?.live_dags_eligible ? projectLive : []} liveEligible={Boolean(dags.data?.live_dags_eligible)} focusDagId={contextDagId} graphFilter={graphFilter} selectedDashboard={selectedDashboard} onDashboard={changeDashboard} onDagRoute={(id) => navigate("dags", { dagId: id })} loading={dags.loading} error={dags.error} select={openSelection} />}
@@ -576,11 +576,47 @@ interface DocsNavSection {
   pages: DocsManifestPage[];
 }
 
-function DocsPage({ pageId, onNavigate }: { pageId?: string; onNavigate: (id?: string, hash?: string) => void }) {
+const START_DOCS = ["index", "why-daggerml", "getting-started", "use/guides/author-a-dag"];
+const DOCS_GROUP_ORDER = new Map([
+  "README", "index", "concepts", "guides", "reference", "architecture",
+].map((name, index) => [name, index]));
+const USE_DOCS_ORDER = new Map([
+  "use/README",
+  "use/concepts/README",
+  "use/concepts/projects",
+  "use/concepts/dags-nodes-results",
+  "use/concepts/funks-execution-cache",
+  "use/concepts/artifacts-data-codecs",
+  "use/concepts/runtimes",
+  "use/concepts/history-remotes",
+  "use/concepts/errors-provenance",
+  "use/concepts/errors",
+  "use/guides/README",
+  "use/guides/temporary-projects",
+  "use/guides/inspect-a-completed-dag",
+  "use/guides/artifacts",
+  "use/guides/refresh-cache",
+  "use/guides/share-reuse",
+  "use/guides/remote-execution",
+  "use/guides/docker-workloads",
+  "use/guides/runtime-inspection-cancellation",
+  "use/guides/custom-codecs",
+  "use/guides/custom-dag-dashboards",
+  "use/reference/README",
+  "use/reference/python-authoring",
+  "use/reference/cli",
+  "use/reference/configuration",
+  "use/reference/runtime-state",
+  "use/reference/errors",
+].map((id, index) => [id, index]));
+
+function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark" | "light"; onNavigate: (id?: string, hash?: string) => void }) {
   const [pages, setPages] = useState<DocsManifestPage[]>();
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();
   const [filter, setFilter] = useState("");
+  const docsContentRef = useRef<HTMLElement>(null);
+  const diagramSequence = useRef(0);
   const selected = pages?.find((item) => item.id === (pageId ?? "index"));
 
   useEffect(() => {
@@ -615,7 +651,75 @@ function DocsPage({ pageId, onNavigate }: { pageId?: string; onNavigate: (id?: s
     if (typeof target?.scrollIntoView === "function") target.scrollIntoView();
   }, [content]);
 
-  const navigateLink = (event: ReactMouseEvent<HTMLElement>) => {
+  useEffect(() => {
+    if (!content) return;
+    docsContentRef.current?.querySelectorAll<HTMLButtonElement>("button.code-copy-button").forEach((button) => {
+      button.type = "button";
+      button.title = "Copy code";
+      button.setAttribute("aria-label", "Copy code");
+    });
+  }, [content]);
+
+  useEffect(() => {
+    if (!content) return;
+    const diagrams = [...(docsContentRef.current?.querySelectorAll<HTMLElement>("pre.mermaid") ?? [])];
+    if (!diagrams.length) return;
+    let active = true;
+    const renderDiagrams = async () => {
+      const { default: mermaid } = await import("mermaid");
+      if (!active) return;
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: theme === "dark" ? "dark" : "default" });
+      for (const diagram of diagrams) {
+        const source = diagram.dataset.mermaidSource ?? diagram.textContent?.trim() ?? "";
+        diagram.dataset.mermaidSource = source;
+        diagram.classList.remove("mermaid--error");
+        diagram.setAttribute("role", "img");
+        diagram.setAttribute("aria-label", "Flow chart");
+        try {
+          const id = `dml-docs-diagram-${++diagramSequence.current}`;
+          const { svg, bindFunctions } = await mermaid.render(id, source);
+          if (!active || !diagram.isConnected) return;
+          diagram.innerHTML = svg;
+          bindFunctions?.(diagram);
+        } catch {
+          if (!active || !diagram.isConnected) return;
+          diagram.textContent = source;
+          diagram.classList.add("mermaid--error");
+          diagram.setAttribute("aria-label", "Flow chart failed to render");
+        }
+      }
+    };
+    void renderDiagrams();
+    return () => { active = false; };
+  }, [content, theme]);
+
+  const interactWithDocs = (event: ReactMouseEvent<HTMLElement>) => {
+    const copy = (event.target as Element).closest<HTMLButtonElement>("button.code-copy-button");
+    if (copy) {
+      event.preventDefault();
+      const code = copy.closest("pre")?.querySelector("code")?.textContent ?? "";
+      const write = navigator.clipboard?.writeText(code);
+      if (!write) {
+        copy.title = "Copy unavailable";
+        copy.setAttribute("aria-label", "Copy unavailable");
+        return;
+      }
+      write.then(() => {
+        copy.dataset.copied = "true";
+        copy.title = "Copied";
+        copy.setAttribute("aria-label", "Copied");
+        window.setTimeout(() => {
+          if (!copy.isConnected) return;
+          delete copy.dataset.copied;
+          copy.title = "Copy code";
+          copy.setAttribute("aria-label", "Copy code");
+        }, 1_500);
+      }).catch(() => {
+        copy.title = "Copy failed";
+        copy.setAttribute("aria-label", "Copy failed");
+      });
+      return;
+    }
     const link = (event.target as Element).closest("a");
     const href = link?.getAttribute("href");
     if (!href || !link || link.target || link.hasAttribute("download") || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || /^(?:[a-z]+:|\/)/i.test(href) && !href.startsWith("/docs/")) return;
@@ -635,13 +739,17 @@ function DocsPage({ pageId, onNavigate }: { pageId?: string; onNavigate: (id?: s
       const current = section.pages.some((item) => item.id === selected?.id);
       return <details key={`${section.id}-${current}`} open={Boolean(filter) || current || section.id === "start"}>
         <summary>{section.label}<span>{section.pages.length}</span></summary>
-        <div>{section.pages.map((item) => <button key={item.id} type="button" className={item.id === selected?.id ? "active" : ""} aria-current={item.id === selected?.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item)}</button>)}</div>
+        <div>{section.pages.map((item, index) => {
+          const subgroup = docsSubgroup(section.id, item.id);
+          const previous = index > 0 ? docsSubgroup(section.id, section.pages[index - 1].id) : undefined;
+          return <Fragment key={item.id}>{subgroup && subgroup !== previous && <p className="docs-nav__subheading">{humanize(subgroup)}</p>}<button type="button" className={item.id === selected?.id ? "active" : ""} aria-current={item.id === selected?.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item)}</button></Fragment>;
+        })}</div>
       </details>;
     })}{sections.length === 0 && <p className="docs-nav__empty">No matching pages</p>}</div>
   </aside>;
   if (!pageId && !selected) return <section className="docs-layout">{navigation}<div className="docs-content"><PageHeader eyebrow="DaggerML documentation" title="Docs" description="Guides, concepts, reference material, and executable examples." /></div></section>;
   if (!selected) return <Problem title="Documentation page not found" detail="The requested page is not part of this packaged documentation set." />;
-  return <section className="docs-layout">{navigation}<article className="docs-content" onClick={navigateLink} dangerouslySetInnerHTML={{ __html: content ?? "" }} />{selected.headings.length > 0 && <aside className="docs-outline" aria-label="On this page"><p className="nav-label">On this page</p>{selected.headings.map((heading) => <button key={heading.id} type="button" onClick={() => onNavigate(selected.id, `#${encodeURIComponent(heading.id)}`)}>{heading.text}</button>)}</aside>}</section>;
+  return <section className="docs-layout">{navigation}<article ref={docsContentRef} className="docs-content" onClick={interactWithDocs} dangerouslySetInnerHTML={{ __html: content ?? "" }} />{selected.headings.length > 0 && <aside className="docs-outline" aria-label="On this page"><p className="nav-label">On this page</p>{selected.headings.map((heading) => <button key={heading.id} type="button" onClick={() => onNavigate(selected.id, `#${encodeURIComponent(heading.id)}`)}>{heading.text}</button>)}</aside>}</section>;
 }
 
 function docsLabel(page: DocsManifestPage) {
@@ -653,7 +761,7 @@ function docsLabel(page: DocsManifestPage) {
 
 function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSection[] {
   const definitions = [
-    { id: "start", label: "Start here", matches: (id: string) => ["index", "why-daggerml", "getting-started"].includes(id) },
+    { id: "start", label: "Start here", matches: (id: string) => START_DOCS.includes(id) },
     { id: "use", label: "Use DaggerML", matches: (id: string) => id === "use" || id.startsWith("use/") },
     { id: "examples", label: "Examples", matches: (id: string) => id === "examples" || id.startsWith("examples/") },
     { id: "extend", label: "Extend DaggerML", matches: (id: string) => id === "extend" || id.startsWith("extend/") },
@@ -661,15 +769,32 @@ function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSect
     { id: "more", label: "More", matches: (_id: string) => true },
   ];
   const remaining = new Set(pages);
-  const startOrder = new Map(["index", "why-daggerml", "getting-started"].map((id, index) => [id, index]));
+  const startOrder = new Map(START_DOCS.map((id, index) => [id, index]));
   const query = filter.trim().toLocaleLowerCase();
   return definitions.flatMap((definition) => {
     const sectionPages = pages.filter((page) => remaining.has(page) && definition.matches(page.id));
     sectionPages.forEach((page) => remaining.delete(page));
-    if (definition.id === "start") sectionPages.sort((left, right) => (startOrder.get(left.id) ?? 99) - (startOrder.get(right.id) ?? 99));
+    sectionPages.sort((left, right) => {
+      if (definition.id === "start") return (startOrder.get(left.id) ?? 99) - (startOrder.get(right.id) ?? 99);
+      return docsPageOrder(left.id) - docsPageOrder(right.id) || docsLabel(left).localeCompare(docsLabel(right));
+    });
     const matches = query ? sectionPages.filter((page) => `${docsLabel(page)} ${page.id}`.toLocaleLowerCase().includes(query)) : sectionPages;
     return matches.length > 0 ? [{ id: definition.id, label: definition.label, pages: matches }] : [];
   });
+}
+
+function docsPageOrder(id: string) {
+  const useOrder = USE_DOCS_ORDER.get(id);
+  if (useOrder !== undefined) return useOrder;
+  const parts = id.split("/");
+  const subgroup = parts[1] ?? "README";
+  return (DOCS_GROUP_ORDER.get(subgroup) ?? 50) * 100 + (parts.at(-1) === "README" || parts.at(-1) === "index" ? 0 : 1);
+}
+
+function docsSubgroup(section: string, id: string) {
+  if (!["use", "extend", "develop"].includes(section)) return undefined;
+  const parts = id.split("/");
+  return parts.length > 2 ? parts[1] : undefined;
 }
 
 function PageHeader({ eyebrow, title, description, actions, className = "" }: { eyebrow: string; title: string; description?: string; actions?: ReactNode; className?: string }) {

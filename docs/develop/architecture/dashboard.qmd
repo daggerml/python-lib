@@ -82,9 +82,16 @@ equivalent light and dark themes. The DaggerML brand links to **Home**, and
 content and project directory; Docs serves packaged, version-matched product
 documentation from the [QMD source tree](../../index.qmd), without project or
 revision scope. Docs navigation groups pages by reader path, uses rendered page
-titles rather than filesystem labels, and provides a local page filter. Only
-the current reader path and the introductory path are expanded by default so
-the complete inventory remains available without dominating the page.
+titles rather than filesystem labels, and provides a local page filter. Within
+each reader path, overview pages precede concepts, guides, and reference, with
+subgroup labels preserving that hierarchy; first-DAG authoring belongs to the
+introductory path. Only the current reader path and the introductory path are
+expanded by default so the complete inventory remains available without
+dominating the page. Source blocks preserve syntax highlighting and expose an
+explicit top-right copy action. Executed output is visually labeled and
+distinct from source. Mermaid diagrams render inside the packaged documentation
+surface using the active dashboard theme; a rendering failure leaves the source
+visible rather than hiding the diagram content.
 Selecting a locally available
 project resolves its `HEAD` to
 a concrete commit and opens its project workspace, whose navigation contains

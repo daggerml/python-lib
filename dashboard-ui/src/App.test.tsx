@@ -6,7 +6,7 @@ import App from "./App";
 import { api } from "./api";
 import type { DashboardProject } from "./types";
 
-const { projects, eventHandlers, plotlyNew, plotlyPurge, vegaEmbed } = vi.hoisted(() => ({
+const { projects, eventHandlers, plotlyNew, plotlyPurge, vegaEmbed, clipboardWrite, mermaidInitialize, mermaidRender } = vi.hoisted(() => ({
   projects: [
     { id: "project-1", name: "research", path: "/workspace/research", local_available: true, path_context: { parent: "/workspace", leaf: "research" }, live_index_count: 2, availability: "complete", checkout: { branch: "main" }, sync: { state: "in-sync" }, last_activity: { state: "known", timestamp: "2026-01-01T00:00:00Z" } },
     { id: "project-2", name: "research", path: "/archive/research", local_available: false, path_context: { parent: "/archive", leaf: "research" }, live_index_count: 0, availability: "unavailable", checkout: { state: "unavailable" }, sync: { state: "unknown" }, last_activity: { state: "unavailable" } },
@@ -15,6 +15,9 @@ const { projects, eventHandlers, plotlyNew, plotlyPurge, vegaEmbed } = vi.hoiste
   plotlyNew: vi.fn().mockResolvedValue(undefined),
   plotlyPurge: vi.fn(),
   vegaEmbed: vi.fn().mockResolvedValue({ view: { finalize: vi.fn() } }),
+  clipboardWrite: vi.fn().mockResolvedValue(undefined),
+  mermaidInitialize: vi.fn(),
+  mermaidRender: vi.fn().mockResolvedValue({ svg: '<svg viewBox="0 0 100 40"><text>Rendered flow chart</text></svg>' }),
 }));
 vi.mock("./api", () => ({
   api: {
@@ -32,10 +35,12 @@ vi.mock("./api", () => ({
 vi.mock("./components/FlowGraph", () => ({ FlowGraph: () => <div aria-label="Flow graph" /> }));
 vi.mock("plotly.js-dist-min", () => ({ default: { newPlot: plotlyNew, purge: plotlyPurge } }));
 vi.mock("vega-embed", () => ({ default: vegaEmbed }));
+vi.mock("mermaid", () => ({ default: { initialize: mermaidInitialize, render: mermaidRender } }));
 
 beforeEach(() => {
   history.replaceState(null, "", "/");
   vi.stubGlobal("localStorage", { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() });
+  vi.stubGlobal("navigator", { clipboard: { writeText: clipboardWrite } });
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   vi.mocked(api.overview).mockClear();
   vi.mocked(api.dags).mockClear();
@@ -53,9 +58,12 @@ beforeEach(() => {
   plotlyNew.mockClear();
   plotlyPurge.mockClear();
   vegaEmbed.mockClear();
+  clipboardWrite.mockClear();
+  mermaidInitialize.mockClear();
+  mermaidRender.mockClear();
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
     if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "examples/one", title: "Worked example", fragment: "fragments/examples/one.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
-    if (input === "/docs/static/fragments/examples/one.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><a href="/docs/examples/one#example">Anchor</a><a href="/docs/static/downloads/examples/one.py">Download</a>');
+    if (input === "/docs/static/fragments/examples/one.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><div class="sourceCode"><pre class="sourceCode python code-with-copy"><code>print("one")</code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div><div class="cell-output cell-output-stdout"><pre><code>one</code></pre></div><pre class="mermaid"><code>flowchart TD\nA--&gt;B</code></pre><a href="/docs/examples/one#example">Anchor</a><a href="/docs/static/downloads/examples/one.py">Download</a>');
     return new Response("Not found", { status: 404 });
   }));
 });
@@ -93,6 +101,50 @@ describe("canonical dashboard routes", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: "Filter documentation" }), { target: { value: "worked" } });
     expect(screen.getByRole("button", { name: "Worked example" })).toBeVisible();
     expect(screen.queryByText("Start here", { selector: "summary" })).not.toBeInTheDocument();
+  });
+
+  it("orders documentation by learning path and promotes first-DAG authoring", async () => {
+    const pages = [
+      { id: "use/reference/errors", title: "Error reference" },
+      { id: "use/guides/artifacts", title: "Manage artifacts" },
+      { id: "use/concepts/errors", title: "Errors" },
+      { id: "use/README", title: "Use DaggerML" },
+      { id: "use/concepts/README", title: "Research concepts" },
+      { id: "use/guides/README", title: "Research guides" },
+      { id: "use/reference/README", title: "Reference" },
+      { id: "use/guides/author-a-dag", title: "Author a DAG" },
+    ].map((page) => ({ ...page, fragment: `fragments/${page.id}.html`, headings: [] }));
+    vi.mocked(fetch).mockImplementation(async (input: URL | RequestInfo) => String(input) === "/docs/static/manifest.json"
+      ? new Response(JSON.stringify({ pages }))
+      : new Response("<h1>Documentation page</h1>"));
+    history.replaceState(null, "", "/docs/use/guides/artifacts");
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Documentation page" });
+    const start = screen.getByText("Start here", { selector: "summary" }).closest("details")!;
+    expect(within(start).getByRole("button", { name: "Author a DAG" })).toBeVisible();
+    const use = screen.getByText("Use DaggerML", { selector: "summary" }).closest("details")!;
+    expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Use DaggerML", "Research concepts", "Errors", "Research guides", "Manage artifacts", "Reference", "Error reference",
+    ]);
+  });
+
+  it("copies rendered source through an explicit code action", async () => {
+    history.replaceState(null, "", "/docs/examples/one");
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy code" }));
+    expect(clipboardWrite).toHaveBeenCalledWith('print("one")');
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeVisible();
+  });
+
+  it("renders packaged Mermaid diagrams in the active theme", async () => {
+    history.replaceState(null, "", "/docs/examples/one");
+    render(<App />);
+
+    expect(await screen.findByRole("img", { name: "Flow chart" })).toContainHTML("Rendered flow chart");
+    expect(mermaidInitialize).toHaveBeenCalledWith(expect.objectContaining({ startOnLoad: false, securityLevel: "strict", theme: "dark" }));
+    expect(mermaidRender).toHaveBeenCalledWith(expect.stringMatching(/^dml-docs-diagram-/), "flowchart TD\nA-->B");
   });
 
   it("leaves packaged downloads to the browser", async () => {
