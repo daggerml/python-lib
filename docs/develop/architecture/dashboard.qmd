@@ -81,7 +81,11 @@ equivalent light and dark themes. The DaggerML brand links to **Home**, and
 **Docs** is the other global destination. Home combines the cross-project status
 content and project directory; Docs serves packaged, version-matched product
 documentation from the [QMD source tree](../../index.qmd), without project or
-revision scope. Selecting a locally available
+revision scope. Docs navigation groups pages by reader path, uses rendered page
+titles rather than filesystem labels, and provides a local page filter. Only
+the current reader path and the introductory path are expanded by default so
+the complete inventory remains available without dominating the page.
+Selecting a locally available
 project resolves its `HEAD` to
 a concrete commit and opens its project workspace, whose navigation contains
 only **Overview**, **DAG Explorer**, and **Tags and refs**:

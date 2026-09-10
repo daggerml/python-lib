@@ -3,13 +3,56 @@ title: DaggerML documentation
 engine: knitr
 ---
 
-DaggerML records research computations as durable, inspectable, cacheable DAGs.
+## Content
 
-- [Why DaggerML?](why-daggerml.qmd): decide whether it fits your work.
-- [Get started](getting-started.qmd): create a research project and record a first DAG.
-- [Use DaggerML](use/README.qmd): create, run, inspect, and share research.
-- [Extend DaggerML](extend/index.qmd): build adapters, executors, codecs, and integrations.
-- [Develop DaggerML](develop/README.qmd): contribute to DaggerML itself.
-- [Examples](examples/index.qmd): worked Python lessons and matching downloads.
+DaggerML records research computations as durable, inspectable, cacheable DAGs.
+Pick the path that matches what you are trying to accomplish.
+
+### Start using DaggerML
+
+New to DaggerML? Read [Why DaggerML?](why-daggerml.qmd), then follow
+[Get started](getting-started.qmd) to install the package, initialize a project,
+and record your first DAG. Continue through [Use DaggerML](use/README.qmd) for
+concepts, task-focused guides, and exact API reference.
+
+### Learn from working code
+
+[Examples](examples/index.qmd) contains executable lessons with matching
+downloads. Start with the script executor, a class-based computation, or the
+multi-file analysis report.
+
+### Build integrations
+
+[Extend DaggerML](extend/index.qmd) covers adapters, executors, codecs, plugin
+registration, and the contracts that connect them to the runtime.
+
+### Contribute to DaggerML
+
+[Develop DaggerML](develop/README.qmd) explains local setup, testing, the
+codebase map, and the architecture behind the public Python and command-line
+surfaces.
+
+### Keep close at hand
+
 - [Sharp bits and security](sharp-bits-and-security.qmd): operational caveats and known security limitations.
 - [Glossary](glossary.qmd): shared terms.
+
+## References
+
+- [Get started](getting-started.qmd)
+- [Use DaggerML](use/README.qmd)
+- [Extend DaggerML](extend/index.qmd)
+- [Develop DaggerML](develop/README.qmd)
+
+## Document metadata
+
+Status: implemented
+
+Purpose: Help researchers, integration engineers, and contributors enter the
+documentation at the right level.
+
+Authority: Navigation among the canonical user, extension, example, and
+contributor documentation paths.
+
+Scope: The packaged DaggerML documentation set; individual pages own their
+technical contracts and procedures.

@@ -566,13 +566,21 @@ export default function App() {
 interface DocsManifestPage {
   id: string;
   fragment: string;
+  title?: string;
   headings: Array<{ id: string; level: number; text: string }>;
+}
+
+interface DocsNavSection {
+  id: string;
+  label: string;
+  pages: DocsManifestPage[];
 }
 
 function DocsPage({ pageId, onNavigate }: { pageId?: string; onNavigate: (id?: string, hash?: string) => void }) {
   const [pages, setPages] = useState<DocsManifestPage[]>();
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();
+  const [filter, setFilter] = useState("");
   const selected = pages?.find((item) => item.id === (pageId ?? "index"));
 
   useEffect(() => {
@@ -580,7 +588,7 @@ function DocsPage({ pageId, onNavigate }: { pageId?: string; onNavigate: (id?: s
     fetch("/docs/static/manifest.json").then(async (response) => {
       if (!response.ok) throw new Error("Packaged documentation is unavailable.");
       const manifest = await response.json() as { pages?: DocsManifestPage[] };
-      if (!Array.isArray(manifest.pages) || !manifest.pages.every((item) => typeof item.id === "string" && typeof item.fragment === "string" && item.fragment.startsWith("fragments/") && !item.fragment.includes(".."))) throw new Error("Packaged documentation manifest is invalid.");
+      if (!Array.isArray(manifest.pages) || !manifest.pages.every((item) => typeof item.id === "string" && (item.title === undefined || typeof item.title === "string") && typeof item.fragment === "string" && item.fragment.startsWith("fragments/") && !item.fragment.includes(".."))) throw new Error("Packaged documentation manifest is invalid.");
       if (active) setPages(manifest.pages);
     }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { active = false; };
@@ -620,13 +628,48 @@ function DocsPage({ pageId, onNavigate }: { pageId?: string; onNavigate: (id?: s
 
   if (error) return <Problem title={pageId && pages && !selected ? "Documentation page not found" : "Documentation unavailable"} detail={error} />;
   if (!pages) return <Loading />;
-  if (!pageId && !selected) return <section className="docs-layout"><aside className="docs-nav"><p className="nav-label">Documentation</p>{pages.map((item) => <button key={item.id} type="button" onClick={() => onNavigate(item.id)}>{docsLabel(item.id)}</button>)}</aside><div className="docs-content"><PageHeader eyebrow="DaggerML documentation" title="Docs" description="Guides, concepts, reference material, and executable examples." /></div></section>;
+  const sections = docsNavSections(pages, filter);
+  const navigation = <aside className="docs-nav" aria-label="Documentation navigation">
+    <label className="docs-filter"><span className="sr-only">Filter documentation</span><Search /><input type="search" aria-label="Filter documentation" placeholder="Filter docs…" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
+    <div className="docs-nav__sections">{sections.map((section) => {
+      const current = section.pages.some((item) => item.id === selected?.id);
+      return <details key={`${section.id}-${current}`} open={Boolean(filter) || current || section.id === "start"}>
+        <summary>{section.label}<span>{section.pages.length}</span></summary>
+        <div>{section.pages.map((item) => <button key={item.id} type="button" className={item.id === selected?.id ? "active" : ""} aria-current={item.id === selected?.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item)}</button>)}</div>
+      </details>;
+    })}{sections.length === 0 && <p className="docs-nav__empty">No matching pages</p>}</div>
+  </aside>;
+  if (!pageId && !selected) return <section className="docs-layout">{navigation}<div className="docs-content"><PageHeader eyebrow="DaggerML documentation" title="Docs" description="Guides, concepts, reference material, and executable examples." /></div></section>;
   if (!selected) return <Problem title="Documentation page not found" detail="The requested page is not part of this packaged documentation set." />;
-  return <section className="docs-layout"><aside className="docs-nav" aria-label="Documentation navigation"><p className="nav-label">Documentation</p>{pages.map((item) => <button key={item.id} type="button" className={item.id === selected.id ? "active" : ""} aria-current={item.id === selected.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item.id)}</button>)}</aside><article className="docs-content" onClick={navigateLink} dangerouslySetInnerHTML={{ __html: content ?? "" }} />{selected.headings.length > 0 && <aside className="docs-outline" aria-label="On this page"><p className="nav-label">On this page</p>{selected.headings.map((heading) => <button key={heading.id} type="button" onClick={() => onNavigate(selected.id, `#${encodeURIComponent(heading.id)}`)}>{heading.text}</button>)}</aside>}</section>;
+  return <section className="docs-layout">{navigation}<article className="docs-content" onClick={navigateLink} dangerouslySetInnerHTML={{ __html: content ?? "" }} />{selected.headings.length > 0 && <aside className="docs-outline" aria-label="On this page"><p className="nav-label">On this page</p>{selected.headings.map((heading) => <button key={heading.id} type="button" onClick={() => onNavigate(selected.id, `#${encodeURIComponent(heading.id)}`)}>{heading.text}</button>)}</aside>}</section>;
 }
 
-function docsLabel(id: string) {
-  return id.split("/").map((part) => humanize(part)).join(" / ");
+function docsLabel(page: DocsManifestPage) {
+  if (page.title) return page.title;
+  const parts = page.id.split("/");
+  const leaf = parts.at(-1) ?? page.id;
+  return humanize(leaf === "README" || leaf === "index" ? parts.at(-2) ?? leaf : leaf);
+}
+
+function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSection[] {
+  const definitions = [
+    { id: "start", label: "Start here", matches: (id: string) => ["index", "why-daggerml", "getting-started"].includes(id) },
+    { id: "use", label: "Use DaggerML", matches: (id: string) => id === "use" || id.startsWith("use/") },
+    { id: "examples", label: "Examples", matches: (id: string) => id === "examples" || id.startsWith("examples/") },
+    { id: "extend", label: "Extend DaggerML", matches: (id: string) => id === "extend" || id.startsWith("extend/") },
+    { id: "develop", label: "Develop DaggerML", matches: (id: string) => id === "develop" || id.startsWith("develop/") },
+    { id: "more", label: "More", matches: (_id: string) => true },
+  ];
+  const remaining = new Set(pages);
+  const startOrder = new Map(["index", "why-daggerml", "getting-started"].map((id, index) => [id, index]));
+  const query = filter.trim().toLocaleLowerCase();
+  return definitions.flatMap((definition) => {
+    const sectionPages = pages.filter((page) => remaining.has(page) && definition.matches(page.id));
+    sectionPages.forEach((page) => remaining.delete(page));
+    if (definition.id === "start") sectionPages.sort((left, right) => (startOrder.get(left.id) ?? 99) - (startOrder.get(right.id) ?? 99));
+    const matches = query ? sectionPages.filter((page) => `${docsLabel(page)} ${page.id}`.toLocaleLowerCase().includes(query)) : sectionPages;
+    return matches.length > 0 ? [{ id: definition.id, label: definition.label, pages: matches }] : [];
+  });
 }
 
 function PageHeader({ eyebrow, title, description, actions, className = "" }: { eyebrow: string; title: string; description?: string; actions?: ReactNode; className?: string }) {

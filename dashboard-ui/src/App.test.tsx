@@ -54,7 +54,7 @@ beforeEach(() => {
   plotlyPurge.mockClear();
   vegaEmbed.mockClear();
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
-    if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "examples/one", fragment: "fragments/examples/one.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
+    if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "examples/one", title: "Worked example", fragment: "fragments/examples/one.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
     if (input === "/docs/static/fragments/examples/one.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><a href="/docs/examples/one#example">Anchor</a><a href="/docs/static/downloads/examples/one.py">Download</a>');
     return new Response("Not found", { status: 404 });
   }));
@@ -73,7 +73,7 @@ describe("canonical dashboard routes", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Examples / One" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "Worked example" })).toHaveAttribute("aria-current", "page");
     fireEvent.click(screen.getByRole("link", { name: "Anchor" }));
     expect(location.pathname).toBe("/docs/examples/one");
     expect(location.hash).toBe("#example");
@@ -82,6 +82,17 @@ describe("canonical dashboard routes", () => {
     history.back();
     window.dispatchEvent(new PopStateEvent("popstate"));
     await waitFor(() => expect(location.pathname).toBe("/docs/examples/one"));
+  });
+
+  it("groups and filters documentation navigation by reader path", async () => {
+    history.replaceState(null, "", "/docs/examples/one");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+    expect(screen.getByText("Examples", { selector: "summary" })).toBeVisible();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter documentation" }), { target: { value: "worked" } });
+    expect(screen.getByRole("button", { name: "Worked example" })).toBeVisible();
+    expect(screen.queryByText("Start here", { selector: "summary" })).not.toBeInTheDocument();
   });
 
   it("leaves packaged downloads to the browser", async () => {
