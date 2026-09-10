@@ -53,6 +53,11 @@ beforeEach(() => {
   plotlyNew.mockClear();
   plotlyPurge.mockClear();
   vegaEmbed.mockClear();
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+    if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "examples/one", fragment: "fragments/examples/one.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
+    if (input === "/docs/static/fragments/examples/one.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><a href="/docs/examples/one#example">Anchor</a><a href="/docs/static/downloads/examples/one.py">Download</a>');
+    return new Response("Not found", { status: 404 });
+  }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -61,6 +66,65 @@ describe("canonical dashboard routes", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "0 commits in the last year" })).toBeVisible();
     expect(location.pathname).toBe("/");
+  });
+
+  it("renders Docs without a project and preserves nested links and history", async () => {
+    history.replaceState(null, "", "/docs/examples/one#example");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Examples / One" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("link", { name: "Anchor" }));
+    expect(location.pathname).toBe("/docs/examples/one");
+    expect(location.hash).toBe("#example");
+    fireEvent.click(screen.getAllByRole("button", { name: "Home" })[0]);
+    expect(location.pathname).toBe("/");
+    history.back();
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(location.pathname).toBe("/docs/examples/one"));
+  });
+
+  it("leaves packaged downloads to the browser", async () => {
+    history.replaceState(null, "", "/docs/examples/one");
+    render(<App />);
+
+    const download = await screen.findByRole("link", { name: "Download" });
+    expect(download).toHaveAttribute("href", "/docs/static/downloads/examples/one.py");
+    // Observe the default action after React's delegated handler, then suppress
+    // jsdom's unsupported navigation. The app must not consume this click.
+    let prevented: boolean | undefined;
+    const observe = (event: MouseEvent) => {
+      prevented = event.defaultPrevented;
+      event.preventDefault();
+    };
+    document.addEventListener("click", observe, { once: true });
+    fireEvent.click(download);
+    expect(prevented).toBe(false);
+    expect(location.pathname).toBe("/docs/examples/one");
+  });
+
+  it("keeps Docs visible when switching themes", async () => {
+    history.replaceState(null, "", "/docs/examples/one");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Use light theme" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(screen.getByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+  });
+
+  it("restores a historical project route when navigating back from Docs", async () => {
+    history.replaceState(null, "", "/projects/project-1/commits/older");
+    render(<App />);
+    await screen.findByRole("heading", { name: "Repository snapshot" });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Docs" })[0]);
+    expect(await screen.findByRole("heading", { name: "Docs" })).toBeVisible();
+    history.pushState(null, "", "/projects/project-1/commits/older");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    await waitFor(() => expect(location.pathname).toBe("/projects/project-1/commits/older"));
+    expect(await screen.findByRole("heading", { name: "Repository snapshot" })).toBeVisible();
   });
 
   it("restores a direct concrete DAG route and scopes reads from its URL", async () => {

@@ -1,0 +1,22 @@
+---
+title: Python examples
+engine: knitr
+---
+
+These focused examples execute when the documentation is built. Their downloads
+contain the exact source displayed here, not a separate maintained copy.
+
+- [Script executor](script-executor/index.qmd): execute a file-backed function.
+- [Dagclass](dagclass/index.qmd): bind a parameter to a class-based computation.
+- [Multi-file report](analysis-report/index.qmd): keep calculation and recording
+  in separate modules, with individual files and a path-preserving ZIP bundle.
+
+Start with [installation and initialization](../getting-started.qmd), then
+configure a writable [remote](../use/reference/configuration.qmd). These examples
+need Python and DaggerML; they do not require Docker or SSH. The documentation
+build supplies disposable storage, but downloads do not provision services or
+configure credentials for you. Run a downloaded entrypoint from your initialized
+project directory, with its storage endpoint configured.
+
+The repository's shell-oriented push/pull, Docker, and SSH workflows remain
+separate from this embedded collection.

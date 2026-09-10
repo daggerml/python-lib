@@ -1,0 +1,23 @@
+project:
+  type: default
+  output-dir: _build
+  render:
+    - "**/*.qmd"
+
+engine: knitr
+
+knitr:
+  opts_chunk:
+    engine.opts:
+      bash: "-euo pipefail"
+
+execute:
+  eval: true
+  error: false
+  cache: false
+  freeze: false
+
+format:
+  html:
+    toc: false
+    embed-resources: false

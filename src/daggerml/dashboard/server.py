@@ -56,7 +56,13 @@ def create_app(config_home: str | Path | None = None, *, auth_token: str | None 
     from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
 
-    app = fastapi.FastAPI(title="DaggerML Research Dashboard", version="1")
+    app = fastapi.FastAPI(
+        title="DaggerML Research Dashboard",
+        version="1",
+        docs_url="/api/docs",
+        openapi_url="/api/openapi.json",
+        swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
+    )
     app.state.projects = DashboardProjects(config_home)
     dashboard_plugins, dashboard_diagnostics = load_dashboard_plugins()
     app.state.custom_dashboards = CustomDashboardService(
@@ -565,6 +571,14 @@ def create_app(config_home: str | Path | None = None, *, auth_token: str | None 
         static_root = Path()
     if static_root.is_dir() and (static_root / "index.html").is_file():
         app.mount("/assets", StaticFiles(directory=static_root / "assets"), name="dashboard-assets")
+        docs_root = static_root / "docs"
+
+        @app.get("/docs/static/{path:path}", include_in_schema=False)
+        def docs_static(path: str):
+            candidate = (docs_root / path).resolve()
+            if path and docs_root.is_dir() and docs_root.resolve() in candidate.parents and candidate.is_file():
+                return FileResponse(candidate, filename=candidate.name if path.startswith("downloads/") else None)
+            raise fastapi.HTTPException(status_code=404, detail="Documentation asset not found")
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):

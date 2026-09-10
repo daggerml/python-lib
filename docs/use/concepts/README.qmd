@@ -1,0 +1,9 @@
+# Research concepts
+
+- [Projects](projects.qmd)
+- [DAGs, nodes, and results](dags-nodes-results.qmd)
+- [Funks, execution, and cache](funks-execution-cache.qmd)
+- [Runtimes](runtimes.qmd)
+- [Artifacts, data, and codecs](artifacts-data-codecs.qmd)
+- [History and remotes](history-remotes.qmd)
+- [Errors](errors.qmd)

@@ -1,0 +1,19 @@
+---
+title: Multi-file analysis report
+engine: knitr
+---
+
+This report keeps the calculation and the DaggerML recording step in separate
+Python files. Download both files individually, or use the bundle to preserve
+the sibling-module layout.
+See the [prerequisites](../index.qmd) before running the download.
+
+{{< dml-source analysis/metrics.py >}}
+
+{{< dml-source run_report.py >}}
+
+<a data-download="analysis/metrics.py" href="analysis/metrics.py">Download metrics.py</a>
+
+<a data-download="run_report.py" href="run_report.py">Download run_report.py</a>
+
+<a data-download="analysis-report.zip" href="analysis-report.zip">Download the example bundle</a>

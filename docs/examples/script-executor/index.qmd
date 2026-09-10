@@ -1,0 +1,16 @@
+---
+title: File-backed script executor
+engine: knitr
+---
+
+This example runs a local script executor from its canonical downloadable file.
+See the [prerequisites](../index.qmd) before running the download.
+
+{{< dml-source script.py >}}
+
+<a data-download="script.py" href="script.py">Download script.py</a>
+
+```{bash}
+#| include: false
+test -n "$RETICULATE_PYTHON"
+```

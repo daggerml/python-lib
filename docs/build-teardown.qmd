@@ -1,0 +1,15 @@
+---
+title: Documentation fixture teardown
+engine: knitr
+format: html
+execute:
+  eval: true
+  error: false
+  cache: false
+---
+
+```{bash}
+#| include: false
+source "$DOCS_BUILD_LIB"
+docs_teardown
+```

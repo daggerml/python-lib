@@ -606,6 +606,19 @@ pre { background: #080b0e; color: #c8d1d8; border: 1px solid var(--border); bord
 .problem p { max-width: 500px; text-align: center; font-size: 11px; line-height: 1.7; }
 .inline-empty { color: var(--muted); min-height: 90px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 9px; }
 .inline-empty span { color: var(--accent); }
+.docs-layout { display: grid; grid-template-columns: minmax(170px, 220px) minmax(0, 760px) minmax(150px, 200px); gap: 34px; align-items: start; }
+.docs-nav, .docs-outline { position: sticky; top: 98px; max-height: calc(100vh - 120px); overflow: auto; }
+.docs-nav button, .docs-outline button { display: block; width: 100%; border: 0; border-left: 2px solid transparent; background: transparent; color: var(--muted); padding: 7px 10px; text-align: left; font-size: 11px; line-height: 1.35; }
+.docs-nav button:hover, .docs-nav button.active, .docs-outline button:hover { color: var(--text); background: var(--accent-soft); }
+.docs-nav button.active { border-left-color: var(--accent); }
+.docs-content { min-width: 0; line-height: 1.65; font-size: 14px; }
+.docs-content h1, .docs-content h2, .docs-content h3 { font-family: Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif; line-height: 1.1; letter-spacing: -.035em; }
+.docs-content h1 { font-size: clamp(34px, 4vw, 52px); margin-top: 0; }
+.docs-content h2 { font-size: 28px; margin-top: 2.5em; }
+.docs-content h3 { font-size: 21px; margin-top: 2em; }
+.docs-content a { color: var(--accent); }
+.docs-content pre { overflow: auto; padding: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.docs-content code { font: 12px "DM Mono", monospace; }
 .menu-button, .sidebar__close, .sidebar-scrim { display: none; }
 
 @media (min-width: 761px) {
@@ -683,6 +696,12 @@ pre { background: #080b0e; color: #c8d1d8; border: 1px solid var(--border); bord
   .mobile-destinations button { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 4px; color: var(--muted); background: transparent; border: 0; border-radius: 7px; font-size: 9px; }
   .mobile-destinations button.active { color: var(--text); background: var(--accent-soft); }
   .mobile-destinations svg { width: 14px; }
+  .docs-layout { display: block; }
+  .docs-nav { position: static; display: flex; gap: 4px; overflow-x: auto; max-height: none; margin-bottom: 24px; }
+  .docs-nav .nav-label { display: none; }
+  .docs-nav button { min-width: max-content; border-left: 0; border-bottom: 2px solid transparent; }
+  .docs-nav button.active { border-left-color: transparent; border-bottom-color: var(--accent); }
+  .docs-outline { position: static; max-height: none; margin-top: 30px; }
 }
 @media (max-width: 470px) {
   .metric-grid { grid-template-columns: 1fr; }

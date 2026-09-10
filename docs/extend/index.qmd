@@ -1,0 +1,47 @@
+---
+title: Extend DaggerML
+engine: knitr
+---
+
+# Extend DaggerML
+
+This path is for integration engineers adding execution backends, adapters,
+literal codecs, or packages that supply them. It documents extension contracts;
+using a built-in integration does not require reading these pages.
+
+## Start here
+
+- [Extension model](concepts/extension-model.qmd): where delayed authoring,
+  adapters, executors, codecs, and the runtime meet.
+- [Write an adapter](guides/write-adapter.qmd): add a transport boundary.
+- [Write an executor](guides/write-executor.qmd): add backend-specific work.
+- [Plugin API](reference/plugin-api.qmd): package discovery and lookup rules.
+
+## Browse by goal
+
+- Concepts: [adapters and executors](concepts/adapters-and-executors.qmd),
+  [codecs](concepts/codecs.qmd), [remote integrations](concepts/remote-integrations.qmd),
+  and [plugin registration](concepts/plugin-registration.qmd).
+- Guides: [shared codecs](guides/write-shared-codec.qmd),
+  [package an integration](guides/package-integration.qmd), and
+  [test an integration](guides/test-integration.qmd).
+- Reference: [adapter operations](reference/adapter-operations.qmd),
+  [executor lifecycle](reference/executor-lifecycle.qmd),
+  [codec contracts](reference/codec-contracts.qmd), and
+  [built-in integrations](reference/built-in-integrations.qmd).
+
+```{python}
+from daggerml.contrib.api import funkify
+from daggerml.contrib.testing import defunkify
+
+
+@funkify
+def double(_dag, value):
+    return value.value() * 2
+
+
+assert defunkify(double)(None, 21) == 42
+```
+
+The implementation namespace is `daggerml.contrib`, but this documentation is
+organized by integration task rather than package name.

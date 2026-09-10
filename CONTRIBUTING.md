@@ -73,6 +73,20 @@ requests and appreciate your help in improving this project.
 - Ensure your code passes all tests and does not decrease code coverage.
 - If your changes introduce new dependencies, please update `pyproject.toml`, but we prefer to keep the dependencies to a minimum.
 
+## Documentation Build
+
+- Run the complete executable documentation and dashboard build with:
+  ```bash
+  bash build-dashboard.sh
+  ```
+- The script installs its pinned Quarto/R toolchain and all related caches under
+  the ignored `.tools/` directory. Set `DOCS_PYTHON` when the project interpreter
+  is not `.venv/bin/python`:
+  ```bash
+  DOCS_PYTHON="/path/to/python" bash build-dashboard.sh
+  ```
+- The build executes all QMD examples against disposable fixtures; do not use it as a substitute for the full test suite.
+
 ### Test taxonomy and naming
 
 This section is for contributors maintaining or restructuring the test suite.

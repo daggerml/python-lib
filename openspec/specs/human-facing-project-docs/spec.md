@@ -33,10 +33,10 @@ The `docs/` tree SHALL organize its primary navigation by reader relationship to
 - **THEN** the docs navigation distinguishes those needs through Use, Extend, and Develop paths rather than requiring the reader to start from generic document types or a package subtree
 
 ### Requirement: `getting-started` SHALL be one concise page
-The project docs SHALL provide one concise researcher getting-started page at `docs/getting-started.md` that covers installation, first repository setup through the CLI, first DAG creation in Python, basic inspection, and next-step links without splitting those basics across multiple introductory files.
+The project docs SHALL provide one concise researcher getting-started page at `docs/getting-started.qmd` that covers installation, first repository setup through the CLI, first DAG creation in Python, basic inspection, and next-step links without splitting those basics across multiple introductory files.
 
 #### Scenario: Reader starts from zero
-- **WHEN** a reader follows `docs/getting-started.md`
+- **WHEN** a reader follows `docs/getting-started.qmd`
 - **THEN** the page includes enough information to install DaggerML, initialize a project with `dml init`, create a first DAG, and inspect it with at least one simple command or API example
 
 ### Requirement: Human-facing docs SHALL avoid normative spec voice

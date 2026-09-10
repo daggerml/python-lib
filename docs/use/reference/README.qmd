@@ -1,0 +1,7 @@
+# Research reference
+
+- [CLI](cli.qmd): project and runtime administration.
+- [Python authoring](python-authoring.qmd): DAG, node, and helper APIs.
+- [Configuration](configuration.qmd): resolved settings and remote setup.
+- [Runtime state](runtime-state.qmd): runtime inspection and control commands.
+- [Errors](errors.qmd): failure surfaces and common recovery steps.

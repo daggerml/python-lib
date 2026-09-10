@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="100" viewBox="0 0 360 100" role="img" aria-label="A source node flows to a result node">
+  <rect x="20" y="30" width="110" height="40" rx="6" fill="#e7f0ff" stroke="#315a9d"/>
+  <text x="75" y="55" text-anchor="middle" font-family="sans-serif" font-size="14">source</text>
+  <path d="M140 50h75" stroke="#315a9d" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="225" y="30" width="110" height="40" rx="6" fill="#e7f0ff" stroke="#315a9d"/>
+  <text x="280" y="55" text-anchor="middle" font-family="sans-serif" font-size="14">result</text>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0l8 4-8 4z" fill="#315a9d"/></marker></defs>
+</svg>

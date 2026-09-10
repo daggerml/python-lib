@@ -2,6 +2,7 @@ import {
   Activity,
   AlertTriangle,
   Archive,
+  BookOpen,
   Box,
   Check,
   ChevronDown,
@@ -66,6 +67,10 @@ const PROJECT_NAV: Array<{ id: PageId; label: string; icon: typeof LayoutDashboa
   { id: "refs", label: "Tags and refs", icon: GitBranch, shortcut: "G R" },
 ];
 const NAV = PROJECT_NAV;
+const GLOBAL_NAV: Array<{ id: PageId; label: string; icon: typeof LayoutDashboard }> = [
+  { id: "home", label: "Home", icon: ListTodo },
+  { id: "docs", label: "Docs", icon: BookOpen },
+];
 
 interface BrowserRoute {
   page: PageId;
@@ -76,6 +81,7 @@ interface BrowserRoute {
   dashboard?: string;
   selection?: Selection;
   inspectorTab?: string;
+  docsPage?: string;
   invalid?: boolean;
 }
 
@@ -87,8 +93,12 @@ function readBrowserRoute(): BrowserRoute {
   let commitId: string | undefined;
   let dagId: string | undefined;
   let invalid = false;
+  let docsPage: string | undefined;
   if (parts.length) {
-    if (parts[0] !== "projects" || !parts[1]) invalid = true;
+    if (parts[0] === "docs") {
+      page = "docs";
+      docsPage = parts.slice(1).join("/") || undefined;
+    } else if (parts[0] !== "projects" || !parts[1]) invalid = true;
     else if (parts.length === 3 && parts[2] === "unborn") { projectId = parts[1]; page = "unborn"; }
     else if (parts[2] === "commits" && parts[3]) {
       projectId = parts[1]; commitId = parts[3];
@@ -111,14 +121,16 @@ function readBrowserRoute(): BrowserRoute {
     dagId,
     graphFilter: params.get("graphFilter") ?? undefined,
     dashboard: params.get("dashboard") ?? undefined,
+    docsPage,
     selection: resource && resourceType ? { type: resourceType, id: resource, project_id: projectId } : undefined,
     inspectorTab,
     invalid,
   };
 }
 
-function routePath(page: PageId, projectId?: string, commitId?: string, dagId?: string): string {
+function routePath(page: PageId, projectId?: string, commitId?: string, dagId?: string, docsPage?: string): string {
   if (page === "home") return "/";
+  if (page === "docs") return `/docs${docsPage ? `/${docsPage.split("/").map(encodeURIComponent).join("/")}` : ""}`;
   if (!projectId) return "/";
   const root = `/projects/${encodeURIComponent(projectId)}`;
   if (page === "unborn") return `${root}/unborn`;
@@ -278,6 +290,7 @@ export default function App() {
   const [commitId, setCommitId] = useState<string | undefined>(initialRoute.commitId);
   const [graphFilter, setGraphFilter] = useState<string | undefined>(initialRoute.graphFilter);
   const [selectedDashboard, setSelectedDashboard] = useState<string | undefined>(initialRoute.dashboard);
+  const [docsPage, setDocsPage] = useState<string | undefined>(initialRoute.docsPage);
   const [routeInvalid, setRouteInvalid] = useState(Boolean(initialRoute.invalid));
   const bootstrapGeneration = useRef(0);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
@@ -307,15 +320,16 @@ export default function App() {
     setCommitId(route.commitId);
     setGraphFilter(route.graphFilter);
     setSelectedDashboard(route.dashboard);
+    setDocsPage(route.docsPage);
     setRouteInvalid(Boolean(route.invalid));
   }, []);
 
-  const navigate = useCallback((nextPage: PageId, options?: { projectId?: string; commitId?: string; dagId?: string; replace?: boolean }) => {
+  const navigate = useCallback((nextPage: PageId, options?: { projectId?: string; commitId?: string; dagId?: string; docsPage?: string; hash?: string; replace?: boolean }) => {
     const nextProject = options?.projectId ?? selectedProjectId;
     const nextCommit = options?.commitId ?? commitId;
-    const path = routePath(nextPage, nextProject, nextCommit, options?.dagId);
+    const path = `${routePath(nextPage, nextProject, nextCommit, options?.dagId, options?.docsPage)}${options?.hash ?? ""}`;
     window.history[options?.replace ? "replaceState" : "pushState"](null, "", path);
-    applyRoute({ page: nextPage, projectId: nextPage === "home" ? undefined : nextProject, commitId: nextPage === "home" || nextPage === "unborn" ? undefined : nextCommit, dagId: options?.dagId });
+    applyRoute({ page: nextPage, projectId: ["home", "docs"].includes(nextPage) ? undefined : nextProject, commitId: ["home", "docs", "unborn"].includes(nextPage) ? undefined : nextCommit, dagId: options?.dagId, docsPage: options?.docsPage });
     setMobileNav(false);
   }, [applyRoute, selectedProjectId, commitId]);
 
@@ -446,7 +460,7 @@ export default function App() {
     };
   }, [palette, selection, closeSelection, navigate]);
 
-  const current = NAV.find((item) => item.id === page) ?? { label: page === "home" ? "Home" : "Overview" };
+  const current = [...GLOBAL_NAV, ...NAV].find((item) => item.id === page) ?? { label: "Overview" };
   const refreshAll = () => {
     status.reload();
     projects.reload();
@@ -492,6 +506,11 @@ export default function App() {
           <button className="icon-button sidebar__close" onClick={() => setMobileNav(false)} aria-label="Close navigation"><X /></button>
         </div>
         <nav aria-label="Primary navigation">
+          <p className="nav-label">Workspace</p>
+          {GLOBAL_NAV.map((item) => {
+            const Icon = item.icon;
+            return <button key={item.id} className={`nav-item ${page === item.id ? "nav-item--active" : ""}`} onClick={() => navigate(item.id)} aria-current={page === item.id ? "page" : undefined} aria-label={item.label} title={sidebarCollapsed ? item.label : undefined}><Icon /><span>{item.label}</span></button>;
+          })}
           {scope && <>
             <p className="nav-label">Project</p>
             {PROJECT_NAV.map((item) => {
@@ -528,6 +547,7 @@ export default function App() {
         <div className="page">
           {routeInvalid && <Problem title="Page not found" detail="This dashboard location is not available." />}
            {!routeInvalid && page === "home" && <HomePage data={status.data} loading={status.loading} error={status.error} onSelect={openSelection} onProject={selectProject} onProjectsChanged={() => { status.reload(); projects.reload(); }} />}
+           {!routeInvalid && page === "docs" && <DocsPage pageId={docsPage} onNavigate={(id, hash) => navigate("docs", { docsPage: id, hash })} />}
           {!routeInvalid && page === "unborn" && <PageHeader eyebrow="Project workspace" title={selectedProject?.name ?? projectId ?? "Project"} description="This repository has no commit at HEAD yet." />}
           {!routeInvalid && page === "overview" && <OverviewPage data={overview.data} commits={commits.data?.items ?? []} historyBounded={Boolean(commits.data?.next_cursor)} dags={dags.data?.items ?? []} runs={runs.data ?? []} liveIndexes={projectLive} loading={overview.loading} error={overview.error} select={openSelection} navigate={navigate} projectId={selectedProjectId} onCommit={changeCommit} />}
           {!routeInvalid && page === "dags" && scope && <DagsPage key={`${commitId}:${contextDagId}:${graphFilter ?? ""}`} scope={scope} dags={dags.data?.items ?? []} liveIndexes={dags.data?.live_dags_eligible ? projectLive : []} liveEligible={Boolean(dags.data?.live_dags_eligible)} focusDagId={contextDagId} graphFilter={graphFilter} selectedDashboard={selectedDashboard} onDashboard={changeDashboard} onDagRoute={(id) => navigate("dags", { dagId: id })} loading={dags.loading} error={dags.error} select={openSelection} />}
@@ -537,10 +557,76 @@ export default function App() {
 
       {selection && (scope || selection.type === "index") && <Inspector key={`${scope?.project ?? selection.project_id}:${scope?.revision ?? "current"}:${selection.type}:${selection.id}`} scope={scope} selection={selection} executions={runs.data ?? []} activeTab={inspectorTab} onTab={changeInspectorTab} onNavigateHref={navigateHref} onNavigateDag={(id) => { if (scope) navigate("dags", { dagId: id }); }} onNavigateNode={(id) => openSelection({ type: "node", id }, "value")} onClose={closeSelection} onChanged={refreshAll} />}
       {palette && <CommandPalette onClose={() => setPalette(false)} onNavigate={navigate} onHref={navigateHref} onProject={selectProject} onSelect={openSelection} scope={scope} projects={projects.data?.items ?? []} commits={commits.data?.items ?? []} dags={dags.data?.items ?? []} />}
-      <nav className="mobile-destinations" aria-label="Mobile navigation"><button className={page === "home" ? "active" : ""} onClick={() => navigate("home")}><ListTodo />Home</button>{scope && PROJECT_NAV.map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => navigate(item.id)} aria-current={page === item.id ? "page" : undefined}><Icon />{item.label}</button>; })}<button onClick={() => setMobileNav(true)} aria-label="Select project"><FolderKanban />Projects</button></nav>
+      <nav className="mobile-destinations" aria-label="Mobile navigation">{GLOBAL_NAV.map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => navigate(item.id)} aria-current={page === item.id ? "page" : undefined}><Icon />{item.label}</button>; })}{scope && PROJECT_NAV.map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => navigate(item.id)} aria-current={page === item.id ? "page" : undefined}><Icon />{item.label}</button>; })}<button onClick={() => setMobileNav(true)} aria-label="Select project"><FolderKanban />Projects</button></nav>
       {mobileNav && <button className="sidebar-scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation" />}
     </div>
   );
+}
+
+interface DocsManifestPage {
+  id: string;
+  fragment: string;
+  headings: Array<{ id: string; level: number; text: string }>;
+}
+
+function DocsPage({ pageId, onNavigate }: { pageId?: string; onNavigate: (id?: string, hash?: string) => void }) {
+  const [pages, setPages] = useState<DocsManifestPage[]>();
+  const [content, setContent] = useState<string>();
+  const [error, setError] = useState<string>();
+  const selected = pages?.find((item) => item.id === (pageId ?? "index"));
+
+  useEffect(() => {
+    let active = true;
+    fetch("/docs/static/manifest.json").then(async (response) => {
+      if (!response.ok) throw new Error("Packaged documentation is unavailable.");
+      const manifest = await response.json() as { pages?: DocsManifestPage[] };
+      if (!Array.isArray(manifest.pages) || !manifest.pages.every((item) => typeof item.id === "string" && typeof item.fragment === "string" && item.fragment.startsWith("fragments/") && !item.fragment.includes(".."))) throw new Error("Packaged documentation manifest is invalid.");
+      if (active) setPages(manifest.pages);
+    }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!pages) return;
+    if (!pageId && !selected) { setContent(undefined); return; }
+    if (!selected) { setError("This documentation page is not available."); return; }
+    let active = true;
+    setError(undefined);
+    setContent(undefined);
+    fetch(`/docs/static/${selected.fragment}`).then(async (response) => {
+      if (!response.ok) throw new Error("This documentation page is not available.");
+      const html = await response.text();
+      if (active) setContent(html);
+    }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
+    return () => { active = false; };
+  }, [pageId, pages, selected]);
+
+  useEffect(() => {
+    if (!content || !window.location.hash) return;
+    const target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    if (typeof target?.scrollIntoView === "function") target.scrollIntoView();
+  }, [content]);
+
+  const navigateLink = (event: ReactMouseEvent<HTMLElement>) => {
+    const link = (event.target as Element).closest("a");
+    const href = link?.getAttribute("href");
+    if (!href || !link || link.target || link.hasAttribute("download") || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || /^(?:[a-z]+:|\/)/i.test(href) && !href.startsWith("/docs/")) return;
+    const url = new URL(href, window.location.href);
+    if (url.origin !== window.location.origin || !url.pathname.startsWith("/docs") || url.pathname.startsWith("/docs/static/")) return;
+    event.preventDefault();
+    onNavigate(url.pathname.replace(/^\/docs\/?/, "") || undefined, url.hash);
+    if (url.hash) document.getElementById(decodeURIComponent(url.hash.slice(1)))?.scrollIntoView?.();
+  };
+
+  if (error) return <Problem title={pageId && pages && !selected ? "Documentation page not found" : "Documentation unavailable"} detail={error} />;
+  if (!pages) return <Loading />;
+  if (!pageId && !selected) return <section className="docs-layout"><aside className="docs-nav"><p className="nav-label">Documentation</p>{pages.map((item) => <button key={item.id} type="button" onClick={() => onNavigate(item.id)}>{docsLabel(item.id)}</button>)}</aside><div className="docs-content"><PageHeader eyebrow="DaggerML documentation" title="Docs" description="Guides, concepts, reference material, and executable examples." /></div></section>;
+  if (!selected) return <Problem title="Documentation page not found" detail="The requested page is not part of this packaged documentation set." />;
+  return <section className="docs-layout"><aside className="docs-nav" aria-label="Documentation navigation"><p className="nav-label">Documentation</p>{pages.map((item) => <button key={item.id} type="button" className={item.id === selected.id ? "active" : ""} aria-current={item.id === selected.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item.id)}</button>)}</aside><article className="docs-content" onClick={navigateLink} dangerouslySetInnerHTML={{ __html: content ?? "" }} />{selected.headings.length > 0 && <aside className="docs-outline" aria-label="On this page"><p className="nav-label">On this page</p>{selected.headings.map((heading) => <button key={heading.id} type="button" onClick={() => onNavigate(selected.id, `#${encodeURIComponent(heading.id)}`)}>{heading.text}</button>)}</aside>}</section>;
+}
+
+function docsLabel(id: string) {
+  return id.split("/").map((part) => humanize(part)).join(" / ");
 }
 
 function PageHeader({ eyebrow, title, description, actions, className = "" }: { eyebrow: string; title: string; description?: string; actions?: ReactNode; className?: string }) {

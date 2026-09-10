@@ -1,4 +1,4 @@
-export type PageId = "home" | "overview" | "dags" | "refs" | "unborn";
+export type PageId = "home" | "docs" | "overview" | "dags" | "refs" | "unborn";
 export interface ProjectScope {
   project: string;
   revision: string;

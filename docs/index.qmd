@@ -1,0 +1,15 @@
+---
+title: DaggerML documentation
+engine: knitr
+---
+
+DaggerML records research computations as durable, inspectable, cacheable DAGs.
+
+- [Why DaggerML?](why-daggerml.qmd): decide whether it fits your work.
+- [Get started](getting-started.qmd): create a research project and record a first DAG.
+- [Use DaggerML](use/README.qmd): create, run, inspect, and share research.
+- [Extend DaggerML](extend/index.qmd): build adapters, executors, codecs, and integrations.
+- [Develop DaggerML](develop/README.qmd): contribute to DaggerML itself.
+- [Examples](examples/index.qmd): worked Python lessons and matching downloads.
+- [Sharp bits and security](sharp-bits-and-security.qmd): operational caveats and known security limitations.
+- [Glossary](glossary.qmd): shared terms.
