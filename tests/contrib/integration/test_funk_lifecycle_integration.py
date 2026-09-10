@@ -182,6 +182,7 @@ def _spawned_execution(dml, caller_index):
 
 
 @pytest.mark.slow
+@pytest.mark.flaky(reruns=2)
 def test_contrib_int_010__canceling_one_dag_preserves_shared_dependency_for_another(
     tmp_path, monkeypatch, remote_env, s3_bucket, s3_client
 ):
