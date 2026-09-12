@@ -33,6 +33,7 @@ if ! Rscript --vanilla "$root/docs/build-requirements.R"; then
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/daggerml-docs.XXXXXX")"
+mkdir -p "$work/workspace"
 cleanup() {
   local status=$?
   local teardown_status=0
@@ -49,7 +50,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export DOCS_BUILD_ROOT="$root" DOCS_BUILD_WORK="$work" RETICULATE_PYTHON="$("$python" -c 'import sys; print(sys.executable)')" DOCS_BUILD_LIB="$root/docs/build-lib.sh"
+export DOCS_BUILD_ROOT="$root" DOCS_BUILD_WORK="$work" DOCS_WORKSPACE_ROOT="$work/workspace" RETICULATE_PYTHON="$("$python" -c 'import sys; print(sys.executable)')" DOCS_BUILD_LIB="$root/docs/build-lib.sh"
 export PATH="$(dirname "$RETICULATE_PYTHON"):$PATH"
 # Do not inherit developer projects, credentials, profiles, or service endpoints.
 for name in ${!DML_@} ${!AWS_@}; do

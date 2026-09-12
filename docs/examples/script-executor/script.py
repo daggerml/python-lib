@@ -1,7 +1,6 @@
 """A file-backed local-script executor example for the documentation build."""
 
 import daggerml.api as api
-from daggerml import Dml
 from daggerml.contrib.api import funkify
 
 
@@ -11,8 +10,7 @@ def add_one(dag, value):
 
 
 def run():
-    runtime = Dml()
-    dag = api.new("docs-script-executor", dml=runtime)
+    dag = api.new("docs-script-executor")
     result = dag.put(add_one, name="add-one")(41, name="result", sleep=lambda: 0, timeout=10_000)
     dag.commit(result)
     assert result.value() == 42

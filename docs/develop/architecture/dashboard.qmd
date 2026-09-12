@@ -92,6 +92,15 @@ explicit top-right copy action. Executed output is visually labeled and
 distinct from source. Mermaid diagrams render inside the packaged documentation
 surface using the active dashboard theme; a rendering failure leaves the source
 visible rather than hiding the diagram content.
+
+Executable documentation runs in a fresh shared workspace for each build so
+examples can build on earlier examples without reading or changing the user's
+ambient project or configuration. `depends-on` page IDs define a validated,
+acyclic execution graph. A page's workspace-relative `dml-project-home` must
+already have been created by a dependency; the harness sets it as both
+`DML_PROJECT_HOME` and the page working directory, without implicitly creating
+or initializing a repository.
+
 Selecting a locally available
 project resolves its `HEAD` to
 a concrete commit and opens its project workspace, whose navigation contains

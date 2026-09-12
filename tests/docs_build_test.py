@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).parents[1]
 SPEC = importlib.util.spec_from_file_location("docs_build", ROOT / "docs/build.py")
@@ -48,6 +49,108 @@ def test_docs_build_006__canonical_multi_file_source_is_displayed_and_executed_v
         canonical = f'Path(os.environ["DOCS_SOURCE_ROOT"]) / "examples/analysis-report/{relative}"'
         assert f"source = {canonical}" in page
         assert 'runpy.run_path(str(source), run_name="__main__")' in page
+
+
+def test_docs_build_009__single_project_pages_export_frontmatter_project_home(tmp_path):
+    work = tmp_path / "source"
+    build.validate()
+    build.prepare(work)
+
+    expected = {
+        "start-here/create-and-query-dag.qmd": "research-demo",
+        "examples/analysis-report/index.qmd": "research-demo",
+        "examples/dagclass/index.qmd": "research-demo",
+        "examples/script-executor/index.qmd": "research-demo",
+    }
+    for relative, project_home in expected.items():
+        authored = (ROOT / "docs" / relative).read_text(encoding="utf-8")
+        prepared = (work / relative).read_text(encoding="utf-8")
+        assert build.dml_project_home(ROOT / "docs" / relative, authored) == project_home
+        assert f'dml_project_home <- file.path(docs_workspace, "{project_home}")' in prepared
+        assert "Sys.setenv(DML_PROJECT_HOME = dml_project_home)" in prepared
+        assert build.page_dependencies(ROOT / "docs" / relative, authored) == ["getting-started"]
+
+    create_and_query = (work / "start-here/create-and-query-dag.qmd").read_text(encoding="utf-8")
+    assert 'Path(os.environ["DML_PROJECT_HOME"]).mkdir' not in create_and_query
+    assert 'Dml.init(os.environ["DML_PROJECT_HOME"]' not in create_and_query
+    assert "daggerml.contrib" not in create_and_query
+
+    getting_started = (ROOT / "docs/getting-started.qmd").read_text(encoding="utf-8")
+    assert build.dml_project_home(ROOT / "docs/getting-started.qmd", getting_started) is None
+    assert build.page_dependencies(ROOT / "docs/getting-started.qmd", getting_started) == []
+    assert "```{bash}\nmkdir research-demo\ncd research-demo\ndml init\n```" in getting_started
+    assert "```{python}" not in getting_started
+    assert "project = dml.Dml" not in getting_started
+    assert "dml=project" not in getting_started
+    for source in (
+        ROOT / "docs/examples/analysis-report/run_report.py",
+        ROOT / "docs/examples/dagclass/pipeline.py",
+        ROOT / "docs/examples/script-executor/script.py",
+    ):
+        text = source.read_text(encoding="utf-8")
+        assert "runtime = Dml()" not in text
+        assert "dml=runtime" not in text
+
+    render = yaml.safe_load((work / "_quarto.yml").read_text(encoding="utf-8"))["project"]["render"]
+    assert render.index("getting-started.qmd") < render.index("start-here/create-and-query-dag.qmd")
+    assert "docs_workspace <- Sys.getenv(\"DOCS_WORKSPACE_ROOT\")" in create_and_query
+    assert "knitr::opts_knit$set(root.dir = page_workdir)" in create_and_query
+
+
+@pytest.mark.parametrize("project_home", ["", "/absolute", "../outside", "nested/../../outside", "windows\\path"])
+def test_docs_build_010__project_home_must_stay_inside_page_fixture(tmp_path, project_home):
+    page = tmp_path / "bad.qmd"
+    page.write_text(
+        f"---\ntitle: Bad\nengine: knitr\ndml-project-home: '{project_home}'\n---\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="dml-project-home"):
+        build.validate(tmp_path)
+
+
+def test_docs_build_011__dependency_graph_is_stable_and_topological(tmp_path):
+    for name, dependencies in {
+        "alpha": ["zulu"],
+        "middle": [],
+        "zulu": [],
+    }.items():
+        frontmatter = ["---", f"title: {name}", "engine: knitr"]
+        if dependencies:
+            frontmatter.extend(["depends-on:", *[f"  - {dependency}" for dependency in dependencies]])
+        frontmatter.extend(["---", ""])
+        (tmp_path / f"{name}.qmd").write_text("\n".join(frontmatter), encoding="utf-8")
+
+    assert [page.stem for page in build.execution_order(tmp_path)] == ["zulu", "alpha", "middle"]
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "message"),
+    [
+        ("depends-on: missing", "unknown depends-on"),
+        ("depends-on: page", "depend on itself"),
+        ("depends-on: [base, base]", "duplicate page ID"),
+        ("depends-on: ../base", "canonical page IDs"),
+        ("depends-on: base.qmd", "canonical page IDs"),
+    ],
+)
+def test_docs_build_012__dependency_graph_rejects_invalid_edges(tmp_path, frontmatter, message):
+    (tmp_path / "base.qmd").write_text("---\ntitle: Base\nengine: knitr\n---\n", encoding="utf-8")
+    (tmp_path / "page.qmd").write_text(
+        f"---\ntitle: Page\nengine: knitr\n{frontmatter}\n---\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match=message):
+        build.validate(tmp_path)
+
+
+def test_docs_build_013__dependency_graph_rejects_cycles(tmp_path):
+    (tmp_path / "alpha.qmd").write_text(
+        "---\ntitle: Alpha\nengine: knitr\ndepends-on: beta\n---\n", encoding="utf-8"
+    )
+    (tmp_path / "beta.qmd").write_text(
+        "---\ntitle: Beta\nengine: knitr\ndepends-on: alpha\n---\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match=r"dependency cycle: alpha -> beta -> alpha"):
+        build.validate(tmp_path)
 
 
 def test_docs_build_004__tooling_stays_out_of_published_dependencies():
@@ -293,30 +396,44 @@ def test_docs_build_failures__real_coordinator_fails_closed_and_releases_resourc
     )
     (docs / "probe.qmd").write_text("---\ntitle: Probe\nengine: knitr\n---\n\n" + body + "\n")
     if failure == "none":
-        # The same project name and relative file must be fresh on both pages.
-        fixture_probe = (
+        # The dependency creates state in the fresh shared workspace. The
+        # alphabetically earlier dependent proves that the build uses graph
+        # order rather than filename order.
+        project_setup = (
+            '```{bash}\n#| output: false\ntest "$PWD" = "$DOCS_WORKSPACE_ROOT"\n'
+            "test ! -e research-demo/page-sentinel\n"
+            "mkdir research-demo\ncd research-demo\ndml init\ntouch page-sentinel\n```\n"
+        )
+        (docs / "probe.qmd").write_text(
+            "---\ntitle: Probe\nengine: knitr\n---\n\n" + body + "\n" + project_setup,
+            encoding="utf-8",
+        )
+        dependent_probe = (
             "```{python}\n#| include: false\n"
+            "import os\nfrom pathlib import Path\n"
             "import boto3\nfrom daggerml import Dml\n"
-            'page = Path(os.environ["DOCS_PAGE_ROOT"])\n'
-            'assert Path.cwd() == page\n'
-            'assert Path(os.environ["DML_CONFIG_HOME"]) == page / "config"\n'
-            'assert not Path("page-sentinel").exists()\n'
-            'Path("page-sentinel").touch()\n'
-            'Dml.init(str(page), user="docs")\n'
+            'workspace = Path(os.environ["DOCS_WORKSPACE_ROOT"])\n'
+            'project = workspace / "research-demo"\n'
+            "assert Path.cwd() == project\n"
+            'assert Path(os.environ["DML_PROJECT_HOME"]) == project\n'
+            'assert Path(os.environ["DML_CONFIG_HOME"]) == Path(os.environ["DOCS_BUILD_WORK"]) / "config"\n'
+            'assert Path("page-sentinel").is_file()\n'
+            "Dml()\n"
             's3 = boto3.client("s3")\n'
-            's3.put_object(Bucket="daggerml-docs", Key=page.name, Body=b"fixture")\n'
-            'assert s3.get_object(Bucket="daggerml-docs", Key=page.name)["Body"].read() == b"fixture"\n'
+            's3.put_object(Bucket="daggerml-docs", Key="dependent", Body=b"fixture")\n'
+            'assert s3.get_object(Bucket="daggerml-docs", Key="dependent")["Body"].read() == b"fixture"\n'
             'logs = boto3.client("logs")\n'
-            'logs.create_log_group(logGroupName=page.name)\n'
-            'assert logs.describe_log_groups(logGroupNamePrefix=page.name)["logGroups"]\n'
+            'logs.create_log_group(logGroupName="dependent")\n'
+            'assert logs.describe_log_groups(logGroupNamePrefix="dependent")["logGroups"]\n'
             "```\n"
-            '```{bash}\n#| output: false\ntest "$PWD" = "$DOCS_PAGE_ROOT"\n'
+            '```{bash}\n#| output: false\ntest "$PWD" = "$DML_PROJECT_HOME"\n'
             'test -f page-sentinel\ntest -n "$AWS_ENDPOINT_URL"\n```\n'
         )
-        for page in ("probe", "independent"):
-            (docs / f"{page}.qmd").write_text(
-                "---\ntitle: Probe\nengine: knitr\n---\n\n" + body + "\n" + fixture_probe
-            )
+        (docs / "aaa-dependent.qmd").write_text(
+            "---\ntitle: Dependent\nengine: knitr\ndml-project-home: research-demo\n"
+            "depends-on: probe\n---\n\n" + dependent_probe,
+            encoding="utf-8",
+        )
     if failure == "render":
         coordinator = docs / "build.py"
         coordinator.write_text(

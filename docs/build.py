@@ -10,7 +10,7 @@ import re
 import shutil
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
 import yaml
@@ -43,6 +43,102 @@ def source_path(qmd: Path, value: str) -> Path:
     if not path.is_relative_to(examples) or path.suffix != ".py" or not path.is_file():
         raise ValueError(f"{qmd}: dml-source must name a Python file beneath docs/examples: {value}")
     return path
+
+
+def frontmatter_metadata(qmd: Path, text: str) -> dict[str, object]:
+    frontmatter = re.match(r"\A---\s*\n(.*?)\n---\s*(?:\n|$)", text, re.DOTALL)
+    if frontmatter is None:
+        return {}
+    metadata = yaml.safe_load(frontmatter.group(1))
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, dict):
+        raise ValueError(f"{qmd}: front matter must be a mapping")
+    return metadata
+
+
+def dml_project_home(qmd: Path, text: str) -> str | None:
+    value = frontmatter_metadata(qmd, text).get("dml-project-home")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{qmd}: dml-project-home must be a nonempty relative path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or "\\" in value:
+        raise ValueError(f"{qmd}: dml-project-home must stay within the build workspace")
+    return value
+
+
+def source_page_id(qmd: Path, root: Path) -> str:
+    relative = qmd.relative_to(root).with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "index":
+        parts.pop()
+    return "/".join(parts) or "index"
+
+
+def page_dependencies(qmd: Path, text: str) -> list[str]:
+    value = frontmatter_metadata(qmd, text).get("depends-on", [])
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{qmd}: depends-on must be a page ID or a list of page IDs")
+    dependencies: list[str] = []
+    for dependency in value:
+        path = PurePosixPath(dependency)
+        if (
+            not dependency
+            or dependency.strip() != dependency
+            or path.is_absolute()
+            or ".." in path.parts
+            or "\\" in dependency
+            or dependency.endswith(".qmd")
+        ):
+            raise ValueError(f"{qmd}: depends-on must contain canonical page IDs without .qmd")
+        if dependency in dependencies:
+            raise ValueError(f"{qmd}: depends-on contains duplicate page ID {dependency!r}")
+        dependencies.append(dependency)
+    return dependencies
+
+
+def execution_order(root: Path) -> list[Path]:
+    pages = [path for path in qmd_files(root) if not path.name.startswith("build-") and path.name != "README.qmd"]
+    by_id: dict[str, Path] = {}
+    dependencies: dict[str, list[str]] = {}
+    for page in pages:
+        page_id = source_page_id(page, root)
+        if page_id in by_id:
+            raise ValueError(f"duplicate documentation page ID {page_id!r}: {by_id[page_id]} and {page}")
+        text = page.read_text(encoding="utf-8")
+        by_id[page_id] = page
+        dependencies[page_id] = page_dependencies(page, text)
+
+    order: list[Path] = []
+    state: dict[str, str] = {}
+    stack: list[str] = []
+
+    def visit(page_id: str) -> None:
+        if state.get(page_id) == "done":
+            return
+        if state.get(page_id) == "visiting":
+            start = stack.index(page_id)
+            cycle = " -> ".join([*stack[start:], page_id])
+            raise ValueError(f"documentation dependency cycle: {cycle}")
+        state[page_id] = "visiting"
+        stack.append(page_id)
+        for dependency in dependencies[page_id]:
+            if dependency == page_id:
+                raise ValueError(f"{by_id[page_id]}: page cannot depend on itself")
+            if dependency not in by_id:
+                raise ValueError(f"{by_id[page_id]}: unknown depends-on page ID {dependency!r}")
+            visit(dependency)
+        stack.pop()
+        state[page_id] = "done"
+        order.append(by_id[page_id])
+
+    for page_id in sorted(by_id):
+        visit(page_id)
+    return order
 
 
 def validate(root: Path = ROOT) -> None:
@@ -87,9 +183,20 @@ def validate(root: Path = ROOT) -> None:
         policy(yaml.safe_load(config.read_text(encoding="utf-8")), str(config))
     for qmd in qmd_files(root):
         text = qmd.read_text(encoding="utf-8")
-        frontmatter = re.match(r"\A---\s*\n(.*?)\n---\s*(?:\n|$)", text, re.DOTALL)
-        if frontmatter:
-            policy(yaml.safe_load(frontmatter.group(1)), str(qmd))
+        try:
+            metadata = frontmatter_metadata(qmd, text)
+            project_home = dml_project_home(qmd, text)
+            dependencies = page_dependencies(qmd, text)
+        except ValueError as exc:
+            errors.append(str(exc))
+            metadata = {}
+            project_home = None
+            dependencies = []
+        policy(metadata, str(qmd))
+        if SOURCE_MARKER.search(text) and project_home is None:
+            errors.append(f"{qmd}: dml-source pages require dml-project-home front matter")
+        if project_home is not None and not dependencies:
+            errors.append(f"{qmd}: dml-project-home pages require depends-on front matter")
         for match in SOURCE_MARKER.finditer(text):
             try:
                 source_path(qmd, match.group(1))
@@ -135,6 +242,10 @@ def validate(root: Path = ROOT) -> None:
                 errors.append(f"{location}: static {language!r} fence must be executable or marked docs:pseudocode")
     for source in (root / "examples").rglob("*.py"):
         python_policy(source.read_text(encoding="utf-8"), str(source))
+    try:
+        execution_order(root)
+    except ValueError as exc:
+        errors.append(str(exc))
     if errors:
         raise ValueError("\n".join(errors))
 
@@ -162,29 +273,38 @@ def prepare(work: Path) -> None:
     shutil.copytree(
         ROOT, work, ignore=shutil.ignore_patterns("_build", "build-staging", "__pycache__", ".quarto", "*_files")
     )
+    order = execution_order(work)
     for qmd in qmd_files(work):
         text = expand_sources(qmd, qmd.read_text(encoding="utf-8"))
-        page = qmd.relative_to(work).with_suffix("").as_posix()
+        page = source_page_id(qmd, work)
+        project_home = dml_project_home(qmd, text)
+        project_environment = 'Sys.unsetenv("DML_PROJECT_HOME")\n'
+        if project_home is not None:
+            project_environment = (
+                f'dml_project_home <- file.path(docs_workspace, {json.dumps(project_home)})\n'
+                'if (!dir.exists(dml_project_home)) stop("depends-on pages did not create dml-project-home: ", '
+                "dml_project_home)\n"
+                'Sys.setenv(DML_PROJECT_HOME = dml_project_home)\n'
+                "page_workdir <- dml_project_home\n"
+            )
         setup = (
             "\n```{r}\n#| include: false\n"
-            f'page_root <- file.path(Sys.getenv("DOCS_BUILD_WORK"), "pages", "{page}")\n'
-            "dir.create(page_root, recursive = TRUE, showWarnings = FALSE)\n"
-            'Sys.setenv(DML_CONFIG_HOME = file.path(page_root, "config"), '
-            "DOCS_PAGE_ROOT = page_root)\n"
-            "knitr::opts_knit$set(root.dir = page_root)\n```\n\n"
+            'docs_workspace <- Sys.getenv("DOCS_WORKSPACE_ROOT")\n'
+            'if (!dir.exists(docs_workspace)) stop("DOCS_WORKSPACE_ROOT does not exist")\n'
+            "page_workdir <- docs_workspace\n"
+            f"{project_environment}"
+            f'Sys.setenv(DOCS_PAGE_ROOT = page_workdir, DOCS_PAGE_ID = "{page}")\n'
+            "knitr::opts_knit$set(root.dir = page_workdir)\n```\n\n"
         )
-        if SOURCE_MARKER.search(qmd.read_text(encoding="utf-8")):
-            setup += (
-                "```{python}\n#| include: false\n"
-                "import os\nfrom daggerml import Dml\n"
-                'os.environ["DML_PROJECT_HOME"] = os.environ["DOCS_PAGE_ROOT"]\n'
-                'Dml.init(os.environ["DOCS_PAGE_ROOT"], user="docs")\n```\n\n'
-            )
         frontmatter = re.match(r"\A---\s*\n.*?\n---\s*\n", text, re.DOTALL)
         position = frontmatter.end() if frontmatter else 0
         qmd.write_text(text[:position] + setup + text[position:], encoding="utf-8")
     for qmd in work.glob("build-*.qmd"):
         qmd.unlink()
+    config_path = work / "_quarto.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["project"]["render"] = [page.relative_to(work).as_posix() for page in order]
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
 
 def page_id(html_path: Path, render: Path) -> str:

@@ -1,0 +1,112 @@
+---
+title: Create and query a DAG
+engine: knitr
+dml-project-home: research-demo
+depends-on: getting-started
+---
+
+A DAG records values as nodes and identifies one committed value as its result.
+Create one with `dml.new()`, add nodes with `dag.put()`, and finish it with
+`dag.commit()`.
+
+## Create nodes and collections
+
+```{python}
+import daggerml as dml
+
+
+with dml.new("inventory", message="record current inventory") as dag:
+    count = dag.put(3, name="count")
+    labels = dag.put(["fresh", "local", "seasonal"], name="labels")
+    summary = dag.put(
+        {"count": count, "labels": labels},
+        name="summary",
+    )
+    dag.put("This node is not the result.", name="note")
+    dag.commit(summary)
+```
+
+`dag.put()` accepts scalar values, lists, dictionaries, and existing nodes.
+Putting nodes inside a collection preserves their graph relationships. A name
+lets you retrieve a node later; it does not make that node the result.
+
+The result is always the value passed to `dag.commit()`. Here that value is
+`summary`, even though `note` was added afterward.
+
+## Load and query the DAG
+
+```{python}
+inventory = dml.load("inventory")
+
+assert inventory.keys() == ["count", "labels", "note", "summary"]
+assert inventory["count"].value() == 3
+assert inventory.labels[1].value() == "local"
+
+assert inventory.result.ref == inventory.summary.ref
+assert inventory.result.value() == {
+    "count": 3,
+    "labels": ["fresh", "local", "seasonal"],
+}
+assert inventory.result["labels"][0].value() == "fresh"
+```
+
+Load a committed DAG by name with `dml.load()`. Query named nodes with
+`dag["name"]` or attribute syntax such as `dag.labels`. Use `.value()` to
+materialize a node or a nested collection selection. `keys()` lists all named
+nodes, while `result` returns only the committed value.
+
+## Record and query errors
+
+Using a DAG as a context manager records an uncaught exception as the DAG's
+terminal error. The original exception still propagates, so callers handle it
+normally:
+
+```{python}
+#| output: false
+try:
+    with dml.new("invalid-inventory") as dag:
+        dag.put(-1, name="count")
+        raise ValueError("count must not be negative")
+except ValueError as e:
+    print("Got ValueError:", e)
+```
+
+The failed DAG retains its named nodes, but it has an error instead of a result.
+Accessing `result` raises the persisted `dml.Error`:
+
+```{python}
+invalid = dml.load("invalid-inventory")
+
+assert invalid["count"].value() == -1
+try:
+    invalid.result
+except dml.Error as error:
+    assert error.type == "valueerror"
+    assert error.origin == "python"
+    assert error.message == "count must not be negative"
+else:
+    raise AssertionError("a failed DAG must raise its persisted error")
+```
+
+A missing name or an operation on an uncommitted DAG is instead a repository
+error: the requested repository state does not exist. A persisted `dml.Error`
+means the computation itself failed and remains part of the DAG's durable
+record.
+
+## References
+
+- [DAGs, nodes, and results](../use/concepts/dags-nodes-results.qmd)
+- [Errors](../use/concepts/errors.qmd)
+- [Python authoring reference](../use/reference/python-authoring.qmd)
+
+## Document metadata
+
+Status: implemented
+
+Purpose: Teach the core workflow for creating, committing, loading, and querying
+a DaggerML DAG without extension APIs.
+
+Authority: The introductory executable example for core DAG creation, named
+nodes, collection queries, committed results, and persisted errors.
+
+Scope: A single local DaggerML project and the public `daggerml` authoring API.

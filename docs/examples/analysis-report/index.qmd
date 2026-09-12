@@ -1,6 +1,8 @@
 ---
 title: Multi-file analysis report
 engine: knitr
+dml-project-home: research-demo
+depends-on: getting-started
 ---
 
 This report keeps the calculation and the DaggerML recording step in separate

@@ -24,6 +24,23 @@ all QMD cells, validates and stages the results, builds the frontend, and copies
 only verified docs into the packaged static tree. Cached or frozen execution is
 rejected before rendering.
 
+All executable pages in one build share a fresh temporary workspace. A page may
+declare `depends-on` with a canonical page ID, or a list of IDs; the build
+validates that graph and executes pages in stable topological order. Unknown
+IDs, duplicate dependencies, self-dependencies, and cycles fail validation.
+The `getting-started` page owns the visible creation of the shared example
+repository.
+
+An executable QMD that uses one DaggerML project declares its workspace-relative
+directory with `dml-project-home` and declares the page that creates it with
+`depends-on`. Before executing the page, the build requires that directory to
+exist, sets `DML_PROJECT_HOME` to its absolute path, changes the page working
+directory to it, and leaves the build-wide isolated `DML_CONFIG_HOME` in place.
+The preprocessor never creates or initializes a project implicitly. Pages that
+demonstrate multiple projects keep project selection explicit in their examples
+instead. The complete temporary workspace and build-only environment disappear
+after the build, including on failure.
+
 Canonical executable Python examples live below `docs/examples/`. A
 `{{< dml-source path.py >}}` marker displays the file verbatim and expands to a
 hidden `runpy.run_path` cell at build time. This keeps the file-backed source

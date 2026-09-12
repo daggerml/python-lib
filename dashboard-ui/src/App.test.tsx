@@ -112,6 +112,7 @@ describe("canonical dashboard routes", () => {
       { id: "use/concepts/README", title: "Research concepts" },
       { id: "use/guides/README", title: "Research guides" },
       { id: "use/reference/README", title: "Reference" },
+      { id: "start-here/create-and-query-dag", title: "Create and query a DAG" },
       { id: "use/guides/author-a-dag", title: "Author a DAG" },
     ].map((page) => ({ ...page, fragment: `fragments/${page.id}.html`, headings: [] }));
     vi.mocked(fetch).mockImplementation(async (input: URL | RequestInfo) => String(input) === "/docs/static/manifest.json"
@@ -122,7 +123,9 @@ describe("canonical dashboard routes", () => {
 
     await screen.findByRole("heading", { name: "Documentation page" });
     const start = screen.getByText("Start here", { selector: "summary" }).closest("details")!;
-    expect(within(start).getByRole("button", { name: "Author a DAG" })).toBeVisible();
+    expect(within(start).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Create and query a DAG", "Author a DAG",
+    ]);
     const use = screen.getByText("Use DaggerML", { selector: "summary" }).closest("details")!;
     expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual([
       "Use DaggerML", "Research concepts", "Errors", "Research guides", "Manage artifacts", "Reference", "Error reference",

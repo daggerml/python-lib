@@ -576,7 +576,13 @@ interface DocsNavSection {
   pages: DocsManifestPage[];
 }
 
-const START_DOCS = ["index", "why-daggerml", "getting-started", "use/guides/author-a-dag"];
+const START_DOCS = [
+  "index",
+  "why-daggerml",
+  "getting-started",
+  "start-here/create-and-query-dag",
+  "use/guides/author-a-dag",
+];
 const DOCS_GROUP_ORDER = new Map([
   "README", "index", "concepts", "guides", "reference", "architecture",
 ].map((name, index) => [name, index]));

@@ -1,6 +1,8 @@
 ---
 title: File-backed script executor
 engine: knitr
+dml-project-home: research-demo
+depends-on: getting-started
 ---
 
 This example runs a local script executor from its canonical downloadable file.
