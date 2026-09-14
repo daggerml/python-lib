@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import importlib.util
 import json
 import os
@@ -25,30 +24,30 @@ build = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build)
 
 
-def test_docs_build_001__source_markers_expand_to_file_backed_execution(tmp_path):
+def test_docs_build_015__source_aware_lessons_execute_inline(tmp_path):
     work = tmp_path / "source"
     build.validate()
     build.prepare(work)
-    page = (work / "examples/script-executor/index.qmd").read_text(encoding="utf-8")
-    assert 'data-dml-source="examples/script-executor/script.py"' in page
-    assert 'Path(os.environ["DOCS_SOURCE_ROOT"]) / "examples/script-executor/script.py"' in page
-    assert 'test -n "$RETICULATE_PYTHON"' in page
 
+    page = (work / "start-here/funks.qmd").read_text(encoding="utf-8")
+    assert "engine: jupyter" in page
+    assert "jupyter: python3" in page
+    assert "@api.funkify(extra_objs=(clamp,)" in page
+    assert "def summarize(dag, values):" in page
+    assert "{{< dml-snippet" not in page
+    assert "{{< dml-run" not in page
+    assert "runpy.run_path" not in page
+    assert not (ROOT / "docs/examples/start-here/funks.py").exists()
 
-def test_docs_build_006__canonical_multi_file_source_is_displayed_and_executed_verbatim(tmp_path):
-    work = tmp_path / "source"
-    build.prepare(work)
-    page = (work / "examples/analysis-report/index.qmd").read_text(encoding="utf-8")
-
-    for relative in ("analysis/metrics.py", "run_report.py"):
-        canonical_source = ROOT / "docs/examples/analysis-report" / relative
-        source = canonical_source.read_text(encoding="utf-8")
-        assert (work / "examples/analysis-report" / relative).read_bytes() == canonical_source.read_bytes()
-        escaped = html.escape(source)
-        assert f'<pre><code class="language-python">{escaped}</code></pre>' in page
-        canonical = f'Path(os.environ["DOCS_SOURCE_ROOT"]) / "examples/analysis-report/{relative}"'
-        assert f"source = {canonical}" in page
-        assert 'runpy.run_path(str(source), run_name="__main__")' in page
+    dagclasses = (work / "start-here/dagclasses.qmd").read_text(encoding="utf-8")
+    assert "engine: jupyter" in dagclasses
+    assert "jupyter: python3" in dagclasses
+    assert "class ScaledTotal:" in dagclasses
+    assert "class ContainerTotal:" in dagclasses
+    assert "{{< dml-snippet" not in dagclasses
+    assert "{{< dml-run" not in dagclasses
+    assert "runpy.run_path" not in dagclasses
+    assert not (ROOT / "docs/examples/start-here/dagclasses.py").exists()
 
 
 def test_docs_build_009__single_project_pages_export_frontmatter_project_home(tmp_path):
@@ -57,44 +56,80 @@ def test_docs_build_009__single_project_pages_export_frontmatter_project_home(tm
     build.prepare(work)
 
     expected = {
-        "start-here/create-and-query-dag.qmd": "research-demo",
-        "examples/analysis-report/index.qmd": "research-demo",
-        "examples/dagclass/index.qmd": "research-demo",
-        "examples/script-executor/index.qmd": "research-demo",
+        "start-here/dags.qmd": "research-demo",
+        "start-here/funks.qmd": "research-demo",
+        "start-here/dagclasses.qmd": "research-demo",
+    }
+    dependencies = {
+        "start-here/dags.qmd": ["start-here/get-started"],
+        "start-here/funks.qmd": ["start-here/dags"],
+        "start-here/dagclasses.qmd": ["start-here/funks"],
     }
     for relative, project_home in expected.items():
         authored = (ROOT / "docs" / relative).read_text(encoding="utf-8")
         prepared = (work / relative).read_text(encoding="utf-8")
         assert build.dml_project_home(ROOT / "docs" / relative, authored) == project_home
-        assert f'dml_project_home <- file.path(docs_workspace, "{project_home}")' in prepared
-        assert "Sys.setenv(DML_PROJECT_HOME = dml_project_home)" in prepared
-        assert build.page_dependencies(ROOT / "docs" / relative, authored) == ["getting-started"]
+        if "engine: jupyter" in authored:
+            assert f'dml_project_home = docs_workspace / "{project_home}"' in prepared
+            assert 'os.environ["DML_PROJECT_HOME"] = str(dml_project_home)' in prepared
+            assert "os.chdir(page_workdir)" in prepared
+        else:
+            assert f'dml_project_home <- file.path(docs_workspace, "{project_home}")' in prepared
+            assert "Sys.setenv(DML_PROJECT_HOME = dml_project_home)" in prepared
+        assert build.page_dependencies(ROOT / "docs" / relative, authored) == dependencies[relative]
 
-    create_and_query = (work / "start-here/create-and-query-dag.qmd").read_text(encoding="utf-8")
-    assert 'Path(os.environ["DML_PROJECT_HOME"]).mkdir' not in create_and_query
-    assert 'Dml.init(os.environ["DML_PROJECT_HOME"]' not in create_and_query
-    assert "daggerml.contrib" not in create_and_query
+    dags = (work / "start-here/dags.qmd").read_text(encoding="utf-8")
+    assert 'Path(os.environ["DML_PROJECT_HOME"]).mkdir' not in dags
+    assert 'Dml.init(os.environ["DML_PROJECT_HOME"]' not in dags
+    assert "dml-source" not in dags
+    assert "def " not in dags
+    assert dags.count("```{python}") == 8
+    assert 'dag = dml.new("docs-image"' in dags
+    assert "```{python}\ndag.commit(image)\n```" in dags
 
-    getting_started = (ROOT / "docs/getting-started.qmd").read_text(encoding="utf-8")
-    assert build.dml_project_home(ROOT / "docs/getting-started.qmd", getting_started) is None
-    assert build.page_dependencies(ROOT / "docs/getting-started.qmd", getting_started) == []
+    getting_started = (ROOT / "docs/start-here/get-started.qmd").read_text(encoding="utf-8")
+    assert build.dml_project_home(ROOT / "docs/start-here/get-started.qmd", getting_started) is None
+    assert build.page_dependencies(ROOT / "docs/start-here/get-started.qmd", getting_started) == ["start-here"]
     assert "```{bash}\nmkdir research-demo\ncd research-demo\ndml init\n```" in getting_started
     assert "```{python}" not in getting_started
     assert "project = dml.Dml" not in getting_started
     assert "dml=project" not in getting_started
-    for source in (
-        ROOT / "docs/examples/analysis-report/run_report.py",
-        ROOT / "docs/examples/dagclass/pipeline.py",
-        ROOT / "docs/examples/script-executor/script.py",
-    ):
-        text = source.read_text(encoding="utf-8")
-        assert "runtime = Dml()" not in text
-        assert "dml=runtime" not in text
-
     render = yaml.safe_load((work / "_quarto.yml").read_text(encoding="utf-8"))["project"]["render"]
-    assert render.index("getting-started.qmd") < render.index("start-here/create-and-query-dag.qmd")
-    assert "docs_workspace <- Sys.getenv(\"DOCS_WORKSPACE_ROOT\")" in create_and_query
-    assert "knitr::opts_knit$set(root.dir = page_workdir)" in create_and_query
+    course = [
+        "start-here/index.qmd",
+        "start-here/get-started.qmd",
+        "start-here/dags.qmd",
+        "start-here/funks.qmd",
+        "start-here/dagclasses.qmd",
+    ]
+    assert [render.index(page) for page in course] == sorted(render.index(page) for page in course)
+    assert not (work / "index.qmd").exists()
+    assert not (work / "getting-started.qmd").exists()
+    assert not list((work / "examples").rglob("*.qmd"))
+    assert "docs_workspace <- Sys.getenv(\"DOCS_WORKSPACE_ROOT\")" in dags
+    assert "knitr::opts_knit$set(root.dir = page_workdir)" in dags
+
+
+def test_docs_build_014__concept_pages_reject_executable_cells(tmp_path):
+    concepts = tmp_path / "use"
+    concepts.mkdir()
+    (concepts / "bad.qmd").write_text(
+        "---\ntitle: Bad concept\nengine: knitr\n---\n\n```{python}\nprint('not pseudocode')\n```\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="concept pages must use prose"):
+        build.validate(tmp_path)
+
+
+@pytest.mark.parametrize("language", ["bash", "r"])
+def test_docs_build_016__jupyter_pages_reject_non_python_executable_cells(tmp_path, language):
+    (tmp_path / "bad.qmd").write_text(
+        f"---\ntitle: Bad Jupyter page\nengine: jupyter\njupyter: python3\n---\n\n"
+        f"```{{{language}}}\ntrue\n```\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="jupyter pages may contain only Python"):
+        build.validate(tmp_path)
 
 
 @pytest.mark.parametrize("project_home", ["", "/absolute", "../outside", "nested/../../outside", "windows\\path"])
@@ -157,7 +192,7 @@ def test_docs_build_004__tooling_stays_out_of_published_dependencies():
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = metadata["project"]["dependencies"]
     optional = metadata["project"]["optional-dependencies"]
-    build_tools = {"quarto", "knitr", "rmarkdown", "reticulate", "xfun"}
+    build_tools = {"quarto", "knitr", "rmarkdown", "reticulate", "xfun", "jupyter", "ipykernel"}
 
     assert all(not any(tool in dependency.lower() for tool in build_tools) for dependency in dependencies)
     assert all(
@@ -168,7 +203,7 @@ def test_docs_build_004__tooling_stays_out_of_published_dependencies():
 
 
 def test_docs_build__released_package_install_is_not_executed():
-    page = (ROOT / "docs/getting-started.qmd").read_text(encoding="utf-8")
+    page = (ROOT / "docs/start-here/get-started.qmd").read_text(encoding="utf-8")
 
     assert "```bash\npip install daggerml\n```" in page
     assert "```{bash}\npip install daggerml" not in page
@@ -229,11 +264,11 @@ def test_docs_build_policy__only_authored_executable_options_are_validated(tmp_p
 
 
 def test_docs_build_003__staging_creates_script_free_fragments_and_manifest(tmp_path):
-    render = tmp_path / "render/examples/dagclass"
+    render = tmp_path / "render/start-here/dags"
     render.mkdir(parents=True)
     (render / "index.html").write_text(
         '<html><body><main><h1 id="example">Example</h1>'
-        '<a href="pipeline.py">Download</a><a href="../../use/guide.md#next">Guide</a>'
+        '<a href="../../use/guide.md#next">Guide</a>'
         '<img src="chart.png"><script>secret()</script></main></body></html>',
         encoding="utf-8",
     )
@@ -243,47 +278,13 @@ def test_docs_build_003__staging_creates_script_free_fragments_and_manifest(tmp_
     (render / "chart.png").write_bytes(b"image")
     staging = tmp_path / "staging"
     build.stage(tmp_path / "render", staging)
-    fragment = (staging / "fragments/examples/dagclass.html").read_text(encoding="utf-8")
+    fragment = (staging / "fragments/start-here/dags.html").read_text(encoding="utf-8")
     manifest = json.loads((staging / "manifest.json").read_text(encoding="utf-8"))
     assert "<script" not in fragment
-    assert 'href="/docs/static/downloads/examples/dagclass/pipeline.py"' in fragment
     assert 'href="/docs/use/guide#next"' in fragment
-    assert 'src="/docs/static/assets/examples/dagclass/chart.png"' in fragment
+    assert 'src="/docs/static/assets/start-here/dags/chart.png"' in fragment
     assert manifest["pages"][0]["headings"] == [{"id": "example", "level": 1, "text": "Example"}]
     assert manifest["pages"][0]["title"] == "Example"
-    assert (staging / "downloads/examples/dagclass/pipeline.py").is_file()
-    assert (staging / "downloads/examples/dagclass/dagclass.zip").is_file()
-
-
-def test_docs_build_007__multi_file_downloads_and_bundle_preserve_canonical_paths(tmp_path):
-    render = tmp_path / "render/examples/analysis-report"
-    render.mkdir(parents=True)
-    render.joinpath("index.html").write_text(
-        "<main><h1>Report</h1>"
-        '<a href="analysis/metrics.py">Metrics</a>'
-        '<a href="run_report.py">Runner</a>'
-        '<a href="analysis-report.zip">Bundle</a></main>',
-        encoding="utf-8",
-    )
-    staging = tmp_path / "staging"
-    build.stage(tmp_path / "render", staging)
-
-    fragment = (staging / "fragments/examples/analysis-report.html").read_text(encoding="utf-8")
-    expected = (
-        "analysis-report/analysis/metrics.py",
-        "analysis-report/run_report.py",
-    )
-    for relative in expected:
-        source = ROOT / "docs/examples" / relative
-        download = staging / "downloads/examples" / relative
-        assert download.read_bytes() == source.read_bytes()
-        assert f'href="/docs/static/downloads/examples/{relative}"' in fragment
-    assert 'href="/docs/static/downloads/examples/analysis-report/analysis-report.zip"' in fragment
-
-    with zipfile.ZipFile(staging / "downloads/examples/analysis-report/analysis-report.zip") as bundle:
-        assert bundle.namelist() == list(expected)
-        for relative in expected:
-            assert bundle.read(relative) == (ROOT / "docs/examples" / relative).read_bytes()
 
 
 def test_docs_build_005__packaging_build_cleans_and_copies_verified_staging():
@@ -309,6 +310,7 @@ def test_docs_build__shared_entrypoint_bootstraps_an_isolated_pinned_toolchain()
     assert 'CONDA_PKGS_DIRS="$tools/mamba/pkgs"' in script
     assert 'TMPDIR="$tools/tmp"' in script
     assert 'python="${DOCS_PYTHON:-$root/.venv/bin/python}"' in script
+    assert 'export QUARTO_PYTHON="$python"' in script
     for platform in ("osx-arm64", "osx-64", "linux-aarch64", "linux-64"):
         assert f'micromamba_platform="{platform}"' in script
     for package in (
@@ -515,8 +517,8 @@ def test_docs_build_008__wheels_package_and_serve_completed_docs_without_build_t
     )
     static = source / "src/daggerml/dashboard/static"
     static_docs = static / "docs"
-    fragment = static_docs / "fragments/examples/analysis-report.html"
-    asset = static_docs / "assets/examples/analysis-report/index_files/libs/quarto-html/quarto.js"
+    fragment = static_docs / "fragments/start-here/dags.html"
+    asset = static_docs / "assets/start-here/dags_files/libs/quarto-html/quarto.js"
     runner = static_docs / "downloads/examples/analysis-report/run_report.py"
     metrics = static_docs / "downloads/examples/analysis-report/analysis/metrics.py"
     bundle = static_docs / "downloads/examples/analysis-report/analysis-report.zip"
@@ -535,12 +537,12 @@ def test_docs_build_008__wheels_package_and_serve_completed_docs_without_build_t
     manifest = {
         "pages": [
             {
-                "id": "examples/analysis-report",
-                "fragment": "fragments/examples/analysis-report.html",
+                "id": "start-here/dags",
+                "fragment": "fragments/start-here/dags.html",
                 "headings": [],
             }
         ],
-        "assets": ["assets/examples/analysis-report/index_files/libs/quarto-html/quarto.js"],
+        "assets": ["assets/start-here/dags_files/libs/quarto-html/quarto.js"],
         "downloads": [
             "downloads/examples/analysis-report/analysis/metrics.py",
             "downloads/examples/analysis-report/run_report.py",
@@ -570,8 +572,8 @@ def test_docs_build_008__wheels_package_and_serve_completed_docs_without_build_t
 
     expected_files = {
         "daggerml/dashboard/static/docs/manifest.json",
-        "daggerml/dashboard/static/docs/fragments/examples/analysis-report.html",
-        "daggerml/dashboard/static/docs/assets/examples/analysis-report/index_files/libs/quarto-html/quarto.js",
+        "daggerml/dashboard/static/docs/fragments/start-here/dags.html",
+        "daggerml/dashboard/static/docs/assets/start-here/dags_files/libs/quarto-html/quarto.js",
         "daggerml/dashboard/static/docs/downloads/examples/analysis-report/run_report.py",
         "daggerml/dashboard/static/docs/downloads/examples/analysis-report/analysis-report.zip",
     }

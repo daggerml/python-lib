@@ -6,7 +6,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 ## Global Docs (Always Read)
 
-- `docs/index.qmd`: audience-first documentation navigation.
+- `docs/start-here/index.qmd`: audience-first documentation navigation.
 - `docs/develop/architecture/system-overview.qmd`: system-level layers and subsystem boundaries.
 
 ## Path Rules
@@ -125,8 +125,8 @@ Use this file to identify which project docs to read before editing a code path,
 
 - Match: `docs/**`
 - Read:
-  - `docs/index.qmd`
-  - `docs/getting-started.qmd` when changing onboarding
+  - `docs/start-here/index.qmd`
+  - `docs/start-here/get-started.qmd` when changing onboarding
   - the target audience landing page under `docs/use/`, `docs/extend/`, or `docs/develop/` when changing an audience path
 
 ### Local research dashboard
@@ -163,7 +163,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 If no rule clearly matches:
 
-- Read `docs/develop/architecture/system-overview.qmd` and `docs/index.qmd`.
+- Read `docs/develop/architecture/system-overview.qmd` and `docs/start-here/index.qmd`.
 - Add or refine a mapping in this file in the same change.
 
 ## Maintenance

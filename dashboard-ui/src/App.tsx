@@ -567,6 +567,7 @@ interface DocsManifestPage {
   id: string;
   fragment: string;
   title?: string;
+  order?: number;
   headings: Array<{ id: string; level: number; text: string }>;
 }
 
@@ -574,14 +575,15 @@ interface DocsNavSection {
   id: string;
   label: string;
   pages: DocsManifestPage[];
+  direct?: boolean;
 }
 
 const START_DOCS = [
-  "index",
-  "why-daggerml",
-  "getting-started",
-  "start-here/create-and-query-dag",
-  "use/guides/author-a-dag",
+  "start-here",
+  "start-here/get-started",
+  "start-here/dags",
+  "start-here/funks",
+  "start-here/dagclasses",
 ];
 const DOCS_GROUP_ORDER = new Map([
   "README", "index", "concepts", "guides", "reference", "architecture",
@@ -623,7 +625,7 @@ function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark
   const [filter, setFilter] = useState("");
   const docsContentRef = useRef<HTMLElement>(null);
   const diagramSequence = useRef(0);
-  const selected = pages?.find((item) => item.id === (pageId ?? "index"));
+  const selected = pages?.find((item) => item.id === (pageId ?? "start-here"));
 
   useEffect(() => {
     let active = true;
@@ -743,6 +745,10 @@ function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark
     <label className="docs-filter"><span className="sr-only">Filter documentation</span><Search /><input type="search" aria-label="Filter documentation" placeholder="Filter docs…" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
     <div className="docs-nav__sections">{sections.map((section) => {
       const current = section.pages.some((item) => item.id === selected?.id);
+      if (section.direct) {
+        const item = section.pages[0];
+        return <button key={section.id} type="button" className={item.id === selected?.id ? "active" : ""} aria-current={item.id === selected?.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item)}</button>;
+      }
       return <details key={`${section.id}-${current}`} open={Boolean(filter) || current || section.id === "start"}>
         <summary>{section.label}<span>{section.pages.length}</span></summary>
         <div>{section.pages.map((item, index) => {
@@ -766,12 +772,13 @@ function docsLabel(page: DocsManifestPage) {
 }
 
 function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSection[] {
-  const definitions = [
+  const definitions: Array<{ id: string; label: string; matches: (id: string) => boolean; direct?: boolean }> = [
     { id: "start", label: "Start here", matches: (id: string) => START_DOCS.includes(id) },
-    { id: "use", label: "Use DaggerML", matches: (id: string) => id === "use" || id.startsWith("use/") },
-    { id: "examples", label: "Examples", matches: (id: string) => id === "examples" || id.startsWith("examples/") },
-    { id: "extend", label: "Extend DaggerML", matches: (id: string) => id === "extend" || id.startsWith("extend/") },
-    { id: "develop", label: "Develop DaggerML", matches: (id: string) => id === "develop" || id.startsWith("develop/") },
+    { id: "concepts", label: "Concepts", matches: (id: string) => id === "use" || id.startsWith("use/") },
+    { id: "extend", label: "Extend", matches: (id: string) => id === "extend" || id.startsWith("extend/") },
+    { id: "develop", label: "Develop", matches: (id: string) => id === "develop" || id.startsWith("develop/") },
+    { id: "glossary", label: "Glossary", matches: (id: string) => id === "glossary", direct: true },
+    { id: "sharp-bits", label: "Sharp bits and security", matches: (id: string) => id === "sharp-bits-and-security", direct: true },
     { id: "more", label: "More", matches: (_id: string) => true },
   ];
   const remaining = new Set(pages);
@@ -781,11 +788,11 @@ function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSect
     const sectionPages = pages.filter((page) => remaining.has(page) && definition.matches(page.id));
     sectionPages.forEach((page) => remaining.delete(page));
     sectionPages.sort((left, right) => {
-      if (definition.id === "start") return (startOrder.get(left.id) ?? 99) - (startOrder.get(right.id) ?? 99);
+      if (definition.id === "start") return (left.order ?? startOrder.get(left.id) ?? 99) - (right.order ?? startOrder.get(right.id) ?? 99);
       return docsPageOrder(left.id) - docsPageOrder(right.id) || docsLabel(left).localeCompare(docsLabel(right));
     });
     const matches = query ? sectionPages.filter((page) => `${docsLabel(page)} ${page.id}`.toLocaleLowerCase().includes(query)) : sectionPages;
-    return matches.length > 0 ? [{ id: definition.id, label: definition.label, pages: matches }] : [];
+    return matches.length > 0 ? [{ id: definition.id, label: definition.label, pages: matches, direct: definition.direct }] : [];
   });
 }
 
@@ -798,8 +805,9 @@ function docsPageOrder(id: string) {
 }
 
 function docsSubgroup(section: string, id: string) {
-  if (!["use", "extend", "develop"].includes(section)) return undefined;
+  if (!["concepts", "extend", "develop"].includes(section)) return undefined;
   const parts = id.split("/");
+  if (section === "concepts" && parts[0] === "examples") return "examples";
   return parts.length > 2 ? parts[1] : undefined;
 }
 

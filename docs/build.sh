@@ -31,6 +31,11 @@ if ! Rscript --vanilla "$root/docs/build-requirements.R"; then
   printf '%s\n' 'Documentation build requires the pinned R packages; see docs/build-tooling.md.' >&2
   exit 1
 fi
+if ! "$python" -c 'import ipykernel, jupyter' >/dev/null 2>&1; then
+  printf '%s\n' 'Documentation build requires Jupyter in the project development environment; run uv sync --group dev --all-extras.' >&2
+  exit 127
+fi
+export QUARTO_PYTHON="$python"
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/daggerml-docs.XXXXXX")"
 mkdir -p "$work/workspace"

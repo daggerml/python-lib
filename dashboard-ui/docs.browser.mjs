@@ -11,16 +11,16 @@ const output = process.env.BROWSER_OUTPUT;
 assert.ok(output, "BROWSER_OUTPUT must name an evidence directory");
 await mkdir(output, { recursive: true });
 const pages = [
-  { id: "index", fragment: "fragments/index.html", headings: [] },
-  { id: "examples/one", fragment: "fragments/examples/one.html", headings: [{ id: "source", level: 2, text: "Source" }] },
+  { id: "start-here", title: "DaggerML", fragment: "fragments/start-here.html", headings: [] },
+  { id: "start-here/dags", title: "DAGs", fragment: "fragments/start-here/dags.html", headings: [{ id: "source", level: 2, text: "Source" }] },
 ];
 const script = 'print("verified example")\n';
 // A valid empty ZIP tests binary download handling independently of packaging.
 const bundle = Buffer.from("504b0506000000000000000000000000000000000000", "hex");
 const fixtures = new Map([
   ["/docs/static/manifest.json", { contentType: "application/json", body: JSON.stringify({ pages }) }],
-  ["/docs/static/fragments/index.html", { contentType: "text/html", body: '<h1>Documentation</h1><p>Use, extend, and develop DaggerML.</p><a href="/docs/examples/one">Worked example</a>' }],
-  ["/docs/static/fragments/examples/one.html", { contentType: "text/html", body: '<h1>Worked example</h1><p>A canonical script with matching downloads.</p><h2 id="source">Source</h2><pre><code>print("verified example")</code></pre><a href="/docs/static/downloads/one.py" download>Download script</a><p><a href="/docs/static/downloads/one.zip" download>Download bundle</a></p><a href="/docs/index">Documentation home</a>' }],
+  ["/docs/static/fragments/start-here.html", { contentType: "text/html", body: '<h1>Documentation</h1><p>Use, extend, and develop DaggerML.</p><a href="/docs/start-here/dags">DAGs</a>' }],
+  ["/docs/static/fragments/start-here/dags.html", { contentType: "text/html", body: '<h1>DAGs</h1><p>A canonical script with matching downloads.</p><h2 id="source">Source</h2><pre><code>print("verified example")</code></pre><a href="/docs/static/downloads/one.py" download>Download script</a><p><a href="/docs/static/downloads/one.zip" download>Download bundle</a></p><a href="/docs/start-here">Documentation home</a>' }],
   ["/docs/static/downloads/one.py", { contentType: "text/x-python", filename: "one.py", body: script }],
   ["/docs/static/downloads/one.zip", { contentType: "application/zip", filename: "one.zip", body: bundle }],
 ]);
@@ -65,8 +65,8 @@ try {
             ? { projects: { items: [] }, live_indexes: { items: [] }, recent_commits: { items: [] }, diagnostics: [], retention_days: 365, truncated: false }
             : { items: [] } });
         });
-        await page.goto(`${server.resolvedUrls.local[0]}docs/examples/one`);
-        await page.getByRole("heading", { name: "Worked example" }).waitFor();
+        await page.goto(`${server.resolvedUrls.local[0]}docs/start-here/dags`);
+        await page.getByRole("heading", { name: "DAGs" }).waitFor();
         if (theme === "light") await page.getByRole("button", { name: "Use light theme" }).click();
         assert.equal(await page.locator("html").getAttribute("data-theme"), theme);
 
@@ -82,15 +82,15 @@ try {
         }
 
         const navigation = page.getByLabel("Documentation navigation");
-        const current = navigation.getByRole("button", { name: "Examples / One" });
+        const current = navigation.getByRole("button", { name: "DAGs" });
         assert.equal(await current.getAttribute("aria-current"), "page");
-        await tabTo(navigation.getByRole("button", { name: "Index", exact: true }));
+        await tabTo(navigation.getByRole("button", { name: "DaggerML", exact: true }));
         await page.keyboard.press("Enter");
         await page.getByRole("heading", { name: "Documentation", exact: true }).waitFor();
         assert.equal(await current.getAttribute("aria-current"), null);
         await tabTo(current);
         await page.keyboard.press("Space");
-        await page.getByRole("heading", { name: "Worked example" }).waitFor();
+        await page.getByRole("heading", { name: "DAGs" }).waitFor();
         assert.equal(await current.getAttribute("aria-current"), "page");
         for (const [name, filename, bytes] of [["Download script", "one.py", Buffer.from(script)], ["Download bundle", "one.zip", bundle]]) {
           await tabTo(page.getByRole("link", { name }));
@@ -99,7 +99,7 @@ try {
           const download = await downloadReady;
           assert.equal(download.suggestedFilename(), filename);
           assert.deepEqual(await readFile(await download.path()), bytes);
-          assert.equal(new URL(page.url()).pathname, "/docs/examples/one");
+          assert.equal(new URL(page.url()).pathname, "/docs/start-here/dags");
         }
         const globalNav = page.getByRole("navigation", { name: viewport.width < 600 ? "Mobile navigation" : "Primary navigation", exact: true });
         assert.equal(await globalNav.getByRole("button", { name: "Docs", exact: true }).getAttribute("aria-current"), "page");

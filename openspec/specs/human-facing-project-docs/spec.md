@@ -14,30 +14,52 @@ The repository SHALL treat `docs/` as the human-facing project documentation sur
 - **WHEN** a reader needs change proposals, implementation tasks, or requirement deltas for a change
 - **THEN** those artifacts are found under `openspec/` rather than inside `docs/`
 
-### Requirement: Documentation SHALL explain why to use DaggerML before audience-specific detail
-The docs home SHALL link to a root-level Why DaggerML page that explains the research problems DaggerML addresses, its durable-DAG approach, the outcomes it enables, suitable use cases, and unsuitable use cases.
+### Requirement: The documentation home SHALL explain why to use DaggerML
+The single docs home SHALL concisely explain the research problems DaggerML addresses, its durable-DAG approach, the outcomes it enables, suitable use cases, and unsuitable use cases before routing readers into detail.
 
 #### Scenario: Reader evaluates DaggerML
 - **WHEN** a prospective reader opens the docs home
-- **THEN** they can reach a concise explanation of why DaggerML exists before choosing a documentation path
+- **THEN** the home itself explains why DaggerML exists before presenting the documentation paths
 
-### Requirement: Project docs SHALL be organized by reader intent
-The `docs/` tree SHALL organize its primary navigation by reader relationship to DaggerML: Use DaggerML for researchers, Extend DaggerML for integration engineers, and Develop DaggerML for core contributors. Each path MAY organize detailed material into concepts, guides, and reference pages when that structure serves its readers.
+### Requirement: Project docs SHALL use a minimal primary navigation
+Primary navigation SHALL contain Start here, Concepts, Extend, and Develop sections. Glossary and Sharp bits and security SHALL be direct top-level siblings of those sections rather than additional containers.
 
 #### Scenario: Reader looks for onboarding
 - **WHEN** a new researcher wants the fastest path to first success
-- **THEN** the docs home directs them to the top-level getting-started page and the Use DaggerML path
+- **THEN** the docs home directs them into the ordered Start here course
 
 #### Scenario: Reader looks for the right kind of information
 - **WHEN** a reader needs to use DaggerML, implement an integration, or develop DaggerML itself
-- **THEN** the docs navigation distinguishes those needs through Use, Extend, and Develop paths rather than requiring the reader to start from generic document types or a package subtree
+- **THEN** the docs navigation distinguishes executable learning, explanatory concepts, extension work, and core development without a separate Examples or Use section
 
-### Requirement: `getting-started` SHALL be one concise page
-The project docs SHALL provide one concise researcher getting-started page at `docs/getting-started.qmd` that covers installation, first repository setup through the CLI, first DAG creation in Python, basic inspection, and next-step links without splitting those basics across multiple introductory files.
+### Requirement: Documentation source paths SHALL mirror published paths
+Human-facing QMD source paths SHALL match their published HTML paths as closely as the rendering system permits. Every page presented in the Start here navigation section SHALL live beneath `docs/start-here/` and publish beneath `/docs/start-here/`; supporting downloadable source MAY remain beneath `docs/examples/`.
+
+#### Scenario: Maintainer locates a Start here page
+- **WHEN** a maintainer maps a `/docs/start-here/...` route back to its QMD source
+- **THEN** the corresponding page is found at the same relative path beneath `docs/start-here/`
+
+#### Scenario: Reader opens the documentation root
+- **WHEN** a reader opens `/docs`
+- **THEN** the dashboard presents the `docs/start-here/index.qmd` page without requiring a duplicate root-level QMD
+
+### Requirement: Start here SHALL be an executable course
+Start here SHALL progress from the docs home through repository setup, DAGs, funks, and dagclasses. Pages SHALL declare their prerequisites with `depends-on`; the documentation build and navigation SHALL use the same validated topological order.
 
 #### Scenario: Reader starts from zero
-- **WHEN** a reader follows `docs/getting-started.qmd`
-- **THEN** the page includes enough information to install DaggerML, initialize a project with `dml init`, create a first DAG, and inspect it with at least one simple command or API example
+- **WHEN** a reader follows `docs/start-here/get-started.qmd`
+- **THEN** Get started initializes the project and later pages execute the important authoring, access, Docker, function, cache, and dagclass examples against that shared project
+
+#### Scenario: A learning example stops working
+- **WHEN** an important executable example in Start here fails
+- **THEN** the documentation build and CI fail rather than publishing stale output
+
+### Requirement: Concept documentation SHALL be prose with explicit pseudocode
+Concept pages SHALL explain behavior in prose. Code used to illustrate a concept SHALL be visibly non-executable and explicitly marked as pseudocode; runnable teaching belongs in Start here.
+
+#### Scenario: Reader distinguishes explanation from verified instruction
+- **WHEN** a reader sees code on a concept page
+- **THEN** it is presented as illustrative pseudocode rather than implied to have executed during the documentation build
 
 ### Requirement: Human-facing docs SHALL avoid normative spec voice
 Docs under `docs/` SHALL describe the system in reader-facing language and SHALL avoid structuring pages around authority ownership, compatibility classifications, or normative maintenance phrases such as document-level handoff rules.
@@ -64,13 +86,9 @@ Repository-maintenance documents such as edit pre-read maps, agent instructions,
 - **WHEN** a contributor needs stable architecture or development setup information
 - **THEN** they can find it in the Develop DaggerML path without encountering automated maintenance policy there
 
-### Requirement: Docs rewrite tasks SHALL be independently assignable to repo-aware subagents
-The reorganization plan SHALL divide implementation work into independent documentation tasks whose owners first inspect the existing repo, current docs, and relevant code for the area they are rewriting.
+### Requirement: Executable docs SHALL not use ambient user state
+The executable course SHALL run in a fresh build workspace with isolated DaggerML and cloud configuration. A page with `dml-project-home` SHALL run from that workspace-relative directory only after a declared dependency has created it.
 
-#### Scenario: Subagent rewrites a docs area
-- **WHEN** a subagent is assigned a docs subtree or topic lane
-- **THEN** the task instructions require that subagent to read the current docs for that area and inspect the corresponding source modules before producing rewritten docs
-
-#### Scenario: Parallel docs work proceeds safely
-- **WHEN** multiple subagents work on different doc lanes such as concepts, reference, architecture, or contrib
-- **THEN** the task boundaries are specific enough that each subagent can make progress independently without redefining the whole docs architecture
+#### Scenario: A developer builds the documentation
+- **WHEN** the complete documentation build succeeds or fails
+- **THEN** its repositories, credentials, configuration, services, and temporary state are removed without modifying the developer's ambient DaggerML environment

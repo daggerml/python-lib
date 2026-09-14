@@ -62,8 +62,8 @@ beforeEach(() => {
   mermaidInitialize.mockClear();
   mermaidRender.mockClear();
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
-    if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "examples/one", title: "Worked example", fragment: "fragments/examples/one.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
-    if (input === "/docs/static/fragments/examples/one.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><div class="sourceCode"><pre class="sourceCode python code-with-copy"><code>print("one")</code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div><div class="cell-output cell-output-stdout"><pre><code>one</code></pre></div><pre class="mermaid"><code>flowchart TD\nA--&gt;B</code></pre><a href="/docs/examples/one#example">Anchor</a><a href="/docs/static/downloads/examples/one.py">Download</a>');
+    if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "start-here/dags", title: "DAGs", fragment: "fragments/start-here/dags.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
+    if (input === "/docs/static/fragments/start-here/dags.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><div class="sourceCode"><pre class="sourceCode python code-with-copy"><code>print("one")</code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div><div class="cell-output cell-output-stdout"><pre><code>one</code></pre></div><pre class="mermaid"><code>flowchart TD\nA--&gt;B</code></pre><a href="/docs/start-here/dags#example">Anchor</a><a href="/docs/static/downloads/examples/one.py">Download</a>');
     return new Response("Not found", { status: 404 });
   }));
 });
@@ -77,30 +77,30 @@ describe("canonical dashboard routes", () => {
   });
 
   it("renders Docs without a project and preserves nested links and history", async () => {
-    history.replaceState(null, "", "/docs/examples/one#example");
+    history.replaceState(null, "", "/docs/start-here/dags#example");
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Worked example" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "DAGs" })).toHaveAttribute("aria-current", "page");
     fireEvent.click(screen.getByRole("link", { name: "Anchor" }));
-    expect(location.pathname).toBe("/docs/examples/one");
+    expect(location.pathname).toBe("/docs/start-here/dags");
     expect(location.hash).toBe("#example");
     fireEvent.click(screen.getAllByRole("button", { name: "Home" })[0]);
     expect(location.pathname).toBe("/");
     history.back();
     window.dispatchEvent(new PopStateEvent("popstate"));
-    await waitFor(() => expect(location.pathname).toBe("/docs/examples/one"));
+    await waitFor(() => expect(location.pathname).toBe("/docs/start-here/dags"));
   });
 
   it("groups and filters documentation navigation by reader path", async () => {
-    history.replaceState(null, "", "/docs/examples/one");
+    history.replaceState(null, "", "/docs/start-here/dags");
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
-    expect(screen.getByText("Examples", { selector: "summary" })).toBeVisible();
-    fireEvent.change(screen.getByRole("searchbox", { name: "Filter documentation" }), { target: { value: "worked" } });
-    expect(screen.getByRole("button", { name: "Worked example" })).toBeVisible();
-    expect(screen.queryByText("Start here", { selector: "summary" })).not.toBeInTheDocument();
+    expect(screen.getByText("Start here", { selector: "summary" })).toBeVisible();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter documentation" }), { target: { value: "dag" } });
+    expect(screen.getByRole("button", { name: "DAGs" })).toBeVisible();
+    expect(screen.getByText("Start here", { selector: "summary" })).toBeVisible();
   });
 
   it("orders documentation by learning path and promotes first-DAG authoring", async () => {
@@ -112,8 +112,13 @@ describe("canonical dashboard routes", () => {
       { id: "use/concepts/README", title: "Research concepts" },
       { id: "use/guides/README", title: "Research guides" },
       { id: "use/reference/README", title: "Reference" },
-      { id: "start-here/create-and-query-dag", title: "Create and query a DAG" },
-      { id: "use/guides/author-a-dag", title: "Author a DAG" },
+      { id: "start-here", title: "DaggerML", order: 0 },
+      { id: "start-here/get-started", title: "Get started", order: 1 },
+      { id: "start-here/dags", title: "DAGs", order: 2 },
+      { id: "start-here/funks", title: "Funks", order: 3 },
+      { id: "start-here/dagclasses", title: "Dagclasses", order: 4 },
+      { id: "glossary", title: "Glossary" },
+      { id: "sharp-bits-and-security", title: "Sharp bits and security" },
     ].map((page) => ({ ...page, fragment: `fragments/${page.id}.html`, headings: [] }));
     vi.mocked(fetch).mockImplementation(async (input: URL | RequestInfo) => String(input) === "/docs/static/manifest.json"
       ? new Response(JSON.stringify({ pages }))
@@ -124,16 +129,18 @@ describe("canonical dashboard routes", () => {
     await screen.findByRole("heading", { name: "Documentation page" });
     const start = screen.getByText("Start here", { selector: "summary" }).closest("details")!;
     expect(within(start).getAllByRole("button").map((button) => button.textContent)).toEqual([
-      "Create and query a DAG", "Author a DAG",
+      "DaggerML", "Get started", "DAGs", "Funks", "Dagclasses",
     ]);
-    const use = screen.getByText("Use DaggerML", { selector: "summary" }).closest("details")!;
-    expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual([
+    const concepts = screen.getByText("Concepts", { selector: "summary" }).closest("details")!;
+    expect(within(concepts).getAllByRole("button").map((button) => button.textContent)).toEqual([
       "Use DaggerML", "Research concepts", "Errors", "Research guides", "Manage artifacts", "Reference", "Error reference",
     ]);
+    expect(screen.getByRole("button", { name: "Glossary" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sharp bits and security" })).toBeVisible();
   });
 
   it("copies rendered source through an explicit code action", async () => {
-    history.replaceState(null, "", "/docs/examples/one");
+    history.replaceState(null, "", "/docs/start-here/dags");
     render(<App />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Copy code" }));
@@ -142,7 +149,7 @@ describe("canonical dashboard routes", () => {
   });
 
   it("renders packaged Mermaid diagrams in the active theme", async () => {
-    history.replaceState(null, "", "/docs/examples/one");
+    history.replaceState(null, "", "/docs/start-here/dags");
     render(<App />);
 
     expect(await screen.findByRole("img", { name: "Flow chart" })).toContainHTML("Rendered flow chart");
@@ -151,7 +158,7 @@ describe("canonical dashboard routes", () => {
   });
 
   it("leaves packaged downloads to the browser", async () => {
-    history.replaceState(null, "", "/docs/examples/one");
+    history.replaceState(null, "", "/docs/start-here/dags");
     render(<App />);
 
     const download = await screen.findByRole("link", { name: "Download" });
@@ -166,11 +173,11 @@ describe("canonical dashboard routes", () => {
     document.addEventListener("click", observe, { once: true });
     fireEvent.click(download);
     expect(prevented).toBe(false);
-    expect(location.pathname).toBe("/docs/examples/one");
+    expect(location.pathname).toBe("/docs/start-here/dags");
   });
 
   it("keeps Docs visible when switching themes", async () => {
-    history.replaceState(null, "", "/docs/examples/one");
+    history.replaceState(null, "", "/docs/start-here/dags");
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();

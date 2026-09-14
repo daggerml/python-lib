@@ -78,7 +78,7 @@ def main():
             with TestClient(create_app(config_home=environment["DML_CONFIG_HOME"])) as client:
                 headers = {"host": "127.0.0.1:8765"}
                 shell = (root / "dashboard/static/index.html").read_bytes()
-                for route in ("/docs", "/docs/examples/analysis-report"):
+                for route in ("/docs", "/docs/start-here/dags"):
                     response = client.get(route, headers=headers)
                     assert response.status_code == 200, route
                     assert response.content == shell, route

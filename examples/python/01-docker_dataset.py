@@ -22,15 +22,23 @@ from daggerml.contrib.funks import docker_build
 from daggerml.contrib.s3 import S3Store
 
 EXCLUDE_PATTERNS = (
-    # ".git",  # we need .git to install lib from the repo
-    ".dml/*",
-    "ignore/*",
-    ".venv/*",
-    ".mypy_cache/*",
-    ".pytest_cache/*",
-    "__pycache__/*",
+    ".git",
+    ".dml",
+    ".tools",
+    "ignore",
+    ".venv",
+    ".mypy_cache",
+    ".pytest_cache",
+    "__pycache__",
     "*.pyc",
-    "tests/*",
+    "tests",
+    "build",
+    "dist",
+    "docs",
+    "dashboard-ui",
+    "openspec",
+    ".github",
+    "src/daggerml/dashboard/static",
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

@@ -2,9 +2,11 @@
 
 Use the CLI to create and operate a research project. Use Python to author DAGs and funks within that project.
 
-1. [Get started](../getting-started.qmd)
+1. [Get started](../start-here/get-started.qmd)
 2. Learn the [concepts](concepts/README.qmd)
 3. Follow a task-focused [guide](guides/README.qmd)
 4. Consult the exact [reference](reference/README.qmd)
 
-The [glossary](../glossary.qmd) defines shared terms. For the product rationale, see [Why DaggerML?](../why-daggerml.qmd).
+The [glossary](../glossary.qmd) defines shared terms. The
+[documentation home](../start-here/index.qmd) explains the product rationale and links the
+executable Start here course.

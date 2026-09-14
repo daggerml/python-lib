@@ -1,0 +1,147 @@
+---
+title: DAGs
+engine: knitr
+dml-project-home: research-demo
+depends-on: start-here/get-started
+---
+
+A DAG is a durable record of a computation. Create one first, then add work to
+it. Until `commit()`, `dag` is the live computation we are building.
+
+```{python}
+import daggerml as dml
+from daggerml.contrib.funks import docker_build
+
+dag = dml.new("docs-image", message="build the tutorial image")
+```
+
+## Put values in the DAG
+
+`dag.put()` records a value and returns its node. Naming important nodes makes
+them easy to find later without changing their identity.
+
+```{python}
+count = dag.put(3, name="count")
+labels = dag.put(["fresh", "local", "seasonal"], name="labels")
+
+print(count.value())
+print(labels.value())
+```
+
+The values look like ordinary Python values when materialized with `.value()`,
+but `count` and `labels` are nodes. They retain where they live in the DAG and
+can be used as inputs without discarding that provenance.
+
+## Access collections
+
+Indexing a collection node creates another node. This matters when a downstream
+result uses only part of a large or structured input: the graph records which
+part was selected.
+
+```{python}
+first_label = labels[0]
+
+print(first_label.value())
+print(first_label.ref)
+```
+
+Dictionary access works the same way, including nested access.
+
+```{python}
+settings = dag.put(
+    {"mode": "local", "limits": {"retries": 2}},
+    name="settings",
+)
+mode = settings["mode"]
+retries = settings["limits"]["retries"]
+
+print(mode.value())
+print(retries.value())
+```
+
+Nodes can be placed inside new collections. DaggerML records those
+relationships; it does not replace the nodes with unrelated copies of their
+Python values.
+
+```{python}
+summary = dag.put(
+    {
+        "count": count,
+        "first_label": first_label,
+        "mode": mode,
+        "retries": retries,
+    },
+    name="summary",
+)
+
+print(summary.value())
+print(dag.keys())
+```
+
+## Call a node
+
+Functions are data in DaggerML. Putting `docker_build` in the DAG produces a
+callable node; calling that node records both the inputs and the produced image.
+For this live build, the harness quietly packages the current checkout into the
+same S3-backed context used by the repository's Docker examples.
+
+```{python}
+#| echo: false
+import os
+from pathlib import Path
+
+from daggerml.contrib.s3 import S3Store
+
+context_uri = S3Store().tar(
+    str(Path(os.environ["DOCS_BUILD_ROOT"])),
+    excludes=(
+        ".git", ".dml", ".tools", "ignore", ".venv", ".mypy_cache",
+        ".pytest_cache", "__pycache__", "*.pyc", "tests", "build", "dist",
+        "docs", "dashboard-ui", "openspec", ".github",
+        "src/daggerml/dashboard/static",
+    ),
+    symlinks="ignore",
+)
+```
+
+```{python}
+context = dag.put(context_uri, name="context-tarball")
+build = dag.put(docker_build, name="build-image")
+image = build(
+    context,
+    ["-f", "./examples/dkr-ctx/Dockerfile.docs"],
+    name="image",
+)
+
+print(image.value().uri.startswith("s3://"))
+```
+
+`image` is the result we want another DAG to reuse, so we commit it last. A
+commit closes the live DAG and makes its named nodes, result, and provenance
+durable.
+
+```{python}
+dag.commit(image)
+```
+
+The [Funks](funks.qmd) lesson now can import this exact result with
+`dag.require()` and run code inside the image.
+
+## References
+
+- [Python authoring reference](../use/reference/python-authoring.qmd)
+- [Artifacts, data, and codecs](../use/concepts/artifacts-data-codecs.qmd)
+- [Error reference](../use/reference/errors.qmd)
+
+## Document metadata
+
+Status: implemented
+
+Purpose: Teach DAG authoring as a sequence of small, live operations that also
+produces the reusable tutorial image.
+
+Authority: Introductory use of DAG creation, values, collections, access,
+callable nodes, and commit results.
+
+Scope: Core DAG authoring and the first Docker-image funk call; detailed funk
+authoring and cache behavior belong to the next page.

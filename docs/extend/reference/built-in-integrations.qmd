@@ -37,6 +37,8 @@ Docker, SSH, and Batch require a nested `sub` runnable. Docker requires an
 image and optionally flags; it can load a gzip-compressed image tar from an S3
 URI. `docker_build` creates that compressed S3 artifact when no registry
 repository is given, while repository builds are tagged and pushed directly.
+After saving or pushing the result, it removes its temporary local `dml:*`
+image on a best-effort basis.
 SSH requires a non-empty host and accepts flags and environment files. Batch
 requires a Lambda URI and image, with optional CPU, memory, and GPU values; its
 deployment also needs `CPU_QUEUE` or `GPU_QUEUE` and `BATCH_TASK_ROLE_ARN`

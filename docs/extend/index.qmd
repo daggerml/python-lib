@@ -1,6 +1,7 @@
 ---
 title: Extend DaggerML
-engine: knitr
+engine: jupyter
+jupyter: python3
 ---
 
 # Extend DaggerML

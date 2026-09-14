@@ -8,6 +8,9 @@ WORKDIR /app
 
 COPY . /app
 
+ARG SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DAGGERML=0.0.0
+ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DAGGERML=${SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DAGGERML}
+
 RUN python -m venv /opt/venv \
   && /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
   && /opt/venv/bin/pip install --no-cache-dir "/app" pandas scikit-learn pyarrow s3fs

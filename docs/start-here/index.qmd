@@ -1,0 +1,74 @@
+---
+title: DaggerML
+engine: knitr
+---
+
+## Content
+
+DaggerML makes a computation a durable research artifact. Its inputs,
+functions, results, execution boundaries, and provenance are recorded as a DAG,
+so a result can lead back to the computation that produced it and repeated work
+can reuse a known result.
+
+It is a good fit when research needs repeatable derived results, reusable
+intermediate work, auditable inputs and outputs, or execution beyond one local
+Python process. It combines Python authoring with a CLI for project history,
+configuration, remotes, and runtime operations.
+
+It is not a general workflow scheduler, a replacement for object storage, or a
+promise that arbitrary Python state can be replayed. Large data normally stays
+in external storage and appears in a DAG as a tracked artifact URI.
+
+### Start here
+
+Follow the live course in order. Each page builds on the project and results
+created by the pages before it:
+
+1. [Get started](get-started.qmd): install DaggerML and initialize a project.
+2. [DAGs](dags.qmd): create, query, trace, and commit nodes, then build
+   a reusable Docker image.
+3. [Funks](funks.qmd): write containerized functions and inspect their
+   execution DAGs and cache reuse.
+4. [Dagclasses](dagclasses.qmd): package reusable parameters and funks
+   behind a conventional entry point.
+
+### Concepts
+
+[Concepts and reference](../use/README.qmd) explain projects, DAG storage,
+artifacts, runtimes, history, errors, configuration, and operational workflows.
+
+### Build integrations
+
+[Extend DaggerML](../extend/index.qmd) covers adapters, executors, codecs, plugin
+registration, and the contracts that connect them to the runtime.
+
+### Contribute to DaggerML
+
+[Develop DaggerML](../develop/README.qmd) explains local setup, testing, the
+codebase map, and the architecture behind the public Python and command-line
+surfaces.
+
+### Keep close at hand
+
+- [Sharp bits and security](../sharp-bits-and-security.qmd): operational caveats and known security limitations.
+- [Glossary](../glossary.qmd): shared terms.
+
+## References
+
+- [Start here](get-started.qmd)
+- [Concepts](../use/README.qmd)
+- [Extend DaggerML](../extend/index.qmd)
+- [Develop DaggerML](../develop/README.qmd)
+
+## Document metadata
+
+Status: implemented
+
+Purpose: Explain why DaggerML exists and route researchers, integration
+engineers, and contributors into the appropriate documentation path.
+
+Authority: Product rationale and navigation among the canonical introductory,
+concept, extension, and contributor documentation paths.
+
+Scope: The packaged DaggerML documentation set; individual pages own their
+technical contracts and procedures.

@@ -4,13 +4,6 @@ project:
   render:
     - "**/*.qmd"
 
-engine: knitr
-
-knitr:
-  opts_chunk:
-    engine.opts:
-      bash: "-euo pipefail"
-
 execute:
   eval: true
   error: false

@@ -61,6 +61,7 @@ if [[ ! -x "$python" ]]; then
   exit 127
 fi
 export DOCS_PYTHON="$python"
+export QUARTO_PYTHON="$python"
 export PATH="$toolchain/bin:$(dirname "$python"):$PATH"
 # Set relocatable Quarto paths directly instead of relying on shell activation.
 export QUARTO_SHARE_PATH="$toolchain/share/quarto"

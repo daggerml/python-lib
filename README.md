@@ -35,8 +35,8 @@ with dml.new("first-result") as dag:
 
 ## Docs
 
-- [Why DaggerML?](docs/why-daggerml.qmd)
-- [Get started](docs/getting-started.qmd)
+- [DaggerML documentation](docs/start-here/index.qmd)
+- [Get started](docs/start-here/get-started.qmd)
 - [Use DaggerML](docs/use/README.qmd)
 - [Extend DaggerML](docs/extend/index.qmd)
 - [Develop DaggerML](docs/develop/README.qmd)

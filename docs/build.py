@@ -17,8 +17,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent
 SOURCE_MARKER = re.compile(r"\{\{<\s*dml-source\s+([^\s>]+)\s*>\}\}")
+SNIPPET_MARKER = re.compile(r"\{\{<\s*dml-snippet\s+([^\s>]+)\s+([a-zA-Z0-9_-]+)\s*>\}\}")
+RUN_MARKER = re.compile(r"\{\{<\s*dml-run\s+([^\s>]+)\s*>\}\}")
 FENCE = re.compile(r"^ {0,3}(?P<delimiter>`{3,}|~{3,})(?P<info>[^\n]*)$", re.MULTILINE)
 POLICY = {"eval": True, "cache": False, "freeze": False, "error": False}
+SUPPORTED_ENGINES = {"knitr", "jupyter"}
 SECRET = re.compile(r"(DOCS_BUILD_WORK|daggerml-docs/artifacts|moto_server)")
 
 
@@ -43,6 +46,19 @@ def source_path(qmd: Path, value: str) -> Path:
     if not path.is_relative_to(examples) or path.suffix != ".py" or not path.is_file():
         raise ValueError(f"{qmd}: dml-source must name a Python file beneath docs/examples: {value}")
     return path
+
+
+def source_region(source: Path, name: str) -> str:
+    text = source.read_text(encoding="utf-8")
+    begin = f"# docs:begin {name}"
+    end = f"# docs:end {name}"
+    if text.count(begin) != 1 or text.count(end) != 1:
+        raise ValueError(f"{source}: snippet region {name!r} must have exactly one begin and end marker")
+    before, body = text.split(begin, 1)
+    body, after = body.split(end, 1)
+    if end in before or begin in after:
+        raise ValueError(f"{source}: malformed snippet region {name!r}")
+    return body.strip("\n")
 
 
 def frontmatter_metadata(qmd: Path, text: str) -> dict[str, object]:
@@ -150,8 +166,8 @@ def validate(root: Path = ROOT) -> None:
         for key, setting in value.items():
             if key in POLICY and setting is not POLICY[key]:
                 errors.append(f"{location}: execution policy forbids {key}: {str(setting).lower()}")
-            if key == "engine" and setting != "knitr":
-                errors.append(f"{location}: execution policy requires engine: knitr")
+            if key == "engine" and setting not in SUPPORTED_ENGINES:
+                errors.append(f"{location}: unsupported execution engine: {setting}")
             if key == "execute" and not isinstance(setting, dict):
                 errors.append(f"{location}: execute must contain explicit execution options")
             if key in {"engine.path", "engine.opts"} and setting != {"bash": "-euo pipefail"}:
@@ -193,8 +209,10 @@ def validate(root: Path = ROOT) -> None:
             project_home = None
             dependencies = []
         policy(metadata, str(qmd))
-        if SOURCE_MARKER.search(text) and project_home is None:
-            errors.append(f"{qmd}: dml-source pages require dml-project-home front matter")
+        page_engine = metadata.get("engine", "knitr")
+        file_backed = bool(SOURCE_MARKER.search(text) or SNIPPET_MARKER.search(text) or RUN_MARKER.search(text))
+        if file_backed and project_home is None:
+            errors.append(f"{qmd}: file-backed Python pages require dml-project-home front matter")
         if project_home is not None and not dependencies:
             errors.append(f"{qmd}: dml-project-home pages require depends-on front matter")
         for match in SOURCE_MARKER.finditer(text):
@@ -202,6 +220,22 @@ def validate(root: Path = ROOT) -> None:
                 source_path(qmd, match.group(1))
             except ValueError as exc:
                 errors.append(str(exc))
+        snippet_paths: list[Path] = []
+        for match in SNIPPET_MARKER.finditer(text):
+            try:
+                source = source_path(qmd, match.group(1))
+                source_region(source, match.group(2))
+                snippet_paths.append(source)
+            except ValueError as exc:
+                errors.append(str(exc))
+        run_paths: list[Path] = []
+        for match in RUN_MARKER.finditer(text):
+            try:
+                run_paths.append(source_path(qmd, match.group(1)))
+            except ValueError as exc:
+                errors.append(str(exc))
+        if snippet_paths and (len(run_paths) != 1 or any(path != run_paths[0] for path in snippet_paths)):
+            errors.append(f"{qmd}: dml-snippet blocks require one dml-run for the same source")
         end = 0
         for match in FENCE.finditer(text):
             if match.start() < end:
@@ -223,6 +257,11 @@ def validate(root: Path = ROOT) -> None:
                 language = re.split(r"[\s,]", info[1:-1])[0].lower()
                 if language not in {"python", "bash", "r", "mermaid", "dot"}:
                     errors.append(f"{location}: unsupported executable engine {language!r}")
+                if page_engine == "jupyter" and language in {"bash", "r"}:
+                    errors.append(f"{location}: jupyter pages may contain only Python executable cells")
+                relative_parts = qmd.relative_to(root).parts
+                if relative_parts and relative_parts[0] == "use" and language in {"python", "bash", "r"}:
+                    errors.append(f"{location}: concept pages must use prose or explicitly marked pseudocode")
                 options = "\n".join(re.findall(r"^\s*#\| ?(.*)$", body, re.MULTILINE))
                 policy(yaml.safe_load(options), location)
                 for key, value in re.findall(
@@ -254,17 +293,39 @@ def expand_sources(qmd: Path, text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         source = source_path(qmd, match.group(1))
         relative = source.relative_to(project_root(qmd)).as_posix()
-        displayed = html.escape(source.read_text(encoding="utf-8"))
+        displayed = source.read_text(encoding="utf-8").rstrip()
         return (
-            f'<div data-dml-source="{relative}"><pre><code class="language-python">{displayed}</code></pre></div>\n\n'
+            f'::: {{data-dml-source="{relative}"}}\n````python\n{displayed}\n````\n:::\n\n'
             "```{python}\n#| echo: false\n#| output: false\n"
             "import os\nimport runpy\nimport sys\nfrom pathlib import Path\n"
             f'source = Path(os.environ["DOCS_SOURCE_ROOT"]) / "{relative}"\n'
             "sys.path.insert(0, str(source.parent))\n"
-            'runpy.run_path(str(source), run_name="__main__")\n```'
+            '_ = runpy.run_path(str(source), run_name="__main__")\n```'
         )
 
-    return SOURCE_MARKER.sub(replace, text)
+    def replace_snippet(match: re.Match[str]) -> str:
+        source = source_path(qmd, match.group(1))
+        relative = source.relative_to(project_root(qmd)).as_posix()
+        displayed = source_region(source, match.group(2))
+        return (
+            f'::: {{data-dml-source="{relative}" data-dml-region="{match.group(2)}"}}\n'
+            f"````python\n{displayed}\n````\n:::\n"
+        )
+
+    def replace_run(match: re.Match[str]) -> str:
+        source = source_path(qmd, match.group(1))
+        relative = source.relative_to(project_root(qmd)).as_posix()
+        return (
+            "```{python}\n#| echo: false\n"
+            "import os\nimport runpy\nimport sys\nfrom pathlib import Path\n"
+            f'source = Path(os.environ["DOCS_SOURCE_ROOT"]) / "{relative}"\n'
+            "sys.path.insert(0, str(source.parent))\n"
+            '_ = runpy.run_path(str(source), run_name="__main__")\n```'
+        )
+
+    text = SOURCE_MARKER.sub(replace, text)
+    text = SNIPPET_MARKER.sub(replace_snippet, text)
+    return RUN_MARKER.sub(replace_run, text)
 
 
 def prepare(work: Path) -> None:
@@ -276,26 +337,51 @@ def prepare(work: Path) -> None:
     order = execution_order(work)
     for qmd in qmd_files(work):
         text = expand_sources(qmd, qmd.read_text(encoding="utf-8"))
+        metadata = frontmatter_metadata(qmd, text)
+        engine = metadata.get("engine", "knitr")
         page = source_page_id(qmd, work)
         project_home = dml_project_home(qmd, text)
-        project_environment = 'Sys.unsetenv("DML_PROJECT_HOME")\n'
-        if project_home is not None:
-            project_environment = (
-                f'dml_project_home <- file.path(docs_workspace, {json.dumps(project_home)})\n'
-                'if (!dir.exists(dml_project_home)) stop("depends-on pages did not create dml-project-home: ", '
-                "dml_project_home)\n"
-                'Sys.setenv(DML_PROJECT_HOME = dml_project_home)\n'
-                "page_workdir <- dml_project_home\n"
+        if engine == "jupyter":
+            project_environment = 'os.environ.pop("DML_PROJECT_HOME", None)\n'
+            if project_home is not None:
+                project_environment = (
+                    f'dml_project_home = docs_workspace / {json.dumps(project_home)}\n'
+                    'if not dml_project_home.is_dir():\n'
+                    '    raise RuntimeError(f"depends-on pages did not create dml-project-home: {dml_project_home}")\n'
+                    'os.environ["DML_PROJECT_HOME"] = str(dml_project_home)\n'
+                    'page_workdir = dml_project_home\n'
+                )
+            setup = (
+                "\n```{python}\n#| include: false\n"
+                "import os\nfrom pathlib import Path\n"
+                'docs_workspace = Path(os.environ["DOCS_WORKSPACE_ROOT"])\n'
+                'if not docs_workspace.is_dir():\n    raise RuntimeError("DOCS_WORKSPACE_ROOT does not exist")\n'
+                "page_workdir = docs_workspace\n"
+                f"{project_environment}"
+                f'os.environ["DOCS_PAGE_ROOT"] = str(page_workdir)\n'
+                f'os.environ["DOCS_PAGE_ID"] = {json.dumps(page)}\n'
+                "os.chdir(page_workdir)\n```\n\n"
             )
-        setup = (
-            "\n```{r}\n#| include: false\n"
-            'docs_workspace <- Sys.getenv("DOCS_WORKSPACE_ROOT")\n'
-            'if (!dir.exists(docs_workspace)) stop("DOCS_WORKSPACE_ROOT does not exist")\n'
-            "page_workdir <- docs_workspace\n"
-            f"{project_environment}"
-            f'Sys.setenv(DOCS_PAGE_ROOT = page_workdir, DOCS_PAGE_ID = "{page}")\n'
-            "knitr::opts_knit$set(root.dir = page_workdir)\n```\n\n"
-        )
+        else:
+            project_environment = 'Sys.unsetenv("DML_PROJECT_HOME")\n'
+            if project_home is not None:
+                project_environment = (
+                    f'dml_project_home <- file.path(docs_workspace, {json.dumps(project_home)})\n'
+                    'if (!dir.exists(dml_project_home)) stop("depends-on pages did not create dml-project-home: ", '
+                    "dml_project_home)\n"
+                    'Sys.setenv(DML_PROJECT_HOME = dml_project_home)\n'
+                    "page_workdir <- dml_project_home\n"
+                )
+            setup = (
+                "\n```{r}\n#| include: false\n"
+                'docs_workspace <- Sys.getenv("DOCS_WORKSPACE_ROOT")\n'
+                'if (!dir.exists(docs_workspace)) stop("DOCS_WORKSPACE_ROOT does not exist")\n'
+                "page_workdir <- docs_workspace\n"
+                f"{project_environment}"
+                f'Sys.setenv(DOCS_PAGE_ROOT = page_workdir, DOCS_PAGE_ID = "{page}")\n'
+                'knitr::opts_chunk$set(engine.opts = list(bash = "-euo pipefail"))\n'
+                "knitr::opts_knit$set(root.dir = page_workdir)\n```\n\n"
+            )
         frontmatter = re.match(r"\A---\s*\n.*?\n---\s*\n", text, re.DOTALL)
         position = frontmatter.end() if frontmatter else 0
         qmd.write_text(text[:position] + setup + text[position:], encoding="utf-8")
@@ -363,6 +449,9 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
     assets = staging / "assets"
     downloads = staging / "downloads"
     manifest: dict[str, object] = {"pages": [], "assets": [], "downloads": []}
+    execution_positions = {
+        source_page_id(source, ROOT): position for position, source in enumerate(execution_order(ROOT))
+    }
     for path in render.rglob("*"):
         if path.is_file() and path.suffix.lower() in {
             ".png",
@@ -391,7 +480,9 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
         cast_downloads = manifest["downloads"]
         assert isinstance(cast_downloads, list)
         cast_downloads.append(target.relative_to(staging).as_posix())
-    for example in sorted(path for path in (ROOT / "examples").iterdir() if path.is_dir()):
+    for example in sorted(
+        path for path in (ROOT / "examples").iterdir() if path.is_dir() and any(path.rglob("*.py"))
+    ):
         bundle = downloads / "examples" / example.name / f"{example.name}.zip"
         with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
             for source in sorted(example.rglob("*.py")):
@@ -402,25 +493,6 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
     for path in sorted(render.rglob("*.html")):
         page = page_id(path, render)
         content = fragment(path.read_text(encoding="utf-8"))
-        if page.startswith("examples/"):
-            example = page.removeprefix("examples/")
-            example_root = ROOT / "examples" / example
-
-            def download_href(match: re.Match[str], example: str = example, example_root: Path = example_root) -> str:
-                value = Path(match.group(2))
-                source = (example_root / value).resolve()
-                if source.suffix == ".py" and source.is_relative_to(example_root.resolve()) and source.is_file():
-                    relative = source.relative_to(ROOT / "examples").as_posix()
-                    return f'href="/docs/static/downloads/examples/{relative}"'
-                if value == Path(f"{example}.zip"):
-                    return f'href="/docs/static/downloads/examples/{example}/{example}.zip"'
-                return match.group(0)
-
-            content = re.sub(
-                r'href=(["\'])([^"\']+\.(?:py|zip))\1',
-                download_href,
-                content,
-            )
         content = rewrite_urls(content, path, render)
         if SECRET.search(content):
             raise ValueError(f"{path}: fixture configuration leaked into staged fragment")
@@ -440,6 +512,7 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
                 "id": page,
                 "fragment": target.relative_to(staging).as_posix(),
                 "title": re.sub("<[^>]+>", "", title.group(1)).strip() if title else page.replace("/", " ").title(),
+                "order": execution_positions.get(page),
                 "headings": [
                     {"level": int(level), "id": ident, "text": re.sub("<[^>]+>", "", text)}
                     for level, ident, text in headings

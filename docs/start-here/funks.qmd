@@ -1,0 +1,313 @@
+---
+title: Funks
+engine: jupyter
+jupyter: python3
+dml-project-home: research-demo
+depends-on: start-here/dags
+---
+
+A funk is a function packaged as DaggerML data. It can be stored in a DAG,
+called like any other callable node, cached by its actual inputs, and executed
+somewhere other than the authoring process.
+
+Every Python block on this page runs in order during the docs build. The
+definitions are ordinary inline notebook code—the same form you can use while
+exploring interactively.
+
+## Package a Python function
+
+The authoring helpers live in `daggerml.contrib.api`:
+
+```{python}
+import os
+from urllib.parse import urlparse
+
+import daggerml as dml
+from daggerml.api import NodeError
+from daggerml.contrib import api
+from daggerml.contrib.testing import defunkify
+```
+
+`@api.funkify` does not immediately call the decorated function. It creates a
+delayed runnable describing how the function should execute. The default is a
+local script worker.
+
+A script funk's first parameter is its execution `dag`. Every other argument is
+node-like, so use `.value()` when ordinary Python code needs the materialized
+value. The return value becomes the result of a new execution DAG.
+
+## Make source dependencies explicit
+
+The worker receives the funk's source, not the imports and globals surrounding
+it in the authoring process. Import dependencies inside the function when
+possible. For a source-defined helper, use `extra_objs`; use `post_lines` for a
+small explicit definition that must appear in the generated worker module.
+
+```{python}
+SCALE = 100
+
+
+def clamp(value):
+    return max(0, min(value, 1))
+
+
+@api.funkify(extra_objs=(clamp,), post_lines=["SCALE = 100"])
+def normalize(dag, number):
+    return clamp(number.value() / SCALE)
+```
+
+Including these dependencies makes the generated script self-contained and
+makes their source part of the runnable's cache identity. This avoids silently
+reusing old work after an external helper changes.
+
+### How `funkify` serializes
+
+When `funkify` decorates the function, the script executor normalizes the
+function and its explicit source dependencies into the Python string it will
+persist. Capturing source eagerly is what makes this work in a notebook. Comments
+are removed during normalization.
+
+```{python}
+print(normalize.kwargs["script"])
+```
+
+## Compose funks with `prepop`
+
+A funk can call another funk. `prepop` stages values under names in the worker
+DAG before the function body runs, so the outer function does not need to
+receive every helper as an argument.
+
+```{python}
+@api.funkify
+def total(dag, values):
+    return sum(values.value())
+
+
+@api.funkify(
+    prepop={"total": total},
+    tags=["tutorial", "summary"],
+)
+def summarize(dag, values):
+    numbers = values.value()
+    total_node = dag.total(values)
+    return dag.put(
+        {"count": len(numbers), "total": total_node},
+        name="summary",
+    )
+```
+
+Inside `summarize`, `dag.total` is a callable node. Its call produces another
+node in the execution DAG, and putting that node into the returned dictionary
+preserves the relationship.
+
+The optional `tags` belong to every execution DAG produced by this script funk.
+They are normalized, stored, and retained when a cached result is reused.
+
+## Choose and stack executors
+
+Each `funkify` layer is one runnable. The inner `summarize` layer renders and
+runs Python; this outer layer runs that script runnable inside Docker.
+
+```{python}
+containerized_summarize = api.funkify(
+    summarize,
+    uri="docker",
+    image=api.ref("image"),
+    flags=api.ref("docker-flags"),
+)
+```
+
+`api.ref("image")` and `api.ref("docker-flags")` defer those lookups until the
+runnable is put into a DAG. The named nodes must exist first. This is useful
+when execution configuration is produced by earlier DAG work rather than known
+when the function is defined.
+
+Additional wrappers use the same nesting model: for example, SSH or a cluster
+executor can wrap Docker, which wraps the script. Each layer consumes its own
+configuration and forwards its nested runnable.
+
+## Put and call funks
+
+`api.load()` is the delayed counterpart to `dml.load()`: when staged, it imports
+a committed DAG result into the current DAG. Here it imports the small image
+built on the previous page. The docs harness supplies portable Docker flags
+behind the scenes for local and CI execution.
+
+```{python}
+#| include: false
+flags: list[str] = []
+endpoint = os.environ.get("AWS_ENDPOINT_URL")
+if endpoint:
+    parsed = urlparse(endpoint)
+    if parsed.scheme == "http" and parsed.port is not None:
+        flags.extend(
+            [
+                "--add-host=host.docker.internal:host-gateway",
+                "-e",
+                f"AWS_ENDPOINT_URL=http://host.docker.internal:{parsed.port}",
+            ]
+        )
+for key in (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+):
+    if value := os.environ.get(key):
+        flags.extend(["-e", f"{key}={value}"])
+```
+
+```{python}
+dag = dml.new("funks", message="run and reuse funks")
+
+image = dag.put(api.load("docs-image"), name="image")
+dag.put(flags, name="docker-flags")
+
+normalize_node = dag.put(normalize, name="normalize")
+summarize_node = dag.put(containerized_summarize, name="summarize")
+
+normalized = normalize_node(125, name="normalized")
+first = summarize_node([2, 3, 5], name="first")
+cached = summarize_node([2, 3, 5], name="cached")
+```
+
+Putting each delayed runnable produces a callable node. Calling
+`summarize_node(...)` is equivalent to `dag.call(summarize_node, ...)`, but the
+callable form makes composition easier to read. Every call itself is a named
+node in this authoring DAG.
+
+## Errors remain inspectable
+
+A failed funk call raises an error to the author while retaining its named call
+node and failed execution DAG. Catching it allows this authoring DAG to continue
+and commit other useful results.
+
+```{python}
+@api.funkify
+def divide(dag, numerator, denominator):
+    return numerator.value() / denominator.value()
+
+
+divide_node = dag.put(divide, name="divide")
+```
+
+```{python}
+try:
+    divide_node(1, 0, name="failed")
+except dml.Error as error:
+    print(error.message)
+```
+
+After commit, accessing the failed node raises
+`daggerml.api.NodeError`; its `.context()` is the failed function execution DAG,
+including the persisted error and any nodes created before failure.
+
+## Commit the useful results
+
+The failed call is already retained by name. We commit the successful nodes as
+the result of the outer DAG.
+
+```{python}
+dag.commit(
+    {
+        "normalized": normalized,
+        "first": first,
+        "cached": cached,
+    }
+)
+```
+
+## Test function logic without a runtime
+
+`defunkify()` unwraps the innermost script function and supplies lightweight
+node-like arguments. It is useful for fast unit tests of ordinary function
+logic; it does not exercise an executor, remote storage, or caching.
+
+```{python}
+assert defunkify(normalize)(None, 125) == 1
+```
+
+## Inspect caching and execution DAGs
+
+The runnable plus normalized DaggerML arguments form the cache identity. The
+two identical calls above are distinct nodes in `funks`, but both resolve to
+the same completed execution DAG.
+
+```{python}
+recorded = dml.load("funks")
+first_execution = recorded["first"].context(root=False)
+cached_execution = recorded["cached"].context(root=False)
+
+print(recorded.result.value())
+print(first_execution.ref == cached_execution.ref)
+print(first_execution.tags)
+print(first_execution.keys())
+```
+
+`context(root=False)` stops at the immediate function execution. That DAG has
+ordinary names, inputs, a result, tags, and error state, so it can be queried
+like any DAG. Changing the runnable or normalized inputs produces a different
+cache identity. Invalidation is an explicit operation; deleting an authoring
+node is not cache invalidation.
+
+The output comes from executing the blocks above in order. `True`
+confirms cache reuse, while the final names show the prepopulated `total` funk
+and its `summary` result inside the execution DAG.
+
+```{python}
+#| include: false
+assert image.context(root=False).ref == dml.load("docs-image").ref
+assert recorded.result["normalized"].value() == 1
+assert recorded.result["first"].value() == {"count": 3, "total": 10}
+assert recorded.result["cached"].value() == {"count": 3, "total": 10}
+assert first_execution.ref == cached_execution.ref
+assert first_execution.tags == ["summary", "tutorial"]
+assert first_execution.result.value() == {"count": 3, "total": 10}
+
+try:
+    recorded["failed"]
+except NodeError as error:
+    assert error.message == "division by zero"
+    assert error.context().ref
+else:
+    raise AssertionError("the failed funk call must remain inspectable")
+```
+
+## What `funkify` controls
+
+The commonly used arguments are:
+
+- `adapter`: dispatch mechanism; defaults to `local`.
+- `uri`: executor type; defaults to `script`.
+- `prepop`: values staged as named nodes in the worker DAG.
+- `tags`: classifications stored on script execution DAGs.
+- `extra_objs`: additional inspectable definitions copied into script source.
+- `post_lines`: explicit source lines appended to the worker module.
+- Executor-specific keywords such as Docker `image` and `flags`.
+
+Script stdout, stderr, and logging are captured by the supervisor. The generated
+module is named `_daggerml_live`; imports should remain inside the function or
+be injected explicitly. Remote-backed script execution requires `remote.root`.
+
+## References
+
+- [Funks, execution, and cache](../use/concepts/funks-execution-cache.qmd)
+- [Built-in integrations](../extend/reference/built-in-integrations.qmd)
+- [Refresh cached work](../use/guides/refresh-cache.qmd)
+- [Error reference](../use/reference/errors.qmd)
+- [Sharp bits and security](../sharp-bits-and-security.qmd)
+
+## Document metadata
+
+Status: implemented
+
+Purpose: Teach complete funk authoring, composition, execution, testing, error,
+and cache workflows through one live containerized example.
+
+Authority: Introductory `funkify`, delayed-value, runnable-node, executor-stack,
+cache, and function-context workflow.
+
+Scope: Built-in script and Docker execution from Python; extension contracts
+for new executors and adapters belong to Extend, and dagclass convenience
+belongs to the next page.

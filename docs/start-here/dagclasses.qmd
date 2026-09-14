@@ -1,0 +1,375 @@
+---
+title: Dagclasses
+engine: jupyter
+jupyter: python3
+dml-project-home: research-demo
+depends-on: start-here/funks
+---
+
+A dagclass packages values and funks into one reusable, parameterized callable.
+It is useful when a computation has enough named parts that repeatedly wiring
+the same DAG by hand would obscure the work itself.
+
+Every Python block on this page runs in order during the docs build.
+
+## Start with constructor values and an entrypoint
+
+```{python}
+import daggerml as dml
+from daggerml.api import DmlRepoError
+from daggerml.contrib import api
+```
+
+Decorating a class with `@api.dagclass` also makes it a dataclass. Annotated
+fields become constructor arguments. Inside a method, their values are nodes,
+so read them with `.value()` when ordinary Python needs the stored value.
+
+```{python}
+@api.dagclass
+class ScaledTotal:
+    scale: int
+
+    def main(self, values):
+        return self.scale.value() * sum(values.value())
+
+
+job = ScaledTotal(scale=10)
+api.run(job, [2, 3, 5], name="dagclass-total")
+
+recorded = dml.load("dagclass-total")
+print(recorded.result.value())
+print(recorded.keys())
+```
+
+Instantiating `ScaledTotal` compiles its fields and methods into a callable
+namespace. `api.run()` creates a DAG, stages those members in dependency order,
+calls `main` (the default entrypoint), and commits the call node as the DAG's
+result. The committed DAG keeps the members too: here both `scale` and `main`
+remain addressable and trackable after the run.
+
+## Compose methods and name intermediate nodes
+
+Direct `self.member` reads tell the compiler which members a method needs.
+That lets `main` call `clean`, then `total`, without manually passing either
+funk through the constructor.
+
+```{python}
+@api.dagclass
+class NumberPipeline:
+    scale: int
+
+    def clean(self, values):
+        return [int(value) for value in values.value()]
+
+    def total(self, values):
+        return sum(values.value())
+
+    def main(self, values):
+        self.cleaned = self.clean(values)
+        return self.total(self.cleaned).value() * self.scale.value()
+
+
+api.run(NumberPipeline(scale=2), ["2", "4", "6"], name="number-pipeline")
+
+pipeline = dml.load("number-pipeline")
+pipeline_execution = pipeline.result.context(root=False)
+print(pipeline.result.value())
+print(pipeline_execution.keys())
+```
+
+At execution time, `self` is the worker's `Dag`, not the original Python
+object. Assigning `self.cleaned` therefore creates an invocation-local named
+node. It does not mutate the compiled `NumberPipeline` instance. Looking at the
+result's execution context shows that `cleaned` was recorded with the call.
+The call to `total` also returns a node, so `.value()` reads it before ordinary
+Python multiplication.
+
+Methods are ordinary script funks underneath. Their source, dependencies, and
+arguments participate in the same content-addressed cache described on the
+[Funks](funks.qmd) page.
+
+## Reuse a compiled entrypoint in another DAG
+
+A compiled instance holds runnable methods. Stage its entrypoint and call it
+like any other funk.
+
+```{python}
+compiled_pipeline = NumberPipeline(scale=3)
+
+dag = dml.new("reuse-dagclass", message="reuse a compiled dagclass")
+dag.put(999, name="scale")
+pipeline_node = dag.put(compiled_pipeline.main, name="pipeline")
+result = pipeline_node(["1", "2"], name="result")
+dag.commit(result)
+
+print(dml.load("reuse-dagclass").result.value())
+```
+
+The instance is self-contained: its `scale=3` binding travels with it. The
+unrelated caller node named `scale` cannot shadow that binding. This makes a
+dagclass safe to reuse from many independently authored DAGs.
+
+## Nest dagclasses and use comprehensions
+
+A dagclass can be a member of another dagclass. Dependency discovery also sees
+direct member reads inside comprehensions.
+
+```{python}
+@api.dagclass
+class MultiPipeline:
+    pipeline = NumberPipeline(scale=1)
+
+    def main(self, batches):
+        return {
+            name: self.pipeline(values)
+            for name, values in batches.value().items()
+        }
+
+
+api.run(
+    MultiPipeline(),
+    {"small": ["1", "2"], "large": ["3", "4", "5"]},
+    name="multi-pipeline",
+)
+
+print(dml.load("multi-pipeline").result.value())
+```
+
+The parent stages `pipeline` as one callable member, while the nested
+`NumberPipeline` retains its own methods and configuration as part of its cache
+identity. Each comprehension iteration creates a normal tracked call node.
+
+## Choose a different entrypoint
+
+Use `entrypoint=` when `main` is not the clearest public name.
+
+```{python}
+@api.dagclass(entrypoint="calculate")
+class CustomEntrypoint:
+    offset: int
+
+    def calculate(self, value):
+        return self.offset.value() + value.value()
+
+
+api.run(CustomEntrypoint(offset=2), 40, name="custom-entrypoint")
+print(dml.load("custom-entrypoint").result.value())
+```
+
+`api.run()` calls `calculate` here. The rest of the compilation and commit
+behavior is unchanged.
+
+## Import a committed result lazily
+
+`api.load()` is a delayed class member. It becomes a `dag.require()` node only
+when the dagclass is staged, so the new DAG records exactly which prior commit
+it consumed.
+
+```{python}
+@api.dagclass
+class PreviousResult:
+    previous = api.load("number-pipeline")
+
+    def main(self):
+        return self.previous
+
+
+api.run(PreviousResult(), name="previous-result")
+print(dml.load("previous-result").result.value())
+```
+
+This is the dagclass form of the cross-DAG reuse shown on the previous page.
+Use the optional second argument to `api.load(dag_name, node_name)` when the
+class needs a named node instead of the committed result.
+
+## Bind an existing funk into the class namespace
+
+Class members do not have to be methods. An externally defined funk can use
+`api.ref()` to request configuration from whichever dagclass contains it.
+
+```{python}
+@api.funkify(prepop={"offset": api.ref("offset")})
+def add_offset(dag, value):
+    return dag.offset.value() + value.value()
+
+
+@api.dagclass
+class BoundExternalFunk:
+    offset: int
+    adjusted = add_offset
+
+    def main(self, value):
+        return self.adjusted(value)
+
+
+api.run(BoundExternalFunk(offset=7), 5, name="bound-external-funk")
+print(dml.load("bound-external-funk").result.value())
+```
+
+When `BoundExternalFunk(offset=7)` is instantiated, the compiler resolves the
+funk's `offset` reference against that instance and then binds `adjusted` into
+`main`. `prepop` stages that resolved value as `dag.offset` in the funk's worker
+DAG. A reference that cannot be found in the class namespace is an error at
+instantiation, before a worker is started.
+
+## Decorate a method for another executor
+
+Dagclass methods accept the same `@api.funkify` options as standalone funks.
+This one runs in the tiny image built on the [DAGs](dags.qmd) page and reuses
+the Docker flags committed on the [Funks](funks.qmd) page.
+
+```{python}
+@api.dagclass
+class ContainerTotal:
+    image: object
+    flags: object
+    factor: int
+
+    @api.funkify(
+        uri="docker",
+        image=api.ref("image"),
+        flags=api.ref("flags"),
+    )
+    @api.funkify
+    def main(self, values):
+        return self.factor.value() * sum(values.value())
+
+
+funks_dag = dml.load("funks")
+container_job = ContainerTotal(
+    image=dml.load("docs-image").result,
+    flags=funks_dag["docker-flags"],
+    factor=2,
+)
+api.run(container_job, [2, 3, 5], name="container-total")
+
+print(dml.load("container-total").result.value())
+```
+
+The outer decorator runs the inner script funk in Docker. Its `image` and
+`flags` references and the method body's `factor` reference all resolve in the
+same class namespace, through both wrappers. Supplying previously committed
+nodes as constructor values preserves their provenance; the container call and
+its result are still ordinary DAG nodes.
+
+## Catch dependency mistakes during compilation
+
+Because direct `self.member` reads define the dependency graph, the compiler
+can reject missing members and cycles immediately.
+
+```{python}
+@api.dagclass
+class UnknownMember:
+    def main(self, value):
+        return self.missing(value)
+
+
+try:
+    UnknownMember()
+except DmlRepoError as error:
+    print(error.message)
+
+
+@api.dagclass
+class DependencyCycle:
+    def left(self, value):
+        return self.right(value)
+
+    def right(self, value):
+        return self.left(value)
+
+
+try:
+    DependencyCycle()
+except DmlRepoError as error:
+    print(error.message)
+
+
+@api.dagclass
+class ReservedAssignment:
+    def main(self, value):
+        self.put = value
+        return value
+
+
+try:
+    ReservedAssignment()
+except DmlRepoError as error:
+    print(error.message)
+```
+
+The last class in that excerpt also shows a reserved-name error. `Dag` names
+cannot be declared or assigned as class members:
+`dml`, `token`, `ref`, `name`, `message`, `tags`, `argv`, `result`, `keys`,
+`values`, `put`, `require`, `call`, `commit`, `freeze`, `unfreeze`, and
+`cancel`. Those names keep their normal `Dag` meanings inside methods. `dag`
+is not reserved and may be a normal member name.
+
+## Keep dependency syntax direct
+
+Dependency inference is deliberately syntactic. Any direct assignment to
+`self.output` makes `output` local to the invocation for the whole method,
+regardless of control flow. Dynamic item access is invisible to the compiler.
+
+```{python}
+@api.dagclass
+class ConditionalOutput:
+    def main(self, value, ready):
+        if ready.value():
+            self.output = value
+        return self.output
+
+
+@api.dagclass
+class DynamicLookup:
+    offset = 0
+    transform = add_offset
+
+    def main(self, value):
+        return self["transform"](value)
+
+
+assert ConditionalOutput().main.kwargs["prepop"] == {}
+assert DynamicLookup().main.kwargs["prepop"] == {}
+```
+
+Both methods have empty `prepop` mappings, proving that neither direct member
+dependency was inferred. (`DynamicLookup.transform` independently binds the
+`offset` its external funk requested.) `ConditionalOutput` would fail when
+`ready` is false because no `output` node was created. `DynamicLookup.main`
+would perform an ordinary runtime DAG lookup, but compilation cannot order or
+bind that lookup. Prefer direct `self.member` syntax whenever the class topology
+depends on a member.
+
+```{python}
+#| include: false
+assert recorded.result.value() == 100
+assert recorded["scale"].value() == 10
+assert recorded["main"].ref
+assert pipeline.result.value() == 24
+assert "cleaned" in pipeline_execution.keys()
+assert dml.load("reuse-dagclass").result.value() == 9
+assert dml.load("multi-pipeline").result.value() == {"large": 12, "small": 3}
+assert dml.load("custom-entrypoint").result.value() == 42
+assert dml.load("previous-result").result.value() == 24
+assert dml.load("bound-external-funk").result.value() == 12
+assert dml.load("container-total").result.value() == 20
+```
+
+## References
+
+- [Funks](funks.qmd)
+- [Python authoring reference](../use/reference/python-authoring.qmd)
+
+## Document metadata
+
+Status: implemented
+
+Purpose: Show how dagclasses turn reusable parameters and funks into a
+conventional runnable computation through CI-executed inline examples.
+
+Authority: Introductory dagclass compilation, composition, execution, and
+dependency-inference behavior.
+
+Scope: Python dagclass authoring; low-level runnable and executor contracts
+belong to Extend.

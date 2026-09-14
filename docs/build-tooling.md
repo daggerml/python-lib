@@ -13,11 +13,11 @@ release for this R version. Xfun 0.49 retains the knitr API that this pinned
 knitr release needs.
 
 `docs/build.sh` selects Python with `DOCS_PYTHON`, or the `python` on `PATH`,
-and exports that absolute path as `RETICULATE_PYTHON`. The interpreter must be
-the project environment with DaggerML installed. Moto's server executable is
-also required because selected examples use a disposable local S3 endpoint.
-The build validator uses PyYAML from the development/Moto environment; it is
-not a published runtime or optional dependency.
+and exports that absolute path for both reticulate and Quarto's Jupyter engine.
+The interpreter must be the project development environment with DaggerML,
+Jupyter, and ipykernel installed. Moto's server executable is also required
+because selected examples use a disposable local S3 endpoint. These are build
+dependencies, not published runtime or optional dependencies.
 
 Run `bash build-dashboard.sh`. It bootstraps the build-only toolchain, executes
 all QMD cells, validates and stages the results, builds the frontend, and copies
@@ -28,7 +28,7 @@ All executable pages in one build share a fresh temporary workspace. A page may
 declare `depends-on` with a canonical page ID, or a list of IDs; the build
 validates that graph and executes pages in stable topological order. Unknown
 IDs, duplicate dependencies, self-dependencies, and cycles fail validation.
-The `getting-started` page owns the visible creation of the shared example
+The `start-here/get-started` page owns the visible creation of the shared example
 repository.
 
 An executable QMD that uses one DaggerML project declares its workspace-relative
@@ -41,8 +41,20 @@ demonstrate multiple projects keep project selection explicit in their examples
 instead. The complete temporary workspace and build-only environment disappear
 after the build, including on failure.
 
-Canonical executable Python examples live below `docs/examples/`. A
+The documentation has two teaching modes. Start here is a learn-by-doing course:
+important examples are executable, their rendered output is produced during the
+build, and any failure fails CI. Concepts explains behavior with prose and code
+that is explicitly labeled as pseudocode. The build rejects executable cells in
+the Concepts subtree so illustrative code cannot accidentally imply verification.
+
+Executable pages choose an engine by language. Python-only pages that define
+source-inspected functions use Jupyter, so their ordinary inline definitions
+remain inspectable. Pages that demonstrate shell commands use knitr and execute
+them as native Bash cells under strict shell options. Both engines receive the
+same hidden project-home and fixture setup.
+
+Canonical downloadable Python source files live below `docs/examples/`. A
 `{{< dml-source path.py >}}` marker displays the file verbatim and expands to a
-hidden `runpy.run_path` cell at build time. This keeps the file-backed source
-identity required by script-executor inspection while making that same unchanged
-file the published download.
+hidden `runpy.run_path` cell at build time. This makes the same unchanged file
+both the executed example and the published download. Narrative course examples
+that are not downloads stay inline in their QMD pages.
