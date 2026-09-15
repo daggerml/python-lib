@@ -287,17 +287,31 @@ def test_docs_build_003__staging_creates_script_free_fragments_and_manifest(tmp_
     assert manifest["pages"][0]["title"] == "Example"
 
 
-def test_docs_build_005__packaging_build_cleans_and_copies_verified_staging():
+def test_docs_build_005__packaging_build_infers_components_and_supports_overrides():
     script = (ROOT / "build-dashboard.sh").read_text(encoding="utf-8")
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
+    help_result = subprocess.run(
+        ["bash", str(ROOT / "build-dashboard.sh"), "--help"], text=True, capture_output=True, check=True
+    )
+    assert "--auto" in help_result.stdout
+    assert "--full" in help_result.stdout
+    assert "--docs-only" in help_result.stdout
+    assert "--ui-only" in help_result.stdout
+    assert 'mode="auto"' in script
+    assert 'docs_fingerprint="$(fingerprint build-dashboard.sh docs examples src/daggerml pyproject.toml uv.lock)"' in script
+    assert 'ui_fingerprint="$(fingerprint build-dashboard.sh dashboard-ui)"' in script
+    assert 'build_state="$tools/dashboard-build-state"' in script
+    assert 'if [[ "$docs_fingerprint" != "$stored_docs_fingerprint" ]] || ! docs_output_ready' in script
+    assert 'if [[ "$ui_fingerprint" != "$stored_ui_fingerprint" ]] || ! ui_output_ready' in script
     assert 'rm -rf "$staging"' in script
     assert 'bash "$root/docs/build.sh"' in script
     assert "npm run build" in script
+    assert 'rm -rf "$static/docs"' in script
     assert 'cp -R "$staging/." "$static/docs/"' in script
     assert script.index('rm -rf "$staging"') < script.index('bash "$root/docs/build.sh"')
-    assert script.index('bash "$root/docs/build.sh"') < script.index("npm run build")
-    assert script.index("npm run build") < script.index('cp -R "$staging/." "$static/docs/"')
+    assert 'cp -R "$static/docs/." "$preserved_docs/docs/"' in script
+    assert 'cp -R "$preserved_docs/docs/." "$static/docs/"' in script
     assert ci.count("run: bash ./build-dashboard.sh") == 3
 
 
@@ -306,11 +320,11 @@ def test_docs_build__shared_entrypoint_bootstraps_an_isolated_pinned_toolchain()
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert 'tools="${DML_DOCS_TOOLS_ROOT:-$root/.tools}"' in script
-    assert 'MAMBA_ROOT_PREFIX="$tools/mamba"' in script
-    assert 'CONDA_PKGS_DIRS="$tools/mamba/pkgs"' in script
-    assert 'TMPDIR="$tools/tmp"' in script
+    assert 'MAMBA_ROOT_PREFIX="$docs_mamba"' in script
+    assert 'CONDA_PKGS_DIRS="$docs_mamba/pkgs"' in script
+    assert 'TMPDIR="$docs_tmp"' in script
     assert 'python="${DOCS_PYTHON:-$root/.venv/bin/python}"' in script
-    assert 'export QUARTO_PYTHON="$python"' in script
+    assert 'QUARTO_PYTHON="$python"' in script
     for platform in ("osx-arm64", "osx-64", "linux-aarch64", "linux-64"):
         assert f'micromamba_platform="{platform}"' in script
     for package in (

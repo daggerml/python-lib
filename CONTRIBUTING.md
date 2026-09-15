@@ -75,10 +75,17 @@ requests and appreciate your help in improving this project.
 
 ## Documentation Build
 
-- Run the complete executable documentation and dashboard build with:
+- Run the executable documentation and dashboard build with:
   ```bash
   bash build-dashboard.sh
   ```
+- The default `--auto` mode fingerprints repository inputs and rebuilds only
+  stale components. A missing build-state file or packaged output makes that
+  component stale, so a clean checkout performs the complete build.
+- Use `--full` to force documentation and frontend builds from scratch,
+  `--docs-only` to rebuild executable docs, or `--ui-only` to rebuild the
+  frontend while preserving the packaged docs. Run `bash build-dashboard.sh
+  --help` for the command summary.
 - The script installs its pinned Quarto/R toolchain and all related caches under
   the ignored `.tools/` directory. Set `DOCS_PYTHON` when the project interpreter
   is not `.venv/bin/python`:

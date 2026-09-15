@@ -37,15 +37,18 @@ job = ScaledTotal(scale=10)
 api.run(job, [2, 3, 5], name="dagclass-total")
 
 recorded = dml.load("dagclass-total")
+recorded_execution = recorded.result.context(root=False)
 print(recorded.result.value())
 print(recorded.keys())
+print(recorded_execution.keys())
 ```
 
 Instantiating `ScaledTotal` compiles its fields and methods into a callable
 namespace. `api.run()` creates a DAG, stages those members in dependency order,
 calls `main` (the default entrypoint), and commits the call node as the DAG's
-result. The committed DAG keeps the members too: here both `scale` and `main`
-remain addressable and trackable after the run.
+result. The outer DAG records that call; its function-context DAG keeps staged
+dependencies such as `scale`, while the entrypoint runnable is the context's
+first argument. Both remain addressable and trackable after the run.
 
 ## Compose methods and name intermediate nodes
 
@@ -344,8 +347,8 @@ depends on a member.
 ```{python}
 #| include: false
 assert recorded.result.value() == 100
-assert recorded["scale"].value() == 10
-assert recorded["main"].ref
+assert recorded_execution["scale"].value() == 10
+assert isinstance(recorded_execution.argv[0].value(), dml.Runnable)
 assert pipeline.result.value() == 24
 assert "cleaned" in pipeline_execution.keys()
 assert dml.load("reuse-dagclass").result.value() == 9
