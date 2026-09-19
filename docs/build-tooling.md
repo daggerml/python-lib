@@ -32,36 +32,43 @@ Knitr 1.50 requires R 4.5 on Linux aarch64, so 1.49 is the compatible pinned
 release for this R version. Xfun 0.49 retains the knitr API that this pinned
 knitr release needs.
 
-`docs/build.sh` uses `DOCS_PYTHON`, or the repository `.venv/bin/python`, and
-exports that absolute path for both reticulate and Quarto's Jupyter engine.
-The interpreter must be the project development environment with DaggerML,
-Jupyter, and ipykernel installed. Moto's server executable is also required
-because selected examples use a disposable local S3 endpoint. These are build
-dependencies, not published runtime or optional dependencies.
+Python, Node.js/npm, `uv`, Git, `curl`, `tar`, and native build tools are host
+prerequisites. `docs/build.sh` runs `uv sync --group dev --all-extras` and
+`npm ci` by default, then uses `DOCS_PYTHON`, or the synchronized repository
+`.venv/bin/python`, for both reticulate and Quarto's Jupyter engine. The
+interpreter must contain DaggerML, Jupyter, ipykernel, and Moto's server
+executable because selected examples use a disposable local S3 endpoint. These
+are build dependencies, not published runtime or optional dependencies.
 
-Run `bash docs/build.sh`. Its default `--auto` mode fingerprints tracked
-and untracked, non-ignored repository inputs. Documentation inputs include the
-docs, examples, package source, and package/build metadata; frontend inputs are
-the dashboard UI source and build metadata. The ignored
-`.tools/dashboard-build-state` file records the fingerprints from the last
-successful component builds.
+Run `bash docs/build.sh`. The command synchronizes Python and frontend
+dependencies, runs frontend tests, and then uses default `--auto` mode to
+fingerprint tracked and untracked, non-ignored repository inputs.
+Documentation inputs include the docs, package source, and package/build
+metadata; frontend inputs are the dashboard UI source and build metadata. The
+ignored `.tools/dashboard-build-state` file records the fingerprints from the
+last successful component builds.
 
 Missing packaged outputs or a missing state entry makes the corresponding
 component stale. A clean checkout therefore runs the complete build, while a
 docs-only source change reruns the executable docs without recompiling an
 unchanged frontend.
 
-Use `--full` to force both components from scratch, `--docs-only` to rebuild and
-replace only packaged docs, or `--ui-only` to rebuild the frontend while
-preserving existing packaged docs. Use `--full` when an untracked external tool
-or environment change is not represented by repository inputs. `--help` lists
-the modes without bootstrapping build dependencies.
+Use `--full` to force selected outputs after an untracked external tool or
+environment change. Composable `--no-python-sync`, `--no-npm-ci`, and
+`--no-ui-test` options trust existing setup, while `--no-docs` and `--no-ui`
+preserve the corresponding complete packaged component. `--full` never
+re-enables a disabled component. `bash docs/build.sh --help` is the canonical
+reference for prerequisites, every stage and option, skip-state requirements,
+and common command examples; help does not bootstrap dependencies.
 
 The docs component bootstraps the build-only toolchain, executes all QMD cells,
-validates and stages the results, and copies only verified docs into the
-packaged static tree. The frontend component runs the production Vite build.
-Each replacement removes stale files from that component. Cached or frozen
-documentation execution is rejected before rendering.
+and validates and stages the results. The frontend component runs tests and the
+production TypeScript/Vite build. Both components build outside the installed
+package tree. The coordinator combines new output with any deliberately
+preserved component, validates the complete candidate, and only then replaces
+`src/daggerml/dashboard/static/`; failures retain the prior packaged dashboard.
+Each successful replacement removes stale files. Cached or frozen documentation
+execution is rejected before rendering.
 
 All executable pages in one build share a fresh temporary workspace. A page may
 declare `depends-on` with a canonical page ID, or a list of IDs; the build

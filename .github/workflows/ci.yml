@@ -90,20 +90,12 @@ jobs:
           python-version: "3.13"
       - name: Install uv
         run: pip install uv==0.11.7
-      - name: Sync Python dependencies
-        run: uv sync --group dev --all-extras
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: dashboard-ui/package-lock.json
-      - name: Install dashboard dependencies
-        working-directory: dashboard-ui
-        run: npm ci
-      - name: Test dashboard
-        working-directory: dashboard-ui
-        run: npm test
       - name: Build verified dashboard assets
         env:
           DOCS_PYTHON: ${{ github.workspace }}/.venv/bin/python
@@ -140,17 +132,12 @@ jobs:
           python-version: "3.13"
       - name: Install uv
         run: pip install uv==0.11.7
-      - name: Sync Python dependencies
-        run: uv sync --group dev --all-extras
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: dashboard-ui/package-lock.json
-      - name: Install dashboard dependencies
-        working-directory: dashboard-ui
-        run: npm ci
       - name: Build verified dashboard assets
         env:
           DOCS_PYTHON: ${{ github.workspace }}/.venv/bin/python
@@ -184,17 +171,12 @@ jobs:
           python-version: "3.13"
       - name: Install uv
         run: pip install uv==0.11.7
-      - name: Sync Python dependencies
-        run: uv sync --group dev --all-extras
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: dashboard-ui/package-lock.json
-      - name: Install dashboard dependencies
-        working-directory: dashboard-ui
-        run: npm ci
       - name: Build verified dashboard assets
         env:
           DOCS_PYTHON: ${{ github.workspace }}/.venv/bin/python

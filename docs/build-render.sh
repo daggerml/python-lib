@@ -2,7 +2,8 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-rm -rf "$root/docs/build-staging"
+staging="${DOCS_BUILD_STAGING:-$root/docs/build-staging}"
+rm -rf "$staging"
 python="${DOCS_PYTHON:-}"
 if [[ -z "$python" ]] && command -v python >/dev/null; then
   python="$(command -v python)"
@@ -46,7 +47,7 @@ cleanup() {
     quarto render "$root/docs/build-teardown.qmd" --output-dir "$work/teardown" || teardown_status=$?
   rm -rf "$work"
   if [[ $status -ne 0 || $teardown_status -ne 0 ]]; then
-    rm -rf "$root/docs/build-staging"
+    rm -rf "$staging"
   fi
   if [[ $status -eq 0 && $teardown_status -ne 0 ]]; then
     status=$teardown_status
@@ -69,4 +70,4 @@ source "$work/fixture.env"
 "$python" "$root/docs/build.py" prepare --work "$work/source"
 export DOCS_SOURCE_ROOT="$work/source"
 quarto render "$work/source" --output-dir "$work/render"
-"$python" "$root/docs/build.py" stage --render "$work/render" --staging "$root/docs/build-staging"
+"$python" "$root/docs/build.py" stage --render "$work/render" --staging "$staging"

@@ -91,22 +91,27 @@ requests and appreciate your help in improving this project.
 
 ## Documentation Build
 
-- Run the executable documentation and dashboard build with:
+- Python, Node.js/npm, `uv`, Git, `curl`, `tar`, and the native package build
+  toolchain are host prerequisites. The build command owns project dependency
+  setup, frontend tests, the pinned Quarto/R bootstrap, documentation execution,
+  frontend compilation, and packaged-output validation:
   ```bash
-   bash docs/build.sh
+  bash docs/build.sh
   ```
-- The default `--auto` mode fingerprints repository inputs and rebuilds only
-  stale components. A missing build-state file or packaged output makes that
-  component stale, so a clean checkout performs the complete build.
-- Use `--full` to force documentation and frontend builds from scratch,
-  `--docs-only` to rebuild executable docs, or `--ui-only` to rebuild the
-   frontend while preserving the packaged docs. Run `bash docs/build.sh
-  --help` for the command summary.
+- The default automatic mode runs `uv sync`, `npm ci`, and frontend tests, then
+  fingerprints repository inputs and rebuilds stale components. A clean checkout
+  therefore performs the complete verified build. Use composable `--no-*` flags
+  to trust existing dependencies or preserve one packaged component, and use
+  `--full` to force selected outputs. Run `bash docs/build.sh --help` for every
+  option, stage interaction, and common command example.
+- Documentation and frontend output are assembled away from the installed
+  package tree. The existing packaged dashboard is replaced only after the
+  complete candidate validates, so failed builds retain the prior output.
 - The script installs its pinned Quarto/R toolchain and all related caches under
   the ignored `.tools/` directory. Set `DOCS_PYTHON` when the project interpreter
   is not `.venv/bin/python`:
   ```bash
-   DOCS_PYTHON="/path/to/python" bash docs/build.sh
+  DOCS_PYTHON="/path/to/python" bash docs/build.sh
   ```
 - The build executes all QMD examples against disposable fixtures; do not use it as a substitute for the full test suite.
 

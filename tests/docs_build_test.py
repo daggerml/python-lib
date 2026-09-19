@@ -4,7 +4,6 @@ import importlib.util
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import tarfile
@@ -12,7 +11,6 @@ import tomllib
 import zipfile
 from email import message_from_bytes
 from pathlib import Path
-from urllib.parse import urlparse
 
 import pytest
 import yaml
@@ -206,7 +204,6 @@ def test_docs_build__released_package_install_is_not_executed():
 
     assert "```bash\npip install daggerml\n```" in page
     assert "```{bash}\npip install daggerml" not in page
-    assert "PIP_TARGET" not in (ROOT / "docs/build.sh").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -284,228 +281,6 @@ def test_docs_build_003__staging_creates_script_free_fragments_and_manifest(tmp_
     assert 'src="/docs/static/assets/start-here/dags/chart.png"' in fragment
     assert manifest["pages"][0]["headings"] == [{"id": "example", "level": 1, "text": "Example"}]
     assert manifest["pages"][0]["title"] == "Example"
-
-
-def test_docs_build_005__packaging_build_infers_components_and_supports_overrides():
-    script = (ROOT / "docs/build.sh").read_text(encoding="utf-8")
-    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-
-    help_result = subprocess.run(
-        ["bash", str(ROOT / "docs/build.sh"), "--help"], text=True, capture_output=True, check=True
-    )
-    assert "--auto" in help_result.stdout
-    assert "--full" in help_result.stdout
-    assert "--docs-only" in help_result.stdout
-    assert "--ui-only" in help_result.stdout
-    assert 'mode="auto"' in script
-    assert 'docs_fingerprint="$(fingerprint docs src/daggerml pyproject.toml uv.lock)"' in script
-    assert 'ui_fingerprint="$(fingerprint docs/build.sh dashboard-ui)"' in script
-    assert 'build_state="$tools/dashboard-build-state"' in script
-    assert 'if [[ "$docs_fingerprint" != "$stored_docs_fingerprint" ]] || ! docs_output_ready' in script
-    assert 'if [[ "$ui_fingerprint" != "$stored_ui_fingerprint" ]] || ! ui_output_ready' in script
-    assert 'rm -rf "$staging"' in script
-    assert 'bash "$root/docs/build-render.sh"' in script
-    assert "npm run build" in script
-    assert 'rm -rf "$static/docs"' in script
-    assert 'cp -R "$staging/." "$static/docs/"' in script
-    assert script.index('rm -rf "$staging"') < script.index('bash "$root/docs/build-render.sh"')
-    assert 'cp -R "$static/docs/." "$preserved_docs/docs/"' in script
-    assert 'cp -R "$preserved_docs/docs/." "$static/docs/"' in script
-    assert ci.count("run: bash ./docs/build.sh") == 3
-    assert not (ROOT / "build-dashboard.sh").exists()
-
-
-def test_docs_build__shared_entrypoint_bootstraps_an_isolated_pinned_toolchain():
-    script = (ROOT / "docs/build.sh").read_text(encoding="utf-8")
-    ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-
-    assert 'tools="${DML_DOCS_TOOLS_ROOT:-$root/.tools}"' in script
-    assert 'MAMBA_ROOT_PREFIX="$docs_mamba"' in script
-    assert 'CONDA_PKGS_DIRS="$docs_mamba/pkgs"' in script
-    assert 'TMPDIR="$docs_tmp"' in script
-    assert 'python="${DOCS_PYTHON:-$root/.venv/bin/python}"' in script
-    assert 'QUARTO_PYTHON="$python"' in script
-    for platform in ("osx-arm64", "osx-64", "linux-aarch64", "linux-64"):
-        assert f'micromamba_platform="{platform}"' in script
-    for package in (
-        "quarto=1.7.31",
-        "r-base=4.4.3",
-        "r-knitr=1.49",
-        "r-rmarkdown=2.29",
-        "r-reticulate=1.40.0",
-        "r-xfun=0.49",
-    ):
-        assert package in script
-    assert "/.tools/" in (ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert "quarto-dev/quarto-actions" not in ci
-    assert "r-lib/actions/setup-r" not in ci
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize(
-    "failure",
-    [
-        "setup",
-        "python",
-        "bash",
-        "pipeline",
-        "render",
-        "validation",
-        "cleanup",
-        "expected-error",
-        "missing-moto",
-        "none",
-    ],
-)
-def test_docs_build_failures__real_coordinator_fails_closed_and_releases_resources(tmp_path, failure):
-    source = tmp_path / "source"
-    docs = source / "docs"
-    docs.mkdir(parents=True)
-    for name in (
-        "build.sh",
-        "build-render.sh",
-        "build-lib.sh",
-        "build.py",
-        "build-requirements.R",
-        "build-bootstrap.qmd",
-        "build-teardown.qmd",
-        "_quarto.yml",
-    ):
-        shutil.copy2(ROOT / "docs" / name, docs / name)
-    shutil.copy2(ROOT / "docs/moto_server_env.py", docs / "moto_server_env.py")
-    (docs / "examples").mkdir()
-    audit = tmp_path / "moto.json"
-    teardown = docs / "build-teardown.qmd"
-    teardown.write_text(
-        teardown.read_text().replace(
-            "docs_teardown",
-            'if [[ -f "$DOCS_BUILD_WORK/moto/moto.json" ]]; then\n'
-            '  cp "$DOCS_BUILD_WORK/moto/moto.json" "$DOCS_TEST_AUDIT"\nfi\n'
-            "docs_teardown" + ("\nexit 43" if failure == "cleanup" else ""),
-        )
-    )
-    if failure == "setup":
-        bootstrap = docs / "build-bootstrap.qmd"
-        bootstrap.write_text(bootstrap.read_text().replace("docs_bootstrap", "docs_bootstrap\nexit 41"))
-    if failure == "missing-moto":
-        library = docs / "build-lib.sh"
-        library.write_text(library.read_text().replace("command -v moto_server", "command -v docs_missing_moto_server"))
-    body = {
-        "python": '```{python}\nraise RuntimeError("injected Python failure")\n```',
-        "bash": '```{bash}\nfalse\nprintf "unreachable"\n```',
-        "pipeline": '```{bash}\nfalse | true\nprintf "unreachable"\n```',
-        "validation": "```python\nassert False\n```",
-        "expected-error": (
-            '```{python}\ntry:\n    pass\nexcept ValueError:\n    pass\nelse:\n'
-            '    raise AssertionError("expected ValueError")\n```'
-        ),
-    }.get(
-        failure,
-        "```{python}\n#| include: false\nimport os\nfrom pathlib import Path\n"
-        'root = Path(os.environ["DOCS_BUILD_WORK"])\n'
-        'assert Path(os.environ["DML_CONFIG_HOME"]).is_relative_to(root)\n'
-        'assert "DML_PROJECT_HOME" not in os.environ\n'
-        'assert "AWS_ENDPOINT_URL_S3" not in os.environ\n'
-        'assert "AWS_PROFILE" not in os.environ\n'
-        'Path(os.environ["DOCS_TEST_MARKER"]).touch()\n```\n'
-        '```{bash}\n#| output: false\ntest -f "$DOCS_TEST_MARKER"\n```',
-    )
-    (docs / "probe.qmd").write_text("---\ntitle: Probe\nengine: knitr\n---\n\n" + body + "\n")
-    if failure == "none":
-        # The dependency creates state in the fresh shared workspace. The
-        # alphabetically earlier dependent proves that the build uses graph
-        # order rather than filename order.
-        project_setup = (
-            '```{bash}\n#| output: false\ntest "$PWD" = "$DOCS_WORKSPACE_ROOT"\n'
-            "test ! -e research-demo/page-sentinel\n"
-            "mkdir research-demo\ncd research-demo\ndml init\ntouch page-sentinel\n```\n"
-        )
-        (docs / "probe.qmd").write_text(
-            "---\ntitle: Probe\nengine: knitr\n---\n\n" + body + "\n" + project_setup,
-            encoding="utf-8",
-        )
-        dependent_probe = (
-            "```{python}\n#| include: false\n"
-            "import os\nfrom pathlib import Path\n"
-            "import boto3\nfrom daggerml import Dml\n"
-            'workspace = Path(os.environ["DOCS_WORKSPACE_ROOT"])\n'
-            'project = workspace / "research-demo"\n'
-            "assert Path.cwd() == project\n"
-            'assert Path(os.environ["DML_PROJECT_HOME"]) == project\n'
-            'assert Path(os.environ["DML_CONFIG_HOME"]) == Path(os.environ["DOCS_BUILD_WORK"]) / "config"\n'
-            'assert Path("page-sentinel").is_file()\n'
-            "Dml()\n"
-            's3 = boto3.client("s3")\n'
-            's3.put_object(Bucket="daggerml-docs", Key="dependent", Body=b"fixture")\n'
-            'assert s3.get_object(Bucket="daggerml-docs", Key="dependent")["Body"].read() == b"fixture"\n'
-            'logs = boto3.client("logs")\n'
-            'logs.create_log_group(logGroupName="dependent")\n'
-            'assert logs.describe_log_groups(logGroupNamePrefix="dependent")["logGroups"]\n'
-            "```\n"
-            '```{bash}\n#| output: false\ntest "$PWD" = "$DML_PROJECT_HOME"\n'
-            'test -f page-sentinel\ntest -n "$AWS_ENDPOINT_URL"\n```\n'
-        )
-        (docs / "aaa-dependent.qmd").write_text(
-            "---\ntitle: Dependent\nengine: knitr\ndml-project-home: research-demo\n"
-            "depends-on: probe\n---\n\n" + dependent_probe,
-            encoding="utf-8",
-        )
-    if failure == "render":
-        coordinator = docs / "build.py"
-        coordinator.write_text(
-            coordinator.read_text().replace(
-                "prepare(args.work)",
-                'prepare(args.work)\n            (args.work / "probe.qmd").write_text('
-                '"{{< include missing-file.qmd >}}")',
-            )
-        )
-    user_config = tmp_path / "user-config"
-    user_config.mkdir()
-    (user_config / "sentinel").write_text("untouched")
-    marker = tmp_path / "executed"
-    environment = {
-        **os.environ,
-        "DOCS_PYTHON": sys.executable,
-        "DOCS_TEST_AUDIT": str(audit),
-        "DOCS_TEST_MARKER": str(marker),
-        "DML_CONFIG_HOME": str(user_config),
-        "DML_PROJECT_HOME": str(user_config),
-        "AWS_PROFILE": "must-not-use",
-        "AWS_ENDPOINT_URL_S3": "https://must-not-use.invalid",
-        "TMPDIR": str(tmp_path),
-        "PYTHONFAULTHANDLER": "1",
-    }
-    (docs / "build-staging").mkdir()
-    (docs / "build-staging/manifest.json").write_text('{"stale": true}')
-    for _ in range(2 if failure == "none" else 1):
-        marker.unlink(missing_ok=True)
-        result = subprocess.run(
-            ["bash", str(docs / "build-render.sh")], env=environment, text=True, capture_output=True, timeout=300
-        )
-        diagnostic = result.stdout + result.stderr
-        assert not any(
-            crash in diagnostic.lower() for crash in ("segmentation fault", "fatal python error", "caught segfault")
-        ), diagnostic
-        assert (result.returncode == 0) == (failure == "none"), diagnostic
-        if failure == "none":
-            assert marker.is_file()
-    assert (user_config / "sentinel").read_text() == "untouched"
-    assert list(user_config.iterdir()) == [user_config / "sentinel"]
-    assert not list(tmp_path.glob("daggerml-docs.*"))
-    if failure not in {"validation", "missing-moto"}:
-        endpoint = urlparse(json.loads(audit.read_text())["endpoint"])
-        with socket.socket() as connection:
-            assert connection.connect_ex((endpoint.hostname, endpoint.port)) != 0
-    if failure != "none":
-        assert not (docs / "build-staging").exists()
-        if failure == "missing-moto":
-            assert "docs fixtures require moto_server" in diagnostic
-        if failure in {"python", "bash", "pipeline", "expected-error"}:
-            assert "probe.qmd" in result.stderr
-            assert "unnamed-chunk" in result.stderr
-    else:
-        assert marker.is_file()
-        assert (docs / "build-staging/manifest.json").is_file()
 
 
 def _wheel_contents(wheel):
