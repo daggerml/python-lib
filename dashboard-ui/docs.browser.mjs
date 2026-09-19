@@ -11,8 +11,17 @@ const output = process.env.BROWSER_OUTPUT;
 assert.ok(output, "BROWSER_OUTPUT must name an evidence directory");
 await mkdir(output, { recursive: true });
 const pages = [
-  { id: "start-here", title: "DaggerML", fragment: "fragments/start-here.html", headings: [] },
-  { id: "start-here/dags", title: "DAGs", fragment: "fragments/start-here/dags.html", headings: [{ id: "source", level: 2, text: "Source" }] },
+  { id: "extend/executors", title: "Executors", fragment: "fragments/extend/executors.html", order: 13, headings: [] },
+  { id: "use/sharing", title: "Sharing", fragment: "fragments/use/sharing.html", order: 10, headings: [] },
+  { id: "start-here", title: "DaggerML", fragment: "fragments/start-here.html", order: 0, headings: [] },
+  { id: "extend/codecs", title: "Codecs", fragment: "fragments/extend/codecs.html", order: 11, headings: [] },
+  { id: "use/projects", title: "Projects", fragment: "fragments/use/projects.html", order: 5, headings: [{ id: "configure", level: 2, text: "Configure" }] },
+  { id: "start-here/dags", title: "DAGs", fragment: "fragments/start-here/dags.html", order: 2, headings: [{ id: "source", level: 2, text: "Source" }] },
+  { id: "use/artifacts", title: "Artifacts", fragment: "fragments/use/artifacts.html", order: 6, headings: [] },
+  { id: "extend/adapters", title: "Adapters", fragment: "fragments/extend/adapters.html", order: 12, headings: [{ id: "transport", level: 2, text: "Transport" }] },
+  { id: "use/execution", title: "Execution", fragment: "fragments/use/execution.html", order: 7, headings: [] },
+  { id: "use/inspection", title: "Inspection", fragment: "fragments/use/inspection.html", order: 8, headings: [] },
+  { id: "use/runtimes", title: "Runtimes", fragment: "fragments/use/runtimes.html", order: 9, headings: [] },
 ];
 const script = 'print("verified example")\n';
 // A valid empty ZIP tests binary download handling independently of packaging.
@@ -21,6 +30,8 @@ const fixtures = new Map([
   ["/docs/static/manifest.json", { contentType: "application/json", body: JSON.stringify({ pages }) }],
   ["/docs/static/fragments/start-here.html", { contentType: "text/html", body: '<h1>Documentation</h1><p>Use, extend, and develop DaggerML.</p><a href="/docs/start-here/dags">DAGs</a>' }],
   ["/docs/static/fragments/start-here/dags.html", { contentType: "text/html", body: '<h1>DAGs</h1><p>A canonical script with matching downloads.</p><h2 id="source">Source</h2><pre><code>print("verified example")</code></pre><a href="/docs/static/downloads/one.py" download>Download script</a><p><a href="/docs/static/downloads/one.zip" download>Download bundle</a></p><a href="/docs/start-here">Documentation home</a>' }],
+  ["/docs/static/fragments/use/projects.html", { contentType: "text/html", body: '<h1>Projects</h1><p>Continue the executable research course.</p><h2 id="configure">Configure</h2><p>Inspect and configure one durable project.</p>' }],
+  ["/docs/static/fragments/extend/adapters.html", { contentType: "text/html", body: '<h1>Adapters</h1><p>Follow delayed authoring to an executable transport.</p><h2 id="transport">Transport</h2><p>Move one operation across the boundary.</p>' }],
   ["/docs/static/downloads/one.py", { contentType: "text/x-python", filename: "one.py", body: script }],
   ["/docs/static/downloads/one.zip", { contentType: "application/zip", filename: "one.zip", body: bundle }],
 ]);
@@ -105,7 +116,25 @@ try {
         assert.equal(await globalNav.getByRole("button", { name: "Docs", exact: true }).getAttribute("aria-current"), "page");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "Layout must not overflow the viewport");
         const evidence = `${viewport.width}-${theme}`;
-        await page.screenshot({ path: join(output, `${evidence}.png`), fullPage: true });
+
+        const use = navigation.locator("details").filter({ has: page.locator("summary", { hasText: "Use" }) });
+        await use.locator("summary").click();
+        assert.deepEqual(await use.getByRole("button").allTextContents(), ["Projects", "Artifacts", "Execution", "Inspection", "Runtimes", "Sharing"]);
+        await use.getByRole("button", { name: "Projects" }).click();
+        await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
+        assert.equal(await page.getByRole("button", { name: "Projects", exact: true }).getAttribute("aria-current"), "page");
+        assert.equal(await page.getByLabel("On this page").getByRole("button", { name: "Configure" }).isVisible(), true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "Use layout must not overflow the viewport");
+        await page.screenshot({ path: join(output, `${evidence}-use.png`), fullPage: true });
+
+        const extend = navigation.locator("details").filter({ has: page.locator("summary", { hasText: "Extend" }) });
+        await extend.locator("summary").click();
+        assert.deepEqual(await extend.getByRole("button").allTextContents(), ["Codecs", "Adapters", "Executors"]);
+        await extend.getByRole("button", { name: "Adapters" }).click();
+        await page.getByRole("heading", { name: "Adapters", exact: true }).waitFor();
+        assert.equal(await page.getByLabel("On this page").getByRole("button", { name: "Transport" }).isVisible(), true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "Extend layout must not overflow the viewport");
+        await page.screenshot({ path: join(output, `${evidence}-extend.png`), fullPage: true });
         await tabTo(globalNav.getByRole("button", { name: "Home", exact: true }));
         await page.keyboard.press("Enter");
         assert.equal(new URL(page.url()).pathname, "/");

@@ -362,17 +362,5 @@ assert dml.load("container-total").result.value() == 20
 ## References
 
 - [Funks](funks.qmd)
-- [Python authoring reference](../use/python-authoring.qmd)
-
-## Document metadata
-
-Status: implemented
-
-Purpose: Show how dagclasses turn reusable parameters and funks into a
-conventional runnable computation through CI-executed inline examples.
-
-Authority: Introductory dagclass compilation, composition, execution, and
-dependency-inference behavior.
-
-Scope: Python dagclass authoring; low-level runnable and executor contracts
-belong to Extend.
+- [Projects](../use/projects.qmd)
+- [Inspection](../use/inspection.qmd)

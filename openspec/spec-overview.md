@@ -10,18 +10,18 @@ When a concept is not listed here, treat it as unresolved rather than guessing f
 
 | concept | authority | scope |
 | --- | --- | --- |
-| Public API behavior | `docs/use/python-authoring.qmd`, `docs/use/dags-nodes-results.qmd`, `docs/use/error-reference.qmd` | Public Python authoring semantics, node wrappers, DAG-call staging behavior, and user-visible API errors. |
-| CLI behavior | `docs/use/cli.qmd` | User-visible CLI commands, arguments, and CLI semantics. |
-| Execution and runtime behavior | `docs/use/configuration.qmd`, `docs/use/funks-execution-cache.qmd`, `src/daggerml/_core/README.md` | Runtime configuration, execution flow, cache behavior, and lifecycle semantics. |
-| Cache publication and cache identity | `docs/use/funks-execution-cache.qmd`, `src/daggerml/_core/README.md` | Runtime cache publication behavior, cache identity, and remote execution state. |
-| Storage and object persistence | `docs/use/artifacts-data-codecs.qmd`, `docs/glossary.qmd`, `src/daggerml/_core/README.md`, `docs/use/artifacts.qmd` | Storage model, references, GC-adjacent behavior, and external data persistence. |
-| Commit and DAG semantics | `docs/use/history-remotes.qmd`, `docs/use/dags-nodes-results.qmd`, `src/daggerml/_core/README.md` | Commit objects, DAG model semantics, and repository operations. |
-| Remote sync and protocol | `docs/use/history-remotes.qmd`, `src/daggerml/_core/README.md` | Remote lifecycle, sync protocol semantics, and remote operations behavior. |
-| Codec encoding and import/export behavior | `docs/extend/codec-contracts.qmd`, `docs/use/artifacts-data-codecs.qmd` | Codec registry behavior, encoding rules, and import/export semantics. |
-| Extension authoring API | `docs/use/author-a-dag.qmd`, `docs/extend/extension-model.qmd` | `daggerml.contrib.api` decorators, delayed actions, and execution helpers. |
-| Extension runtime lifecycle | `docs/extend/adapter-operations.qmd`, `docs/extend/executor-lifecycle.qmd`, `src/daggerml/_core/README.md` | Adapter/executor pairing, execution-state transitions, and deployment-specific execution behavior. |
-| Extension plugin packaging and discovery | `docs/extend/plugin-api.qmd` | Adapter, executor, codec, and custom dashboard plugin packaging and discovery behavior. |
-| Extension S3 utility behavior | `docs/use/artifacts.qmd`, `docs/extend/codec-contracts.qmd` | `S3Store`, artifact URI behavior, and dataframe serialization. |
+| Public API behavior | `docs/start-here/`, `docs/use/artifacts.qmd`, `docs/use/inspection.qmd` | Public Python authoring semantics, node wrappers, DAG-call staging behavior, and user-visible API errors. Public `Projection` inspection belongs to Inspection, not codec normalization. |
+| CLI behavior | `docs/use/` and generated `dml --help` | User-visible CLI commands, arguments, and CLI semantics in their owning workflows. |
+| Execution and runtime behavior | `docs/use/execution.qmd`, `docs/use/runtimes.qmd`, `src/daggerml/_core/README.md` | Runtime configuration, execution flow, cache behavior, and lifecycle semantics. |
+| Cache publication and cache identity | `docs/use/execution.qmd`, `docs/use/runtimes.qmd`, `src/daggerml/_core/README.md` | Runtime cache publication behavior, cache identity, and remote execution state. |
+| Storage and object persistence | `docs/use/artifacts.qmd`, `docs/glossary.qmd`, `src/daggerml/_core/README.md` | Storage model, references, GC-adjacent behavior, and external data persistence. |
+| Commit and DAG semantics | `docs/use/inspection.qmd`, `docs/use/sharing.qmd`, `src/daggerml/_core/README.md` | Commit objects, DAG model semantics, and repository operations. |
+| Remote sync and protocol | `docs/use/sharing.qmd`, `src/daggerml/_core/README.md` | Remote lifecycle, sync protocol semantics, and remote operations behavior. |
+| Codec normalization and conversion | `docs/extend/codecs.qmd`, `docs/use/artifacts.qmd` | Codecs owns custom conversion and `ProjectionCodec` internals; Artifacts owns selecting installed codecs for durable values. |
+| Extension authoring API | `docs/start-here/funks.qmd`, `docs/extend/adapters.qmd` | `daggerml.contrib.api` decorators, delayed actions, and delayed-lowering chronology. |
+| Extension runtime lifecycle | `docs/extend/adapters.qmd`, `docs/extend/executors.qmd`, `src/daggerml/_core/README.md` | Adapters own delayed authoring, runnable resolution, concrete handoff, and transport; Executors own delegated backend-specific construction and lifecycle behavior. |
+| Extension plugin packaging and discovery | `docs/extend/`, `src/daggerml/dashboard/README.md` | Adapter, executor, codec, and custom dashboard plugin packaging and discovery behavior. |
+| Extension S3 utility behavior | `docs/use/artifacts.qmd` | General `S3Store`, artifact URI, and external-payload behavior. |
 | Bundled agent skills | `openspec/specs/bundled-agent-skills/spec.md` | Portable `authoring`, `repository`, and `inspection` guidance resources. |
 | Local research dashboard | `src/daggerml/dashboard/README.md`, `dashboard-ui/README.md`, and dashboard OpenSpec capabilities | Dashboard launcher, local HTTP API, read-only projections, cancellation confirmation, redaction, executor introspection, and packaged frontend assets. |
 | Dashboard revision navigation | `openspec/specs/dashboard-revision-navigation/spec.md` | Home, canonical project-and-commit routes, revision-scoped reads, refs, and current-versus-historical presentation. |

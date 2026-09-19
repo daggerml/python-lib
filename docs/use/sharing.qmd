@@ -1,0 +1,73 @@
+---
+title: Sharing
+engine: knitr
+dml-project-home: research-demo
+depends-on: use/runtimes
+---
+
+Commits are trees of named DAG snapshots. Branches and tags point to commits;
+`HEAD` selects the checkout. This page publishes the completed course project
+to the fixture-owned Moto remote, then uses separate satellite projects for
+reuse and shallow-history operations.
+
+## Publish and inspect history
+
+```{bash}
+dml log | jq -e 'length > 0'
+dml show | jq -e '.dags["course-execution"] and .dags["course-artifacts"]'
+dml tag create course-v1 >/dev/null
+dml tag list | jq -e '.[] | select(.name == "course-v1")'
+dml config show | jq -e --arg root "$DML_REMOTE_ROOT" '.remote.root == $root'
+dml push >/dev/null
+dml branch list --remote | jq -e '.[] | select(.name == "main")'
+```
+
+`dml log`, `show`, and `diff` inspect history; branches can have one upstream,
+while tags do not. `push` publishes the current attached branch to its upstream;
+the local tag remains an exact name for the course commit. Endpoint listing is
+read-only: it does not fetch commits or update local tracking refs.
+
+## Reuse from satellite projects
+
+The satellites are deliberately outside `research-demo`, so fetch, dependency,
+and shallow-history exercises cannot disturb the course project.
+
+```{bash}
+reuse_home="$DOCS_WORKSPACE_ROOT/course-reuse"
+dep_home="$DOCS_WORKSPACE_ROOT/course-dependency"
+shallow_home="$DOCS_WORKSPACE_ROOT/course-shallow"
+mkdir "$reuse_home" "$dep_home" "$shallow_home"
+
+(
+  cd "$reuse_home"
+  dml init
+  dml config set remote.root "$DML_REMOTE_ROOT" >/dev/null
+  dml fetch main >/dev/null
+  dml dag checkout main course-execution --remote --name reused-execution
+  dml show | jq -e '.dags["reused-execution"]'
+)
+
+(
+  cd "$dep_home"
+  dml init
+  dml dep add tutorial "$DML_REMOTE_ROOT"
+  dml fetch --dep tutorial main >/dev/null
+  dml dag checkout main course-artifacts --dep tutorial --name dependency-artifacts
+  dml show | jq -e '.dags["dependency-artifacts"]'
+)
+
+(
+  cd "$shallow_home"
+  dml --remote-root "$DML_REMOTE_ROOT" clone main --depth 1 --project-home .
+  dml show | jq -e '.dags["course-execution"]'
+  dml fetch --unshallow main >/dev/null
+)
+```
+
+`dml.load("name")` reads a committed DAG and `dag.require("name")` imports
+one into new work. A shallow clone contains the selected commit's complete tree,
+DAGs, nodes, data, and imports; only older parents may be unavailable. Use a
+larger `fetch --depth N` to deepen history or `fetch --unshallow` to retrieve
+it all. Dependencies are import-only endpoints, not the project's cache or
+execution remote. A normal push can advance an observed shallow branch; creating
+a remote branch or forcing publication requires complete ancestry.

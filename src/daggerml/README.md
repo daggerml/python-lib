@@ -6,7 +6,8 @@ executors, codecs, and extension helpers. `_core/` owns repository semantics;
 callers use its package-level public exports rather than its implementation
 submodules.
 
-Use the flat [Python authoring](../../docs/use/python-authoring.qmd) and
-[CLI](../../docs/use/cli.qmd) references for user-facing behavior. Normative
+Use the executable [Start here](../../docs/start-here/index.qmd) course for
+authoring and the ordered [Use](../../docs/use/projects.qmd) course for project,
+artifact, execution, inspection, runtime, and sharing workflows. Normative
 repository and runtime contracts are mapped in
 [`openspec/spec-overview.md`](../../openspec/spec-overview.md).

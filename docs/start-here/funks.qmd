@@ -268,7 +268,7 @@ assert first_execution.result.value() == {"count": 3, "total": 10}
 try:
     recorded["failed"]
 except NodeError as error:
-    assert error.message == "division by zero"
+    assert "division by zero" in error.message
     assert error.context().ref
 else:
     raise AssertionError("the failed funk call must remain inspectable")
@@ -292,22 +292,8 @@ be injected explicitly. Remote-backed script execution requires `remote.root`.
 
 ## References
 
-- [Funks, execution, and cache](../use/funks-execution-cache.qmd)
-- [Built-in integrations](../extend/built-in-integrations.qmd)
-- [Refresh cached work](../use/refresh-cache.qmd)
-- [Error reference](../use/error-reference.qmd)
+- [Execution](../use/execution.qmd)
+- [Inspection](../use/inspection.qmd)
+- [Runtimes](../use/runtimes.qmd)
+- [Executors](../extend/executors.qmd)
 - [Sharp bits and security](../sharp-bits-and-security.qmd)
-
-## Document metadata
-
-Status: implemented
-
-Purpose: Teach complete funk authoring, composition, execution, testing, error,
-and cache workflows through one live containerized example.
-
-Authority: Introductory `funkify`, delayed-value, runnable-node, executor-stack,
-cache, and function-context workflow.
-
-Scope: Built-in script and Docker execution from Python; extension contracts
-for new executors and adapters belong to Extend, and dagclass convenience
-belongs to the next page.

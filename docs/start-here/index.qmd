@@ -3,8 +3,6 @@ title: DaggerML
 engine: knitr
 ---
 
-## Content
-
 DaggerML makes a computation a durable research artifact. Its inputs,
 functions, results, execution boundaries, and provenance are recorded as a DAG,
 so a result can lead back to the computation that produced it and repeated work
@@ -32,15 +30,15 @@ created by the pages before it:
 4. [Dagclasses](dagclasses.qmd): package reusable parameters and funks
    behind a conventional entry point.
 
-### Concepts
+### Use DaggerML
 
-[Concepts and reference](../use/index.qmd) explain projects, DAG storage,
-artifacts, runtimes, history, errors, configuration, and operational workflows.
+Continue with [Projects](../use/projects.qmd), then follow the executable Use
+course through artifacts, execution, inspection, runtimes, and sharing.
 
 ### Build integrations
 
-[Extend DaggerML](../extend/index.qmd) covers adapters, executors, codecs, plugin
-registration, and the contracts that connect them to the runtime.
+[Codecs](../extend/codecs.qmd), [Adapters](../extend/adapters.qmd), and
+[Executors](../extend/executors.qmd) form the executable extension course.
 
 ### Contribute to DaggerML
 
@@ -55,19 +53,6 @@ repository workflow. Co-located package READMEs provide architecture orientation
 ## References
 
 - [Start here](get-started.qmd)
-- [Concepts](../use/index.qmd)
-- [Extend DaggerML](../extend/index.qmd)
+- [Use DaggerML](../use/projects.qmd)
+- [Extend DaggerML](../extend/codecs.qmd)
 - [Contributing](../../CONTRIBUTING.md)
-
-## Document metadata
-
-Status: implemented
-
-Purpose: Explain why DaggerML exists and route researchers, integration
-engineers, and contributors into the appropriate documentation path.
-
-Authority: Product rationale and navigation among the canonical introductory,
-concept, extension, and contributor documentation paths.
-
-Scope: The packaged DaggerML documentation set; individual pages own their
-technical contracts and procedures.

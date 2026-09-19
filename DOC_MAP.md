@@ -15,84 +15,78 @@ Use this file to identify which project docs to read before editing a code path,
 
 - Match: `src/daggerml/api.py`, `src/daggerml/__init__.py`
 - Read:
-  - `docs/use/python-authoring.qmd`
-  - `docs/use/dags-nodes-results.qmd`
+  - `docs/start-here/dags.qmd`
+  - `docs/start-here/funks.qmd`
+  - `docs/use/artifacts.qmd`
+  - `docs/use/inspection.qmd`
   - `docs/glossary.qmd`
-  - `docs/use/error-reference.qmd`
-  - `docs/use/artifacts-data-codecs.qmd`
   - `src/daggerml/_core/README.md`
 
 ### Codec module
 
 - Match: codec implementation in `src/daggerml/api.py` and `src/daggerml/contrib/codecs.py`
 - Read:
-  - `docs/use/artifacts-data-codecs.qmd`
-  - `docs/extend/codec-contracts.qmd`
-  - `docs/use/error-reference.qmd`
+  - `docs/use/artifacts.qmd`
+  - `docs/extend/codecs.qmd`
+  - `docs/use/inspection.qmd`
 
 ### CLI surface
 
 - Match: `src/daggerml/_cli.py`
 - Read:
-  - `docs/use/cli.qmd`
+  - the owning workflow under `docs/use/`
   - `src/daggerml/README.md`
-  - `docs/use/error-reference.qmd`
+  - `docs/use/inspection.qmd`
 
 ### Core repository operations
 
 - Match: `src/daggerml/_core/commit.py`, `src/daggerml/_core/dag.py`, `src/daggerml/_core/head.py`, `src/daggerml/_core/index.py`
 - Read:
   - `src/daggerml/_core/README.md`
-  - `docs/use/dags-nodes-results.qmd`
-  - `docs/use/history-remotes.qmd`
+  - `docs/use/inspection.qmd`
+  - `docs/use/sharing.qmd`
 
 ### Core runtime orchestration
 
 - Match: `src/daggerml/_core/dml.py`, `src/daggerml/_core/config.py`, `src/daggerml/_core/revision.py`, `src/daggerml/_core/uri.py`
 - Read:
-  - `docs/use/configuration.qmd`
-  - `docs/use/funks-execution-cache.qmd`
+  - `docs/use/projects.qmd`
+  - `docs/use/execution.qmd`
+  - `docs/use/runtimes.qmd`
   - `src/daggerml/_core/README.md`
-  - `docs/use/error-reference.qmd`
 
 ### Core types and serde
 
 - Match: `src/daggerml/_core/types.py`, `src/daggerml/_core/builtins.py`, `src/daggerml/_core/serde.py`
 - Read:
   - `docs/glossary.qmd`
-  - `docs/use/dags-nodes-results.qmd`
-  - `docs/use/artifacts-data-codecs.qmd`
+  - `docs/use/artifacts.qmd`
+  - `docs/use/inspection.qmd`
   - `src/daggerml/_core/README.md`
-  - `docs/use/error-reference.qmd`
 
 ### Core storage and database integration
 
 - Match: `src/daggerml/_core/db.pyx`, `src/daggerml/_core/util.py`
 - Read:
-  - `docs/use/artifacts-data-codecs.qmd`
-  - `src/daggerml/_core/README.md`
   - `docs/use/artifacts.qmd`
+  - `src/daggerml/_core/README.md`
 
 ### Runtime and remote execution
 
 - Match: `src/daggerml/_core/dml.py`, `src/daggerml/_core/index.py`, `src/daggerml/_core/exec_state.py`, `src/daggerml/util.py`, `src/daggerml/_core/remote.py`, `src/daggerml/_core/s3_cas.py`
 - Read:
-  - `docs/use/funks-execution-cache.qmd`
+  - `docs/use/execution.qmd`
   - `docs/use/runtimes.qmd`
-  - `docs/use/history-remotes.qmd`
+  - `docs/use/sharing.qmd`
   - `src/daggerml/_core/README.md`
 
 ### Contrib modules and integrations
 
 - Match: `src/daggerml/contrib/**`
 - Read:
-  - `docs/extend/index.qmd`
-  - `docs/extend/extension-model.qmd`
-  - `docs/extend/adapters-and-executors.qmd`
-  - `docs/extend/adapter-operations.qmd`
-  - `docs/extend/executor-lifecycle.qmd`
-  - `docs/extend/codec-contracts.qmd`
-  - `docs/extend/plugin-api.qmd`
+  - `docs/extend/codecs.qmd`
+  - `docs/extend/adapters.qmd`
+  - `docs/extend/executors.qmd`
 
 ### C implementation and headers
 
@@ -100,7 +94,8 @@ Use this file to identify which project docs to read before editing a code path,
 - Read:
   - `c/README.md`
   - `src/daggerml/_core/README.md`
-  - `docs/use/dags-nodes-results.qmd`
+  - `docs/use/artifacts.qmd`
+  - `docs/use/inspection.qmd`
 
 ### Tests
 
@@ -124,7 +119,7 @@ Use this file to identify which project docs to read before editing a code path,
 - Read:
   - `docs/start-here/index.qmd`
   - `docs/start-here/get-started.qmd` when changing onboarding
-  - the target audience landing page under `docs/use/` or `docs/extend/` when changing an audience path
+  - the target canonical course page under `docs/use/` or `docs/extend/` when changing an audience path
 
 ### Local research dashboard
 
@@ -138,22 +133,25 @@ Use this file to identify which project docs to read before editing a code path,
 ## Topic Rules (Apply In Addition To Path Rules)
 
 - If changing adapter behavior:
-  - `docs/extend/adapters-and-executors.qmd`
-  - `docs/extend/adapter-operations.qmd`
-  - `docs/extend/executor-lifecycle.qmd`
+  - `docs/extend/adapters.qmd`
+  - `docs/extend/executors.qmd`
   - `src/daggerml/_core/README.md`
 - If changing data/object representation:
-  - `docs/use/dags-nodes-results.qmd`
+  - `docs/use/artifacts.qmd`
+  - `docs/use/inspection.qmd`
   - `docs/glossary.qmd`
   - `src/daggerml/_core/README.md`
 - If changing codec behavior or literal write normalization:
-  - `docs/use/artifacts-data-codecs.qmd`
-  - `docs/extend/codec-contracts.qmd`
+  - `docs/use/artifacts.qmd`
+  - `docs/extend/codecs.qmd`
+- If changing Projection, committed collection traversal, or Projection reuse:
+  - `docs/use/inspection.qmd`
+  - `docs/extend/codecs.qmd` only when changing `ProjectionCodec` internals
 - If changing storage, references, GC, or artifacts:
   - `docs/use/artifacts.qmd`
   - `src/daggerml/_core/README.md`
 - If changing user-facing errors:
-  - `docs/use/error-reference.qmd`
+  - `docs/use/inspection.qmd`
 
 ## Ambiguity Rule
 

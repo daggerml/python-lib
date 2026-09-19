@@ -741,9 +741,12 @@ function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSect
   return definitions.flatMap((definition) => {
     const sectionPages = pages.filter((page) => remaining.has(page) && definition.matches(page.id));
     sectionPages.forEach((page) => remaining.delete(page));
+    const manifestPosition = new Map(pages.map((page, index) => [page, index]));
     sectionPages.sort((left, right) => {
-      if (definition.id === "start") return (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
-      return 0;
+      const difference = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
+      return Number.isFinite(difference) && difference !== 0
+        ? difference
+        : manifestPosition.get(left)! - manifestPosition.get(right)!;
     });
     const matches = query ? sectionPages.filter((page) => `${docsLabel(page)} ${page.id}`.toLocaleLowerCase().includes(query)) : sectionPages;
     return matches.length > 0 ? [{ id: definition.id, label: definition.label, pages: matches, direct: definition.direct }] : [];

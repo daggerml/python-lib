@@ -1,0 +1,144 @@
+---
+title: Adapters
+engine: jupyter
+jupyter: python3
+depends-on: extend/codecs
+---
+
+An adapter is the executable boundary between DaggerML core and a backend. This
+page follows [Codecs](codecs.qmd); [Executors](executors.qmd) documents the
+optional contrib implementation used by the built-in adapters.
+
+## DML executable request and response contract
+
+For a non-builtin `Runnable`, core locates `runnable.adapter` as an executable
+on `PATH` (or uses a fully specified executable path), writes one JSON request
+to its standard input, and reads one JSON response from standard output. Core
+does not import adapter plugins or know a contrib `Executor` abstraction at
+runtime. An adapter executable is therefore any CLI script that implements this
+stdin/stdout contract; it need not use `AdapterBase`.
+
+| Operation | Exact fields | Success status |
+| --- | --- | --- |
+| invoke | `operation`, `cache_key`, `execution_id`, `remote`, `runnable`, `adapter_state`, `scratch_uri` | `success` |
+| cleanup | invoke fields plus `result_ref` | `success` |
+| cancel | invoke fields plus `argv_ref`, `requested_by` | `cancelled` |
+
+`remote` is exactly `{"root": str}`; identifiers and `scratch_uri` are nonempty
+strings. Cleanup requires a DAG `result_ref`; cancel requires a `node-argv`
+`argv_ref`, while `requested_by` is a string or null. Invoke and cleanup return
+`success`, `retry`, or a nonempty failure code. Retry requires object
+`adapter_state` and may include nonnegative `retry_after_ms`; failure requires
+diagnostics. Cancel returns `cancelled`, `retry`, or failure. The runtime owns
+state persistence, result publication, lifecycle transitions, cache pointers,
+and cancellation coordination—an executable must not mutate them.
+
+<!-- docs:pseudocode: Field names are the exact JSON wire schemas; values are runtime-generated. -->
+```json
+{"operation":"invoke","cache_key":"...","execution_id":"...","remote":{"root":"..."},"runnable":{},"adapter_state":null,"scratch_uri":"..."}
+{"operation":"cleanup","cache_key":"...","execution_id":"...","remote":{"root":"..."},"runnable":{},"adapter_state":{},"scratch_uri":"...","result_ref":"dag:..."}
+{"operation":"cancel","cache_key":"...","execution_id":"...","argv_ref":"node-argv:...","remote":{"root":"..."},"runnable":{},"adapter_state":{},"scratch_uri":"...","requested_by":null}
+```
+
+<!-- docs:pseudocode: These JSON response schemas describe runtime-generated protocol values. -->
+```json
+{"status": "retry", "adapter_state": {}, "retry_after_ms": 1000, "error": null}
+{"status": "success", "adapter_state": null, "error": null}
+{"status": "provider-error", "adapter_state": {}, "error": "diagnostic"}
+{"status": "cancelled", "adapter_state": {}, "error": null}
+```
+
+There is no wire `poll` operation. Repeated `invoke` requests carry saved
+`adapter_state`.
+
+## Delayed authoring and contrib adapters
+
+`funkify()` creates a `DelayedRunnable`. When a DAG stages it, the delayed-action
+codec looks up its **logical adapter key** and calls that adapter's
+`resolve_runnable(uri, kwargs, sub)`. An adapter may construct the concrete
+`Runnable` directly. `AdapterBase` is a contrib semi-implementation: its default
+`resolve_runnable()` can optionally delegate to an executor; see
+[Executors](executors.qmd) for that contrib convention.
+
+| Identity | Example | Owner |
+| --- | --- | --- |
+| logical adapter key | `local` | delayed authoring and adapter registry |
+| target URI | `script` | adapter or delegated executor resolution |
+| adapter executable | `dml-local-adapter` | core runtime process dispatch |
+
+Contrib plugin distributions are needed where delayed work is authored and
+lowered. The selected adapter executable must be available to the runtime
+process; a Lambda adapter additionally needs its target Lambda deployed.
+
+This minimal hook illustration constructs the `Runnable` directly; it is not a
+complete deployable backend.
+```{python}
+from daggerml import Runnable, Uri
+from daggerml.contrib.adapters import AdapterBase
+
+
+class ExampleAdapter(AdapterBase):
+    name = "example"
+
+    @classmethod
+    def resolve_runnable(cls, uri, kwargs, sub):
+        return Runnable(target=Uri(uri), kwargs=kwargs, sub=sub, adapter="example-adapter")
+
+    @classmethod
+    def send(cls, **payload):
+        assert payload["operation"] == "invoke"
+        return {"status": "retry", "adapter_state": {"job": "example"}, "error": None}
+
+
+runnable = ExampleAdapter.resolve_runnable("example:job", {"queue": "short"}, None)
+assert runnable.target == Uri("example:job")
+assert runnable.adapter == "example-adapter"
+response = ExampleAdapter.send(
+    operation="invoke",
+    cache_key="cache",
+    execution_id="execution",
+    remote={"root": "s3://example/root"},
+    runnable={"target": {"uri": "example:job"}},
+    adapter_state=None,
+    scratch_uri="s3://example/scratch",
+)
+assert response == {"status": "retry", "adapter_state": {"job": "example"}, "error": None}
+```
+
+```{python}
+from daggerml.contrib.adapters import list_adapters
+
+
+assert {"local", "lambda"} <= set(list_adapters())
+```
+
+## Contrib hooks and registration
+
+`AdapterBase` supplies three hooks: `resolve_runnable()` optionally delegates to
+the contrib default described on [Executors](executors.qmd), `send(**payload)`
+performs one transport operation, and `cli()` exposes `send()` as an executable.
+
+`AdapterBase.cli()` reads JSON from `-i`/`--input` and writes JSON to
+`-o`/`--output`; each accepts `-`, a local path, or an S3 URI. `--poll` is an
+ephemeral helper for a nested Docker or Batch adapter: it repeats **invoke** on
+`retry`, then drives nested cleanup after success. It never sends
+`operation="poll"` and cannot coordinate cancellation.
+
+Register one class per installed entry point. The entry-point key is descriptive;
+lookup uses the class's `name`. Discovery is lazy, retains loaded objects, warns
+on duplicates with the last registration winning, and raises `DmlRepoError` on a
+failed entry point without completing loading. `daggerml.contrib.status.status()`
+provides JSON-safe registrations and diagnostics.
+
+<!-- docs:pseudocode: Package metadata and cloud deployment require an installed integration distribution. -->
+```toml
+[project.entry-points."daggerml.contrib.adapters"]
+example_transport = "my_package.adapter:ExampleAdapter"
+
+[project.scripts]
+example-adapter = "my_package.adapter:ExampleAdapter.cli"
+```
+
+Install plugin distributions for authoring and lowering and deploy the selected
+adapter executable for runtime dispatch. A Lambda transport also requires a
+deployed function that accepts and returns the same JSON payload.

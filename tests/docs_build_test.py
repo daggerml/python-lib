@@ -118,6 +118,49 @@ def test_docs_build_014__use_pages_allow_executable_cells(tmp_path):
     build.validate(tmp_path)
 
 
+def test_docs_build_017__canonical_course_sources_define_inventory_and_prerequisites():
+    courses = {
+        "use": {
+            "projects": ("start-here/dagclasses", "research-demo"),
+            "artifacts": ("use/projects", "research-demo"),
+            "execution": ("use/artifacts", "research-demo"),
+            "inspection": ("use/execution", "research-demo"),
+            "runtimes": ("use/inspection", "research-demo"),
+            "sharing": ("use/runtimes", "research-demo"),
+        },
+        "extend": {
+            "codecs": (None, None),
+            "adapters": ("extend/codecs", None),
+            "executors": ("extend/adapters", None),
+        },
+    }
+
+    for section, expected in courses.items():
+        source = ROOT / "docs" / section
+        assert {page.stem for page in source.glob("*.qmd")} == set(expected)
+        for name, (dependency, project_home) in expected.items():
+            page = source / f"{name}.qmd"
+            text = page.read_text(encoding="utf-8")
+            assert build.page_dependencies(page, text) == ([] if dependency is None else [dependency])
+            assert build.dml_project_home(page, text) == project_home
+
+
+def test_docs_build_018__canonical_pages_keep_projection_and_delayed_action_ownership():
+    inspection = (ROOT / "docs/use/inspection.qmd").read_text(encoding="utf-8")
+    artifacts = (ROOT / "docs/use/artifacts.qmd").read_text(encoding="utf-8")
+    codecs = (ROOT / "docs/extend/codecs.qmd").read_text(encoding="utf-8")
+    adapters = (ROOT / "docs/extend/adapters.qmd").read_text(encoding="utf-8")
+
+    assert "Projection" in inspection
+    assert "isinstance(label, Projection)" in inspection
+    assert all(term in inspection for term in ("committed", "value", "context", "reuse"))
+    assert "dag.put(label" in inspection
+    assert "describe_node" not in inspection
+    assert "Projection" not in artifacts
+    assert "ProjectionCodec" in codecs
+    assert all(term in adapters for term in ("delayed authoring", "lowering"))
+
+
 @pytest.mark.parametrize("language", ["bash", "r"])
 def test_docs_build_016__jupyter_pages_reject_non_python_executable_cells(tmp_path, language):
     (tmp_path / "bad.qmd").write_text(

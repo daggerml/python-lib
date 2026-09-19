@@ -1,16 +1,15 @@
 ---
+title: Runtimes
 engine: knitr
 dml-project-home: research-demo
-depends-on: start-here/funks
+depends-on: use/inspection
 ---
 
-# Runtimes
+A runtime is mutable state used while authoring a DAG or tracking execution.
+Finalizing it creates an immutable DAG. Use the CLI to inspect and administer
+open work; use named committed DAGs for completed research.
 
-A runtime is the live state used while authoring a DAG or tracking work that has not yet become a committed DAG. A runtime holds the current graph and may have execution lineage. Finalizing it produces an immutable DAG.
-
-A user runtime can be frozen after recording an intermediate result. Freezing preserves its partial DAG, tags, and execution identity but does not create a terminal DAG result. Inspect its named nodes, then unfreeze it to continue authoring. The freeze message is a human-readable reason, not a durable runtime name. Add or remove DAG tags only while the runtime index is active.
-
-The Python `Dag` wrapper manages its runtime for normal authoring. Use the CLI when you need to inspect or control open work:
+## Freeze and resume authoring
 
 ```{bash}
 runtime_ref="$(dml runtime create)"
@@ -26,4 +25,65 @@ resumed_ref="$(dml runtime unfreeze "$frozen_ref")"
 dml runtime freeze "$resumed_ref" --message "Leave the demonstration read-only" >/dev/null
 ```
 
-At the public `Dml.runtime` boundary, runtime and execution identities are `Ref` values. In Python, cancellation is `Dml.runtime.cancel(execution=Ref(...), max_retries=3)`; `execution` is the requested execution identity. Cancellation selects the complete unreferenced execution set as `cancel-pending`, then cancels the selected adapters concurrently. Unsuccessful adapters are retried after their shared `not_before` deadlines, and repeated calls resume persisted work. See [inspect and cancel runtimes](runtime-inspection-cancellation.qmd).
+Freezing preserves partial nodes, tags, and execution identity, but does not
+create a result. Its message is a reason, not a durable name. `Dag.freeze()`
+and `Dag.unfreeze()` manage the normal Python wrapper; `dml.resume(frozen,
+name=..., message=...)` resumes it in another process. Runtime and execution
+identities are complete `Ref` values (`index:` or `frozenindex:`), never bare
+IDs.
+
+## Inspect, cancel, and refresh deliberately
+
+`runtime describe`, `describe-graph`, and `read-execution-record` report graph,
+lifecycle, lineage, cancellation, invalidation, adapter continuation, shared
+retry deadlines, and cleanup. Cleanup may remain pending or fail without making
+an otherwise reusable result unavailable.
+
+```{bash}
+course_ref="$(dml show | jq -er '.dags["course-execution"]')"
+first_ref="$(dml dag get-node-by-name "$course_ref" script-first)"
+execution_dag_ref="$(dml dag describe-node "$first_ref" | jq -er '.dag')"
+cache_key="$(dml dag describe "$execution_dag_ref" | jq -er '.cache_key')"
+cache_description="$(dml cache describe "$cache_key")"
+execution_ref="$(jq -er '.execution' <<< "$cache_description")"
+
+jq -e --arg dag "$execution_dag_ref" '.dag == $dag and .lifecycle == "succeeded"' <<< "$cache_description"
+printf '%s\n' "$execution_ref" > "$DOCS_WORKSPACE_ROOT/invalidated-course-execution"
+dml cache invalidate "$execution_ref"
+```
+
+Rerunning the same stored runnable and argument produces a new execution for the
+same normalized cache key:
+
+```{python}
+import daggerml as dml
+
+course = dml.load("course-execution")
+with dml.new("course-refresh", message="refresh invalidated course work") as dag:
+    runnable = dag.put(course["script"], name="script")
+    source = dag.put(course["source"], name="source")
+    refreshed = runnable(source, name="refreshed")
+    dag.commit(refreshed)
+
+assert dml.load("course-refresh").result.value() == {"count": 3, "total": 10}
+```
+
+```{bash}
+refreshed_ref="$(dml show | jq -er '.dags["course-refresh"]')"
+refreshed_result="$(dml dag get-node-by-name "$refreshed_ref" refreshed)"
+refreshed_dag="$(dml dag describe-node "$refreshed_result" | jq -er '.dag')"
+refreshed_key="$(dml dag describe "$refreshed_dag" | jq -er '.cache_key')"
+new_execution="$(dml cache describe "$refreshed_key" | jq -er '.execution')"
+old_execution="$(cat "$DOCS_WORKSPACE_ROOT/invalidated-course-execution")"
+test "$new_execution" != "$old_execution"
+```
+
+Invalidate exact execution refs, not cache keys or DAG refs. This affects every
+caller sharing `remote.root`, so inspect the returned identity and coordinate
+before refreshing work. Cancellation first selects the complete unreferenced
+set as `cancel-pending`, conditionally removes matching cache pointers, then
+cancels adapters concurrently. Retry responses share `not_before`; repeated
+`dml runtime cancel index:... --max-retries 3` resumes pending cancellation.
+An execution that already finished is a successful no-op. Continue with
+[Sharing](sharing.qmd); cache invalidation is deliberately last among workflows
+that need the original cached result.

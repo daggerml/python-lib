@@ -129,19 +129,6 @@ The [Funks](funks.qmd) lesson now can import this exact result with
 
 ## References
 
-- [Python authoring reference](../use/python-authoring.qmd)
-- [Artifacts, data, and codecs](../use/artifacts-data-codecs.qmd)
-- [Error reference](../use/error-reference.qmd)
-
-## Document metadata
-
-Status: implemented
-
-Purpose: Teach DAG authoring as a sequence of small, live operations that also
-produces the reusable tutorial image.
-
-Authority: Introductory use of DAG creation, values, collections, access,
-callable nodes, and commit results.
-
-Scope: Core DAG authoring and the first Docker-image funk call; detailed funk
-authoring and cache behavior belong to the next page.
+- [Artifacts](../use/artifacts.qmd)
+- [Inspection](../use/inspection.qmd)
+- [Codecs](../extend/codecs.qmd)

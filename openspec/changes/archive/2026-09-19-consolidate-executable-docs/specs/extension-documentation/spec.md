@@ -1,7 +1,4 @@
-## Purpose
-Define documentation for engineers building DaggerML extensions and integrations.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Extension documentation SHALL serve integration engineers
 The documentation SHALL provide an ordered Extend course containing exactly three primary pages named Codecs, Adapters, and Executors. Codecs SHALL combine custom value-conversion concepts, contracts, implementation, registration, packaging, built-ins, and only the narrow `ProjectionCodec` lowering mechanism; user-facing `Projection` inspection remains in Use. Adapters SHALL distinguish the core adapter contract—any CLI executable available on `PATH` or by a fully specified path that implements the JSON stdin/stdout protocol—from optional contrib `AdapterBase` hooks for resolution, transport, and CLI exposure. Adapters SHALL explain delayed authoring and lowering, logical adapter discovery, direct concrete `Runnable` construction, optional delegation to contrib executors, operation payloads, registration, and deployment. Executors SHALL be presented as a contrib-only abstraction, not discovered or imported by core, combining delegated runnable construction and resolution, backend lifecycle, durable continuation, result and cleanup ownership, nesting, remote concerns, built-ins, registration, and deployment. The course SHALL not retain separate concept, guide, plugin, packaging, testing, built-in-inventory, or reference pages that duplicate those journeys. Published pages SHALL NOT include test or verification checklists; executable example validation SHALL remain part of the documentation build.
@@ -33,14 +30,6 @@ The documentation SHALL provide an ordered Extend course containing exactly thre
 ### Requirement: Extension documentation SHALL separate extension contracts from researcher workflows
 The Extend course SHALL own codec contracts, core adapter executable operations, optional contrib adapter hooks and executor lifecycle contracts, plugin registration, package and executable deployment, and provider-authoring details. Use SHALL own operation of installed capabilities. Cross-cutting extension concerns SHALL appear in the mechanism page where a reader applies them, while dashboard-provider contracts that do not fit codecs, adapters, or executors SHALL move to dashboard integration documentation rather than remain as a generic plugin page. Contributor testing procedures and verification checklists SHALL remain outside published course pages.
 
-#### Scenario: Researcher follows a built-in integration page
-- **WHEN** a researcher uses a supported execution capability
-- **THEN** its Use page does not require adapter protocol knowledge
-
-#### Scenario: Engineer needs protocol details
-- **WHEN** an integration engineer follows the corresponding Extend link
-- **THEN** that page defines and demonstrates the relevant public extension contract and lifecycle semantics
-
 #### Scenario: Researcher follows a built-in integration
 - **WHEN** a researcher uses a supported execution or data capability
 - **THEN** its Use page does not require adapter, executor, codec-registry, or provider-schema implementation knowledge
@@ -52,13 +41,6 @@ The Extend course SHALL own codec contracts, core adapter executable operations,
 #### Scenario: Engineer implements a dashboard provider
 - **WHEN** an integration engineer needs dashboard registration and result-schema contracts
 - **THEN** dashboard integration documentation provides those contracts outside the three-page codec, adapter, and executor course
-
-### Requirement: Extension documentation SHALL not use contrib as its primary navigation category
-The documentation SHALL organize extension content by integration goals rather than the `daggerml.contrib` package name, while retaining exact import paths and package names where reference material requires them.
-
-#### Scenario: Engineer enters extension docs
-- **WHEN** an integration engineer seeks adapter or codec guidance
-- **THEN** the primary navigation presents Extend DaggerML rather than requiring the reader to infer that the material is under contrib
 
 ### Requirement: Extension examples SHALL be executable documentation
 Runnable codec, adapter, executor, plugin, and packaging examples SHALL live in the applicable Codecs, Adapters, or Executors page and SHALL be verified by the documentation build. The three pages SHALL form a declared dependency sequence and MAY share only durable workspace, installed-package, project, file, or object-storage state across page boundaries. Examples requiring external infrastructure not owned by the documentation fixture SHALL be explicitly marked as pseudocode and paired with executable contract coverage where practical. The Extend path SHALL NOT depend on a separate example download or example-only page hierarchy.

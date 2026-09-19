@@ -1,18 +1,7 @@
-## Purpose
-Define the documentation path for researchers using DaggerML workflows.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Researcher documentation SHALL cover the research lifecycle
 The documentation SHALL provide an ordered Use course containing exactly six primary pages named Projects, Artifacts, Execution, Inspection, Runtimes, and Sharing. The course SHALL continue from the completed Start here project and cover project orientation and configuration; durable DAG data, external artifacts, and installed-codec selection; supported execution boundaries; result, provenance, runnable, artifact, failure, and committed-DAG `Projection` inspection; runtime and cache administration; and history, remotes, publication, and reuse. Inspection SHALL own user-facing `Projection` traversal, value/context, and reuse: Python item access against a committed immutable DAG returns a `Projection` when it cannot append the `get` node that open-DAG item access would create. Artifacts SHALL own durable values, `Uri`, `S3Store`, and external payloads. The pages SHALL combine explanation, exact interfaces, runnable workflows, failure guidance, and relevant reference detail without separate concept, guide, or reference pages.
-
-#### Scenario: Researcher begins a project
-- **WHEN** a new researcher opens the Use path
-- **THEN** the path connects the unchanged Start here course to directly addressable pages for later research tasks
-
-#### Scenario: Advanced researcher needs runtime control
-- **WHEN** a researcher needs to inspect, cancel, or refresh a running or cached computation
-- **THEN** a Use page explains the behavior and demonstrates the relevant CLI workflow
 
 #### Scenario: Researcher continues after onboarding
 - **WHEN** a researcher completes the Start here course and opens the Use path
@@ -37,18 +26,6 @@ The documentation SHALL provide an ordered Use course containing exactly six pri
 ### Requirement: Researcher examples SHALL use the CLI for project administration
 Researcher-facing pages SHALL use executable `dml` examples for repository initialization, configuration, inspection, history, remote synchronization, runtime administration, cache administration, and cleanup. Executable Python examples SHALL focus on authoring, materializing, and inspecting research within an initialized project. The primary Use journey SHALL execute during the documentation build with assertions against build-owned projects, object storage, and remotes; examples requiring infrastructure not owned by the build SHALL be explicitly identified as pseudocode rather than presented as verified workflows. Examples SHALL live in the page that teaches the workflow rather than in a separate examples tree.
 
-#### Scenario: Use page creates a project
-- **WHEN** a researcher page demonstrates creating a DaggerML project
-- **THEN** it executes `dml init` rather than `Dml.init(...)`
-
-#### Scenario: Use page authors a DAG
-- **WHEN** a researcher page demonstrates writing a DAG or funk
-- **THEN** its Python example assumes an existing project and uses the Python authoring surface
-
-#### Scenario: Researcher repeats a documented workflow
-- **WHEN** a reader follows runnable commands from a Use page
-- **THEN** those commands are the same examples verified by the documentation build
-
 #### Scenario: Use page administers a project
 - **WHEN** a Use workflow configures, inspects, publishes, or controls a DaggerML project
 - **THEN** it executes the applicable `dml` commands against documentation-owned state and verifies their observable results
@@ -61,16 +38,16 @@ Researcher-facing pages SHALL use executable `dml` examples for repository initi
 - **WHEN** an execution example requires an SSH host, scheduler, or cloud compute service not owned by the documentation fixture
 - **THEN** the page marks that example as pseudocode, identifies the prerequisite, and keeps a fixture-owned local or Docker workflow executable
 
+#### Scenario: Researcher repeats a documented workflow
+- **WHEN** a reader follows runnable commands from a Use page
+- **THEN** those commands are the same examples verified by the documentation build
+
 ### Requirement: Researcher documentation SHALL distinguish supported composition from extension implementation
 The Use course SHALL present supported execution environments, external artifacts, built-in codec behavior, temporary DaggerML projects, dashboards, and other researcher-facing composition without requiring adapter, executor, registry, protocol, or plugin-provider implementation knowledge. Custom codec and dashboard-provider implementation SHALL live in extension or subsystem documentation, with Use retaining only the guidance needed to select and operate installed capabilities.
 
 #### Scenario: Researcher packages a workload
 - **WHEN** a researcher needs to run work in Docker or through another supported execution boundary
 - **THEN** the Execution page explains how to compose that capability and links to Extend only for readers implementing the integration
-
-#### Scenario: Researcher uses temporary DML state
-- **WHEN** a researcher needs an isolated disposable project
-- **THEN** the docs explain the `temporary()` helper as a research authoring convenience and state its lifecycle
 
 #### Scenario: Researcher encounters a custom value
 - **WHEN** a value requires a codec not supplied by the installed environment
@@ -83,10 +60,3 @@ The Use course SHALL present supported execution environments, external artifact
 #### Scenario: Researcher uses a dashboard provider
 - **WHEN** a researcher selects or operates an installed custom DAG dashboard
 - **THEN** Use explains the user workflow without embedding provider registration and result-schema contracts
-
-### Requirement: Researcher documentation SHALL use research-facing terminology
-The Use DaggerML path SHALL use "runtime" as the primary term for an active or inspectable computation and SHALL explain its relationship to a DAG node. It SHALL introduce internal terms such as "index" only when necessary to understand an exact interface or diagnostic.
-
-#### Scenario: Reader learns about active computation
-- **WHEN** a researcher reads a runtime guide or CLI reference
-- **THEN** the guide describes the user-visible object as a runtime rather than leading with its internal index representation

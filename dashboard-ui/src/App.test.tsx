@@ -106,16 +106,20 @@ describe("canonical dashboard routes", () => {
 
   it("uses canonical manifest sections and ordering", async () => {
     const pages = [
-      { id: "use/artifacts", title: "Manage artifacts" },
-      { id: "use", title: "Use DaggerML" },
-      { id: "use/errors", title: "Errors" },
-      { id: "extend", title: "Extend DaggerML" },
-      { id: "extend/codecs", title: "Codecs" },
-      { id: "start-here/get-started", title: "Get started", order: 1 },
-      { id: "start-here/dags", title: "DAGs", order: 2 },
+      { id: "use/sharing", title: "Sharing", order: 10 },
+      { id: "extend/executors", title: "Executors", order: 13 },
       { id: "start-here/funks", title: "Funks", order: 3 },
-      { id: "start-here/dagclasses", title: "Dagclasses", order: 4 },
+      { id: "use/artifacts", title: "Artifacts", order: 6 },
+      { id: "extend/codecs", title: "Codecs", order: 11 },
       { id: "start-here", title: "DaggerML", order: 0 },
+      { id: "use/projects", title: "Projects", order: 5 },
+      { id: "extend/adapters", title: "Adapters", order: 12 },
+      { id: "start-here/dagclasses", title: "Dagclasses", order: 4 },
+      { id: "use/execution", title: "Execution", order: 7 },
+      { id: "start-here/dags", title: "DAGs", order: 2 },
+      { id: "use/inspection", title: "Inspection", order: 8 },
+      { id: "start-here/get-started", title: "Get started", order: 1 },
+      { id: "use/runtimes", title: "Runtimes", order: 9 },
       { id: "glossary", title: "Glossary" },
       { id: "sharp-bits-and-security", title: "Sharp bits and security" },
     ].map((page) => ({ ...page, fragment: `fragments/${page.id}.html`, headings: [] }));
@@ -131,12 +135,37 @@ describe("canonical dashboard routes", () => {
       "DaggerML", "Get started", "DAGs", "Funks", "Dagclasses",
     ]);
     const use = screen.getByText("Use", { selector: "summary" }).closest("details")!;
-    expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual(["Manage artifacts", "Use DaggerML", "Errors"]);
+    expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Projects", "Artifacts", "Execution", "Inspection", "Runtimes", "Sharing",
+    ]);
     const extend = screen.getByText("Extend", { selector: "summary" }).closest("details")!;
-    expect(within(extend).getAllByRole("button").map((button) => button.textContent)).toEqual(["Extend DaggerML", "Codecs"]);
+    expect(within(extend).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Codecs", "Adapters", "Executors",
+    ]);
     for (const removed of ["Concepts", "Guides", "Reference", "Examples", "Develop", "More"]) expect(screen.queryByText(removed, { selector: "summary" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Glossary" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Sharp bits and security" })).toBeVisible();
+  });
+
+  it("keeps manifest input order for equal or missing course positions", async () => {
+    const pages = [
+      { id: "use/first", title: "First", order: 7 },
+      { id: "use/second", title: "Second", order: 7 },
+      { id: "use/third", title: "Third", order: 6 },
+      { id: "use/unordered", title: "Unordered" },
+      { id: "start-here", title: "DaggerML", order: 0 },
+    ].map((page) => ({ ...page, fragment: `fragments/${page.id}.html`, headings: [] }));
+    vi.mocked(fetch).mockImplementation(async (input: URL | RequestInfo) => String(input) === "/docs/static/manifest.json"
+      ? new Response(JSON.stringify({ pages }))
+      : new Response("<h1>Documentation page</h1>"));
+    history.replaceState(null, "", "/docs/use/third");
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Documentation page" });
+    const use = screen.getByText("Use", { selector: "summary" }).closest("details")!;
+    expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Third", "First", "Second", "Unordered",
+    ]);
   });
 
   it("copies rendered source through an explicit code action", async () => {
