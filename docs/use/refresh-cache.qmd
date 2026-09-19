@@ -1,0 +1,29 @@
+---
+engine: knitr
+dml-project-home: research-demo
+depends-on: start-here/funks
+---
+
+# Refresh cached work
+
+DaggerML reuses completed remote-backed computations by cache key. The key identifies normalized DaggerML data for a runnable computation, not a Python call. To intentionally recompute known work, first resolve the key's current execution, invalidate that execution ref, then run the authoring code again.
+
+```{bash}
+funks_ref="$(dml show | jq -er '.dags.funks')"
+first_ref="$(dml dag get-node-by-name "$funks_ref" first)"
+execution_dag_ref="$(dml dag describe-node "$first_ref" | jq -er '.dag')"
+cache_key="$(dml dag describe "$execution_dag_ref" | jq -er '.cache_key')"
+cache_description="$(dml cache describe "$cache_key")"
+execution_ref="$(jq -er '.execution' <<< "$cache_description")"
+
+jq -e --arg dag "$execution_dag_ref" '.dag == $dag and .lifecycle == "succeeded"' <<< "$cache_description"
+dml cache invalidate "$execution_ref"
+test -z "$(dml cache describe "$cache_key")"
+```
+
+`cache describe` returns JSON with `execution`, `dag`, and `lifecycle`. Copy its
+`execution` value; `dag` is null unless that execution is an unmarked reusable
+terminal result. Cache invalidation requires `remote.root`. It affects that
+execution and eligible callers for all users of the same remote, so confirm the
+returned identity and coordinate with collaborators. The runtime graph or
+execution record can help identify the relevant execution and cache key.

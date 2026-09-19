@@ -32,6 +32,22 @@ requests and appreciate your help in improving this project.
 6. Push to your branch on GitHub.
 7. Open a pull request against the `master` branch of this repository.
 
+## Development Setup
+
+- Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and a C/C++ toolchain
+  with CMake are required for the Cython-backed LMDB extension.
+- Set up a checkout with `uv sync --dev --all-extras`.
+- The dashboard source and package-manager commands live in `dashboard-ui/`.
+  Distribution changes must include built static assets in
+  `src/daggerml/dashboard/`; installed `dml-dashboard` must not require Node.js.
+
+## Repository Orientation
+
+- `src/daggerml/README.md`: public package and CLI boundary.
+- `src/daggerml/_core/README.md`: repository, storage, execution, and remote boundary.
+- `src/daggerml/dashboard/README.md` and `dashboard-ui/README.md`: dashboard server and frontend boundary.
+- `openspec/spec-overview.md`: normative architecture and capability ownership.
+
 ## Coding Standards
 
 - Follow [PEP 8](https://pep8.org/) for Python code style.
@@ -77,20 +93,20 @@ requests and appreciate your help in improving this project.
 
 - Run the executable documentation and dashboard build with:
   ```bash
-  bash build-dashboard.sh
+   bash docs/build.sh
   ```
 - The default `--auto` mode fingerprints repository inputs and rebuilds only
   stale components. A missing build-state file or packaged output makes that
   component stale, so a clean checkout performs the complete build.
 - Use `--full` to force documentation and frontend builds from scratch,
   `--docs-only` to rebuild executable docs, or `--ui-only` to rebuild the
-  frontend while preserving the packaged docs. Run `bash build-dashboard.sh
+   frontend while preserving the packaged docs. Run `bash docs/build.sh
   --help` for the command summary.
 - The script installs its pinned Quarto/R toolchain and all related caches under
   the ignored `.tools/` directory. Set `DOCS_PYTHON` when the project interpreter
   is not `.venv/bin/python`:
   ```bash
-  DOCS_PYTHON="/path/to/python" bash build-dashboard.sh
+   DOCS_PYTHON="/path/to/python" bash docs/build.sh
   ```
 - The build executes all QMD examples against disposable fixtures; do not use it as a substitute for the full test suite.
 

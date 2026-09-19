@@ -110,15 +110,14 @@ def test_docs_build_009__single_project_pages_export_frontmatter_project_home(tm
     assert "knitr::opts_knit$set(root.dir = page_workdir)" in dags
 
 
-def test_docs_build_014__concept_pages_reject_executable_cells(tmp_path):
+def test_docs_build_014__use_pages_allow_executable_cells(tmp_path):
     concepts = tmp_path / "use"
     concepts.mkdir()
     (concepts / "bad.qmd").write_text(
         "---\ntitle: Bad concept\nengine: knitr\n---\n\n```{python}\nprint('not pseudocode')\n```\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="concept pages must use prose"):
-        build.validate(tmp_path)
+    build.validate(tmp_path)
 
 
 @pytest.mark.parametrize("language", ["bash", "r"])
@@ -288,35 +287,36 @@ def test_docs_build_003__staging_creates_script_free_fragments_and_manifest(tmp_
 
 
 def test_docs_build_005__packaging_build_infers_components_and_supports_overrides():
-    script = (ROOT / "build-dashboard.sh").read_text(encoding="utf-8")
+    script = (ROOT / "docs/build.sh").read_text(encoding="utf-8")
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     help_result = subprocess.run(
-        ["bash", str(ROOT / "build-dashboard.sh"), "--help"], text=True, capture_output=True, check=True
+        ["bash", str(ROOT / "docs/build.sh"), "--help"], text=True, capture_output=True, check=True
     )
     assert "--auto" in help_result.stdout
     assert "--full" in help_result.stdout
     assert "--docs-only" in help_result.stdout
     assert "--ui-only" in help_result.stdout
     assert 'mode="auto"' in script
-    assert 'docs_fingerprint="$(fingerprint build-dashboard.sh docs examples src/daggerml pyproject.toml uv.lock)"' in script
-    assert 'ui_fingerprint="$(fingerprint build-dashboard.sh dashboard-ui)"' in script
+    assert 'docs_fingerprint="$(fingerprint docs src/daggerml pyproject.toml uv.lock)"' in script
+    assert 'ui_fingerprint="$(fingerprint docs/build.sh dashboard-ui)"' in script
     assert 'build_state="$tools/dashboard-build-state"' in script
     assert 'if [[ "$docs_fingerprint" != "$stored_docs_fingerprint" ]] || ! docs_output_ready' in script
     assert 'if [[ "$ui_fingerprint" != "$stored_ui_fingerprint" ]] || ! ui_output_ready' in script
     assert 'rm -rf "$staging"' in script
-    assert 'bash "$root/docs/build.sh"' in script
+    assert 'bash "$root/docs/build-render.sh"' in script
     assert "npm run build" in script
     assert 'rm -rf "$static/docs"' in script
     assert 'cp -R "$staging/." "$static/docs/"' in script
-    assert script.index('rm -rf "$staging"') < script.index('bash "$root/docs/build.sh"')
+    assert script.index('rm -rf "$staging"') < script.index('bash "$root/docs/build-render.sh"')
     assert 'cp -R "$static/docs/." "$preserved_docs/docs/"' in script
     assert 'cp -R "$preserved_docs/docs/." "$static/docs/"' in script
-    assert ci.count("run: bash ./build-dashboard.sh") == 3
+    assert ci.count("run: bash ./docs/build.sh") == 3
+    assert not (ROOT / "build-dashboard.sh").exists()
 
 
 def test_docs_build__shared_entrypoint_bootstraps_an_isolated_pinned_toolchain():
-    script = (ROOT / "build-dashboard.sh").read_text(encoding="utf-8")
+    script = (ROOT / "docs/build.sh").read_text(encoding="utf-8")
     ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert 'tools="${DML_DOCS_TOOLS_ROOT:-$root/.tools}"' in script
@@ -363,6 +363,7 @@ def test_docs_build_failures__real_coordinator_fails_closed_and_releases_resourc
     docs.mkdir(parents=True)
     for name in (
         "build.sh",
+        "build-render.sh",
         "build-lib.sh",
         "build.py",
         "build-requirements.R",
@@ -371,8 +372,7 @@ def test_docs_build_failures__real_coordinator_fails_closed_and_releases_resourc
         "_quarto.yml",
     ):
         shutil.copy2(ROOT / "docs" / name, docs / name)
-    (source / "examples").mkdir()
-    shutil.copy2(ROOT / "examples/moto_server_env.py", source / "examples/moto_server_env.py")
+    shutil.copy2(ROOT / "docs/moto_server_env.py", docs / "moto_server_env.py")
     (docs / "examples").mkdir()
     audit = tmp_path / "moto.json"
     teardown = docs / "build-teardown.qmd"
@@ -480,7 +480,7 @@ def test_docs_build_failures__real_coordinator_fails_closed_and_releases_resourc
     for _ in range(2 if failure == "none" else 1):
         marker.unlink(missing_ok=True)
         result = subprocess.run(
-            ["bash", str(docs / "build.sh")], env=environment, text=True, capture_output=True, timeout=300
+            ["bash", str(docs / "build-render.sh")], env=environment, text=True, capture_output=True, timeout=300
         )
         diagnostic = result.stdout + result.stderr
         assert not any(
@@ -533,21 +533,13 @@ def test_docs_build_008__wheels_package_and_serve_completed_docs_without_build_t
     static_docs = static / "docs"
     fragment = static_docs / "fragments/start-here/dags.html"
     asset = static_docs / "assets/start-here/dags_files/libs/quarto-html/quarto.js"
-    runner = static_docs / "downloads/examples/analysis-report/run_report.py"
-    metrics = static_docs / "downloads/examples/analysis-report/analysis/metrics.py"
-    bundle = static_docs / "downloads/examples/analysis-report/analysis-report.zip"
-    for path in (fragment, asset, runner, metrics, bundle):
+    for path in (fragment, asset):
         path.parent.mkdir(parents=True, exist_ok=True)
     (static / "assets").mkdir(parents=True, exist_ok=True)
     (static / "index.html").write_text("dashboard", encoding="utf-8")
     (static / "assets/app.js").write_text("// dashboard", encoding="utf-8")
     fragment.write_text("<main><h1>Analysis report</h1></main>", encoding="utf-8")
     asset.write_text("// generated asset", encoding="utf-8")
-    runner.write_text("from analysis.metrics import summarize\n", encoding="utf-8")
-    metrics.write_text("def summarize(values):\n    return sum(values)\n", encoding="utf-8")
-    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.write(metrics, "analysis-report/analysis/metrics.py")
-        archive.write(runner, "analysis-report/run_report.py")
     manifest = {
         "pages": [
             {
@@ -557,11 +549,6 @@ def test_docs_build_008__wheels_package_and_serve_completed_docs_without_build_t
             }
         ],
         "assets": ["assets/start-here/dags_files/libs/quarto-html/quarto.js"],
-        "downloads": [
-            "downloads/examples/analysis-report/analysis/metrics.py",
-            "downloads/examples/analysis-report/run_report.py",
-            "downloads/examples/analysis-report/analysis-report.zip",
-        ],
     }
     (static_docs / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     build_environment = {**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DAGGERML": "0.0.0"}
@@ -588,8 +575,6 @@ def test_docs_build_008__wheels_package_and_serve_completed_docs_without_build_t
         "daggerml/dashboard/static/docs/manifest.json",
         "daggerml/dashboard/static/docs/fragments/start-here/dags.html",
         "daggerml/dashboard/static/docs/assets/start-here/dags_files/libs/quarto-html/quarto.js",
-        "daggerml/dashboard/static/docs/downloads/examples/analysis-report/run_report.py",
-        "daggerml/dashboard/static/docs/downloads/examples/analysis-report/analysis-report.zip",
     }
     for distribution in (wheel, sdist_wheel):
         assert expected_files <= _wheel_contents(distribution)

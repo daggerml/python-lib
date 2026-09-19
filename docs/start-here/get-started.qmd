@@ -23,5 +23,5 @@ The commands remain in one shell block so `dml init` runs inside the new
 same project to create and query a live DAG.
 
 Continue with [DAGs](dags.qmd). Use
-`dml --help` and [the CLI reference](../use/reference/cli.qmd) for generated
+`dml --help` and [the CLI reference](../use/cli.qmd) for generated
 command details.

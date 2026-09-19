@@ -362,7 +362,7 @@ assert dml.load("container-total").result.value() == 20
 ## References
 
 - [Funks](funks.qmd)
-- [Python authoring reference](../use/reference/python-authoring.qmd)
+- [Python authoring reference](../use/python-authoring.qmd)
 
 ## Document metadata
 

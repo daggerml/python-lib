@@ -62,8 +62,9 @@ beforeEach(() => {
   mermaidInitialize.mockClear();
   mermaidRender.mockClear();
   vi.stubGlobal("fetch", vi.fn(async (input: string) => {
-    if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "start-here/dags", title: "DAGs", fragment: "fragments/start-here/dags.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
-    if (input === "/docs/static/fragments/start-here/dags.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><div class="sourceCode"><pre class="sourceCode python code-with-copy"><code>print("one")</code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div><div class="cell-output cell-output-stdout"><pre><code>one</code></pre></div><pre class="mermaid"><code>flowchart TD\nA--&gt;B</code></pre><a href="/docs/start-here/dags#example">Anchor</a><a href="/docs/static/downloads/examples/one.py">Download</a>');
+    if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "start-here", title: "DaggerML", fragment: "fragments/start-here.html", order: 0, headings: [] }, { id: "start-here/dags", title: "DAGs", fragment: "fragments/start-here/dags.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
+    if (input === "/docs/static/fragments/start-here.html") return new Response("<h1>DaggerML</h1>");
+    if (input === "/docs/static/fragments/start-here/dags.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><div class="sourceCode"><pre class="sourceCode python code-with-copy"><code>print("one")</code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div><div class="cell-output cell-output-stdout"><pre><code>one</code></pre></div><pre class="mermaid"><code>flowchart TD\nA--&gt;B</code></pre><a href="/docs/start-here/dags#example">Anchor</a>');
     return new Response("Not found", { status: 404 });
   }));
 });
@@ -103,27 +104,25 @@ describe("canonical dashboard routes", () => {
     expect(screen.getByText("Start here", { selector: "summary" })).toBeVisible();
   });
 
-  it("orders documentation by learning path and promotes first-DAG authoring", async () => {
+  it("uses canonical manifest sections and ordering", async () => {
     const pages = [
-      { id: "use/reference/errors", title: "Error reference" },
-      { id: "use/guides/artifacts", title: "Manage artifacts" },
-      { id: "use/concepts/errors", title: "Errors" },
-      { id: "use/README", title: "Use DaggerML" },
-      { id: "use/concepts/README", title: "Research concepts" },
-      { id: "use/guides/README", title: "Research guides" },
-      { id: "use/reference/README", title: "Reference" },
-      { id: "start-here", title: "DaggerML", order: 0 },
+      { id: "use/artifacts", title: "Manage artifacts" },
+      { id: "use", title: "Use DaggerML" },
+      { id: "use/errors", title: "Errors" },
+      { id: "extend", title: "Extend DaggerML" },
+      { id: "extend/codecs", title: "Codecs" },
       { id: "start-here/get-started", title: "Get started", order: 1 },
       { id: "start-here/dags", title: "DAGs", order: 2 },
       { id: "start-here/funks", title: "Funks", order: 3 },
       { id: "start-here/dagclasses", title: "Dagclasses", order: 4 },
+      { id: "start-here", title: "DaggerML", order: 0 },
       { id: "glossary", title: "Glossary" },
       { id: "sharp-bits-and-security", title: "Sharp bits and security" },
     ].map((page) => ({ ...page, fragment: `fragments/${page.id}.html`, headings: [] }));
     vi.mocked(fetch).mockImplementation(async (input: URL | RequestInfo) => String(input) === "/docs/static/manifest.json"
       ? new Response(JSON.stringify({ pages }))
       : new Response("<h1>Documentation page</h1>"));
-    history.replaceState(null, "", "/docs/use/guides/artifacts");
+    history.replaceState(null, "", "/docs/use/artifacts");
     render(<App />);
 
     await screen.findByRole("heading", { name: "Documentation page" });
@@ -131,10 +130,11 @@ describe("canonical dashboard routes", () => {
     expect(within(start).getAllByRole("button").map((button) => button.textContent)).toEqual([
       "DaggerML", "Get started", "DAGs", "Funks", "Dagclasses",
     ]);
-    const concepts = screen.getByText("Concepts", { selector: "summary" }).closest("details")!;
-    expect(within(concepts).getAllByRole("button").map((button) => button.textContent)).toEqual([
-      "Use DaggerML", "Research concepts", "Errors", "Research guides", "Manage artifacts", "Reference", "Error reference",
-    ]);
+    const use = screen.getByText("Use", { selector: "summary" }).closest("details")!;
+    expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual(["Manage artifacts", "Use DaggerML", "Errors"]);
+    const extend = screen.getByText("Extend", { selector: "summary" }).closest("details")!;
+    expect(within(extend).getAllByRole("button").map((button) => button.textContent)).toEqual(["Extend DaggerML", "Codecs"]);
+    for (const removed of ["Concepts", "Guides", "Reference", "Examples", "Develop", "More"]) expect(screen.queryByText(removed, { selector: "summary" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Glossary" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Sharp bits and security" })).toBeVisible();
   });
@@ -157,23 +157,12 @@ describe("canonical dashboard routes", () => {
     expect(mermaidRender).toHaveBeenCalledWith(expect.stringMatching(/^dml-docs-diagram-/), "flowchart TD\nA-->B");
   });
 
-  it("leaves packaged downloads to the browser", async () => {
-    history.replaceState(null, "", "/docs/start-here/dags");
+  it("renders the manifest start-here index at the docs root", async () => {
+    history.replaceState(null, "", "/docs");
     render(<App />);
 
-    const download = await screen.findByRole("link", { name: "Download" });
-    expect(download).toHaveAttribute("href", "/docs/static/downloads/examples/one.py");
-    // Observe the default action after React's delegated handler, then suppress
-    // jsdom's unsupported navigation. The app must not consume this click.
-    let prevented: boolean | undefined;
-    const observe = (event: MouseEvent) => {
-      prevented = event.defaultPrevented;
-      event.preventDefault();
-    };
-    document.addEventListener("click", observe, { once: true });
-    fireEvent.click(download);
-    expect(prevented).toBe(false);
-    expect(location.pathname).toBe("/docs/start-here/dags");
+    expect(await screen.findByRole("heading", { name: "DaggerML", level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "DaggerML" })).toHaveAttribute("aria-current", "page");
   });
 
   it("keeps Docs visible when switching themes", async () => {
@@ -192,7 +181,7 @@ describe("canonical dashboard routes", () => {
     await screen.findByRole("heading", { name: "Repository snapshot" });
 
     fireEvent.click(screen.getAllByRole("button", { name: "Docs" })[0]);
-    expect(await screen.findByRole("heading", { name: "Docs" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "DaggerML" })).toBeVisible();
     history.pushState(null, "", "/projects/project-1/commits/older");
     window.dispatchEvent(new PopStateEvent("popstate"));
 

@@ -108,20 +108,14 @@ def test_dash_sec_002__configured_bearer_token_protects_api(tmp_path):
 def test_dash_docs_001__docs_static_files_are_contained_and_do_not_fall_back_to_spa(tmp_path, monkeypatch):
     app, static = _static_app(tmp_path, monkeypatch)
     docs = static / "docs"
-    (docs / "fragments" / "examples").mkdir(parents=True)
-    (docs / "fragments" / "examples" / "one.html").write_text("<h1>Example</h1>", encoding="utf-8")
-    (docs / "downloads").mkdir()
-    (docs / "downloads" / "example.py").write_bytes(b"print('download')\n")
+    (docs / "fragments" / "start-here").mkdir(parents=True)
+    (docs / "fragments" / "start-here" / "index.html").write_text("<h1>DaggerML</h1>", encoding="utf-8")
     client = TestClient(app)
 
-    assert client.get("/docs/examples/one", headers={"host": "127.0.0.1:8765"}).text == "dashboard"
+    assert client.get("/docs/start-here/index", headers={"host": "127.0.0.1:8765"}).text == "dashboard"
     assert (
-        client.get("/docs/static/fragments/examples/one.html", headers={"host": "127.0.0.1:8765"}).text
-        == "<h1>Example</h1>"
-    )
-    assert (
-        client.get("/docs/static/downloads/example.py", headers={"host": "127.0.0.1:8765"}).content
-        == b"print('download')\n"
+        client.get("/docs/static/fragments/start-here/index.html", headers={"host": "127.0.0.1:8765"}).text
+        == "<h1>DaggerML</h1>"
     )
     assert client.get("/docs/static/fragments/missing.html", headers={"host": "127.0.0.1:8765"}).status_code == 404
     assert client.get("/docs/static/%2e%2e/index.html", headers={"host": "127.0.0.1:8765"}).status_code == 404

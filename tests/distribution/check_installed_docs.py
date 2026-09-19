@@ -7,13 +7,11 @@ Requires the dashboard extra and httpx in that environment. No build is run.
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
 import shutil
 import sys
 import tempfile
-import zipfile
 from importlib.metadata import distribution
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
@@ -38,11 +36,9 @@ def main():
     docs = root / "dashboard/static/docs"
     manifest = json.loads((docs / "manifest.json").read_bytes())
     paths = ["manifest.json", *(page["fragment"] for page in manifest["pages"])]
-    paths += manifest["assets"] + manifest["downloads"]
+    paths += manifest["assets"]
     assert any(path.startswith("fragments/") and path.count("/") >= 2 for path in paths)
     assert any(path.startswith("assets/") and path.count("/") >= 3 for path in paths)
-    assert any(path.endswith(".py") and path.count("/") >= 4 for path in manifest["downloads"])
-    assert any(path.endswith(".zip") for path in manifest["downloads"])
     for path in paths:
         relative = PurePosixPath(path)
         assert not relative.is_absolute() and ".." not in relative.parts, path
@@ -86,13 +82,7 @@ def main():
                     response = client.get(f"/docs/static/{path}", headers=headers)
                     assert response.status_code == 200, path
                     assert response.content == (docs / path).read_bytes(), path
-                    if path.endswith(".zip"):
-                        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
-                            assert bundle.namelist(), path
-                            for member in bundle.namelist():
-                                assert f"downloads/examples/{member}" in manifest["downloads"], member
-                                assert bundle.read(member) == (docs / "downloads/examples" / member).read_bytes()
-                for path in ("fragments/missing.html", "assets/missing.png", "downloads/missing.py"):
+                for path in ("fragments/missing.html", "assets/missing.png"):
                     assert client.get(f"/docs/static/{path}", headers=headers).status_code == 404, path
             assert not forbidden, forbidden
     print(f"PASS: {package.metadata['Name']} {package.version}: {len(paths)} packaged Docs files; "

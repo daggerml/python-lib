@@ -292,10 +292,10 @@ be injected explicitly. Remote-backed script execution requires `remote.root`.
 
 ## References
 
-- [Funks, execution, and cache](../use/concepts/funks-execution-cache.qmd)
-- [Built-in integrations](../extend/reference/built-in-integrations.qmd)
-- [Refresh cached work](../use/guides/refresh-cache.qmd)
-- [Error reference](../use/reference/errors.qmd)
+- [Funks, execution, and cache](../use/funks-execution-cache.qmd)
+- [Built-in integrations](../extend/built-in-integrations.qmd)
+- [Refresh cached work](../use/refresh-cache.qmd)
+- [Error reference](../use/error-reference.qmd)
 - [Sharp bits and security](../sharp-bits-and-security.qmd)
 
 ## Document metadata

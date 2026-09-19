@@ -34,7 +34,7 @@ created by the pages before it:
 
 ### Concepts
 
-[Concepts and reference](../use/README.qmd) explain projects, DAG storage,
+[Concepts and reference](../use/index.qmd) explain projects, DAG storage,
 artifacts, runtimes, history, errors, configuration, and operational workflows.
 
 ### Build integrations
@@ -44,9 +44,8 @@ registration, and the contracts that connect them to the runtime.
 
 ### Contribute to DaggerML
 
-[Develop DaggerML](../develop/README.qmd) explains local setup, testing, the
-codebase map, and the architecture behind the public Python and command-line
-surfaces.
+[Contributing](../../CONTRIBUTING.md) explains local setup, testing, and the
+repository workflow. Co-located package READMEs provide architecture orientation.
 
 ### Keep close at hand
 
@@ -56,9 +55,9 @@ surfaces.
 ## References
 
 - [Start here](get-started.qmd)
-- [Concepts](../use/README.qmd)
+- [Concepts](../use/index.qmd)
 - [Extend DaggerML](../extend/index.qmd)
-- [Develop DaggerML](../develop/README.qmd)
+- [Contributing](../../CONTRIBUTING.md)
 
 ## Document metadata
 

@@ -2,6 +2,8 @@
 
 The live Python lessons currently execute through knitr/reticulate, which does not retain inspectable source for functions defined in QMD cells. That forces the documentation to inject definitions from separate Python files, so the authored lesson is no longer the ordinary inline code readers are meant to write.
 
+The mixed-engine and eager source-capture behavior remains current, but `flatten-executable-docs` supersedes this completed change's standalone-download assumptions. Archive this change with `--skip-specs`; the superseding change owns the final documentation structure.
+
 ## What Changes
 
 - Permit Python-only executable pages to use a Jupyter kernel while retaining knitr for pages that require native Bash cells.

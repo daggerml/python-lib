@@ -9,7 +9,7 @@ docs_bootstrap() {
   }
   mkdir -p "$DOCS_BUILD_WORK/moto" "$DOCS_BUILD_WORK/pages"
   local envfile
-  envfile="$("$RETICULATE_PYTHON" "$DOCS_BUILD_ROOT/examples/moto_server_env.py" up --moto-dir "$DOCS_BUILD_WORK/moto" --remote-root "s3://daggerml-docs/artifacts")"
+  envfile="$("$RETICULATE_PYTHON" "$DOCS_BUILD_ROOT/docs/moto_server_env.py" up --moto-dir "$DOCS_BUILD_WORK/moto" --remote-root "s3://daggerml-docs/artifacts")"
   test -s "$envfile"
   cp "$envfile" "$DOCS_BUILD_WORK/fixture.env"
 }
@@ -17,5 +17,5 @@ docs_bootstrap() {
 docs_teardown() {
   : "${DOCS_BUILD_ROOT:?DOCS_BUILD_ROOT is required}"
   : "${DOCS_BUILD_WORK:?DOCS_BUILD_WORK is required}"
-  "$RETICULATE_PYTHON" "$DOCS_BUILD_ROOT/examples/moto_server_env.py" down --moto-dir "$DOCS_BUILD_WORK/moto"
+  "$RETICULATE_PYTHON" "$DOCS_BUILD_ROOT/docs/moto_server_env.py" down --moto-dir "$DOCS_BUILD_WORK/moto"
 }

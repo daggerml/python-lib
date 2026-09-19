@@ -9,16 +9,12 @@ import json
 import re
 import shutil
 import sys
-import zipfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
 import yaml
 
 ROOT = Path(__file__).resolve().parent
-SOURCE_MARKER = re.compile(r"\{\{<\s*dml-source\s+([^\s>]+)\s*>\}\}")
-SNIPPET_MARKER = re.compile(r"\{\{<\s*dml-snippet\s+([^\s>]+)\s+([a-zA-Z0-9_-]+)\s*>\}\}")
-RUN_MARKER = re.compile(r"\{\{<\s*dml-run\s+([^\s>]+)\s*>\}\}")
 FENCE = re.compile(r"^ {0,3}(?P<delimiter>`{3,}|~{3,})(?P<info>[^\n]*)$", re.MULTILINE)
 POLICY = {"eval": True, "cache": False, "freeze": False, "error": False}
 SUPPORTED_ENGINES = {"knitr", "jupyter"}
@@ -31,34 +27,6 @@ def qmd_files(root: Path) -> list[Path]:
         for path in root.rglob("*.qmd")
         if not {"build-staging", "_build", ".quarto"}.intersection(path.relative_to(root).parts)
     )
-
-
-def project_root(qmd: Path) -> Path:
-    for parent in (qmd.parent, *qmd.parents):
-        if (parent / "_quarto.yml").is_file():
-            return parent.resolve()
-    return ROOT.resolve()
-
-
-def source_path(qmd: Path, value: str) -> Path:
-    path = (qmd.parent / value).resolve()
-    examples = (project_root(qmd) / "examples").resolve()
-    if not path.is_relative_to(examples) or path.suffix != ".py" or not path.is_file():
-        raise ValueError(f"{qmd}: dml-source must name a Python file beneath docs/examples: {value}")
-    return path
-
-
-def source_region(source: Path, name: str) -> str:
-    text = source.read_text(encoding="utf-8")
-    begin = f"# docs:begin {name}"
-    end = f"# docs:end {name}"
-    if text.count(begin) != 1 or text.count(end) != 1:
-        raise ValueError(f"{source}: snippet region {name!r} must have exactly one begin and end marker")
-    before, body = text.split(begin, 1)
-    body, after = body.split(end, 1)
-    if end in before or begin in after:
-        raise ValueError(f"{source}: malformed snippet region {name!r}")
-    return body.strip("\n")
 
 
 def frontmatter_metadata(qmd: Path, text: str) -> dict[str, object]:
@@ -118,7 +86,7 @@ def page_dependencies(qmd: Path, text: str) -> list[str]:
 
 
 def execution_order(root: Path) -> list[Path]:
-    pages = [path for path in qmd_files(root) if not path.name.startswith("build-") and path.name != "README.qmd"]
+    pages = [path for path in qmd_files(root) if not path.name.startswith("build-")]
     by_id: dict[str, Path] = {}
     dependencies: dict[str, list[str]] = {}
     for page in pages:
@@ -210,32 +178,8 @@ def validate(root: Path = ROOT) -> None:
             dependencies = []
         policy(metadata, str(qmd))
         page_engine = metadata.get("engine", "knitr")
-        file_backed = bool(SOURCE_MARKER.search(text) or SNIPPET_MARKER.search(text) or RUN_MARKER.search(text))
-        if file_backed and project_home is None:
-            errors.append(f"{qmd}: file-backed Python pages require dml-project-home front matter")
         if project_home is not None and not dependencies:
             errors.append(f"{qmd}: dml-project-home pages require depends-on front matter")
-        for match in SOURCE_MARKER.finditer(text):
-            try:
-                source_path(qmd, match.group(1))
-            except ValueError as exc:
-                errors.append(str(exc))
-        snippet_paths: list[Path] = []
-        for match in SNIPPET_MARKER.finditer(text):
-            try:
-                source = source_path(qmd, match.group(1))
-                source_region(source, match.group(2))
-                snippet_paths.append(source)
-            except ValueError as exc:
-                errors.append(str(exc))
-        run_paths: list[Path] = []
-        for match in RUN_MARKER.finditer(text):
-            try:
-                run_paths.append(source_path(qmd, match.group(1)))
-            except ValueError as exc:
-                errors.append(str(exc))
-        if snippet_paths and (len(run_paths) != 1 or any(path != run_paths[0] for path in snippet_paths)):
-            errors.append(f"{qmd}: dml-snippet blocks require one dml-run for the same source")
         end = 0
         for match in FENCE.finditer(text):
             if match.start() < end:
@@ -259,9 +203,6 @@ def validate(root: Path = ROOT) -> None:
                     errors.append(f"{location}: unsupported executable engine {language!r}")
                 if page_engine == "jupyter" and language in {"bash", "r"}:
                     errors.append(f"{location}: jupyter pages may contain only Python executable cells")
-                relative_parts = qmd.relative_to(root).parts
-                if relative_parts and relative_parts[0] == "use" and language in {"python", "bash", "r"}:
-                    errors.append(f"{location}: concept pages must use prose or explicitly marked pseudocode")
                 options = "\n".join(re.findall(r"^\s*#\| ?(.*)$", body, re.MULTILINE))
                 policy(yaml.safe_load(options), location)
                 for key, value in re.findall(
@@ -279,53 +220,12 @@ def validate(root: Path = ROOT) -> None:
             prefix = text[: match.start()].rstrip()
             if language not in {"mermaid", "dot"} and not re.search(r"<!--\s*docs:pseudocode:\s*\S[^<>]*-->$", prefix):
                 errors.append(f"{location}: static {language!r} fence must be executable or marked docs:pseudocode")
-    for source in (root / "examples").rglob("*.py"):
-        python_policy(source.read_text(encoding="utf-8"), str(source))
     try:
         execution_order(root)
     except ValueError as exc:
         errors.append(str(exc))
     if errors:
         raise ValueError("\n".join(errors))
-
-
-def expand_sources(qmd: Path, text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        source = source_path(qmd, match.group(1))
-        relative = source.relative_to(project_root(qmd)).as_posix()
-        displayed = source.read_text(encoding="utf-8").rstrip()
-        return (
-            f'::: {{data-dml-source="{relative}"}}\n````python\n{displayed}\n````\n:::\n\n'
-            "```{python}\n#| echo: false\n#| output: false\n"
-            "import os\nimport runpy\nimport sys\nfrom pathlib import Path\n"
-            f'source = Path(os.environ["DOCS_SOURCE_ROOT"]) / "{relative}"\n'
-            "sys.path.insert(0, str(source.parent))\n"
-            '_ = runpy.run_path(str(source), run_name="__main__")\n```'
-        )
-
-    def replace_snippet(match: re.Match[str]) -> str:
-        source = source_path(qmd, match.group(1))
-        relative = source.relative_to(project_root(qmd)).as_posix()
-        displayed = source_region(source, match.group(2))
-        return (
-            f'::: {{data-dml-source="{relative}" data-dml-region="{match.group(2)}"}}\n'
-            f"````python\n{displayed}\n````\n:::\n"
-        )
-
-    def replace_run(match: re.Match[str]) -> str:
-        source = source_path(qmd, match.group(1))
-        relative = source.relative_to(project_root(qmd)).as_posix()
-        return (
-            "```{python}\n#| echo: false\n"
-            "import os\nimport runpy\nimport sys\nfrom pathlib import Path\n"
-            f'source = Path(os.environ["DOCS_SOURCE_ROOT"]) / "{relative}"\n'
-            "sys.path.insert(0, str(source.parent))\n"
-            '_ = runpy.run_path(str(source), run_name="__main__")\n```'
-        )
-
-    text = SOURCE_MARKER.sub(replace, text)
-    text = SNIPPET_MARKER.sub(replace_snippet, text)
-    return RUN_MARKER.sub(replace_run, text)
 
 
 def prepare(work: Path) -> None:
@@ -336,7 +236,7 @@ def prepare(work: Path) -> None:
     )
     order = execution_order(work)
     for qmd in qmd_files(work):
-        text = expand_sources(qmd, qmd.read_text(encoding="utf-8"))
+        text = qmd.read_text(encoding="utf-8")
         metadata = frontmatter_metadata(qmd, text)
         engine = metadata.get("engine", "knitr")
         page = source_page_id(qmd, work)
@@ -447,8 +347,7 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
         shutil.rmtree(staging)
     fragments = staging / "fragments"
     assets = staging / "assets"
-    downloads = staging / "downloads"
-    manifest: dict[str, object] = {"pages": [], "assets": [], "downloads": []}
+    manifest: dict[str, object] = {"pages": [], "assets": []}
     execution_positions = {
         source_page_id(source, ROOT): position for position, source in enumerate(execution_order(ROOT))
     }
@@ -473,23 +372,6 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
             cast_assets = manifest["assets"]
             assert isinstance(cast_assets, list)
             cast_assets.append(target.relative_to(staging).as_posix())
-    for source in sorted((ROOT / "examples").rglob("*.py")):
-        target = downloads / source.relative_to(ROOT)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-        cast_downloads = manifest["downloads"]
-        assert isinstance(cast_downloads, list)
-        cast_downloads.append(target.relative_to(staging).as_posix())
-    for example in sorted(
-        path for path in (ROOT / "examples").iterdir() if path.is_dir() and any(path.rglob("*.py"))
-    ):
-        bundle = downloads / "examples" / example.name / f"{example.name}.zip"
-        with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as archive:
-            for source in sorted(example.rglob("*.py")):
-                archive.write(source, source.relative_to(example.parent))
-        cast_downloads = manifest["downloads"]
-        assert isinstance(cast_downloads, list)
-        cast_downloads.append(bundle.relative_to(staging).as_posix())
     for path in sorted(render.rglob("*.html")):
         page = page_id(path, render)
         content = fragment(path.read_text(encoding="utf-8"))
@@ -521,7 +403,9 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
         )
     if require_all:
         expected = {
-            page_id(path.with_suffix(".html"), ROOT) for path in qmd_files(ROOT) if not path.name.startswith("build-")
+            page_id(path.with_suffix(".html"), ROOT)
+            for path in qmd_files(ROOT)
+            if not path.name.startswith("build-")
         }
         actual = {page_id(path, fragments) for path in fragments.rglob("*.html")}
         if expected != actual:

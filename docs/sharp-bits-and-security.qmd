@@ -44,7 +44,7 @@ literal item key does not create a topology edge or suppress one. These forms
 still execute with normal `Dag` behavior, but users must provide their own
 runtime ordering and cannot rely on dagclass dependency binding. Prefer direct
 `self.<name>` syntax and ensure every assigned node exists before it is read.
-See [Understand `self` inside dagclass methods](use/guides/author-a-dag.qmd#understand-self-inside-dagclass-methods)
+See [Understand `self` inside dagclass methods](use/author-a-dag.qmd#understand-self-inside-dagclass-methods)
 for the complete reserved-name list and examples.
 
 ### Editable dependency changes do not affect a funk cache key

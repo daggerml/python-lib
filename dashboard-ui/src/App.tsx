@@ -33,7 +33,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import dagMark from "./assets/daggerml-dag-mark.png";
 import { api, subscribeToEvents, subscribeToLogs } from "./api";
 import { FlowGraph } from "./components/FlowGraph";
@@ -578,45 +578,7 @@ interface DocsNavSection {
   direct?: boolean;
 }
 
-const START_DOCS = [
-  "start-here",
-  "start-here/get-started",
-  "start-here/dags",
-  "start-here/funks",
-  "start-here/dagclasses",
-];
-const DOCS_GROUP_ORDER = new Map([
-  "README", "index", "concepts", "guides", "reference", "architecture",
-].map((name, index) => [name, index]));
-const USE_DOCS_ORDER = new Map([
-  "use/README",
-  "use/concepts/README",
-  "use/concepts/projects",
-  "use/concepts/dags-nodes-results",
-  "use/concepts/funks-execution-cache",
-  "use/concepts/artifacts-data-codecs",
-  "use/concepts/runtimes",
-  "use/concepts/history-remotes",
-  "use/concepts/errors-provenance",
-  "use/concepts/errors",
-  "use/guides/README",
-  "use/guides/temporary-projects",
-  "use/guides/inspect-a-completed-dag",
-  "use/guides/artifacts",
-  "use/guides/refresh-cache",
-  "use/guides/share-reuse",
-  "use/guides/remote-execution",
-  "use/guides/docker-workloads",
-  "use/guides/runtime-inspection-cancellation",
-  "use/guides/custom-codecs",
-  "use/guides/custom-dag-dashboards",
-  "use/reference/README",
-  "use/reference/python-authoring",
-  "use/reference/cli",
-  "use/reference/configuration",
-  "use/reference/runtime-state",
-  "use/reference/errors",
-].map((id, index) => [id, index]));
+const DOCS_ROOT_PAGE = "start-here";
 
 function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark" | "light"; onNavigate: (id?: string, hash?: string) => void }) {
   const [pages, setPages] = useState<DocsManifestPage[]>();
@@ -625,7 +587,7 @@ function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark
   const [filter, setFilter] = useState("");
   const docsContentRef = useRef<HTMLElement>(null);
   const diagramSequence = useRef(0);
-  const selected = pages?.find((item) => item.id === (pageId ?? "start-here"));
+  const selected = pages?.find((item) => item.id === (pageId ?? DOCS_ROOT_PAGE));
 
   useEffect(() => {
     let active = true;
@@ -751,15 +713,10 @@ function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark
       }
       return <details key={`${section.id}-${current}`} open={Boolean(filter) || current || section.id === "start"}>
         <summary>{section.label}<span>{section.pages.length}</span></summary>
-        <div>{section.pages.map((item, index) => {
-          const subgroup = docsSubgroup(section.id, item.id);
-          const previous = index > 0 ? docsSubgroup(section.id, section.pages[index - 1].id) : undefined;
-          return <Fragment key={item.id}>{subgroup && subgroup !== previous && <p className="docs-nav__subheading">{humanize(subgroup)}</p>}<button type="button" className={item.id === selected?.id ? "active" : ""} aria-current={item.id === selected?.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item)}</button></Fragment>;
-        })}</div>
+        <div>{section.pages.map((item) => <button key={item.id} type="button" className={item.id === selected?.id ? "active" : ""} aria-current={item.id === selected?.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item)}</button>)}</div>
       </details>;
     })}{sections.length === 0 && <p className="docs-nav__empty">No matching pages</p>}</div>
   </aside>;
-  if (!pageId && !selected) return <section className="docs-layout">{navigation}<div className="docs-content"><PageHeader eyebrow="DaggerML documentation" title="Docs" description="Guides, concepts, reference material, and executable examples." /></div></section>;
   if (!selected) return <Problem title="Documentation page not found" detail="The requested page is not part of this packaged documentation set." />;
   return <section className="docs-layout">{navigation}<article ref={docsContentRef} className="docs-content" onClick={interactWithDocs} dangerouslySetInnerHTML={{ __html: content ?? "" }} />{selected.headings.length > 0 && <aside className="docs-outline" aria-label="On this page"><p className="nav-label">On this page</p>{selected.headings.map((heading) => <button key={heading.id} type="button" onClick={() => onNavigate(selected.id, `#${encodeURIComponent(heading.id)}`)}>{heading.text}</button>)}</aside>}</section>;
 }
@@ -773,42 +730,24 @@ function docsLabel(page: DocsManifestPage) {
 
 function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSection[] {
   const definitions: Array<{ id: string; label: string; matches: (id: string) => boolean; direct?: boolean }> = [
-    { id: "start", label: "Start here", matches: (id: string) => START_DOCS.includes(id) },
-    { id: "concepts", label: "Concepts", matches: (id: string) => id === "use" || id.startsWith("use/") },
+    { id: "start", label: "Start here", matches: (id: string) => id === "start-here" || id.startsWith("start-here/") },
+    { id: "use", label: "Use", matches: (id: string) => id === "use" || id.startsWith("use/") },
     { id: "extend", label: "Extend", matches: (id: string) => id === "extend" || id.startsWith("extend/") },
-    { id: "develop", label: "Develop", matches: (id: string) => id === "develop" || id.startsWith("develop/") },
     { id: "glossary", label: "Glossary", matches: (id: string) => id === "glossary", direct: true },
     { id: "sharp-bits", label: "Sharp bits and security", matches: (id: string) => id === "sharp-bits-and-security", direct: true },
-    { id: "more", label: "More", matches: (_id: string) => true },
   ];
   const remaining = new Set(pages);
-  const startOrder = new Map(START_DOCS.map((id, index) => [id, index]));
   const query = filter.trim().toLocaleLowerCase();
   return definitions.flatMap((definition) => {
     const sectionPages = pages.filter((page) => remaining.has(page) && definition.matches(page.id));
     sectionPages.forEach((page) => remaining.delete(page));
     sectionPages.sort((left, right) => {
-      if (definition.id === "start") return (left.order ?? startOrder.get(left.id) ?? 99) - (right.order ?? startOrder.get(right.id) ?? 99);
-      return docsPageOrder(left.id) - docsPageOrder(right.id) || docsLabel(left).localeCompare(docsLabel(right));
+      if (definition.id === "start") return (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
+      return 0;
     });
     const matches = query ? sectionPages.filter((page) => `${docsLabel(page)} ${page.id}`.toLocaleLowerCase().includes(query)) : sectionPages;
     return matches.length > 0 ? [{ id: definition.id, label: definition.label, pages: matches, direct: definition.direct }] : [];
   });
-}
-
-function docsPageOrder(id: string) {
-  const useOrder = USE_DOCS_ORDER.get(id);
-  if (useOrder !== undefined) return useOrder;
-  const parts = id.split("/");
-  const subgroup = parts[1] ?? "README";
-  return (DOCS_GROUP_ORDER.get(subgroup) ?? 50) * 100 + (parts.at(-1) === "README" || parts.at(-1) === "index" ? 0 : 1);
-}
-
-function docsSubgroup(section: string, id: string) {
-  if (!["concepts", "extend", "develop"].includes(section)) return undefined;
-  const parts = id.split("/");
-  if (section === "concepts" && parts[0] === "examples") return "examples";
-  return parts.length > 2 ? parts[1] : undefined;
 }
 
 function PageHeader({ eyebrow, title, description, actions, className = "" }: { eyebrow: string; title: string; description?: string; actions?: ReactNode; className?: string }) {

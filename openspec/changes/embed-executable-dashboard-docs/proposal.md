@@ -2,6 +2,8 @@
 
 Documentation and examples currently live outside the dashboard and their displayed snippets are not verified by rendering. Bring them into the persistent dashboard layout and make documentation builds execute the code they publish so failures block CI and releases.
 
+This completed change's documentation hierarchy and download deltas are superseded by `flatten-executable-docs`. Archive this change with `--skip-specs`; the superseding change owns the final documentation requirements.
+
 ## What Changes
 
 - Convert human-facing docs to executable Quarto QMD, retaining the Use, Extend, Develop, and getting-started organization.

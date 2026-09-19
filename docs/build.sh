@@ -1,83 +1,102 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-rm -rf "$root/docs/build-staging"
-python="${DOCS_PYTHON:-}"
-if [[ -z "$python" ]] && command -v python >/dev/null; then
-  python="$(command -v python)"
-fi
-if [[ -z "$python" ]] && command -v uv >/dev/null; then
-  python="$(uv run --dev python -c 'import sys; print(sys.executable)')"
-fi
-
-if [[ -z "$python" ]]; then
-  printf '%s\n' 'Documentation build requires Python; set DOCS_PYTHON to the project interpreter.' >&2
-  exit 127
-fi
-if ! command -v quarto >/dev/null; then
-  printf '%s\n' 'Documentation build requires Quarto 1.7.31; see docs/build-tooling.md.' >&2
-  exit 127
-fi
-if [[ "$(quarto --version)" != "1.7.31" ]]; then
-  printf '%s\n' 'Documentation build requires Quarto 1.7.31; see docs/build-tooling.md.' >&2
-  exit 1
-fi
-if ! command -v R >/dev/null; then
-  printf '%s\n' 'Documentation build requires R 4.4.3 with knitr, rmarkdown, and reticulate; see docs/build-tooling.md.' >&2
-  exit 127
-fi
-if ! Rscript --vanilla "$root/docs/build-requirements.R"; then
-  printf '%s\n' 'Documentation build requires the pinned R packages; see docs/build-tooling.md.' >&2
-  exit 1
-fi
-if ! "$python" -c 'import ipykernel, jupyter' >/dev/null 2>&1; then
-  printf '%s\n' 'Documentation build requires Jupyter in the project development environment; run uv sync --group dev --all-extras.' >&2
-  exit 127
-fi
-export QUARTO_PYTHON="$python"
-
-work="$(mktemp -d "${TMPDIR:-/tmp}/daggerml-docs.XXXXXX")"
-mkdir -p "$work/workspace"
-cleanup() {
-  local status=$?
-  local teardown_status=0
-  DOCS_BUILD_ROOT="$root" DOCS_BUILD_WORK="$work" RETICULATE_PYTHON="$python" DOCS_BUILD_LIB="$root/docs/build-lib.sh" \
-    quarto render "$root/docs/build-teardown.qmd" --output-dir "$work/teardown" || teardown_status=$?
-  rm -rf "$work"
-  if [[ $status -ne 0 || $teardown_status -ne 0 ]]; then
-    rm -rf "$root/docs/build-staging"
-  fi
-  if [[ $status -eq 0 && $teardown_status -ne 0 ]]; then
-    status=$teardown_status
-  fi
-  exit "$status"
+usage() {
+  command_name="$(basename "$0")"
+  printf '%s\n' \
+    "Usage: $command_name [--auto|--full|--docs-only|--ui-only]" \
+    "" \
+    "Build the executable documentation and packaged dashboard frontend." \
+    "" \
+    "Modes:" \
+    "  --auto       Rebuild stale components from repository input fingerprints (default)." \
+    "  --full       Rebuild documentation and frontend from scratch." \
+    "  --docs-only  Rebuild and package documentation without rebuilding the frontend." \
+    "  --ui-only    Rebuild the frontend while preserving packaged documentation." \
+    "  -h, --help   Show this help message." \
+    "" \
+    "Use --full after changing untracked build tools or the external build environment."
 }
-trap cleanup EXIT
 
-export DOCS_BUILD_ROOT="$root" DOCS_BUILD_WORK="$work" DOCS_WORKSPACE_ROOT="$work/workspace" RETICULATE_PYTHON="$("$python" -c 'import sys; print(sys.executable)')" DOCS_BUILD_LIB="$root/docs/build-lib.sh"
-export PATH="$(dirname "$RETICULATE_PYTHON"):$PATH"
-# Do not inherit developer projects, credentials, profiles, or service endpoints.
-for name in ${!DML_@} ${!AWS_@}; do
-  unset "$name"
-done
-export DML_CONFIG_HOME="$work/config" XDG_CONFIG_HOME="$work/config"
-export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true
-"$python" "$root/docs/build.py" validate
-quarto render "$root/docs/build-bootstrap.qmd" --output-dir "$work/bootstrap"
-source "$work/fixture.env"
-"$python" "$root/docs/build.py" prepare --work "$work/source"
-export DOCS_SOURCE_ROOT="$work/source"
-quarto render "$work/source" --output-dir "$work/render"
-# Quarto excludes README.qmd from project discovery, even with an explicit glob.
-shopt -s globstar nullglob
-for page in "$work/source"/**/README.qmd; do
-  quarto render "$page" --metadata-file "$work/source/_quarto.yml"
-  target="$work/render/${page#"$work/source/"}"
-  mkdir -p "$(dirname "$target")"
-  cp "${page%.qmd}.html" "${target%.qmd}.html"
-  if [[ -d "${page%.qmd}_files" ]]; then
-    cp -R "${page%.qmd}_files" "$(dirname "$target")/"
+mode="auto"
+if [[ $# -gt 1 ]]; then usage >&2; exit 2; fi
+if [[ $# -eq 1 ]]; then
+  case "$1" in
+    --auto) mode="auto" ;; --full) mode="full" ;; --docs-only) mode="docs" ;; --ui-only) mode="ui" ;;
+    -h|--help) usage; exit 0 ;;
+    *) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+fi
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+staging="$root/docs/build-staging"
+static="$root/src/daggerml/dashboard/static"
+tools="${DML_DOCS_TOOLS_ROOT:-$root/.tools}"
+toolchain="$tools/docs"
+micromamba="$tools/bin/micromamba"
+toolchain_stamp="$toolchain/.daggerml-toolchain"
+build_state="$tools/dashboard-build-state"
+toolchain_spec="quarto=1.7.31 r-base=4.4.3 r-knitr=1.49 r-rmarkdown=2.29 r-reticulate=1.40.0 r-xfun=0.49"
+python="${DOCS_PYTHON:-$root/.venv/bin/python}"
+mkdir -p "$tools/tmp"
+
+fingerprint() {
+  { git -C "$root" ls-files -co --exclude-standard -- "$@" | LC_ALL=C sort -u | while IFS= read -r path; do
+    [[ -f "$root/$path" ]] || continue
+    printf '%s\0' "$path"; git -C "$root" hash-object -- "$path"
+  done; } | git -C "$root" hash-object --stdin
+}
+state_value() { key="$1"; [[ -f "$build_state" ]] || return 0; awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); exit }' "$build_state"; }
+docs_output_ready() { [[ -f "$static/docs/manifest.json" && -d "$static/docs/fragments" && -d "$static/docs/assets" ]]; }
+ui_output_ready() { [[ -f "$static/index.html" && -d "$static/assets" ]]; }
+
+docs_fingerprint="$(fingerprint docs src/daggerml pyproject.toml uv.lock)"
+ui_fingerprint="$(fingerprint docs/build.sh dashboard-ui)"
+stored_docs_fingerprint="$(state_value docs)"; stored_ui_fingerprint="$(state_value ui)"
+build_docs=false; build_ui=false
+case "$mode" in
+  auto)
+    if [[ "$docs_fingerprint" != "$stored_docs_fingerprint" ]] || ! docs_output_ready; then build_docs=true; fi
+    if [[ "$ui_fingerprint" != "$stored_ui_fingerprint" ]] || ! ui_output_ready; then build_ui=true; fi ;;
+  full) build_docs=true; build_ui=true ;; docs) build_docs=true ;; ui) build_ui=true ;;
+esac
+if [[ "$build_docs" == false && "$build_ui" == false ]]; then printf 'Dashboard documentation and frontend are up to date.\n'; exit 0; fi
+plan=(); [[ "$build_docs" == true ]] && plan+=(documentation); [[ "$build_ui" == true ]] && plan+=(frontend)
+printf 'Build plan (%s): %s\n' "$mode" "${plan[*]}"
+
+if [[ "$build_docs" == true ]]; then
+  if [[ ! -x "$python" ]]; then printf 'Project Python not found at %s; run uv sync --group dev --all-extras or set DOCS_PYTHON.\n' "$python" >&2; exit 127; fi
+  case "$(uname -s):$(uname -m)" in
+    Darwin:arm64) micromamba_platform="osx-arm64" ;; Darwin:x86_64) micromamba_platform="osx-64" ;;
+    Linux:aarch64|Linux:arm64) micromamba_platform="linux-aarch64" ;; Linux:x86_64) micromamba_platform="linux-64" ;;
+    *) printf 'Unsupported documentation build platform: %s %s\n' "$(uname -s)" "$(uname -m)" >&2; exit 1 ;;
+  esac
+  docs_home="$tools/home"; docs_cache="$tools/cache"; docs_config="$tools/config"; docs_mamba="$tools/mamba"; docs_tmp="$tools/tmp"
+  mkdir -p "$tools/bin" "$docs_home" "$docs_cache" "$docs_config" "$docs_mamba/pkgs" "$docs_tmp"
+  if [[ ! -x "$micromamba" ]]; then
+    if ! command -v curl >/dev/null || ! command -v tar >/dev/null; then printf 'Documentation tool bootstrap requires curl and tar.\n' >&2; exit 127; fi
+    curl --fail --location --silent --show-error "https://micro.mamba.pm/api/micromamba/$micromamba_platform/latest" | tar -xj -C "$tools/bin" --strip-components=1 bin/micromamba
   fi
-done
-"$python" "$root/docs/build.py" stage --render "$work/render" --staging "$root/docs/build-staging"
+  current_spec=""; [[ -f "$toolchain_stamp" ]] && current_spec="$(<"$toolchain_stamp")"
+  if [[ "$current_spec" != "$toolchain_spec" ]]; then
+    read -r -a packages <<< "$toolchain_spec"; [[ -d "$toolchain/conda-meta" ]] && action=install || action=create
+    env HOME="$docs_home" XDG_CACHE_HOME="$docs_cache" XDG_CONFIG_HOME="$docs_config" MAMBA_ROOT_PREFIX="$docs_mamba" CONDA_PKGS_DIRS="$docs_mamba/pkgs" TMPDIR="$docs_tmp" "$micromamba" --no-rc "$action" --yes --prefix "$toolchain" --override-channels --channel conda-forge "${packages[@]}"
+    printf '%s\n' "$toolchain_spec" > "$toolchain_stamp"
+  fi
+  rm -rf "$staging"
+  env HOME="$docs_home" XDG_CACHE_HOME="$docs_cache" XDG_CONFIG_HOME="$docs_config" MAMBA_ROOT_PREFIX="$docs_mamba" CONDA_PKGS_DIRS="$docs_mamba/pkgs" TMPDIR="$docs_tmp" DOCS_PYTHON="$python" QUARTO_PYTHON="$python" PATH="$toolchain/bin:$(dirname "$python"):$PATH" QUARTO_SHARE_PATH="$toolchain/share/quarto" QUARTO_DENO="$toolchain/bin/deno" QUARTO_DENO_DOM="$toolchain/lib/deno_dom.dylib" QUARTO_PANDOC="$toolchain/bin/pandoc" QUARTO_ESBUILD="$toolchain/bin/esbuild" QUARTO_TYPST="$toolchain/bin/typst" QUARTO_DART_SASS="$toolchain/bin/sass" bash "$root/docs/build-render.sh"
+  for path in manifest.json fragments assets; do [[ -e "$staging/$path" ]] || { printf 'Documentation build did not stage %s.\n' "$path" >&2; exit 1; }; done
+  "$python" -c 'import json, sys; json.load(open(sys.argv[1], encoding="utf-8"))' "$staging/manifest.json"
+fi
+
+preserved_docs=""
+cleanup() { [[ -n "$preserved_docs" && -d "$preserved_docs" ]] && rm -rf "$preserved_docs"; }
+trap cleanup EXIT
+if [[ "$build_ui" == true ]]; then
+  if [[ "$build_docs" == false && -d "$static/docs" ]]; then preserved_docs="$(mktemp -d "$tools/tmp/dashboard-docs.XXXXXX")"; mkdir -p "$preserved_docs/docs"; cp -R "$static/docs/." "$preserved_docs/docs/"; fi
+  (cd "$root/dashboard-ui" && npm run build)
+  if [[ -n "$preserved_docs" ]]; then mkdir -p "$static/docs"; cp -R "$preserved_docs/docs/." "$static/docs/"; fi
+fi
+if [[ "$build_docs" == true ]]; then rm -rf "$static/docs"; mkdir -p "$static/docs"; cp -R "$staging/." "$static/docs/"; stored_docs_fingerprint="$docs_fingerprint"; fi
+if [[ "$build_ui" == true ]]; then stored_ui_fingerprint="$ui_fingerprint"; fi
+printf 'docs=%s\nui=%s\n' "$stored_docs_fingerprint" "$stored_ui_fingerprint" > "$build_state"

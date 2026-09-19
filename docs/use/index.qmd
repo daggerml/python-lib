@@ -1,0 +1,12 @@
+# Use DaggerML
+
+Use the CLI to create and operate a research project. Use Python to author DAGs and funks within that project.
+
+1. [Get started](../start-here/get-started.qmd)
+2. Learn the concepts: [projects](projects.qmd), [DAGs, nodes, and results](dags-nodes-results.qmd), [funks, execution, and cache](funks-execution-cache.qmd), [runtimes](runtimes.qmd), [artifacts, data, and codecs](artifacts-data-codecs.qmd), [history and remotes](history-remotes.qmd), and [errors](errors.qmd).
+3. Follow a task-focused guide: [author a DAG](author-a-dag.qmd), [run Docker workloads](docker-workloads.qmd), [run work remotely](remote-execution.qmd), [manage artifacts](artifacts.qmd), [write a custom codec](custom-codecs.qmd), [use a temporary project](temporary-projects.qmd), [inspect and cancel runtimes](runtime-inspection-cancellation.qmd), [refresh cached work](refresh-cache.qmd), [inspect a completed DAG](inspect-a-completed-dag.qmd), [provide custom DAG dashboards](custom-dag-dashboards.qmd), and [share and reuse research](share-reuse.qmd).
+4. Consult the reference: [CLI](cli.qmd), [Python authoring](python-authoring.qmd), [configuration](configuration.qmd), [runtime state](runtime-state.qmd), and [errors](error-reference.qmd).
+
+The [glossary](../glossary.qmd) defines shared terms. The
+[documentation home](../start-here/index.qmd) explains the product rationale and links the
+executable Start here course.

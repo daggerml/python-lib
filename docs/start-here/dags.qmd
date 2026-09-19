@@ -83,7 +83,7 @@ print(dag.keys())
 Functions are data in DaggerML. Putting `docker_build` in the DAG produces a
 callable node; calling that node records both the inputs and the produced image.
 For this live build, the harness quietly packages the current checkout into the
-same S3-backed context used by the repository's Docker examples.
+same S3-backed context used by this tutorial's Docker build.
 
 ```{python}
 #| echo: false
@@ -97,7 +97,7 @@ context_uri = S3Store().tar(
     excludes=(
         ".git", ".dml", ".tools", "ignore", ".venv", ".mypy_cache",
         ".pytest_cache", "__pycache__", "*.pyc", "tests", "build", "dist",
-        "docs", "dashboard-ui", "openspec", ".github",
+        "dashboard-ui", "openspec", ".github",
         "src/daggerml/dashboard/static",
     ),
     symlinks="ignore",
@@ -109,7 +109,7 @@ context = dag.put(context_uri, name="context-tarball")
 build = dag.put(docker_build, name="build-image")
 image = build(
     context,
-    ["-f", "./examples/dkr-ctx/Dockerfile.docs"],
+    ["-f", "./docs/Dockerfile"],
     name="image",
 )
 
@@ -129,9 +129,9 @@ The [Funks](funks.qmd) lesson now can import this exact result with
 
 ## References
 
-- [Python authoring reference](../use/reference/python-authoring.qmd)
-- [Artifacts, data, and codecs](../use/concepts/artifacts-data-codecs.qmd)
-- [Error reference](../use/reference/errors.qmd)
+- [Python authoring reference](../use/python-authoring.qmd)
+- [Artifacts, data, and codecs](../use/artifacts-data-codecs.qmd)
+- [Error reference](../use/error-reference.qmd)
 
 ## Document metadata
 
