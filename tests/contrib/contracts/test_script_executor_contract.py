@@ -12,6 +12,7 @@ import pytest
 import daggerml.contrib.executors.script as script_mod
 from daggerml import Runnable, Uri
 from daggerml.api import DmlRepoError
+from daggerml.contrib import api
 from daggerml.contrib.executors.script import ScriptExecutor
 
 
@@ -90,6 +91,52 @@ def test_contrib_script_001a__script_kwargs_normalize_tags():
     assert kwargs["tags"] == ["candidate", "research.v0"]
     with pytest.raises(DmlRepoError, match="tags must be a list of strings"):
         ScriptExecutor._script_kwargs({"fn": fn, "tags": "candidate"})
+
+
+def test_contrib_script_001b__funkify_captures_script_before_staging(monkeypatch):
+    def helper(value):
+        return value + 1
+
+    def fn(dag, value):
+        return helper(value)
+
+    delayed = api.funkify(fn, extra_objs=[helper], post_lines=["CAPTURED = True"])
+    captured = delayed.kwargs["script"]
+    assert delayed.kwargs["fn_name"] == "fn"
+    assert "def helper" in captured
+    assert "CAPTURED = True" in captured
+
+    def fail_if_rendered(cls, fn, extra_objs, post_lines):
+        raise AssertionError("source was inspected after funkification")
+
+    monkeypatch.setattr(ScriptExecutor, "_render_script", classmethod(fail_if_rendered))
+    resolved, staged = ScriptExecutor._script_kwargs(delayed.kwargs)
+    assert resolved["fn_name"] == "fn"
+    assert staged == captured
+
+
+def test_contrib_script_001c__funkify_fails_immediately_when_source_is_unavailable(monkeypatch):
+    def fn(dag):
+        return 1
+
+    def unavailable(_obj):
+        raise OSError("source cache is empty")
+
+    monkeypatch.setattr(script_mod.inspect, "getsource", unavailable)
+    with pytest.raises(DmlRepoError, match="Failed to serialize object source: source cache is empty"):
+        api.funkify(fn)
+
+
+def test_contrib_script_001d__eager_capture_does_not_include_authoring_globals():
+    authoring_secret = "must-not-be-captured"
+
+    def fn(dag):
+        return authoring_secret
+
+    delayed = api.funkify(fn)
+
+    assert "must-not-be-captured" not in delayed.kwargs["script"]
+    assert "authoring_secret" in delayed.kwargs["script"]
 
 
 def test_contrib_script_002__rendered_source_rejects_pathological_wrapped_functions():

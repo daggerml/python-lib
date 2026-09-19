@@ -423,9 +423,21 @@ def funkify(
 ) -> Callable[[FunkifyInput], DelayedRunnable] | DelayedRunnable:
     def _make(value: FunkifyInput) -> DelayedRunnable:
         if callable(value):
-            if "fn" in kwargs:
-                raise DmlRepoError("Unknown kwarg: fn")
-            return DelayedRunnable(uri=uri, adapter=adapter, sub=None, kwargs={"fn": value, **kwargs})
+            reserved = sorted({"fn", "script", "fn_name"} & kwargs.keys())
+            if reserved:
+                raise DmlRepoError(f"Unknown kwarg: {reserved[0]}")
+            delayed_kwargs = {"fn": value, **kwargs}
+            if uri == "script":
+                from daggerml.contrib.executors.script import ScriptExecutor
+
+                script = ScriptExecutor._render_script(
+                    value,
+                    extra_objs=list(kwargs.get("extra_objs", [])),
+                    post_lines=list(kwargs.get("post_lines", [])),
+                )
+                delayed_kwargs["script"] = script
+                delayed_kwargs["fn_name"] = value.__name__
+            return DelayedRunnable(uri=uri, adapter=adapter, sub=None, kwargs=delayed_kwargs)
         if isinstance(value, (Runnable, DelayedRunnable)):
             return DelayedRunnable(uri=uri, adapter=adapter, sub=value, kwargs=dict(kwargs))
         raise DmlRepoError(f"Invalid funkify input: {type(value).__name__}")

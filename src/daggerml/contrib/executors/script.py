@@ -45,23 +45,33 @@ class ScriptExecutor(ExecutorBase):
 
     @classmethod
     def _script_kwargs(cls, kwargs: dict) -> tuple[dict, str]:
-        allowed = {"fn", "prepop", "extra_objs", "post_lines", "tags"}
+        allowed = {"fn", "fn_name", "script", "prepop", "extra_objs", "post_lines", "tags"}
         unknown = sorted(set(kwargs.keys()) - allowed)
         if unknown:
             bad = ", ".join(unknown)
             raise DmlRepoError(f"Unknown script executor kwargs: {bad}")
-        fn = kwargs["fn"]
+        fn = kwargs.get("fn")
         prepop = kwargs.get("prepop", {})
         extra_objs = list(kwargs.get("extra_objs", []))
         post_lines = list(kwargs.get("post_lines", []))
         tags = kwargs.get("tags", [])
         if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
             raise DmlRepoError("script tags must be a list of strings")
-        params = list(inspect.signature(fn).parameters.values())
-        if not params:
-            raise DmlRepoError("script fn must include at least one parameter")
-        script = cls._render_script(fn, extra_objs=extra_objs, post_lines=post_lines)
-        resolved = {"prepop": prepop, "fn_name": fn.__name__}
+        script = kwargs.get("script")
+        fn_name = kwargs.get("fn_name")
+        if (script is None) != (fn_name is None):
+            raise DmlRepoError("script and fn_name must be captured together")
+        if script is None:
+            if not callable(fn):
+                raise DmlRepoError("script fn must be callable")
+            params = list(inspect.signature(fn).parameters.values())
+            if not params:
+                raise DmlRepoError("script fn must include at least one parameter")
+            script = cls._render_script(fn, extra_objs=extra_objs, post_lines=post_lines)
+            fn_name = fn.__name__
+        elif not isinstance(script, str) or not isinstance(fn_name, str):
+            raise DmlRepoError("captured script and fn_name must be strings")
+        resolved = {"prepop": prepop, "fn_name": fn_name}
         if tags:
             resolved["tags"] = sorted(set(tags))
         return resolved, script
