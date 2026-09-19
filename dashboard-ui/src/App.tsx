@@ -1,5 +1,4 @@
 import {
-  Activity,
   AlertTriangle,
   Archive,
   BookOpen,
@@ -11,7 +10,6 @@ import {
   Command,
   Copy,
   GitBranch,
-  GitCommitHorizontal,
   FolderKanban,
   LayoutDashboard,
   ListTodo,
@@ -19,7 +17,6 @@ import {
   Menu,
   Minimize2,
   Moon,
-  Network,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -34,6 +31,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { DagIcon, CommitIcon, RunIcon, CacheIcon, RemoteIcon } from "./components/ConceptIcon";
 import dagMark from "./assets/daggerml-dag-mark.png";
 import { api, subscribeToEvents, subscribeToLogs } from "./api";
 import { FlowGraph } from "./components/FlowGraph";
@@ -61,13 +59,13 @@ import type {
   StatusPayload,
 } from "./types";
 
-const PROJECT_NAV: Array<{ id: PageId; label: string; icon: typeof LayoutDashboard; shortcut: string }> = [
+const PROJECT_NAV: Array<{ id: PageId; label: string; icon: React.ComponentType; shortcut: string }> = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, shortcut: "G O" },
-  { id: "dags", label: "DAG Explorer", icon: Network, shortcut: "G D" },
+  { id: "dags", label: "DAG Explorer", icon: DagIcon, shortcut: "G D" },
   { id: "refs", label: "Tags and refs", icon: GitBranch, shortcut: "G R" },
 ];
 const NAV = PROJECT_NAV;
-const GLOBAL_NAV: Array<{ id: PageId; label: string; icon: typeof LayoutDashboard }> = [
+const GLOBAL_NAV: Array<{ id: PageId; label: string; icon: React.ComponentType }> = [
   { id: "home", label: "Home", icon: ListTodo },
   { id: "docs", label: "Docs", icon: BookOpen },
 ];
@@ -985,7 +983,7 @@ function OverviewPage({ data, commits, historyBounded, dags, runs, liveIndexes, 
           <div className="dag-list">
             {dags.slice(0, 4).map((dag) => (
               <button key={dag.id} onClick={() => select({ type: "dag", id: dag.id, project_id: projectId, data: dag })}>
-                <span className="dag-list__icon"><Network /></span><span><strong>{dag.name ?? short(dag.id)}</strong><small>{formatNodeCount(dag)} · {relativeTime(dag.created_at)}</small></span><StatusPill value={dag.status ?? "unknown"} />
+                <span className="dag-list__icon"><DagIcon /></span><span><strong>{dag.name ?? short(dag.id)}</strong><small>{formatNodeCount(dag)} · {relativeTime(dag.created_at)}</small></span><StatusPill value={dag.status ?? "unknown"} />
               </button>
             ))}
             {!dags.length && <InlineEmpty message="No committed DAGs available" />}
@@ -1015,7 +1013,7 @@ function RefsPage({ data, loading, error, onCommit }: { data?: RefsEnvelope; loa
   return <>
     <PageHeader eyebrow="Current repository topology" title="Tags and refs" description={data?.checkout.branch ? `Checkout: ${data.checkout.branch}` : "Checkout state is unavailable"} />
     <section className="metric-grid" aria-label="Ref summaries">
-      <Metric label="Selected commit" value={short(selected)} detail={data?.selected.labels.join(", ") || "No current ref label"} icon={<GitCommitHorizontal />} accent="cyan" />
+      <Metric label="Selected commit" value={short(selected)} detail={data?.selected.labels.join(", ") || "No current ref label"} icon={<CommitIcon size={24} />} accent="cyan" />
       <Metric label="Current HEAD" value={short(data?.current_head?.replace(/^commit:/, ""))} detail={data?.checkout.state ?? "Unknown"} icon={<GitBranch />} accent="lime" />
     </section>
     <section className="dashboard-grid">
@@ -1038,7 +1036,7 @@ function RefSourceSummary({ sources }: { sources?: RefsEnvelope["sources"] }) {
   const diagnostic = live?.diagnostic;
   const bounded = (["branch", "tag"] as const).filter((kind) => live?.[kind]?.truncated);
   if (!diagnostic && !bounded.length) return null;
-  return <Panel className="span-2" title="Main remote" subtitle="Live remote reads are separate from fetched tracking refs">
+  return <Panel className="span-2" title={<><RemoteIcon /> Main remote</>} subtitle="Live remote reads are separate from fetched tracking refs">
     {diagnostic && <RefDiagnostic diagnostic={diagnostic} />}
     {bounded.length > 0 && <p className="ref-note">Live {bounded.join(" and ")} refs are bounded; omitted refs are not known absent.</p>}
   </Panel>;
@@ -1124,12 +1122,12 @@ function DagsPage({ scope, dags, liveIndexes, liveEligible, focusDagId, graphFil
           <div className="explorer-layout">
             {!expanded && <aside className="dag-picker" aria-label="DAGs">
               <p className="nav-label">DAGs <span>{inventory.length}</span></p>
-              {activeId && !inventory.some((dag) => dag.id === activeId) && <button className="active"><span className="dag-picker__icon dag-picker__icon--neutral"><Network /></span><span><strong>Function context</strong><small>{short(activeId, 18)}</small></span></button>}
+              {activeId && !inventory.some((dag) => dag.id === activeId) && <button className="active"><span className="dag-picker__icon dag-picker__icon--neutral"><DagIcon /></span><span><strong>Function context</strong><small>{short(activeId, 18)}</small></span></button>}
               {inventory.map((dag) => {
                 const displayed = dag.id === active?.id ? active : dag;
                 const partial = liveIndexes.find((item) => item.dag_ref === dag.id);
                 const outcome = partial ? partialDagOutcome(partial.group) : dagOutcome(displayed?.status);
-                return <button key={dag.id} className={dag.id === active?.id ? "active" : ""} onClick={() => chooseDag(dag.id)}><span className={`dag-picker__icon dag-picker__icon--${outcome}`} title={partial ? `Partial DAG: ${humanize(partial.group)}` : `DAG outcome: ${displayed?.status ?? "unknown"}`}><Network /></span><span><strong>{dag.name ?? short(dag.id)}</strong><small>{partial ? `Live index · ${humanize(partial.state ?? partial.group)}` : formatNodeCount(displayed)}</small></span></button>;
+                return <button key={dag.id} className={dag.id === active?.id ? "active" : ""} onClick={() => chooseDag(dag.id)}><span className={`dag-picker__icon dag-picker__icon--${outcome}`} title={partial ? `Partial DAG: ${humanize(partial.group)}` : `DAG outcome: ${displayed?.status ?? "unknown"}`}><DagIcon /></span><span><strong>{dag.name ?? short(dag.id)}</strong><small>{partial ? `Live index · ${humanize(partial.state ?? partial.group)}` : formatNodeCount(displayed)}</small></span></button>;
               })}
               {!!inventory.length && <div className="dag-outcome-legend" aria-label="DAG outcome legend"><strong>Outcome</strong><span><i className="dag-outcome-legend__mark dag-picker__icon--index" />Active index</span><span><i className="dag-outcome-legend__mark dag-picker__icon--attention" />Waiting for you</span><span><i className="dag-outcome-legend__mark dag-picker__icon--normal" />Normal DAG</span><span><i className="dag-outcome-legend__mark dag-picker__icon--failure" />DAG error</span><span><i className="dag-outcome-legend__mark dag-picker__icon--cancelled" />Cancelled</span></div>}
               {!inventory.length && <InlineEmpty message="No committed or partial DAGs found" />}
@@ -1297,7 +1295,7 @@ function InspectorDag({ record, onNavigateDag }: { record: Record<string, unknow
   if (contained.length) {
     return <section className="detail-section"><h3>Contained DAGs</h3><div className="contained-dags">{contained.map(([name, value]) => {
       const ref = String(isRecord(value) ? value.ref ?? value.id ?? "" : value);
-      return <button key={`${name}-${ref}`} onClick={() => ref && onNavigateDag(ref)}><Network /><span><strong>{name}</strong><code>{ref}</code></span><b>Open →</b></button>;
+      return <button key={`${name}-${ref}`} onClick={() => ref && onNavigateDag(ref)}><DagIcon /><span><strong>{name}</strong><code>{ref}</code></span><b>Open →</b></button>;
     })}</div></section>;
   }
   const dag = isRecord(record.dag) ? record.dag : record;
@@ -1335,7 +1333,7 @@ function FunctionContextDetails({ value }: { value: Record<string, unknown> }) {
   const dag = isRecord(value.dag) ? value.dag : {};
   return <section className="detail-section"><h3>Function context</h3><dl>
     <div><dt>Context DAG</dt><dd><code>{String(dag.ref ?? "Unavailable")}</code></dd></div>
-    <div><dt>Cache key</dt><dd><code>{String(value.cache_key ?? "Unavailable")}</code></dd></div>
+    <div><dt><CacheIcon /> Cache key</dt><dd><code>{String(value.cache_key ?? "Unavailable")}</code></dd></div>
   </dl></section>;
 }
 
@@ -1376,7 +1374,7 @@ function FndagDetails({ value }: { value: Record<string, unknown> }) {
   const output = isRecord(value.output) ? value.output : {};
   const inputs = Array.isArray(argv.inputs) ? argv.inputs.filter(isRecord) : [];
   return <section className="detail-section"><h3>Function DAG</h3><dl>
-    <div><dt>Cache key</dt><dd><code>{String(value.cache_key ?? "Unavailable")}</code></dd></div>
+    <div><dt><CacheIcon /> Cache key</dt><dd><code>{String(value.cache_key ?? "Unavailable")}</code></dd></div>
     <div><dt>Started</dt><dd>{formatTimestamp(timing.started_at)}</dd></div>
     <div><dt>Ended</dt><dd>{formatTimestamp(timing.ended_at)}</dd></div>
     <div><dt>Duration</dt><dd>{typeof timing.duration_seconds === "number" ? `${timing.duration_seconds.toFixed(2)}s` : "In progress"}</dd></div>
@@ -1450,17 +1448,17 @@ function CommandPalette({ onClose, onNavigate, onHref, onProject, onSelect, scop
     else onSelect({ type: item.type as Selection["type"], id: item.id, project_id: item.project_id });
     onClose();
   };
-  return <div className="palette-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="palette" role="dialog" aria-modal="true" aria-label="Command palette"><div className="palette__input"><Search /><input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects, refs, commits, and DAGs…" onKeyDown={(event) => { if (event.key === "Enter" && items[0]) choose(items[0]); }} /><kbd>ESC</kbd></div><div className="palette__results"><p className="nav-label">{query ? "Matches" : "Quick navigation"}</p>{items.map((item, index) => <button key={`${item.type}-${item.project_id ?? "global"}-${item.id}`} onClick={() => choose(item)}><span className="result-icon">{item.type === "page" ? <Command /> : item.type === "project" ? <FolderKanban /> : item.type === "commit" ? <GitCommitHorizontal /> : item.type === "dag" ? <Network /> : <Activity />}</span><span><strong>{item.label}</strong><small>{item.project_id ? `${item.type} · ${item.project_id} · ${item.detail}` : `${item.type} · ${item.detail}`}</small></span>{index === 0 && <kbd>↵</kbd>}</button>)}{!items.length && <InlineEmpty message="No results" />}</div><footer><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span></footer></section></div>;
+  return <div className="palette-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="palette" role="dialog" aria-modal="true" aria-label="Command palette"><div className="palette__input"><Search /><input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects, refs, commits, and DAGs…" onKeyDown={(event) => { if (event.key === "Enter" && items[0]) choose(items[0]); }} /><kbd>ESC</kbd></div><div className="palette__results"><p className="nav-label">{query ? "Matches" : "Quick navigation"}</p>{items.map((item, index) => <button key={`${item.type}-${item.project_id ?? "global"}-${item.id}`} onClick={() => choose(item)}><span className="result-icon">{item.type === "page" ? <Command /> : item.type === "project" ? <FolderKanban /> : item.type === "commit" ? <CommitIcon /> : item.type === "dag" ? <DagIcon /> : <RunIcon />}</span><span><strong>{item.label}</strong><small>{item.project_id ? `${item.type} · ${item.project_id} · ${item.detail}` : `${item.type} · ${item.detail}`}</small></span>{index === 0 && <kbd>↵</kbd>}</button>)}{!items.length && <InlineEmpty message="No results" />}</div><footer><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span></footer></section></div>;
 }
 
 function Metric({ label, value, detail, icon, accent }: { label: string; value: string; detail: string; icon: ReactNode; accent: string }) {
   return <article className={`metric metric--${accent}`}><span className="metric__icon">{icon}</span><div><p>{label}</p><strong>{value}</strong><small>{detail}</small></div></article>;
 }
-function Panel({ title, subtitle, action, className = "", children }: { title: string; subtitle: string; action?: ReactNode; className?: string; children: ReactNode }) {
+function Panel({ title, subtitle, action, className = "", children }: { title: ReactNode; subtitle: string; action?: ReactNode; className?: string; children: ReactNode }) {
   return <section className={`panel ${className}`}><header><div><h2>{title}</h2><p>{subtitle}</p></div>{action}</header>{children}</section>;
 }
 function RunRow({ run, onClick }: { run: Execution; onClick: () => void }) {
-  return <button onClick={onClick} className="run-row"><span className="run-row__icon"><Activity /></span><span><strong>{run.name ?? short(run.id)}</strong><small>{run.executor ?? "local"} · {elapsed(run.started_at, run.updated_at)}</small><i><b style={{ width: `${normalizeProgress(run.progress)}%` }} /></i></span><StatusPill value={run.status} /></button>;
+  return <button onClick={onClick} className="run-row"><span className="run-row__icon"><RunIcon /></span><span><strong>{run.name ?? short(run.id)}</strong><small>{run.executor ?? "local"} · {elapsed(run.started_at, run.updated_at)}</small><i><b style={{ width: `${normalizeProgress(run.progress)}%` }} /></i></span><StatusPill value={run.status} /></button>;
 }
 function Health({ icon, label, detail, status }: { icon: ReactNode; label: string; detail: string; status: string }) {
   return <div><span className="health-icon">{icon}</span><span><strong>{label}</strong><small>{detail}</small></span><StatusPill value={status} /></div>;

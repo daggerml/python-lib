@@ -12,6 +12,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import type { GraphEdge, GraphNode, Selection } from "../types";
+import { FunctionIcon, DataIcon, NodeIcon, RunIcon } from "./ConceptIcon";
 import { StatusPill } from "./StatusPill";
 
 type FlowData = Record<string, unknown> & { item: GraphNode; kind: "node" | "execution" };
@@ -89,7 +90,7 @@ export function layeredLayout(items: GraphNode[], graphEdges: GraphEdge[]): Map<
 
 function ResearchNode({ data, selected }: NodeProps<Node<FlowData>>) {
   const item = data.item;
-  const glyph = item.kind === "error" ? "!" : item.kind === "fn" ? "ƒ" : item.kind === "import" ? "↗" : item.kind === "argv" ? "…" : item.kind === "literal" ? "◇" : data.kind === "execution" ? "▶" : "•";
+  const glyph = item.kind === "error" ? "!" : item.kind === "fn" ? <FunctionIcon /> : item.kind === "import" ? "↗" : item.kind === "argv" ? "…" : item.kind === "literal" ? <DataIcon /> : data.kind === "execution" ? <RunIcon /> : <NodeIcon />;
   const type = item.kind ?? data.kind;
   const role = item.role ?? "intermediate";
   return (
@@ -163,7 +164,7 @@ export function FlowGraph({
         <Background gap={22} size={1} />
         {kind === "node" && <Panel position="top-left" className="graph-legend" aria-label="DAG graph legend">
           <div className="graph-legend__group"><strong>Role</strong><span><i className="legend-role legend-role--argv" />Arguments</span><span><i className="legend-role legend-role--result" />Result</span><span><i className="legend-role legend-role--error" />Error</span><span><i className="legend-role legend-role--intermediate" />Intermediate</span></div>
-          <div className="graph-legend__group"><strong>Type</strong><span><i className="legend-shape legend-shape--fn">ƒ</i>Function</span><span><i className="legend-shape legend-shape--literal">◇</i>Literal</span><span><i className="legend-shape legend-shape--import">↗</i>Import</span><span><i className="legend-shape legend-shape--argv">…</i>Argv</span></div>
+          <div className="graph-legend__group"><strong>Type</strong><span><i className="legend-shape legend-shape--fn"><FunctionIcon /></i>Function</span><span><i className="legend-shape legend-shape--literal"><DataIcon /></i>Literal</span><span><i className="legend-shape legend-shape--import">↗</i>Import</span><span><i className="legend-shape legend-shape--argv">…</i>Argv</span></div>
         </Panel>}
         <Controls showInteractive={false} />
       </ReactFlow>

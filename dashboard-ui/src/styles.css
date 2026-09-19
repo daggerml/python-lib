@@ -751,3 +751,7 @@ pre { background: #080b0e; color: #c8d1d8; border: 1px solid var(--border); bord
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+.concept-icon { flex-shrink: 0; vertical-align: middle; }
+
+.legend-shape--fn, .legend-shape--literal { width: 16px; height: 16px; border: 0; }
