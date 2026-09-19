@@ -92,7 +92,9 @@ requests and appreciate your help in improving this project.
 ## Documentation Build
 
 - Python, Node.js/npm, `uv`, Git, `curl`, `tar`, and the native package build
-  toolchain are host prerequisites. The build command owns project dependency
+  toolchain are host prerequisites. Executable documentation also requires
+  Docker with a running daemon to build and run the course's container image.
+  The build command owns project dependency
   setup, frontend tests, the pinned Quarto/R bootstrap, documentation execution,
   frontend compilation, and packaged-output validation:
   ```bash
@@ -114,6 +116,10 @@ requests and appreciate your help in improving this project.
   DOCS_PYTHON="/path/to/python" bash docs/build.sh
   ```
 - The build executes all QMD examples against disposable fixtures; do not use it as a substitute for the full test suite.
+- CI builds and verifies the dashboard and executable documentation once in the
+  Linux `dashboard` job. Wheel and source-distribution jobs download its
+  `dashboard-assets` artifact and package those same verified files. macOS wheel
+  runners therefore do not need Docker or the documentation build toolchain.
 
 ### Test taxonomy and naming
 

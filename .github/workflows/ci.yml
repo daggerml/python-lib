@@ -103,7 +103,15 @@ jobs:
         env:
           DOCS_PYTHON: ${{ github.workspace }}/.venv/bin/python
         run: bash ./docs/build.sh
+      - name: Upload verified dashboard assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: dashboard-assets
+          path: src/daggerml/dashboard/static/
+          if-no-files-found: error
+          retention-days: 1
   build-wheels:
+    needs: dashboard
     if: >-
       github.event_name == 'pull_request' ||
       startsWith(github.ref, 'refs/tags/v')
@@ -124,7 +132,7 @@ jobs:
             os: ubuntu-latest
           - id: macos
             os: macos-latest
-    name: Build Python ${{ matrix.python.version }} wheel for ${{ matrix.platform.id }}
+    # name: Build Python ${{ matrix.python.version }} wheel for ${{ matrix.platform.id }}
     runs-on: ${{ matrix.platform.os }}
     steps:
       - uses: actions/checkout@v6
@@ -135,18 +143,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Install uv
-        run: pip install uv==0.11.7
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - name: Download verified dashboard assets
+        uses: actions/download-artifact@v8
         with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: dashboard-ui/package-lock.json
-      - name: Build verified dashboard assets
-        env:
-          DOCS_PYTHON: ${{ github.workspace }}/.venv/bin/python
-        run: bash ./docs/build.sh
+          name: dashboard-assets
+          path: src/daggerml/dashboard/static/
       - name: Build wheel
         uses: pypa/cibuildwheel@v3.2.1
         env:
@@ -163,6 +164,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   build-sdist:
+    needs: dashboard
     if: >-
       github.event_name == 'pull_request' ||
       startsWith(github.ref, 'refs/tags/v')
@@ -176,18 +178,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Install uv
-        run: pip install uv==0.11.7
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
+      - name: Download verified dashboard assets
+        uses: actions/download-artifact@v8
         with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: dashboard-ui/package-lock.json
-      - name: Build verified dashboard assets
-        env:
-          DOCS_PYTHON: ${{ github.workspace }}/.venv/bin/python
-        run: bash ./docs/build.sh
+          name: dashboard-assets
+          path: src/daggerml/dashboard/static/
       - name: Build source distribution
         run: |
           pip install hatch
@@ -207,7 +202,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
   publish:
-    needs: ["test", "lint", "sanitize", "dashboard", "build-wheels", "build-sdist"]
+    needs:
+      ["test", "lint", "sanitize", "dashboard", "build-wheels", "build-sdist"]
     if: startsWith(github.ref, 'refs/tags/v')
     name: Upload release to PyPI
     runs-on: ubuntu-latest
