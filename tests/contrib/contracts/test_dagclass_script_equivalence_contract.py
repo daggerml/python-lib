@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+import daggerml.api as core_api
 from daggerml import Runnable, Uri
 from daggerml._core import DmlRepoError
 from daggerml.contrib import api
-from daggerml.contrib.codecs import DelayedRef, DelayedRunnable
+from daggerml.contrib.codecs import DelayedActionCodec, DelayedRef, DelayedRunnable
 from daggerml.contrib.executors.script import ScriptExecutor
 
 
@@ -203,6 +204,32 @@ def main(self, raw):
     return self.summarize(self.preprocess(raw))
 
 
+class CallableMember:
+    def __call__(self):
+        return None
+
+
+class CallableMemberCodec:
+    def can_encode(self, value):
+        return isinstance(value, CallableMember)
+
+    def encode(self, value, dag):
+        del value, dag
+        return "encoded-callable"
+
+
+def _install_staging_codecs(monkeypatch, *extra_codecs):
+    class Adapter:
+        @staticmethod
+        def resolve_runnable(uri, kwargs, sub):
+            del sub
+            return Runnable(target=Uri(uri), adapter="", kwargs={"prepop": kwargs.get("prepop", {})})
+
+    monkeypatch.setattr("daggerml.contrib.codecs.get_adapter", lambda _name: Adapter)
+    codecs = [DelayedActionCodec(), *extra_codecs, core_api.NodeCodec(), core_api.ProjectionCodec()]
+    monkeypatch.setattr(core_api, "_codecs", [(1, index, codec) for index, codec in enumerate(codecs, 1)])
+
+
 def test_contrib_dagclass_001__matching_funkify_definition_renders_identical_script():
     dagclass_main = DagclassPipeline().main
 
@@ -362,3 +389,92 @@ def test_contrib_dagclass_019__item_access_is_opaque_to_compilation():
             return self["missing"](raw)
 
     assert UnknownItemPipeline().main.kwargs["prepop"] == {}
+
+
+def test_contrib_dagclass_020__ordinary_fields_and_class_members_are_preserved():
+    class_value = CallableMember()
+    field_value = CallableMember()
+
+    @api.dagclass
+    class ValuePipeline:
+        configured = class_value
+        supplied: object
+
+        @property
+        def label(self):
+            return "evaluated-descriptor"
+
+        def main(self, raw):
+            return [self.configured, self.supplied, self.label, raw]
+
+    pipeline = ValuePipeline(supplied=field_value)
+
+    assert pipeline.__dagclass_members__["configured"] is class_value
+    assert pipeline.__dagclass_members__["supplied"] is field_value
+    assert pipeline.__dagclass_members__["label"] == "evaluated-descriptor"
+    assert pipeline.label == "evaluated-descriptor"
+    assert pipeline.main.kwargs["prepop"] == {
+        "configured": class_value,
+        "supplied": field_value,
+        "label": "evaluated-descriptor",
+    }
+
+
+def test_contrib_dagclass_021__preserved_members_use_normal_codec_staging(monkeypatch, dag, fake_dml, refs):
+    _install_staging_codecs(monkeypatch, CallableMemberCodec())
+    source = core_api.Dag(dml=fake_dml, ref=refs.dag2)
+    source_node = core_api.Node(source, refs.scalar)
+    source_projection = core_api.Projection(dag=source, base=source_node, path=("answer",))
+    custom_value = CallableMember()
+
+    @api.dagclass
+    class CodecPipeline:
+        node = source_node
+        projection = source_projection
+        custom = custom_value
+
+        def main(self, raw):
+            return [self.node, self.projection, self.custom, raw]
+
+    pipeline = CodecPipeline()
+    dag.put(pipeline.main)
+
+    staged = fake_dml.runtime.put_literal.call_args_list[-1].args[1]
+    assert isinstance(staged, Runnable)
+    assert staged.kwargs["prepop"] == {
+        "node": refs.imported,
+        "projection": refs.result,
+        "custom": "encoded-callable",
+    }
+
+
+def test_contrib_dagclass_022__preserved_member_errors_are_deferred_to_staging(monkeypatch, dag, fake_dml, refs):
+    _install_staging_codecs(monkeypatch)
+    unsupported = CallableMember()
+
+    @api.dagclass
+    class UnsupportedPipeline:
+        value = unsupported
+
+        def main(self, raw):
+            return [self.value, raw]
+
+    unsupported_pipeline = UnsupportedPipeline()
+    assert unsupported_pipeline.__dagclass_members__["value"] is unsupported
+    with pytest.raises(core_api.CodecError, match="No codec found for value of type CallableMember"):
+        dag.put(unsupported_pipeline.main)
+
+    source = core_api.Dag(dml=fake_dml, token=refs.commit)
+    uncommitted_node = core_api.Node(source, refs.scalar)
+
+    @api.dagclass
+    class CrossIndexPipeline:
+        value = uncommitted_node
+
+        def main(self, raw):
+            return [self.value, raw]
+
+    cross_index_pipeline = CrossIndexPipeline()
+    assert cross_index_pipeline.__dagclass_members__["value"] is uncommitted_node
+    with pytest.raises(core_api.CodecError, match="Cannot encode node from uncommitted DAG in a different index"):
+        dag.put(cross_index_pipeline.main)

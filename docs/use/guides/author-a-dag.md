@@ -245,6 +245,10 @@ Dagclass is a thin convenience wrapper, not a source normalizer. A dagclass meth
 
 Instantiating a dagclass compiles it into a self-contained namespace. Constructor values and other evaluated attributes seed that namespace; methods are then compiled in dependency order and bind `self.<member>` references to those namespace values. A compiled method can therefore be staged in another DAG without requiring same-named nodes there, and caller nodes cannot shadow its dagclass attributes. `api.run()` executes the entrypoint compiled during instantiation; it does not compile the instance later.
 
+Compilation transforms only recognized dagclass forms: plain Python methods become delayed methods, `funkify`-decorated methods receive their inferred namespace dependencies, and nested dagclass instances become their compiled entrypoints. Every other field or class-defined member is preserved as its evaluated value, even when that value is callable or produced by a descriptor. Dagclass compilation does not test whether a codec supports these ordinary values.
+
+When a compiled member is staged, its preserved values follow the same recursive codec path as direct DAG inputs. Nodes and projections are therefore reused or imported under their normal codec rules, custom codec values remain supported, and unsupported or contextually invalid values raise their normal codec errors at staging time.
+
 Within a dagclass, every `api.ref("name")` is also local to the dagclass namespace. This includes references inside an externally defined `@api.funkify` value assigned as a dagclass attribute. Such a funk may reference only known dagclass attributes or members; instantiation fails if a reference cannot be resolved. Pass external configuration explicitly through constructor attributes rather than expecting a compiled dagclass member to capture a node from its caller DAG.
 
 ### Understand `self` inside dagclass methods

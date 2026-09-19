@@ -242,6 +242,7 @@ def _compile_dagclass_instance(instance) -> None:
 
     attributes: dict[str, Any] = {}
     attribute_order: list[str] = []
+    data_descriptor_names: set[str] = set()
     method_defs: dict[str, tuple[Any, DelayedRunnable | None]] = {}
     field_names = {f.name for f in fields(instance)}
 
@@ -258,8 +259,8 @@ def _compile_dagclass_instance(instance) -> None:
             continue
         if name in field_names:
             continue
-        if isinstance(class_value, (staticmethod, classmethod, property)):
-            raise DmlRepoError(f"dagclass member {name} uses unsupported descriptor type: {type(class_value).__name__}")
+        if inspect.isdatadescriptor(cast(Any, class_value)):
+            data_descriptor_names.add(name)
         if inspect.isfunction(class_value):
             method_defs[name] = (class_value, None)
             continue
@@ -267,8 +268,6 @@ def _compile_dagclass_instance(instance) -> None:
         if decorated_method is not None:
             method_defs[name] = (decorated_method, class_value)
             continue
-        if callable(class_value):
-            raise DmlRepoError(f"dagclass member {name} uses unsupported callable type: {type(class_value).__name__}")
         if name in instance.__dict__:
             attributes[name] = getattr(instance, name)
             attribute_order.append(name)
@@ -294,7 +293,8 @@ def _compile_dagclass_instance(instance) -> None:
     order: list[str] = []
     for name in _toposort_members(attribute_deps, attribute_order):
         bound = _bind_dagclass_member(attributes[name], members)
-        setattr(instance, name, bound)
+        if name not in data_descriptor_names:
+            setattr(instance, name, bound)
         members[name] = bound
         order.append(name)
 
