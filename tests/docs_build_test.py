@@ -22,6 +22,50 @@ build = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build)
 
 
+def test_standalone_site_preserves_full_pages_and_relative_navigation(tmp_path):
+    render = tmp_path / "render"
+    (render / "start-here").mkdir(parents=True)
+    (render / "site_libs").mkdir()
+    (render / "site_libs/quarto.js").write_text("// Quarto runtime", encoding="utf-8")
+    (render / "start-here/index.html").write_text(
+        '<!doctype html><html><head><script src="../site_libs/quarto.js"></script></head>'
+        '<body><main><h1>DaggerML</h1><a href="dags.qmd#example">DAGs</a>'
+        '<a href="../../CONTRIBUTING.md">Contribute</a></main></body></html>',
+        encoding="utf-8",
+    )
+    (render / "start-here/dags.html").write_text(
+        '<html><body><main id="example">Example</main></body></html>', encoding="utf-8"
+    )
+    (render / "start-here/dags.qmd").write_text("build-only source", encoding="utf-8")
+    output = tmp_path / "pages"
+    output.mkdir()
+    (output / "stale.html").touch()
+
+    build.site(render, output)
+
+    page = (output / "start-here/index.html").read_text(encoding="utf-8")
+    assert '<script src="../site_libs/quarto.js"></script>' in page
+    assert 'href="dags.html#example"' in page
+    assert 'href="https://github.com/daggerml/python-lib/blob/master/CONTRIBUTING.md"' in page
+    assert 'href="../start-here/index.html"' in page
+    assert 'href="../api/index.html"' in page
+    assert "/docs/" not in page
+    assert (output / "site_libs/quarto.js").is_file()
+    assert 'url=start-here/index.html' in (output / "index.html").read_text(encoding="utf-8")
+    assert (output / ".nojekyll").is_file()
+    assert not (output / "stale.html").exists()
+    assert not (output / "start-here/dags.qmd").exists()
+    assert (output / "api/index.html").is_file()
+    public_api = (output / "api/daggerml.html").read_text(encoding="utf-8")
+    assert 'id="Dml"' in public_api
+    assert 'id="Dag"' in public_api
+    assert 'href="../start-here/index.html"' in public_api
+    contrib_api = (output / "api/daggerml/contrib/api.html").read_text(encoding="utf-8")
+    assert 'id="funkify"' in contrib_api
+    assert 'href="../../../start-here/index.html"' in contrib_api
+    assert (output / "api/search.js").is_file()
+
+
 def test_docs_build_015__source_aware_lessons_execute_inline(tmp_path):
     work = tmp_path / "source"
     build.validate()
