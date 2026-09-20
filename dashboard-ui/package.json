@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:docs": "tsc -b && vite build --mode docs",
     "typecheck": "tsc -b",
     "test": "vitest run"
   },

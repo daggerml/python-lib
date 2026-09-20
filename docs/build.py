@@ -309,7 +309,7 @@ def fragment(document: str) -> str:
     return body.group(0) if body else document
 
 
-def rewrite_urls(content: str, source: Path, render: Path) -> str:
+def rewrite_urls(content: str, source: Path, render: Path, *, standalone: bool = False) -> str:
     def replace(match: re.Match[str]) -> str:
         attribute, quote, value = match.groups()
         if value.startswith(("#", "/", "//")) or re.match(r"[a-z][a-z0-9+.-]*:", value, re.IGNORECASE):
@@ -330,14 +330,56 @@ def rewrite_urls(content: str, source: Path, render: Path) -> str:
         except ValueError:
             return match.group(0)
         if target.suffix in {".html", ".md", ".qmd"}:
+            if standalone:
+                suffix = f"#{anchor}" if separator else ""
+                return f"{attribute}={quote}{PurePosixPath(path).with_suffix('.html')}{suffix}{quote}"
             page = page_id(target.with_suffix(".html"), render)
             suffix = f"#{anchor}" if separator else ""
             return f"{attribute}={quote}/docs/{page if page != 'index' else ''}{suffix}{quote}"
-        if target.is_file():
+        if target.is_file() and not standalone:
             return f"{attribute}={quote}/docs/static/assets/{relative.as_posix()}{quote}"
         return match.group(0)
 
     return re.sub(r"\b(href|src)=([\"'])([^\"']+)\2", replace, content)
+
+
+def site(render: Path, output: Path, frontend: Path) -> None:
+    """Export the dashboard docs UI and static routes for root-site hosting."""
+    import pdoc
+
+    render = render.resolve()
+    output = output.resolve()
+    if not (render / "start-here/index.html").is_file():
+        raise ValueError("standalone documentation requires start-here/index.html")
+    shell = (frontend / "docs.html").read_text(encoding="utf-8")
+    if not re.search(r'<link\b[^>]*rel="stylesheet"', shell):
+        raise ValueError("standalone documentation requires a built frontend stylesheet")
+    if output.exists():
+        shutil.rmtree(output)
+    shutil.copytree(frontend, output)
+    (output / "docs.html").unlink()
+    stage(render, output / "docs/static")
+    for source in render.rglob("*.html"):
+        page = page_id(source, render)
+        target = output / "docs" / page / "index.html"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(shell, encoding="utf-8")
+        # Keep previously published tutorial URLs (including pdoc backlinks) working.
+        legacy = output / source.relative_to(render)
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        destination = "/" if page == "start-here" else f"/docs/{page}/"
+        legacy.write_text(
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta http-equiv="refresh" content="0;url={destination}">'
+            f'<title>DaggerML documentation</title></head><body><a href="{destination}">'
+            'DaggerML documentation</a></body></html>\n',
+            encoding="utf-8",
+        )
+    (output / "index.html").write_text(shell, encoding="utf-8")
+    (output / ".nojekyll").touch()
+    pdoc.render.configure(docformat="numpy", template_directory=ROOT / "pdoc-templates")
+    # The root package's __all__ lists exports, so name public submodules explicitly.
+    pdoc.pdoc("daggerml", "daggerml.api", "daggerml.contrib", "daggerml.util", output_directory=output / "api")
 
 
 def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
@@ -446,12 +488,18 @@ def main() -> int:
     stage_parser = commands.add_parser("stage")
     stage_parser.add_argument("--render", type=Path, required=True)
     stage_parser.add_argument("--staging", type=Path, required=True)
+    site_parser = commands.add_parser("site")
+    site_parser.add_argument("--render", type=Path, required=True)
+    site_parser.add_argument("--output", type=Path, required=True)
+    site_parser.add_argument("--frontend", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == "validate":
             validate()
         elif args.command == "prepare":
             prepare(args.work)
+        elif args.command == "site":
+            site(args.render, args.output, args.frontend)
         else:
             stage(args.render, args.staging, require_all=True)
     except (OSError, ValueError, yaml.YAMLError) as exc:

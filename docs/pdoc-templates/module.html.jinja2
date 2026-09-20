@@ -1,0 +1,5 @@
+{% extends "default/module.html.jinja2" %}
+{% block nav_title %}
+<a href="{{ '../' * (module.modulename.count('.') + 1) }}start-here/index.html">← DaggerML documentation</a>
+{{ super() }}
+{% endblock %}

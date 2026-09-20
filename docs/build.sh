@@ -14,6 +14,11 @@ Host prerequisites:
   be installed. This script installs repository Python and npm dependencies and
   bootstraps the pinned Quarto/R documentation toolchain under .tools/.
 
+Environment:
+  DOCS_SITE_OUTPUT    Also export standalone HTML and a generated API reference
+                      to this absolute directory.
+                      Forces documentation rendering; incompatible with --no-docs.
+
 Default stages:
   1. Synchronize Python dependencies with uv sync --group dev --all-extras.
   2. Install locked frontend dependencies with npm ci.
@@ -73,6 +78,13 @@ for option in "$@"; do
     *) printf 'Unknown option: %s\n\n' "$option" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [[ -n "${DOCS_SITE_OUTPUT:-}" ]]; then
+  if [[ "$select_docs" == false || "$DOCS_SITE_OUTPUT" != /* ]]; then
+    printf 'DOCS_SITE_OUTPUT requires an absolute output path and enabled documentation.\n' >&2
+    exit 2
+  fi
+fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 static="$root/src/daggerml/dashboard/static"
@@ -178,7 +190,7 @@ stored_docs_fingerprint="$(state_value docs)"
 stored_ui_fingerprint="$(state_value ui)"
 build_docs=false
 build_ui=false
-if [[ "$select_docs" == true ]] && { [[ "$mode" == "full" ]] || [[ "$docs_fingerprint" != "$stored_docs_fingerprint" ]] || ! docs_output_ready; }; then
+if [[ "$select_docs" == true ]] && { [[ "$mode" == "full" || -n "${DOCS_SITE_OUTPUT:-}" ]] || [[ "$docs_fingerprint" != "$stored_docs_fingerprint" ]] || ! docs_output_ready; }; then
   build_docs=true
 fi
 if [[ "$select_ui" == true ]] && { [[ "$mode" == "full" ]] || [[ "$ui_fingerprint" != "$stored_ui_fingerprint" ]] || ! ui_output_ready; }; then

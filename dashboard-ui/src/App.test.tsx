@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import { DocumentationSite } from "./docs";
 import { api } from "./api";
 import type { DashboardProject } from "./types";
 
@@ -71,6 +72,35 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("canonical dashboard routes", () => {
+  it("serves standalone docs at the site root without dashboard navigation or API calls", async () => {
+    vi.stubGlobal("scrollTo", vi.fn());
+    render(<DocumentationSite />);
+    expect(await screen.findByRole("heading", { name: "DaggerML", level: 1 })).toBeVisible();
+    expect(screen.getByLabelText("Documentation navigation")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "API reference" })).toHaveAttribute("href", "/api/index.html");
+    fireEvent.click(screen.getByRole("button", { name: "DAGs" }));
+    expect(location.pathname).toBe("/docs/start-here/dags/");
+    expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+    fireEvent.click(screen.getByRole("link", { name: "Anchor" }));
+    expect(location.hash).toBe("#example");
+    fireEvent.click(screen.getByRole("button", { name: "Use light theme" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    history.replaceState(null, "", "/");
+    fireEvent.popState(window);
+    expect(await screen.findByRole("heading", { name: "DaggerML", level: 1 })).toBeVisible();
+    expect(api.status).not.toHaveBeenCalled();
+    expect(api.projects).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls.every(([url]) => String(url).startsWith("/docs/static/"))).toBe(true);
+  });
+
+  it("loads a standalone deep link directly", async () => {
+    history.replaceState(null, "", "/docs/start-here/dags/#example");
+    render(<DocumentationSite />);
+    expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "DAGs" })).toHaveAttribute("aria-current", "page");
+  });
+
   it("loads Home only at the root", async () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "0 commits in the last year" })).toBeVisible();

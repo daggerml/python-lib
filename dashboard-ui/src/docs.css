@@ -1,0 +1,10 @@
+.docs-site__header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 22px; height: 68px; padding: 0 34px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.docs-site__header a { color: var(--text); text-decoration: none; font-size: 12px; }
+.docs-site__brand { display: flex; align-items: center; gap: 10px; margin-right: auto; font-weight: 600; }
+.docs-site__brand .brand-icon { width: 32px; height: 32px; }
+.docs-site__content { padding: 30px 34px; }
+.docs-site .docs-layout { justify-content: center; }
+@media (max-width: 760px) {
+  .docs-site__header { padding-inline: 18px; }
+  .docs-site__content { padding: 24px 18px; }
+}

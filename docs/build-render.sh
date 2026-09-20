@@ -71,3 +71,7 @@ source "$work/fixture.env"
 export DOCS_SOURCE_ROOT="$work/source"
 quarto render "$work/source" --output-dir "$work/render"
 "$python" "$root/docs/build.py" stage --render "$work/render" --staging "$staging"
+if [[ -n "${DOCS_SITE_OUTPUT:-}" ]]; then
+  npm --prefix "$root/dashboard-ui" run build:docs -- --outDir "$work/site-ui"
+  "$python" "$root/docs/build.py" site --render "$work/render" --frontend "$work/site-ui" --output "$DOCS_SITE_OUTPUT"
+fi

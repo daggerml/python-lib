@@ -578,7 +578,7 @@ interface DocsNavSection {
 
 const DOCS_ROOT_PAGE = "start-here";
 
-function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark" | "light"; onNavigate: (id?: string, hash?: string) => void }) {
+export function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark" | "light"; onNavigate: (id?: string, hash?: string) => void }) {
   const [pages, setPages] = useState<DocsManifestPage[]>();
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();

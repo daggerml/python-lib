@@ -22,6 +22,62 @@ build = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(build)
 
 
+def test_standalone_site_shares_dashboard_assets_and_has_static_deep_links(tmp_path):
+    render = tmp_path / "render"
+    (render / "start-here").mkdir(parents=True)
+    (render / "site_libs").mkdir()
+    (render / "site_libs/quarto.js").write_text("// Quarto runtime", encoding="utf-8")
+    (render / "start-here/index.html").write_text(
+        '<!doctype html><html><head><script src="../site_libs/quarto.js"></script></head>'
+        '<body><main><h1>DaggerML</h1><a href="dags.qmd#example">DAGs</a>'
+        '<a href="../../CONTRIBUTING.md">Contribute</a></main></body></html>',
+        encoding="utf-8",
+    )
+    (render / "start-here/dags.html").write_text(
+        '<html><body><main id="example">Example</main></body></html>', encoding="utf-8"
+    )
+    (render / "start-here/dags.qmd").write_text("build-only source", encoding="utf-8")
+    output = tmp_path / "pages"
+    output.mkdir()
+    (output / "stale.html").touch()
+
+    frontend = tmp_path / "frontend"
+    (frontend / "assets").mkdir(parents=True)
+    shell = ('<!doctype html><html><head><link rel="stylesheet" href="/assets/docs.css">'
+             '<script type="module" src="/assets/docs.js"></script></head>'
+             '<body><div id="root"></div></body></html>')
+    (frontend / "docs.html").write_text(shell, encoding="utf-8")
+    (frontend / "assets/docs.css").write_text(".docs-content { color: red; }", encoding="utf-8")
+    (frontend / "assets/docs.js").write_text("// docs application", encoding="utf-8")
+
+    build.site(render, output, frontend)
+
+    page = (output / "docs/static/fragments/start-here.html").read_text(encoding="utf-8")
+    assert '<script' not in page
+    assert 'href="/docs/start-here/dags#example"' in page
+    assert 'href="https://github.com/daggerml/python-lib/blob/master/CONTRIBUTING.md"' in page
+    assert (output / "docs/static/assets/site_libs/quarto.js").is_file()
+    assert (output / "index.html").read_text(encoding="utf-8") == shell
+    assert (output / "docs/start-here/dags/index.html").read_text(encoding="utf-8") == shell
+    assert (output / "assets/docs.css").is_file()
+    assert (output / "assets/docs.js").is_file()
+    manifest = json.loads((output / "docs/static/manifest.json").read_text(encoding="utf-8"))
+    assert {page["id"] for page in manifest["pages"]} == {"start-here", "start-here/dags"}
+    assert 'url=/' in (output / "start-here/index.html").read_text(encoding="utf-8")
+    assert (output / ".nojekyll").is_file()
+    assert not (output / "stale.html").exists()
+    assert not (output / "start-here/dags.qmd").exists()
+    assert (output / "api/index.html").is_file()
+    public_api = (output / "api/daggerml.html").read_text(encoding="utf-8")
+    assert 'id="Dml"' in public_api
+    assert 'id="Dag"' in public_api
+    assert 'href="../start-here/index.html"' in public_api
+    contrib_api = (output / "api/daggerml/contrib/api.html").read_text(encoding="utf-8")
+    assert 'id="funkify"' in contrib_api
+    assert 'href="../../../start-here/index.html"' in contrib_api
+    assert (output / "api/search.js").is_file()
+
+
 def test_docs_build_015__source_aware_lessons_execute_inline(tmp_path):
     work = tmp_path / "source"
     build.validate()

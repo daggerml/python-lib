@@ -1,0 +1,55 @@
+name: Documentation Pages
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment:
+      name: github-pages
+      url: https://daggerml.com/
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install uv
+        run: pip install uv==0.11.7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: dashboard-ui/package-lock.json
+      - name: Build executable documentation and standalone site
+        env:
+          DOCS_SITE_OUTPUT: ${{ github.workspace }}/.tools/pages
+        run: bash docs/build.sh
+      - name: Replace organization website
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.DOCS_DEPLOY_KEY }}
+          external_repository: daggerml/daggerml.github.io
+          publish_branch: gh-pages
+          publish_dir: .tools/pages
+          keep_files: false
+          cname: daggerml.com
