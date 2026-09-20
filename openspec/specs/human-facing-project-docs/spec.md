@@ -14,30 +14,45 @@ The repository SHALL treat `docs/` as the human-facing project documentation sur
 - **WHEN** a reader needs change proposals, implementation tasks, or requirement deltas for a change
 - **THEN** those artifacts are found under `openspec/` rather than inside `docs/`
 
-### Requirement: Documentation SHALL explain why to use DaggerML before audience-specific detail
-The docs home SHALL link to a root-level Why DaggerML page that explains the research problems DaggerML addresses, its durable-DAG approach, the outcomes it enables, suitable use cases, and unsuitable use cases.
+### Requirement: The documentation home SHALL explain why to use DaggerML
+The single docs home SHALL concisely explain the research problems DaggerML addresses, its durable-DAG approach, the outcomes it enables, suitable use cases, and unsuitable use cases before routing readers into detail.
 
 #### Scenario: Reader evaluates DaggerML
 - **WHEN** a prospective reader opens the docs home
-- **THEN** they can reach a concise explanation of why DaggerML exists before choosing a documentation path
+- **THEN** the home itself explains why DaggerML exists before presenting the documentation paths
 
-### Requirement: Project docs SHALL be organized by reader intent
-The `docs/` tree SHALL organize its primary navigation by reader relationship to DaggerML: Use DaggerML for researchers, Extend DaggerML for integration engineers, and Develop DaggerML for core contributors. Each path MAY organize detailed material into concepts, guides, and reference pages when that structure serves its readers.
+### Requirement: Project docs SHALL use a minimal primary navigation
+Primary navigation SHALL contain Start here, Use, and Extend sections. Glossary and Sharp bits and security SHALL be direct top-level siblings of those sections. It SHALL NOT contain separate Concepts, Guides, Reference, Examples, or Develop sections.
 
 #### Scenario: Reader looks for onboarding
 - **WHEN** a new researcher wants the fastest path to first success
-- **THEN** the docs home directs them to the top-level getting-started page and the Use DaggerML path
+- **THEN** the docs home directs them into the ordered Start here course
 
-#### Scenario: Reader looks for the right kind of information
-- **WHEN** a reader needs to use DaggerML, implement an integration, or develop DaggerML itself
-- **THEN** the docs navigation distinguishes those needs through Use, Extend, and Develop paths rather than requiring the reader to start from generic document types or a package subtree
+#### Scenario: Reader looks for detailed information
+- **WHEN** a reader needs to use DaggerML or implement an integration
+- **THEN** the docs navigation directs them to Use or Extend without first requiring them to classify the page as a concept, guide, reference, or example
 
-### Requirement: `getting-started` SHALL be one concise page
-The project docs SHALL provide one concise researcher getting-started page at `docs/getting-started.md` that covers installation, first repository setup through the CLI, first DAG creation in Python, basic inspection, and next-step links without splitting those basics across multiple introductory files.
+### Requirement: Documentation source paths SHALL mirror published paths
+Human-facing QMD source paths SHALL match their published HTML paths. Start here pages SHALL live directly beneath `docs/start-here/`, researcher pages directly beneath `docs/use/`, and extension pages directly beneath `docs/extend/`. Directory landing pages SHALL use `index.qmd`. Glossary and Sharp bits and security SHALL remain top-level QMD siblings. A separate documentation examples source or route SHALL NOT exist.
+
+#### Scenario: Maintainer locates a published page
+- **WHEN** a maintainer maps a `/docs/<section>/<page>` route back to its QMD source
+- **THEN** the corresponding page is found at `docs/<section>/<page>.qmd`
+
+#### Scenario: Reader opens the documentation root
+- **WHEN** a reader opens `/docs`
+- **THEN** the dashboard presents the `docs/start-here/index.qmd` page without requiring a duplicate root-level QMD
+
+### Requirement: Start here SHALL be an executable course
+Start here SHALL progress from the docs home through repository setup, DAGs, funks, and dagclasses. Pages SHALL declare their prerequisites with `depends-on`; the documentation build and navigation SHALL use the same validated topological order.
 
 #### Scenario: Reader starts from zero
-- **WHEN** a reader follows `docs/getting-started.md`
-- **THEN** the page includes enough information to install DaggerML, initialize a project with `dml init`, create a first DAG, and inspect it with at least one simple command or API example
+- **WHEN** a reader follows `docs/start-here/get-started.qmd`
+- **THEN** Get started initializes the project and later pages execute the important authoring, access, Docker, function, cache, and dagclass examples against that shared project
+
+#### Scenario: A learning example stops working
+- **WHEN** an important executable example in Start here fails
+- **THEN** the documentation build and CI fail rather than publishing stale output
 
 ### Requirement: Human-facing docs SHALL avoid normative spec voice
 Docs under `docs/` SHALL describe the system in reader-facing language and SHALL avoid structuring pages around authority ownership, compatibility classifications, or normative maintenance phrases such as document-level handoff rules.
@@ -47,30 +62,139 @@ Docs under `docs/` SHALL describe the system in reader-facing language and SHALL
 - **THEN** the document leads with explanation of the subject matter instead of an authority or governance preamble
 
 ### Requirement: Existing technical content SHALL be preserved through translation, not path churn
-When current docs are reorganized, the implementation SHALL preserve useful technical knowledge by rewriting and reclassifying existing material into concept, guide, reference, or architecture pages rather than merely renaming files or deleting depth.
+When current docs are flattened, the implementation SHALL preserve useful reader-facing technical knowledge in an appropriate Use or Extend page rather than deleting depth solely because its former concept, guide, reference, example, or Develop category is removed. Contributor-only orientation SHALL move to the repository README nearest the code it describes.
 
 #### Scenario: Existing detailed doc is migrated
 - **WHEN** a current technical document contains valuable behavioral or architectural explanation
-- **THEN** the new docs structure preserves that information in an appropriate human-facing page even if the original path or tone changes
+- **THEN** the flat documentation preserves that information in Use or Extend even if the page name and presentation change
 
 ### Requirement: Maintainer workflow docs SHALL leave `docs/`
-Repository-maintenance documents such as edit pre-read maps, agent instructions, spec-governance indexes, and contributor test-taxonomy policy SHALL not remain in the human-facing `docs/` tree. Stable contributor setup and architecture material MAY live under the Develop DaggerML path, but automated workflow policy SHALL remain in maintainer-facing locations outside `docs/`.
+Repository-maintenance documents, contributor setup and testing policy, codebase orientation, architecture notes, edit maps, agent instructions, and spec-governance indexes SHALL live outside the human-facing `docs/` tree. Repository-wide contributor guidance SHALL live in root maintainer files, subsystem orientation SHALL live in co-located README files, and normative behavior SHALL remain in OpenSpec.
 
-#### Scenario: Reader encounters maintainer guidance
-- **WHEN** a contributor needs edit workflow, agent, or spec-governance guidance
-- **THEN** that guidance is located in a maintainer-facing location outside `docs/`
+#### Scenario: Contributor needs workflow guidance
+- **WHEN** a contributor needs setup, testing, edit workflow, agent, or spec-governance guidance
+- **THEN** that guidance is available from repository-level maintainer files outside `docs/`
 
-#### Scenario: Contributor needs codebase orientation
-- **WHEN** a contributor needs stable architecture or development setup information
-- **THEN** they can find it in the Develop DaggerML path without encountering automated maintenance policy there
+#### Scenario: Contributor needs subsystem orientation
+- **WHEN** a contributor needs implementation architecture or a codebase map
+- **THEN** they can find it in a README co-located with the relevant source area
 
-### Requirement: Docs rewrite tasks SHALL be independently assignable to repo-aware subagents
-The reorganization plan SHALL divide implementation work into independent documentation tasks whose owners first inspect the existing repo, current docs, and relevant code for the area they are rewriting.
+### Requirement: Human-facing documentation SHALL be the example surface
+Reader-facing examples SHALL appear in the Start here, Use, or Extend course page that teaches the behavior. Primary workflows supported by build-owned prerequisites SHALL execute during the documentation build, assert their observable results, and fail the build on unexpected errors. Examples that would require ambient credentials, user projects, or external infrastructure outside the build fixture SHALL be explicitly marked as pseudocode and SHALL not be represented as build-verified. The documentation SHALL NOT maintain a separate Examples section, parallel canonical example source, or example-only download inventory.
 
-#### Scenario: Subagent rewrites a docs area
-- **WHEN** a subagent is assigned a docs subtree or topic lane
-- **THEN** the task instructions require that subagent to read the current docs for that area and inspect the corresponding source modules before producing rewritten docs
+#### Scenario: Reader follows documented behavior
+- **WHEN** a page demonstrates a runnable DaggerML workflow supported by the documentation fixture
+- **THEN** the demonstrated code is part of that page and has been executed with assertions by the documentation build
 
-#### Scenario: Parallel docs work proceeds safely
-- **WHEN** multiple subagents work on different doc lanes such as concepts, reference, architecture, or contrib
-- **THEN** the task boundaries are specific enough that each subagent can make progress independently without redefining the whole docs architecture
+#### Scenario: Reader views infrastructure-specific guidance
+- **WHEN** a workflow requires infrastructure not provisioned by the documentation build
+- **THEN** the example is visibly distinguished from executable course code and identifies the missing prerequisite
+
+#### Scenario: Maintainer changes an example
+- **WHEN** a maintainer changes runnable code shown in the documentation
+- **THEN** there is no separate reader-facing example copy that must be updated in parallel
+
+### Requirement: Documentation build entrypoint SHALL live with documentation
+The repository SHALL provide `docs/build.sh` as the single local, CI, and release entrypoint for producing verified executable documentation and packaged dashboard assets. Given host-provided Python, Node/npm, `uv`, source-control and download utilities, and native build prerequisites, the default invocation SHALL synchronize project Python dependencies, install locked frontend dependencies, bootstrap the pinned documentation toolchain, run frontend tests, execute and stage the documentation, compile the frontend, assemble the combined static tree, and validate the packaged result. Dashboard and release automation SHALL invoke this entrypoint rather than duplicate repository dependency-installation, frontend-test, documentation-render, or frontend-build commands. A duplicate root-level dashboard build entrypoint SHALL NOT remain.
+
+#### Scenario: Maintainer performs the complete build
+- **WHEN** a maintainer invokes `bash docs/build.sh` on a host with the documented prerequisite tools
+- **THEN** the command prepares repository dependencies and produces a verified packaged dashboard containing the current frontend and executable documentation
+
+#### Scenario: CI or release automation builds the dashboard
+- **WHEN** automation has provisioned the documented host prerequisites
+- **THEN** it invokes `docs/build.sh` as the sole repository command for dashboard dependency setup, verification, rendering, compilation, and packaging
+
+#### Scenario: A host prerequisite is unavailable
+- **WHEN** a required host-provided tool is unavailable
+- **THEN** the build fails before consuming incomplete generated output and identifies the missing prerequisite
+
+### Requirement: Dashboard build stages SHALL be composable
+The build entrypoint SHALL expose independent options to disable Python dependency synchronization, frontend dependency installation, frontend tests, documentation output, and frontend output. Automatic-versus-forced output rebuilding SHALL remain independent of those stage selections. A disabled setup stage SHALL use existing repository state, a disabled output stage SHALL preserve the corresponding packaged component, and the command SHALL fail clearly when selected downstream work lacks required dependencies or a complete preserved component.
+
+#### Scenario: Contributor performs a fast local rebuild
+- **WHEN** a contributor invokes `bash docs/build.sh --no-python-sync --no-npm-ci` with usable dependency environments
+- **THEN** the build skips dependency synchronization while retaining verification and both output stages
+
+#### Scenario: Contributor builds documentation only
+- **WHEN** a contributor invokes `bash docs/build.sh --no-npm-ci --no-ui-test --no-ui`
+- **THEN** the build prepares and renders documentation while preserving the existing packaged frontend
+
+#### Scenario: Contributor builds the frontend only
+- **WHEN** a contributor invokes `bash docs/build.sh --no-python-sync --no-docs`
+- **THEN** the build installs and verifies frontend dependencies, compiles the frontend, and preserves the existing packaged documentation
+
+#### Scenario: Contributor forces selected outputs
+- **WHEN** a contributor combines forced rebuilding with one or more disabled stages
+- **THEN** the build forces only the selected output stages and does not re-enable a disabled stage
+
+### Requirement: Dashboard packaging SHALL be transactional
+The build SHALL prepare selected documentation and frontend output away from the installed package tree, combine selected output with preserved unselected components, and validate the complete candidate before replacing `src/daggerml/dashboard/static/`. A failed setup, test, render, compilation, assembly, or validation stage SHALL NOT leave a partially replaced packaged dashboard.
+
+#### Scenario: Complete build succeeds
+- **WHEN** every selected stage and final validation succeeds
+- **THEN** the packaged static tree is replaced with the validated candidate containing both dashboard components
+
+#### Scenario: Selected stage fails
+- **WHEN** any selected stage fails
+- **THEN** the command exits unsuccessfully and the previously packaged static tree remains intact
+
+#### Scenario: Partial build lacks a preserved component
+- **WHEN** documentation or frontend output is disabled and no complete packaged version of that component exists
+- **THEN** the command fails before replacing the packaged static tree and identifies the missing preserved component
+
+### Requirement: Build help SHALL document the complete interface
+`docs/build.sh --help` SHALL describe host prerequisites, the default complete build, every setup, verification, output-selection, and rebuild-policy option, interactions between disabled and downstream stages, and the generated-output replacement behavior. The help SHALL include comment-labeled examples for the complete clean CI/release build, a fast local rebuild with existing dependency environments, a documentation-only build, and a frontend-only build that preserves packaged documentation.
+
+#### Scenario: Contributor requests build help
+- **WHEN** a contributor invokes `bash docs/build.sh --help`
+- **THEN** the command exits successfully without installing dependencies or changing generated output and prints the full interface explanation
+
+#### Scenario: Contributor reads build examples
+- **WHEN** the help examples are displayed
+- **THEN** they include the commands and comment labels `# Complete clean CI/release build` with `bash docs/build.sh`, `# Fast local rebuild with existing dependency environments` with `bash docs/build.sh --no-python-sync --no-npm-ci`, `# Documentation only` with `bash docs/build.sh --no-npm-ci --no-ui-test --no-ui`, and `# Frontend only, preserving packaged docs` with `bash docs/build.sh --no-python-sync --no-docs`
+
+### Requirement: Executable docs SHALL not use ambient user state
+The executable course SHALL run in a fresh build workspace with isolated DaggerML and cloud configuration. A page with `dml-project-home` SHALL run from that workspace-relative directory only after a declared dependency has created it.
+
+#### Scenario: A developer builds the documentation
+- **WHEN** the complete documentation build succeeds or fails
+- **THEN** its repositories, credentials, configuration, services, and temporary state are removed without modifying the developer's ambient DaggerML environment
+
+### Requirement: Course navigation SHALL follow validated dependency order
+The documentation manifest SHALL expose the validated topological execution position of each page, and dashboard navigation SHALL order the pages within Start here, Use, and Extend by that position. Every non-home course page SHALL declare the prerequisite that establishes its required durable state. Navigation and execution SHALL therefore present the same relative order for each course.
+
+#### Scenario: Reader opens a course section
+- **WHEN** the dashboard displays Start here, Use, or Extend
+- **THEN** the section's pages appear in the same relative order used to execute their examples
+
+#### Scenario: Maintainer changes a course prerequisite
+- **WHEN** a valid `depends-on` relationship changes the topological page order
+- **THEN** both documentation execution and dashboard navigation reflect the new order without a separate navigation list
+
+#### Scenario: Course dependencies are invalid
+- **WHEN** a page declares an unknown, self-referential, duplicate, or cyclic prerequisite
+- **THEN** documentation validation fails before publishing a manifest
+
+### Requirement: Primary course sections SHALL minimize page inventory
+Start here, Use, and Extend SHALL expose only substantive course destinations in their dashboard sections. A section SHALL NOT retain a landing, forwarding, concept, guide, reference, example, packaging, testing, or inventory page when its useful content has been consolidated into the ordered course. Removed content SHALL be translated into the owning course page, glossary, Sharp bits and security page, subsystem documentation, or contributor documentation as appropriate, and internal links SHALL target the resulting canonical destination. Published pages SHALL NOT expose administrative metadata, implementation checklists, or test and verification checklists as reader-facing content; executable example assertions and build validation SHALL remain in place.
+
+#### Scenario: Reader opens Use navigation
+- **WHEN** the consolidated researcher course is packaged
+- **THEN** Use contains Projects, Artifacts, Execution, Inspection, Runtimes, and Sharing without a duplicate Use landing or standalone reference entries
+
+#### Scenario: Reader opens Extend navigation
+- **WHEN** the consolidated extension course is packaged
+- **THEN** Extend contains Codecs, Adapters, and Executors without a duplicate Extend landing or cross-cutting inventory entries
+
+#### Scenario: Existing technical page is removed
+- **WHEN** a superseded source page contains useful technical guidance
+- **THEN** that guidance remains discoverable in the audience and course page that owns the workflow
+
+#### Scenario: Removed route is referenced internally
+- **WHEN** documentation validation checks links after consolidation
+- **THEN** no packaged page links to a removed Use or Extend route
+
+#### Scenario: Reader views a published page
+- **WHEN** a course page is published
+- **THEN** its reader-facing content omits administrative metadata and implementation, test, and verification checklists while its runnable examples remain build-validated

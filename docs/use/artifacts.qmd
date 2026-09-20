@@ -1,0 +1,47 @@
+---
+title: Artifacts
+engine: knitr
+dml-project-home: research-demo
+depends-on: use/projects
+---
+
+Store small, ordinary values directly in a DAG. Store large payloads outside it
+and commit their `Uri`, preserving the payload's identity without embedding its
+bytes. This project now has the Moto-backed `remote.root` configured by
+[Projects](projects.qmd), so `S3Store()` uses the fixture-owned data prefix.
+
+## Record inputs
+
+```{python}
+import daggerml as dml
+from daggerml.contrib.s3 import S3Store
+
+store = S3Store()
+measurements = store.put(data=b"2,3,5\n", suffix=".csv")
+
+with dml.new("course-artifacts", message="record course input") as dag:
+    source = dag.put(measurements, name="measurements")
+    dataset = dag.put(
+        {"source": source, "labels": ["fresh", "local", "seasonal"]},
+        name="dataset",
+    )
+    dag.commit(dataset)
+
+recorded = dml.load("course-artifacts")
+assert store.get(recorded["measurements"].value()) == b"2,3,5\n"
+recorded_result = recorded.result.value()
+assert recorded_result["labels"][0] == "fresh"
+```
+
+## Choose a durable representation
+
+Built-in normalization accepts scalars, lists, dictionaries, `Uri` values, and
+runnables. Nodes from the active DAG are reused; committed nodes are imported;
+`S3Store.put()` is content-addressed; `put_js`/`get_js` handle JSON and
+`tar`/`untar` handle directory artifacts.
+
+Optional installed pandas and polars codecs externalize data frames as parquet
+URIs. Use an installed codec for another repeatable Python representation; if
+one is unavailable, convert to a supported value or implement a codec in
+Extend. Continue with [Execution](execution.qmd), which consumes the named
+`course-artifacts` input without relying on this page's Python process.

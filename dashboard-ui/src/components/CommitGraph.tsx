@@ -1,6 +1,7 @@
 import { curveBumpY, line } from "d3";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type WheelEvent } from "react";
 import type { Commit, RefLabel } from "../types";
+import { BrandIcon } from "./BrandIcon";
 
 const ROW = 72;
 const LANE = 28;
@@ -160,5 +161,5 @@ function formatTime(value?: string) {
 }
 
 function EmptyGraph({ label }: { label: string }) {
-  return <div className="empty-graph"><span className="empty-graph__glyph">⌁</span><p>{label}</p></div>;
+  return <div className="empty-graph"><BrandIcon expression="happy" size={64} /><p>{label}</p></div>;
 }

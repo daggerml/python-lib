@@ -1,0 +1,103 @@
+---
+title: Execution
+engine: jupyter
+jupyter: python3
+dml-project-home: research-demo
+depends-on: use/artifacts
+---
+
+Funks package computation as `Runnable` values. Calling a staged funk records
+an execution DAG; its normalized runnable and DaggerML arguments form the cache
+identity. This page reads the durable artifact produced by the preceding page
+and runs one fixture-owned script path and one Docker path.
+
+## Run self-contained script work
+
+A script worker receives persisted source, not the authoring interpreter's
+imports or globals. Import dependencies inside the function, or explicitly
+inject source with `extra_objs` or `post_lines`.
+
+```{python}
+import os
+from urllib.parse import urlparse
+
+import daggerml as dml
+from daggerml.contrib import api
+
+
+@api.funkify(tags=["course", "summary"])
+def summarize_artifact(dag, source):
+    from daggerml.contrib.s3 import S3Store
+
+    values = [int(value) for value in S3Store().get(source.value()).splitlines()[0].split(b",")]
+    return {"count": len(values), "total": sum(values)}
+
+
+flags = []
+endpoint = os.environ.get("AWS_ENDPOINT_URL")
+if endpoint:
+    parsed = urlparse(endpoint)
+    if parsed.scheme == "http" and parsed.port is not None:
+        flags += [
+            "--add-host=host.docker.internal:host-gateway",
+            "-e",
+            f"AWS_ENDPOINT_URL=http://host.docker.internal:{parsed.port}",
+        ]
+for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_DEFAULT_REGION"):
+    if value := os.environ.get(key):
+        flags += ["-e", f"{key}={value}"]
+```
+
+## Compose Docker work
+
+Docker is an outer runnable wrapper around the inner script. Its image and
+flags are staged data, so they also participate in the execution boundary and
+identity.
+
+```{python}
+docker_summarize = api.funkify(
+    summarize_artifact,
+    uri="docker",
+    image=api.ref("image"),
+    flags=api.ref("docker-flags"),
+)
+
+with dml.new("course-execution", message="execute course artifact") as dag:
+    source = dag.require("course-artifacts", "measurements", name="source")
+    dag.put(dml.load("docs-image").result, name="image")
+    dag.put(flags, name="docker-flags")
+    script = dag.put(summarize_artifact, name="script")
+    docker = dag.put(docker_summarize, name="docker")
+    first = script(source, name="script-first")
+    cached = script(source, name="script-cached")
+    container = docker(source, name="docker-result")
+    dag.commit({"script": first, "cached": cached, "docker": container})
+
+recorded = dml.load("course-execution")
+assert recorded.result.value() == {
+    "cached": {"count": 3, "total": 10},
+    "docker": {"count": 3, "total": 10},
+    "script": {"count": 3, "total": 10},
+}
+```
+
+Script execution and cache coordination require `remote.root`; Docker also
+needs Docker, S3 access at its execution boundary, and an image containing the
+script's dependencies. The built-in choices are script and Docker through the
+local adapter, SSH-wrapped work through the local adapter, and AWS Batch through
+the Lambda adapter. SSH can source `env_files`; Batch additionally needs a
+Lambda integration, container image, queues, task role, and AWS credentials.
+Other schedulers or cloud integrations require an installed extension.
+
+<!-- docs:pseudocode: An SSH host, scheduler, or cloud adapter is not owned by the documentation fixture. Configure its credentials and installed integration before composing this wrapper. -->
+```python
+remote_docker = api.funkify(
+    docker_summarize,
+    uri="ssh",
+    host="research-host",
+    env_files=["/etc/research.env"],
+)
+```
+
+Continue with [Inspection](inspection.qmd) to inspect these completed results
+from persisted DAG state.

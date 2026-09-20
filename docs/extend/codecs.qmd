@@ -1,0 +1,97 @@
+---
+title: Codecs
+engine: jupyter
+jupyter: python3
+---
+
+Codecs turn Python values into values DaggerML can stage. This is the first
+Extend course page; [Adapters](adapters.qmd) uses the same normalization path
+to lower delayed work.
+
+## Contract and normalization
+
+The public `LiteralCodec` contract has `can_encode(value)` and
+`encode(value, dag)`. Selection stops at the first matching codec. `encode()`
+must return a value that is not an instance of its input type so normalization
+makes progress; otherwise DaggerML raises `CodecError`. Codec exceptions are
+wrapped as `CodecError`, except `DmlRepoError`, which remains meaningful to
+callers.
+
+`apply_codecs()` repeats codec application until it reaches a DaggerML scalar,
+collection, or `Ref`. It then recursively normalizes list and dict
+values, URI text, and a runnable's target, nested runnable, and kwargs. A codec
+may therefore return a `Uri`, `Runnable`, collection, reference, or another
+encodable intermediate value, but the chain must terminate.
+
+```{python}
+from decimal import Decimal
+
+
+class DecimalCodec:
+    def can_encode(self, value):
+        return isinstance(value, Decimal)
+
+    def encode(self, value, dag):
+        return str(value)
+
+
+def literal_codecs():
+    return [(10, DecimalCodec())]
+
+
+priority, codec = literal_codecs()[0]
+assert priority == 10
+assert codec.can_encode(Decimal("1.25"))
+assert codec.encode(Decimal("1.25"), dag=None) == "1.25"
+```
+
+Keep `can_encode()` narrow. Test direct values and every nested shape your
+codec accepts; nested collection members are recursively normalized and do not
+need to be normalized before a codec returns the collection.
+
+## Projection normalization
+
+`ProjectionCodec` uses `NodeCodec` to handle the committed base, then stages a
+built-in `daggerml:get` for each path step in the writable target DAG. The
+selected Python value is not copied. See [Inspection](../use/inspection.qmd)
+for researcher-facing projection behavior.
+
+<!-- docs:pseudocode: This graph trace explains projection encoding rather than providing authored runnable source. -->
+```text
+ImportNode(projection.base) -> get(imported_base, "my_key") -> get(previous_result, "my_key1")
+```
+
+For delayed authoring and lowering, see [Adapters](adapters.qmd).
+
+## Register, package, and inspect
+
+Publish a zero-argument factory, not a codec instance, under
+`daggerml.codecs`. Factories are lazily loaded once per process on first codec
+use. Entry points are sorted by name and value; registrations are then sorted by
+descending priority while ties preserve registration order. A failed load does
+not mark plugins loaded, so a later use can retry.
+
+<!-- docs:pseudocode: Install this metadata in the distribution that owns the codec; do not install it from a documentation example. -->
+```toml
+[project.entry-points."daggerml.codecs"]
+my_package = "my_package.codecs:literal_codecs"
+```
+
+Install that distribution wherever values are authored and normalized. Use the
+public diagnostics helper to inspect discovered codecs and loading errors rather
+than relying on registry internals.
+
+```{python}
+from daggerml.contrib.status import status
+
+
+report = status()
+assert report["summary"]["codec_registration_count"] >= 2
+assert all("key" in item and "implements" in item for item in report["codecs"])
+```
+
+Built-ins include node, collection, and projection codecs. Contrib supplies the
+delayed-action codec and, when their optional libraries are importable, pandas
+and polars dataframe codecs that externalize Parquet through `S3Store` and
+return a `Uri`. See [Artifacts](../use/artifacts.qmd) for general `S3Store`
+behavior.

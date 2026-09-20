@@ -1,0 +1,27 @@
+---
+title: Get started
+engine: knitr
+depends-on: start-here
+---
+
+DaggerML requires Python 3.11 or later. Install it, then create a project with
+the CLI.
+
+<!-- docs:pseudocode: reader installation command; the docs build must use the current repository environment rather than install a released package. -->
+```bash
+pip install daggerml
+```
+
+```{bash}
+mkdir research-demo
+cd research-demo
+dml init
+```
+
+The commands remain in one shell block so `dml init` runs inside the new
+`research-demo` directory. It creates `.dml/` there. The next page uses that
+same project to create and query a live DAG.
+
+Continue with [DAGs](dags.qmd). Use `dml --help` for generated command details;
+the ordered [Use course](../use/projects.qmd) applies administrative commands in
+their project, runtime, and sharing workflows.

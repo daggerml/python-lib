@@ -32,6 +32,22 @@ requests and appreciate your help in improving this project.
 6. Push to your branch on GitHub.
 7. Open a pull request against the `master` branch of this repository.
 
+## Development Setup
+
+- Python 3.11 or newer, [uv](https://docs.astral.sh/uv/), and a C/C++ toolchain
+  with CMake are required for the Cython-backed LMDB extension.
+- Set up a checkout with `uv sync --dev --all-extras`.
+- The dashboard source and package-manager commands live in `dashboard-ui/`.
+  Distribution changes must include built static assets in
+  `src/daggerml/dashboard/`; installed `dml-dashboard` must not require Node.js.
+
+## Repository Orientation
+
+- `src/daggerml/README.md`: public package and CLI boundary.
+- `src/daggerml/_core/README.md`: repository, storage, execution, and remote boundary.
+- `src/daggerml/dashboard/README.md` and `dashboard-ui/README.md`: dashboard server and frontend boundary.
+- `openspec/spec-overview.md`: normative architecture and capability ownership.
+
 ## Coding Standards
 
 - Follow [PEP 8](https://pep8.org/) for Python code style.
@@ -72,6 +88,38 @@ requests and appreciate your help in improving this project.
 - Run all tests locally before submitting a pull request:
 - Ensure your code passes all tests and does not decrease code coverage.
 - If your changes introduce new dependencies, please update `pyproject.toml`, but we prefer to keep the dependencies to a minimum.
+
+## Documentation Build
+
+- Python, Node.js/npm, `uv`, Git, `curl`, `tar`, and the native package build
+  toolchain are host prerequisites. Executable documentation also requires
+  Docker with a running daemon to build and run the course's container image.
+  The build command owns project dependency
+  setup, frontend tests, the pinned Quarto/R bootstrap, documentation execution,
+  frontend compilation, and packaged-output validation:
+  ```bash
+  bash docs/build.sh
+  ```
+- The default automatic mode runs `uv sync`, `npm ci`, and frontend tests, then
+  fingerprints repository inputs and rebuilds stale components. A clean checkout
+  therefore performs the complete verified build. Use composable `--no-*` flags
+  to trust existing dependencies or preserve one packaged component, and use
+  `--full` to force selected outputs. Run `bash docs/build.sh --help` for every
+  option, stage interaction, and common command example.
+- Documentation and frontend output are assembled away from the installed
+  package tree. The existing packaged dashboard is replaced only after the
+  complete candidate validates, so failed builds retain the prior output.
+- The script installs its pinned Quarto/R toolchain and all related caches under
+  the ignored `.tools/` directory. Set `DOCS_PYTHON` when the project interpreter
+  is not `.venv/bin/python`:
+  ```bash
+  DOCS_PYTHON="/path/to/python" bash docs/build.sh
+  ```
+- The build executes all QMD examples against disposable fixtures; do not use it as a substitute for the full test suite.
+- CI builds and verifies the dashboard and executable documentation once in the
+  Linux `dashboard` job. Wheel and source-distribution jobs download its
+  `dashboard-assets` artifact and package those same verified files. macOS wheel
+  runners therefore do not need Docker or the documentation build toolchain.
 
 ### Test taxonomy and naming
 

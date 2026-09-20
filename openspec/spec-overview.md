@@ -10,20 +10,20 @@ When a concept is not listed here, treat it as unresolved rather than guessing f
 
 | concept | authority | scope |
 | --- | --- | --- |
-| Public API behavior | `docs/use/reference/python-authoring.md`, `docs/use/concepts/dags-nodes-results.md`, `docs/use/reference/errors.md` | Public Python authoring semantics, node wrappers, DAG-call staging behavior, and user-visible API errors. |
-| CLI behavior | `docs/use/reference/cli.md` | User-visible CLI commands, arguments, and CLI semantics. |
-| Execution and runtime behavior | `docs/use/reference/configuration.md`, `docs/use/concepts/funks-execution-cache.md`, `docs/develop/architecture/execution-and-runtime-state.md` | Runtime configuration, execution flow, cache behavior, and lifecycle semantics. |
-| Cache publication and cache identity | `docs/use/concepts/funks-execution-cache.md`, `docs/develop/architecture/execution-and-runtime-state.md`, `docs/develop/architecture/remotes-and-sync.md` | Runtime cache publication behavior, cache identity, and remote execution state. |
-| Storage and object persistence | `docs/use/concepts/artifacts-data-codecs.md`, `docs/glossary.md`, `docs/develop/architecture/dag-storage-and-types.md`, `docs/use/guides/artifacts.md` | Storage model, references, GC-adjacent behavior, and external data persistence. |
-| Commit and DAG semantics | `docs/use/concepts/history-remotes.md`, `docs/use/concepts/dags-nodes-results.md`, `docs/develop/architecture/dag-storage-and-types.md` | Commit objects, DAG model semantics, and repository operations. |
-| Remote sync and protocol | `docs/use/concepts/history-remotes.md`, `docs/develop/architecture/remotes-and-sync.md` | Remote lifecycle, sync protocol semantics, and remote operations behavior. |
-| Codec encoding and import/export behavior | `docs/extend/reference/codec-contracts.md`, `docs/use/concepts/artifacts-data-codecs.md` | Codec registry behavior, encoding rules, and import/export semantics. |
-| Extension authoring API | `docs/use/guides/author-a-dag.md`, `docs/extend/concepts/extension-model.md` | `daggerml.contrib.api` decorators, delayed actions, and execution helpers. |
-| Extension runtime lifecycle | `docs/extend/reference/adapter-operations.md`, `docs/extend/reference/executor-lifecycle.md`, `docs/develop/architecture/execution-and-runtime-state.md` | Adapter/executor pairing, execution-state transitions, and deployment-specific execution behavior. |
-| Extension plugin packaging and discovery | `docs/extend/reference/plugin-api.md` | Adapter, executor, codec, and custom dashboard plugin packaging and discovery behavior. |
-| Extension S3 utility behavior | `docs/use/guides/artifacts.md`, `docs/extend/reference/codec-contracts.md` | `S3Store`, artifact URI behavior, and dataframe serialization. |
+| Public API behavior | `docs/start-here/`, `docs/use/artifacts.qmd`, `docs/use/inspection.qmd` | Public Python authoring semantics, node wrappers, DAG-call staging behavior, and user-visible API errors. Public `Projection` inspection belongs to Inspection, not codec normalization. |
+| CLI behavior | `docs/use/` and generated `dml --help` | User-visible CLI commands, arguments, and CLI semantics in their owning workflows. |
+| Execution and runtime behavior | `docs/use/execution.qmd`, `docs/use/runtimes.qmd`, `src/daggerml/_core/README.md` | Runtime configuration, execution flow, cache behavior, and lifecycle semantics. |
+| Cache publication and cache identity | `docs/use/execution.qmd`, `docs/use/runtimes.qmd`, `src/daggerml/_core/README.md` | Runtime cache publication behavior, cache identity, and remote execution state. |
+| Storage and object persistence | `docs/use/artifacts.qmd`, `docs/glossary.qmd`, `src/daggerml/_core/README.md` | Storage model, references, GC-adjacent behavior, and external data persistence. |
+| Commit and DAG semantics | `docs/use/inspection.qmd`, `docs/use/sharing.qmd`, `src/daggerml/_core/README.md` | Commit objects, DAG model semantics, and repository operations. |
+| Remote sync and protocol | `docs/use/sharing.qmd`, `src/daggerml/_core/README.md` | Remote lifecycle, sync protocol semantics, and remote operations behavior. |
+| Codec normalization and conversion | `docs/extend/codecs.qmd`, `docs/use/artifacts.qmd` | Codecs owns custom conversion and `ProjectionCodec` internals; Artifacts owns selecting installed codecs for durable values. |
+| Extension authoring API | `docs/start-here/funks.qmd`, `docs/extend/adapters.qmd` | `daggerml.contrib.api` decorators, delayed actions, and delayed-lowering chronology. |
+| Extension runtime lifecycle | `docs/extend/adapters.qmd`, `docs/extend/executors.qmd`, `src/daggerml/_core/README.md` | Adapters own delayed authoring, runnable resolution, concrete handoff, and transport; Executors own delegated backend-specific construction and lifecycle behavior. |
+| Extension plugin packaging and discovery | `docs/extend/`, `src/daggerml/dashboard/README.md` | Adapter, executor, codec, and custom dashboard plugin packaging and discovery behavior. |
+| Extension S3 utility behavior | `docs/use/artifacts.qmd` | General `S3Store`, artifact URI, and external-payload behavior. |
 | Bundled agent skills | `openspec/specs/bundled-agent-skills/spec.md` | Portable `authoring`, `repository`, and `inspection` guidance resources. |
-| Local research dashboard | `docs/develop/architecture/dashboard.md` | Dashboard launcher, local HTTP API, read-only projections, cancellation confirmation, redaction, executor introspection, and packaged frontend assets. |
+| Local research dashboard | `src/daggerml/dashboard/README.md`, `dashboard-ui/README.md`, and dashboard OpenSpec capabilities | Dashboard launcher, local HTTP API, read-only projections, cancellation confirmation, redaction, executor introspection, and packaged frontend assets. |
 | Dashboard revision navigation | `openspec/specs/dashboard-revision-navigation/spec.md` | Home, canonical project-and-commit routes, revision-scoped reads, refs, and current-versus-historical presentation. |
 | Dashboard public API boundary | `openspec/specs/dashboard-public-api-boundary/spec.md` | Allowed core imports and the dashboard's public plugin surface. |
 | Dashboard value and runnable inspection | `openspec/specs/dashboard-value-runnable-inspection/spec.md` | Inspector value, runnable, script, and log semantics. |

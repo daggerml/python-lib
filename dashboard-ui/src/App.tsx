@@ -1,7 +1,7 @@
 import {
-  Activity,
   AlertTriangle,
   Archive,
+  BookOpen,
   Box,
   Check,
   ChevronDown,
@@ -10,7 +10,6 @@ import {
   Command,
   Copy,
   GitBranch,
-  GitCommitHorizontal,
   FolderKanban,
   LayoutDashboard,
   ListTodo,
@@ -18,7 +17,6 @@ import {
   Menu,
   Minimize2,
   Moon,
-  Network,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -33,7 +31,8 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import dagMark from "./assets/daggerml-dag-mark.png";
+import { DagIcon, CommitIcon, RunIcon, CacheIcon, RemoteIcon } from "./components/ConceptIcon";
+import { BrandIcon } from "./components/BrandIcon";
 import { api, subscribeToEvents, subscribeToLogs } from "./api";
 import { FlowGraph } from "./components/FlowGraph";
 import { CommitGraph } from "./components/CommitGraph";
@@ -60,12 +59,16 @@ import type {
   StatusPayload,
 } from "./types";
 
-const PROJECT_NAV: Array<{ id: PageId; label: string; icon: typeof LayoutDashboard; shortcut: string }> = [
+const PROJECT_NAV: Array<{ id: PageId; label: string; icon: React.ComponentType; shortcut: string }> = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, shortcut: "G O" },
-  { id: "dags", label: "DAG Explorer", icon: Network, shortcut: "G D" },
+  { id: "dags", label: "DAG Explorer", icon: DagIcon, shortcut: "G D" },
   { id: "refs", label: "Tags and refs", icon: GitBranch, shortcut: "G R" },
 ];
 const NAV = PROJECT_NAV;
+const GLOBAL_NAV: Array<{ id: PageId; label: string; icon: React.ComponentType }> = [
+  { id: "home", label: "Home", icon: ListTodo },
+  { id: "docs", label: "Docs", icon: BookOpen },
+];
 
 interface BrowserRoute {
   page: PageId;
@@ -76,6 +79,7 @@ interface BrowserRoute {
   dashboard?: string;
   selection?: Selection;
   inspectorTab?: string;
+  docsPage?: string;
   invalid?: boolean;
 }
 
@@ -87,8 +91,12 @@ function readBrowserRoute(): BrowserRoute {
   let commitId: string | undefined;
   let dagId: string | undefined;
   let invalid = false;
+  let docsPage: string | undefined;
   if (parts.length) {
-    if (parts[0] !== "projects" || !parts[1]) invalid = true;
+    if (parts[0] === "docs") {
+      page = "docs";
+      docsPage = parts.slice(1).join("/") || undefined;
+    } else if (parts[0] !== "projects" || !parts[1]) invalid = true;
     else if (parts.length === 3 && parts[2] === "unborn") { projectId = parts[1]; page = "unborn"; }
     else if (parts[2] === "commits" && parts[3]) {
       projectId = parts[1]; commitId = parts[3];
@@ -111,14 +119,16 @@ function readBrowserRoute(): BrowserRoute {
     dagId,
     graphFilter: params.get("graphFilter") ?? undefined,
     dashboard: params.get("dashboard") ?? undefined,
+    docsPage,
     selection: resource && resourceType ? { type: resourceType, id: resource, project_id: projectId } : undefined,
     inspectorTab,
     invalid,
   };
 }
 
-function routePath(page: PageId, projectId?: string, commitId?: string, dagId?: string): string {
+function routePath(page: PageId, projectId?: string, commitId?: string, dagId?: string, docsPage?: string): string {
   if (page === "home") return "/";
+  if (page === "docs") return `/docs${docsPage ? `/${docsPage.split("/").map(encodeURIComponent).join("/")}` : ""}`;
   if (!projectId) return "/";
   const root = `/projects/${encodeURIComponent(projectId)}`;
   if (page === "unborn") return `${root}/unborn`;
@@ -278,6 +288,7 @@ export default function App() {
   const [commitId, setCommitId] = useState<string | undefined>(initialRoute.commitId);
   const [graphFilter, setGraphFilter] = useState<string | undefined>(initialRoute.graphFilter);
   const [selectedDashboard, setSelectedDashboard] = useState<string | undefined>(initialRoute.dashboard);
+  const [docsPage, setDocsPage] = useState<string | undefined>(initialRoute.docsPage);
   const [routeInvalid, setRouteInvalid] = useState(Boolean(initialRoute.invalid));
   const bootstrapGeneration = useRef(0);
   const [theme, setTheme] = useState<"dark" | "light">(() =>
@@ -307,15 +318,16 @@ export default function App() {
     setCommitId(route.commitId);
     setGraphFilter(route.graphFilter);
     setSelectedDashboard(route.dashboard);
+    setDocsPage(route.docsPage);
     setRouteInvalid(Boolean(route.invalid));
   }, []);
 
-  const navigate = useCallback((nextPage: PageId, options?: { projectId?: string; commitId?: string; dagId?: string; replace?: boolean }) => {
+  const navigate = useCallback((nextPage: PageId, options?: { projectId?: string; commitId?: string; dagId?: string; docsPage?: string; hash?: string; replace?: boolean }) => {
     const nextProject = options?.projectId ?? selectedProjectId;
     const nextCommit = options?.commitId ?? commitId;
-    const path = routePath(nextPage, nextProject, nextCommit, options?.dagId);
+    const path = `${routePath(nextPage, nextProject, nextCommit, options?.dagId, options?.docsPage)}${options?.hash ?? ""}`;
     window.history[options?.replace ? "replaceState" : "pushState"](null, "", path);
-    applyRoute({ page: nextPage, projectId: nextPage === "home" ? undefined : nextProject, commitId: nextPage === "home" || nextPage === "unborn" ? undefined : nextCommit, dagId: options?.dagId });
+    applyRoute({ page: nextPage, projectId: ["home", "docs"].includes(nextPage) ? undefined : nextProject, commitId: ["home", "docs", "unborn"].includes(nextPage) ? undefined : nextCommit, dagId: options?.dagId, docsPage: options?.docsPage });
     setMobileNav(false);
   }, [applyRoute, selectedProjectId, commitId]);
 
@@ -446,7 +458,7 @@ export default function App() {
     };
   }, [palette, selection, closeSelection, navigate]);
 
-  const current = NAV.find((item) => item.id === page) ?? { label: page === "home" ? "Home" : "Overview" };
+  const current = [...GLOBAL_NAV, ...NAV].find((item) => item.id === page) ?? { label: "Overview" };
   const refreshAll = () => {
     status.reload();
     projects.reload();
@@ -477,7 +489,7 @@ export default function App() {
     <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""} ${selection ? "app-shell--inspecting" : ""}`}>
       <aside id="primary-sidebar" className={`sidebar ${sidebarCollapsed ? "sidebar--collapsed" : ""} ${mobileNav ? "sidebar--open" : ""}`}>
         <div className="brand">
-          <img className="brand__mark" src={dagMark} alt="" />
+          <BrandIcon className="brand__mark" />
           <a className="brand__home" href="/" onClick={(event) => { event.preventDefault(); navigate("home"); }}><strong>DaggerML</strong><small>Research workbench</small></a>
           <button
             className="icon-button sidebar-toggle"
@@ -492,6 +504,11 @@ export default function App() {
           <button className="icon-button sidebar__close" onClick={() => setMobileNav(false)} aria-label="Close navigation"><X /></button>
         </div>
         <nav aria-label="Primary navigation">
+          <p className="nav-label">Workspace</p>
+          {GLOBAL_NAV.map((item) => {
+            const Icon = item.icon;
+            return <button key={item.id} className={`nav-item ${page === item.id ? "nav-item--active" : ""}`} onClick={() => navigate(item.id)} aria-current={page === item.id ? "page" : undefined} aria-label={item.label} title={sidebarCollapsed ? item.label : undefined}><Icon /><span>{item.label}</span></button>;
+          })}
           {scope && <>
             <p className="nav-label">Project</p>
             {PROJECT_NAV.map((item) => {
@@ -528,6 +545,7 @@ export default function App() {
         <div className="page">
           {routeInvalid && <Problem title="Page not found" detail="This dashboard location is not available." />}
            {!routeInvalid && page === "home" && <HomePage data={status.data} loading={status.loading} error={status.error} onSelect={openSelection} onProject={selectProject} onProjectsChanged={() => { status.reload(); projects.reload(); }} />}
+           {!routeInvalid && page === "docs" && <DocsPage pageId={docsPage} theme={theme} onNavigate={(id, hash) => navigate("docs", { docsPage: id, hash })} />}
           {!routeInvalid && page === "unborn" && <PageHeader eyebrow="Project workspace" title={selectedProject?.name ?? projectId ?? "Project"} description="This repository has no commit at HEAD yet." />}
           {!routeInvalid && page === "overview" && <OverviewPage data={overview.data} commits={commits.data?.items ?? []} historyBounded={Boolean(commits.data?.next_cursor)} dags={dags.data?.items ?? []} runs={runs.data ?? []} liveIndexes={projectLive} loading={overview.loading} error={overview.error} select={openSelection} navigate={navigate} projectId={selectedProjectId} onCommit={changeCommit} />}
           {!routeInvalid && page === "dags" && scope && <DagsPage key={`${commitId}:${contextDagId}:${graphFilter ?? ""}`} scope={scope} dags={dags.data?.items ?? []} liveIndexes={dags.data?.live_dags_eligible ? projectLive : []} liveEligible={Boolean(dags.data?.live_dags_eligible)} focusDagId={contextDagId} graphFilter={graphFilter} selectedDashboard={selectedDashboard} onDashboard={changeDashboard} onDagRoute={(id) => navigate("dags", { dagId: id })} loading={dags.loading} error={dags.error} select={openSelection} />}
@@ -537,10 +555,200 @@ export default function App() {
 
       {selection && (scope || selection.type === "index") && <Inspector key={`${scope?.project ?? selection.project_id}:${scope?.revision ?? "current"}:${selection.type}:${selection.id}`} scope={scope} selection={selection} executions={runs.data ?? []} activeTab={inspectorTab} onTab={changeInspectorTab} onNavigateHref={navigateHref} onNavigateDag={(id) => { if (scope) navigate("dags", { dagId: id }); }} onNavigateNode={(id) => openSelection({ type: "node", id }, "value")} onClose={closeSelection} onChanged={refreshAll} />}
       {palette && <CommandPalette onClose={() => setPalette(false)} onNavigate={navigate} onHref={navigateHref} onProject={selectProject} onSelect={openSelection} scope={scope} projects={projects.data?.items ?? []} commits={commits.data?.items ?? []} dags={dags.data?.items ?? []} />}
-      <nav className="mobile-destinations" aria-label="Mobile navigation"><button className={page === "home" ? "active" : ""} onClick={() => navigate("home")}><ListTodo />Home</button>{scope && PROJECT_NAV.map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => navigate(item.id)} aria-current={page === item.id ? "page" : undefined}><Icon />{item.label}</button>; })}<button onClick={() => setMobileNav(true)} aria-label="Select project"><FolderKanban />Projects</button></nav>
+      <nav className="mobile-destinations" aria-label="Mobile navigation">{GLOBAL_NAV.map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => navigate(item.id)} aria-current={page === item.id ? "page" : undefined}><Icon />{item.label}</button>; })}{scope && PROJECT_NAV.map((item) => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => navigate(item.id)} aria-current={page === item.id ? "page" : undefined}><Icon />{item.label}</button>; })}<button onClick={() => setMobileNav(true)} aria-label="Select project"><FolderKanban />Projects</button></nav>
       {mobileNav && <button className="sidebar-scrim" onClick={() => setMobileNav(false)} aria-label="Close navigation" />}
     </div>
   );
+}
+
+interface DocsManifestPage {
+  id: string;
+  fragment: string;
+  title?: string;
+  order?: number;
+  headings: Array<{ id: string; level: number; text: string }>;
+}
+
+interface DocsNavSection {
+  id: string;
+  label: string;
+  pages: DocsManifestPage[];
+  direct?: boolean;
+}
+
+const DOCS_ROOT_PAGE = "start-here";
+
+function DocsPage({ pageId, theme, onNavigate }: { pageId?: string; theme: "dark" | "light"; onNavigate: (id?: string, hash?: string) => void }) {
+  const [pages, setPages] = useState<DocsManifestPage[]>();
+  const [content, setContent] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [filter, setFilter] = useState("");
+  const docsContentRef = useRef<HTMLElement>(null);
+  const diagramSequence = useRef(0);
+  const selected = pages?.find((item) => item.id === (pageId ?? DOCS_ROOT_PAGE));
+
+  useEffect(() => {
+    let active = true;
+    fetch("/docs/static/manifest.json").then(async (response) => {
+      if (!response.ok) throw new Error("Packaged documentation is unavailable.");
+      const manifest = await response.json() as { pages?: DocsManifestPage[] };
+      if (!Array.isArray(manifest.pages) || !manifest.pages.every((item) => typeof item.id === "string" && (item.title === undefined || typeof item.title === "string") && typeof item.fragment === "string" && item.fragment.startsWith("fragments/") && !item.fragment.includes(".."))) throw new Error("Packaged documentation manifest is invalid.");
+      if (active) setPages(manifest.pages);
+    }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!pages) return;
+    if (!pageId && !selected) { setContent(undefined); return; }
+    if (!selected) { setError("This documentation page is not available."); return; }
+    let active = true;
+    setError(undefined);
+    setContent(undefined);
+    fetch(`/docs/static/${selected.fragment}`).then(async (response) => {
+      if (!response.ok) throw new Error("This documentation page is not available.");
+      const html = await response.text();
+      if (active) setContent(html);
+    }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
+    return () => { active = false; };
+  }, [pageId, pages, selected]);
+
+  useEffect(() => {
+    if (!content || !window.location.hash) return;
+    const target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    if (typeof target?.scrollIntoView === "function") target.scrollIntoView();
+  }, [content]);
+
+  useEffect(() => {
+    if (!content) return;
+    docsContentRef.current?.querySelectorAll<HTMLButtonElement>("button.code-copy-button").forEach((button) => {
+      button.type = "button";
+      button.title = "Copy code";
+      button.setAttribute("aria-label", "Copy code");
+    });
+  }, [content]);
+
+  useEffect(() => {
+    if (!content) return;
+    const diagrams = [...(docsContentRef.current?.querySelectorAll<HTMLElement>("pre.mermaid") ?? [])];
+    if (!diagrams.length) return;
+    let active = true;
+    const renderDiagrams = async () => {
+      const { default: mermaid } = await import("mermaid");
+      if (!active) return;
+      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: theme === "dark" ? "dark" : "default" });
+      for (const diagram of diagrams) {
+        const source = diagram.dataset.mermaidSource ?? diagram.textContent?.trim() ?? "";
+        diagram.dataset.mermaidSource = source;
+        diagram.classList.remove("mermaid--error");
+        diagram.setAttribute("role", "img");
+        diagram.setAttribute("aria-label", "Flow chart");
+        try {
+          const id = `dml-docs-diagram-${++diagramSequence.current}`;
+          const { svg, bindFunctions } = await mermaid.render(id, source);
+          if (!active || !diagram.isConnected) return;
+          diagram.innerHTML = svg;
+          bindFunctions?.(diagram);
+        } catch {
+          if (!active || !diagram.isConnected) return;
+          diagram.textContent = source;
+          diagram.classList.add("mermaid--error");
+          diagram.setAttribute("aria-label", "Flow chart failed to render");
+        }
+      }
+    };
+    void renderDiagrams();
+    return () => { active = false; };
+  }, [content, theme]);
+
+  const interactWithDocs = (event: ReactMouseEvent<HTMLElement>) => {
+    const copy = (event.target as Element).closest<HTMLButtonElement>("button.code-copy-button");
+    if (copy) {
+      event.preventDefault();
+      const code = copy.closest("pre")?.querySelector("code")?.textContent ?? "";
+      const write = navigator.clipboard?.writeText(code);
+      if (!write) {
+        copy.title = "Copy unavailable";
+        copy.setAttribute("aria-label", "Copy unavailable");
+        return;
+      }
+      write.then(() => {
+        copy.dataset.copied = "true";
+        copy.title = "Copied";
+        copy.setAttribute("aria-label", "Copied");
+        window.setTimeout(() => {
+          if (!copy.isConnected) return;
+          delete copy.dataset.copied;
+          copy.title = "Copy code";
+          copy.setAttribute("aria-label", "Copy code");
+        }, 1_500);
+      }).catch(() => {
+        copy.title = "Copy failed";
+        copy.setAttribute("aria-label", "Copy failed");
+      });
+      return;
+    }
+    const link = (event.target as Element).closest("a");
+    const href = link?.getAttribute("href");
+    if (!href || !link || link.target || link.hasAttribute("download") || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || /^(?:[a-z]+:|\/)/i.test(href) && !href.startsWith("/docs/")) return;
+    const url = new URL(href, window.location.href);
+    if (url.origin !== window.location.origin || !url.pathname.startsWith("/docs") || url.pathname.startsWith("/docs/static/")) return;
+    event.preventDefault();
+    onNavigate(url.pathname.replace(/^\/docs\/?/, "") || undefined, url.hash);
+    if (url.hash) document.getElementById(decodeURIComponent(url.hash.slice(1)))?.scrollIntoView?.();
+  };
+
+  if (error) return <Problem title={pageId && pages && !selected ? "Documentation page not found" : "Documentation unavailable"} detail={error} />;
+  if (!pages) return <Loading />;
+  const sections = docsNavSections(pages, filter);
+  const navigation = <aside className="docs-nav" aria-label="Documentation navigation">
+    <label className="docs-filter"><span className="sr-only">Filter documentation</span><Search /><input type="search" aria-label="Filter documentation" placeholder="Filter docs…" value={filter} onChange={(event) => setFilter(event.target.value)} /></label>
+    <div className="docs-nav__sections">{sections.map((section) => {
+      const current = section.pages.some((item) => item.id === selected?.id);
+      if (section.direct) {
+        const item = section.pages[0];
+        return <button key={section.id} type="button" className={item.id === selected?.id ? "active" : ""} aria-current={item.id === selected?.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item)}</button>;
+      }
+      return <details key={`${section.id}-${current}`} open={Boolean(filter) || current || section.id === "start"}>
+        <summary>{section.label}<span>{section.pages.length}</span></summary>
+        <div>{section.pages.map((item) => <button key={item.id} type="button" className={item.id === selected?.id ? "active" : ""} aria-current={item.id === selected?.id ? "page" : undefined} onClick={() => onNavigate(item.id)}>{docsLabel(item)}</button>)}</div>
+      </details>;
+    })}{sections.length === 0 && <p className="docs-nav__empty">No matching pages</p>}</div>
+  </aside>;
+  if (!selected) return <Problem title="Documentation page not found" detail="The requested page is not part of this packaged documentation set." />;
+  return <section className="docs-layout">{navigation}<article ref={docsContentRef} className="docs-content" onClick={interactWithDocs} dangerouslySetInnerHTML={{ __html: content ?? "" }} />{selected.headings.length > 0 && <aside className="docs-outline" aria-label="On this page"><p className="nav-label">On this page</p>{selected.headings.map((heading) => <button key={heading.id} type="button" onClick={() => onNavigate(selected.id, `#${encodeURIComponent(heading.id)}`)}>{heading.text}</button>)}</aside>}</section>;
+}
+
+function docsLabel(page: DocsManifestPage) {
+  if (page.title) return page.title;
+  const parts = page.id.split("/");
+  const leaf = parts.at(-1) ?? page.id;
+  return humanize(leaf === "README" || leaf === "index" ? parts.at(-2) ?? leaf : leaf);
+}
+
+function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSection[] {
+  const definitions: Array<{ id: string; label: string; matches: (id: string) => boolean; direct?: boolean }> = [
+    { id: "start", label: "Start here", matches: (id: string) => id === "start-here" || id.startsWith("start-here/") },
+    { id: "use", label: "Use", matches: (id: string) => id === "use" || id.startsWith("use/") },
+    { id: "extend", label: "Extend", matches: (id: string) => id === "extend" || id.startsWith("extend/") },
+    { id: "glossary", label: "Glossary", matches: (id: string) => id === "glossary", direct: true },
+    { id: "sharp-bits", label: "Sharp bits and security", matches: (id: string) => id === "sharp-bits-and-security", direct: true },
+  ];
+  const remaining = new Set(pages);
+  const query = filter.trim().toLocaleLowerCase();
+  return definitions.flatMap((definition) => {
+    const sectionPages = pages.filter((page) => remaining.has(page) && definition.matches(page.id));
+    sectionPages.forEach((page) => remaining.delete(page));
+    const manifestPosition = new Map(pages.map((page, index) => [page, index]));
+    sectionPages.sort((left, right) => {
+      const difference = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
+      return Number.isFinite(difference) && difference !== 0
+        ? difference
+        : manifestPosition.get(left)! - manifestPosition.get(right)!;
+    });
+    const matches = query ? sectionPages.filter((page) => `${docsLabel(page)} ${page.id}`.toLocaleLowerCase().includes(query)) : sectionPages;
+    return matches.length > 0 ? [{ id: definition.id, label: definition.label, pages: matches, direct: definition.direct }] : [];
+  });
 }
 
 function PageHeader({ eyebrow, title, description, actions, className = "" }: { eyebrow: string; title: string; description?: string; actions?: ReactNode; className?: string }) {
@@ -775,7 +983,7 @@ function OverviewPage({ data, commits, historyBounded, dags, runs, liveIndexes, 
           <div className="dag-list">
             {dags.slice(0, 4).map((dag) => (
               <button key={dag.id} onClick={() => select({ type: "dag", id: dag.id, project_id: projectId, data: dag })}>
-                <span className="dag-list__icon"><Network /></span><span><strong>{dag.name ?? short(dag.id)}</strong><small>{formatNodeCount(dag)} · {relativeTime(dag.created_at)}</small></span><StatusPill value={dag.status ?? "unknown"} />
+                <span className="dag-list__icon"><DagIcon /></span><span><strong>{dag.name ?? short(dag.id)}</strong><small>{formatNodeCount(dag)} · {relativeTime(dag.created_at)}</small></span><StatusPill value={dag.status ?? "unknown"} />
               </button>
             ))}
             {!dags.length && <InlineEmpty message="No committed DAGs available" />}
@@ -805,7 +1013,7 @@ function RefsPage({ data, loading, error, onCommit }: { data?: RefsEnvelope; loa
   return <>
     <PageHeader eyebrow="Current repository topology" title="Tags and refs" description={data?.checkout.branch ? `Checkout: ${data.checkout.branch}` : "Checkout state is unavailable"} />
     <section className="metric-grid" aria-label="Ref summaries">
-      <Metric label="Selected commit" value={short(selected)} detail={data?.selected.labels.join(", ") || "No current ref label"} icon={<GitCommitHorizontal />} accent="cyan" />
+      <Metric label="Selected commit" value={short(selected)} detail={data?.selected.labels.join(", ") || "No current ref label"} icon={<CommitIcon size={24} />} accent="cyan" />
       <Metric label="Current HEAD" value={short(data?.current_head?.replace(/^commit:/, ""))} detail={data?.checkout.state ?? "Unknown"} icon={<GitBranch />} accent="lime" />
     </section>
     <section className="dashboard-grid">
@@ -828,7 +1036,7 @@ function RefSourceSummary({ sources }: { sources?: RefsEnvelope["sources"] }) {
   const diagnostic = live?.diagnostic;
   const bounded = (["branch", "tag"] as const).filter((kind) => live?.[kind]?.truncated);
   if (!diagnostic && !bounded.length) return null;
-  return <Panel className="span-2" title="Main remote" subtitle="Live remote reads are separate from fetched tracking refs">
+  return <Panel className="span-2" title={<><RemoteIcon /> Main remote</>} subtitle="Live remote reads are separate from fetched tracking refs">
     {diagnostic && <RefDiagnostic diagnostic={diagnostic} />}
     {bounded.length > 0 && <p className="ref-note">Live {bounded.join(" and ")} refs are bounded; omitted refs are not known absent.</p>}
   </Panel>;
@@ -914,12 +1122,12 @@ function DagsPage({ scope, dags, liveIndexes, liveEligible, focusDagId, graphFil
           <div className="explorer-layout">
             {!expanded && <aside className="dag-picker" aria-label="DAGs">
               <p className="nav-label">DAGs <span>{inventory.length}</span></p>
-              {activeId && !inventory.some((dag) => dag.id === activeId) && <button className="active"><span className="dag-picker__icon dag-picker__icon--neutral"><Network /></span><span><strong>Function context</strong><small>{short(activeId, 18)}</small></span></button>}
+              {activeId && !inventory.some((dag) => dag.id === activeId) && <button className="active"><span className="dag-picker__icon dag-picker__icon--neutral"><DagIcon /></span><span><strong>Function context</strong><small>{short(activeId, 18)}</small></span></button>}
               {inventory.map((dag) => {
                 const displayed = dag.id === active?.id ? active : dag;
                 const partial = liveIndexes.find((item) => item.dag_ref === dag.id);
                 const outcome = partial ? partialDagOutcome(partial.group) : dagOutcome(displayed?.status);
-                return <button key={dag.id} className={dag.id === active?.id ? "active" : ""} onClick={() => chooseDag(dag.id)}><span className={`dag-picker__icon dag-picker__icon--${outcome}`} title={partial ? `Partial DAG: ${humanize(partial.group)}` : `DAG outcome: ${displayed?.status ?? "unknown"}`}><Network /></span><span><strong>{dag.name ?? short(dag.id)}</strong><small>{partial ? `Live index · ${humanize(partial.state ?? partial.group)}` : formatNodeCount(displayed)}</small></span></button>;
+                return <button key={dag.id} className={dag.id === active?.id ? "active" : ""} onClick={() => chooseDag(dag.id)}><span className={`dag-picker__icon dag-picker__icon--${outcome}`} title={partial ? `Partial DAG: ${humanize(partial.group)}` : `DAG outcome: ${displayed?.status ?? "unknown"}`}><DagIcon /></span><span><strong>{dag.name ?? short(dag.id)}</strong><small>{partial ? `Live index · ${humanize(partial.state ?? partial.group)}` : formatNodeCount(displayed)}</small></span></button>;
               })}
               {!!inventory.length && <div className="dag-outcome-legend" aria-label="DAG outcome legend"><strong>Outcome</strong><span><i className="dag-outcome-legend__mark dag-picker__icon--index" />Active index</span><span><i className="dag-outcome-legend__mark dag-picker__icon--attention" />Waiting for you</span><span><i className="dag-outcome-legend__mark dag-picker__icon--normal" />Normal DAG</span><span><i className="dag-outcome-legend__mark dag-picker__icon--failure" />DAG error</span><span><i className="dag-outcome-legend__mark dag-picker__icon--cancelled" />Cancelled</span></div>}
               {!inventory.length && <InlineEmpty message="No committed or partial DAGs found" />}
@@ -1087,7 +1295,7 @@ function InspectorDag({ record, onNavigateDag }: { record: Record<string, unknow
   if (contained.length) {
     return <section className="detail-section"><h3>Contained DAGs</h3><div className="contained-dags">{contained.map(([name, value]) => {
       const ref = String(isRecord(value) ? value.ref ?? value.id ?? "" : value);
-      return <button key={`${name}-${ref}`} onClick={() => ref && onNavigateDag(ref)}><Network /><span><strong>{name}</strong><code>{ref}</code></span><b>Open →</b></button>;
+      return <button key={`${name}-${ref}`} onClick={() => ref && onNavigateDag(ref)}><DagIcon /><span><strong>{name}</strong><code>{ref}</code></span><b>Open →</b></button>;
     })}</div></section>;
   }
   const dag = isRecord(record.dag) ? record.dag : record;
@@ -1125,7 +1333,7 @@ function FunctionContextDetails({ value }: { value: Record<string, unknown> }) {
   const dag = isRecord(value.dag) ? value.dag : {};
   return <section className="detail-section"><h3>Function context</h3><dl>
     <div><dt>Context DAG</dt><dd><code>{String(dag.ref ?? "Unavailable")}</code></dd></div>
-    <div><dt>Cache key</dt><dd><code>{String(value.cache_key ?? "Unavailable")}</code></dd></div>
+    <div><dt><CacheIcon /> Cache key</dt><dd><code>{String(value.cache_key ?? "Unavailable")}</code></dd></div>
   </dl></section>;
 }
 
@@ -1166,7 +1374,7 @@ function FndagDetails({ value }: { value: Record<string, unknown> }) {
   const output = isRecord(value.output) ? value.output : {};
   const inputs = Array.isArray(argv.inputs) ? argv.inputs.filter(isRecord) : [];
   return <section className="detail-section"><h3>Function DAG</h3><dl>
-    <div><dt>Cache key</dt><dd><code>{String(value.cache_key ?? "Unavailable")}</code></dd></div>
+    <div><dt><CacheIcon /> Cache key</dt><dd><code>{String(value.cache_key ?? "Unavailable")}</code></dd></div>
     <div><dt>Started</dt><dd>{formatTimestamp(timing.started_at)}</dd></div>
     <div><dt>Ended</dt><dd>{formatTimestamp(timing.ended_at)}</dd></div>
     <div><dt>Duration</dt><dd>{typeof timing.duration_seconds === "number" ? `${timing.duration_seconds.toFixed(2)}s` : "In progress"}</dd></div>
@@ -1240,29 +1448,29 @@ function CommandPalette({ onClose, onNavigate, onHref, onProject, onSelect, scop
     else onSelect({ type: item.type as Selection["type"], id: item.id, project_id: item.project_id });
     onClose();
   };
-  return <div className="palette-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="palette" role="dialog" aria-modal="true" aria-label="Command palette"><div className="palette__input"><Search /><input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects, refs, commits, and DAGs…" onKeyDown={(event) => { if (event.key === "Enter" && items[0]) choose(items[0]); }} /><kbd>ESC</kbd></div><div className="palette__results"><p className="nav-label">{query ? "Matches" : "Quick navigation"}</p>{items.map((item, index) => <button key={`${item.type}-${item.project_id ?? "global"}-${item.id}`} onClick={() => choose(item)}><span className="result-icon">{item.type === "page" ? <Command /> : item.type === "project" ? <FolderKanban /> : item.type === "commit" ? <GitCommitHorizontal /> : item.type === "dag" ? <Network /> : <Activity />}</span><span><strong>{item.label}</strong><small>{item.project_id ? `${item.type} · ${item.project_id} · ${item.detail}` : `${item.type} · ${item.detail}`}</small></span>{index === 0 && <kbd>↵</kbd>}</button>)}{!items.length && <InlineEmpty message="No results" />}</div><footer><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span></footer></section></div>;
+  return <div className="palette-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="palette" role="dialog" aria-modal="true" aria-label="Command palette"><div className="palette__input"><Search /><input ref={input} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects, refs, commits, and DAGs…" onKeyDown={(event) => { if (event.key === "Enter" && items[0]) choose(items[0]); }} /><kbd>ESC</kbd></div><div className="palette__results"><p className="nav-label">{query ? "Matches" : "Quick navigation"}</p>{items.map((item, index) => <button key={`${item.type}-${item.project_id ?? "global"}-${item.id}`} onClick={() => choose(item)}><span className="result-icon">{item.type === "page" ? <Command /> : item.type === "project" ? <FolderKanban /> : item.type === "commit" ? <CommitIcon /> : item.type === "dag" ? <DagIcon /> : <RunIcon />}</span><span><strong>{item.label}</strong><small>{item.project_id ? `${item.type} · ${item.project_id} · ${item.detail}` : `${item.type} · ${item.detail}`}</small></span>{index === 0 && <kbd>↵</kbd>}</button>)}{!items.length && <InlineEmpty message="No results" />}</div><footer><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span></footer></section></div>;
 }
 
 function Metric({ label, value, detail, icon, accent }: { label: string; value: string; detail: string; icon: ReactNode; accent: string }) {
   return <article className={`metric metric--${accent}`}><span className="metric__icon">{icon}</span><div><p>{label}</p><strong>{value}</strong><small>{detail}</small></div></article>;
 }
-function Panel({ title, subtitle, action, className = "", children }: { title: string; subtitle: string; action?: ReactNode; className?: string; children: ReactNode }) {
+function Panel({ title, subtitle, action, className = "", children }: { title: ReactNode; subtitle: string; action?: ReactNode; className?: string; children: ReactNode }) {
   return <section className={`panel ${className}`}><header><div><h2>{title}</h2><p>{subtitle}</p></div>{action}</header>{children}</section>;
 }
 function RunRow({ run, onClick }: { run: Execution; onClick: () => void }) {
-  return <button onClick={onClick} className="run-row"><span className="run-row__icon"><Activity /></span><span><strong>{run.name ?? short(run.id)}</strong><small>{run.executor ?? "local"} · {elapsed(run.started_at, run.updated_at)}</small><i><b style={{ width: `${normalizeProgress(run.progress)}%` }} /></i></span><StatusPill value={run.status} /></button>;
+  return <button onClick={onClick} className="run-row"><span className="run-row__icon"><RunIcon /></span><span><strong>{run.name ?? short(run.id)}</strong><small>{run.executor ?? "local"} · {elapsed(run.started_at, run.updated_at)}</small><i><b style={{ width: `${normalizeProgress(run.progress)}%` }} /></i></span><StatusPill value={run.status} /></button>;
 }
 function Health({ icon, label, detail, status }: { icon: ReactNode; label: string; detail: string; status: string }) {
   return <div><span className="health-icon">{icon}</span><span><strong>{label}</strong><small>{detail}</small></span><StatusPill value={status} /></div>;
 }
 function Loading() {
-  return <div className="loading" role="status"><span /><span /><span /><p>Inspecting project state…</p></div>;
+  return <div className="loading" role="status"><BrandIcon expression="tweaking" size={64} /><p>Inspecting project state…</p></div>;
 }
 function Problem({ title, detail }: { title: string; detail: string }) {
-  return <div className="problem"><span><AlertTriangle /></span><h2>{title}</h2><p>{detail}</p></div>;
+  return <div className="problem"><BrandIcon expression="x-eyes" size={64} /><h2>{title}</h2><p>{detail}</p></div>;
 }
 function InlineEmpty({ message }: { message: string }) {
-  return <div className="inline-empty"><span>◇</span>{message}</div>;
+  return <div className="inline-empty"><BrandIcon size={24} />{message}</div>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

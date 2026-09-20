@@ -1,0 +1,139 @@
+---
+title: Executors
+engine: jupyter
+jupyter: python3
+depends-on: extend/adapters
+---
+
+Executors are a contrib invention for implementing backend behavior behind an
+[AdapterBase](adapters.qmd) adapter. Core dispatches only to an adapter
+executable; it neither discovers executors nor imports `ExecutorBase`.
+
+## Registry, discovery, and lowering
+
+The contrib registry discovers executor entry points by `(adapter name, input
+executor name)`. `AdapterBase.resolve_runnable(uri, kwargs, sub)` looks up
+`(adapter name, uri)` before resolution; the entry-point key is descriptive, but
+lookup uses `MyExecutor.adapter` and `MyExecutor.name`. Discovery is lazy,
+retains loaded objects, warns on duplicate keys with the last registration
+winning, and raises `DmlRepoError` if an entry point fails while loading.
+
+An executor's `resolve_runnable()` validates backend options and nesting,
+normalizes kwargs, and returns a `Runnable` with its target URI, optional nested
+runnable, and adapter executable. The executable must be available to the
+runtime process on `PATH` or as a fully specified path.
+
+For example, the built-in Batch executor is looked up with the input name
+`batch` under adapter `lambda`, but resolves its `Runnable.target` to the
+`lambda_uri` option. Its output adapter is `dml-lambda-adapter`; core still
+requires that executable locally, and it synchronously invokes the deployed
+Lambda.
+
+<!-- docs:pseudocode: This metadata belongs in an installable executor distribution. -->
+```toml
+[project.entry-points."daggerml.contrib.executors"]
+example_backend = "my_package.executor:ExampleExecutor"
+```
+
+```{python}
+from daggerml.contrib.status import status
+
+
+executor_keys = {item["key"] for item in status()["executors"]}
+assert {"local:script", "local:docker", "local:ssh"} <= executor_keys
+```
+
+## Dispatch and lifecycle
+
+`ExecutorBase` creates a fresh instance for every `handle()` call. `handle()`
+accepts only invoke, cleanup, and cancel, validates the adapter request and
+response schemas, and dispatches invoke without `adapter_state` to `start` or
+invoke with saved object state to `poll`. Cleanup calls `cleanup`; cancel calls
+`cancel`, regardless of state. Repeated `operation="invoke"` performs polling;
+there is no wire `poll` operation.
+
+```{python}
+from daggerml import Runnable, Uri
+from daggerml.contrib.executors import ExecutorBase
+
+
+class ExampleExecutor(ExecutorBase):
+    name = "example"
+    adapter = "example"
+
+    @classmethod
+    def resolve_runnable(cls, uri, kwargs, sub):
+        return Runnable(target=Uri(uri), kwargs=kwargs, sub=sub, adapter="example-adapter")
+
+    def start(self, cache_key, execution_id, runnable, remote, scratch_uri):
+        assert remote["root"] == "s3://example/root"
+        return {"status": "retry", "adapter_state": {"job": "1"}, "error": None}
+
+    def poll(self, cache_key, execution_id, runnable, state, remote, scratch_uri):
+        return {"status": "retry", "adapter_state": state, "error": None}
+
+
+payload = {
+    "operation": "invoke", "cache_key": "cache", "execution_id": "execution",
+    "remote": {"root": "s3://example/root"}, "runnable": {"target": {"uri": "example"}},
+    "adapter_state": None, "scratch_uri": "s3://example/scratch",
+}
+assert ExampleExecutor.handle(**payload)["adapter_state"] == {"job": "1"}
+assert ExampleExecutor.handle(**{**payload, "adapter_state": {"job": "1"}})["status"] == "retry"
+```
+
+This is a minimal resolve-and-dispatch illustration, not a complete deployable
+backend.
+
+`start(cache_key, execution_id, runnable, remote, scratch_uri)` launches work or
+returns a terminal response. `poll(..., state, ...)` idempotently checks the
+work using only durable state. An asynchronous response is
+`{"status": "retry", "adapter_state": {...}, "error": None}` and may include
+`retry_after_ms`; later fresh processes receive that saved state. Repeated calls
+for an execution ID must therefore be safe status checks, not repeated launches.
+
+The runtime independently publishes normal results and owns lifecycle/cache
+updates. Invoke success is valid only once a result is published. `cleanup(...,
+state, ..., result_ref)` is idempotent normal teardown after publication; it may
+retry but must not publish, alter, or invalidate the result. Do not put required
+teardown only in terminal `poll`, because publication can stop further invokes.
+The runtime gives eligible cleanup one call before returning a fresh or cached
+terminal result, without synchronously waiting for cleanup retries.
+
+`cancel(..., cancel_requested_by, argv_ref)` is called only after the runtime
+selects `cancel-pending`. Return `cancelled` only after backend teardown;
+repeated cancel must be safe, and the runtime—not the executor—performs the CAS
+transition to `canceled`. Return retry with durable state while cancellation is
+incomplete.
+
+## Backend implementation and built-ins
+
+A leaf `script` executor serializes a global function and accepts no `sub`.
+Only its source plus explicitly supplied `extra_objs` and `post_lines` reaches
+the worker: imports and globals from the authoring module do not. SSH forwards
+invoke, cleanup, and cancel operations to its nested adapter. Docker and Batch
+are wrappers that own detached job state and resource teardown while their
+nested adapter runs in the detached environment.
+
+Use the supplied remote scratch URI for detached input/output, not process-local
+handoff state. Runtime coordination records own durable execution state, shared
+retry timing, locking, result, lineage, cancellation, and invalidation.
+`S3Store` under `remote.root/data/` is only for integration-owned artifacts.
+
+Built-ins are `script`/local, `docker`/local, `ssh`/local, and `batch`/lambda.
+Docker needs an image; SSH needs a nonempty host; Batch needs a Lambda URI,
+image, and `CPU_QUEUE` or `GPU_QUEUE` plus `BATCH_TASK_ROLE_ARN` deployment
+configuration. Docker can load a compressed S3 image tar; `docker_build` either
+uploads that artifact or pushes a repository tag and best-effort removes its
+temporary local image.
+
+The script worker writes the rendered source as `_daggerml_live.py`, imports it
+as the top-level `_daggerml_live` module, and supplies normal module metadata.
+It injects a DEBUG `_daggerml_live` logger whose stderr is captured by the
+supervisor without enabling DEBUG output for dependency loggers. Put imports
+inside the function, include inspectable helpers in `extra_objs`, or use
+`post_lines` deliberately; ambient authoring globals are never transferred.
+
+SSH requires a reachable host and its nested adapter executable. Docker requires
+a Docker daemon and an image. Batch requires deployed Lambda and Batch
+infrastructure, including `CPU_QUEUE` or `GPU_QUEUE` and `BATCH_TASK_ROLE_ARN`.

@@ -1,6 +1,7 @@
 # daggerml
 .dml/
 .opencode/
+/.tools/
 # scm writes version info now...
 __about__.py
 

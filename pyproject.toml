@@ -162,6 +162,7 @@ dev = [
     # Starlette TestClient warns that its httpx fallback is deprecated.
     "httpx2>=2.12",
     "hypothesis>=6.141.1",
+    "jupyter>=1.1.1,<2",
     "moto[all,server]>=5.1.20,<5.2.0",  # max version because moto s3 bug
     "polars>=1.39.0",
     "pyright>=1.1.409",

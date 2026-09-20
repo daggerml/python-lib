@@ -10,3 +10,8 @@ declare module "plotly.js-dist-min" {
   };
   export default Plotly;
 }
+
+declare module "*.svg?raw" {
+  const source: string;
+  export default source;
+}

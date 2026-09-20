@@ -1,0 +1,128 @@
+---
+title: Inspection
+engine: knitr
+dml-project-home: research-demo
+depends-on: use/execution
+---
+
+Completed DAGs retain named nodes, function provenance, runnable source,
+artifacts, and failures. These examples reopen the durable course state; no
+Python or shell variables from the execution page are required.
+
+## Inspect results and provenance
+
+```{bash}
+execution_ref="$(dml show | jq -er '.dags["course-execution"]')"
+first_ref="$(dml dag get-node-by-name "$execution_ref" script-first)"
+execution_dag_ref="$(dml dag describe-node "$first_ref" | jq -er '.dag')"
+
+dml dag describe "$execution_ref" | jq -e '.names["script-first"] and .names["docker-result"]'
+dml dag describe-node "$first_ref" | jq -e --arg dag "$execution_dag_ref" '.dag == $dag'
+```
+
+`context(root=False)` stops at the nearest function or import DAG; the default
+`context()` continues through nested producing boundaries to the rooted source
+context. For a direct function result, both resolve to its execution DAG rather
+than the outer DAG that stores the result node.
+
+```{python}
+import daggerml as dml
+from daggerml.api import NodeError, Projection
+
+course = dml.load("course-execution")
+first = course["script-first"]
+function_dag = first.context(root=False)
+cached = course["script-cached"]
+assert first.context().ref == function_dag.ref
+assert cached.context(root=False).ref == function_dag.ref
+assert function_dag.tags == ["course", "summary"]
+```
+
+## Inspect collection selections
+
+Indexing a collection node in an open DAG creates builtin `get` nodes in that
+DAG, so the selection becomes part of the authored graph immediately.
+
+```{python}
+with dml.new("course-inspection-open-selection", message="inspect open selection") as dag:
+    collection = dag.put({"labels": ["fresh", "local", "seasonal"]}, name="collection")
+    open_labels = collection["labels"]
+    open_label = open_labels[0]
+    dag.commit(open_label)
+
+assert open_label.value() == "fresh"
+```
+
+Indexing a committed collection cannot mutate its DAG. It returns a read-only
+Python-side `Projection`: it has a `base` and a `path`, no independent node
+`ref`, and nested indexing extends that path. `value()` and `context()` inspect
+the selected value and its producing DAG.
+
+```{python}
+artifacts = dml.load("course-artifacts")
+label = artifacts.result["labels"][0]
+
+assert isinstance(label, Projection)
+assert label.base.ref == artifacts.result.ref
+assert label.path == ("labels", 0)
+assert not hasattr(label, "ref")
+assert label.value() == "fresh"
+assert label.context(root=False).ref == artifacts.ref
+```
+
+Staging that projection in another open DAG managed by the same `Dml` preserves
+the committed base and selection path rather than copying the selected Python
+value. [Codecs](../extend/codecs.qmd) owns the lowering mechanism.
+
+```{python}
+with dml.new("course-inspection-projection-reuse", message="reuse selected label") as dag:
+    selected = dag.put(label, name="selected-label")
+    dag.commit(selected)
+
+assert dml.load("course-inspection-projection-reuse").result.value() == "fresh"
+```
+
+## Read runnables and failures
+
+The staged script runnable persists its rendered source as `script_uri`. A
+Docker runnable retains wrapper configuration and its script `sub` runnable.
+The Start here `funks` DAG also deliberately retained a named failed call.
+
+```{python}
+from daggerml.contrib.s3 import S3Store
+
+script = course["script"].value()
+rendered = S3Store().get(script.kwargs["script_uri"]).decode("utf-8")
+docker = course["docker"].value()
+assert "def summarize_artifact" in rendered, rendered
+assert docker.sub is not None, docker
+assert docker.innermost().kwargs["script_uri"], docker.innermost()
+
+try:
+    dml.load("funks")["failed"]
+except NodeError as error:
+    failed = error.context()
+    assert "division by zero" in error.message, error.message
+    assert failed.ref, failed
+else:
+    raise AssertionError("the named failed call must remain inspectable")
+```
+
+For low-level detail, `dml dag describe`, `dml dag describe-node`, `dml dag
+get-node`, and `dml dag get-error` expose the persisted graph and error refs.
+
+## Inspect in the dashboard
+
+Run `dml-dashboard`, register this project, and open its immutable commit and DAG
+views when interactive graph, value, runnable, script, or log inspection is more
+useful than JSON. A tagged DAG may also expose compatible dashboards contributed
+by installed packages; select one from the DAG page and use refresh when its
+provider's editable code changed. Dashboard providers are trusted local code, so
+install only packages you would run in the dashboard process.
+
+<!-- docs:pseudocode: Starting the persistent local dashboard would block the isolated documentation build. -->
+```bash
+dml-dashboard
+```
+
+Continue with [Runtimes](runtimes.qmd) for active state and cache control.

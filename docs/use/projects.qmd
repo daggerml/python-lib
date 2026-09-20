@@ -1,0 +1,56 @@
+---
+title: Projects
+engine: knitr
+dml-project-home: research-demo
+depends-on: start-here/dagclasses
+---
+
+The Start here course created this `research-demo` project and committed its
+`docs-image`, `funks`, and dagclass results. A project is a directory whose
+`.dml/` state contains the local database, checkout, and project configuration.
+Use the CLI to administer it; Python opens the existing project to author or
+read research.
+
+## Inspect and configure the course project
+
+The documentation fixture owns a disposable Moto S3 endpoint. Configure that
+endpoint as this project's single synchronization, script-execution, cache, and
+artifact endpoint. The assertions make the durable starting state explicit.
+
+```{bash}
+dml status | jq -e '.branch == "main"'
+dml show | jq -e '.dags["docs-image"] and .dags.funks and .dags["number-pipeline"]'
+
+dml config set remote.root "$DML_REMOTE_ROOT" >/dev/null
+dml config show | jq -e --arg root "$DML_REMOTE_ROOT" '.remote.root == $root'
+```
+
+Configuration precedence is defaults, global configuration, project
+`.dml/config.json`, environment variables, then explicit CLI or Python
+overrides. Important project settings include `default.branch_name`,
+`default.db_map_size_headroom`, `default.db_map_size_max`, `remote.root`,
+`remote.fetch_workers`, and `user`. `remote.root` is not a dependency registry:
+add an import-only endpoint later with `dml dep add NAME ROOT`.
+
+## Open durable and temporary state
+
+Python's default session opens this initialized project. `Dml(project_home=...)`
+opens another existing project; use `dml init` rather than `Dml.init()` for the
+normal researcher workflow.
+
+```{python}
+import daggerml as dml
+
+assert dml.load("funks").result["first"].value() == {"count": 3, "total": 10}
+
+with dml.temporary() as temporary:
+    with dml.new("scratch", dml=temporary) as dag:
+        result = dag.put("ephemeral", name="note")
+        dag.commit(result)
+    assert dml.load("scratch", dml=temporary).result.value() == "ephemeral"
+```
+
+`dml.temporary()` creates an initialized isolated project and removes its state
+when the context exits. Use it for experiments and tests, not results that must
+be retained or shared. Continue with [Artifacts](artifacts.qmd), which records
+a durable input in this configured project.

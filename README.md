@@ -35,11 +35,11 @@ with dml.new("first-result") as dag:
 
 ## Docs
 
-- [Why DaggerML?](docs/why-daggerml.md)
-- [Get started](docs/getting-started.md)
-- [Use DaggerML](docs/use/README.md)
-- [Extend DaggerML](docs/extend/README.md)
-- [Develop DaggerML](docs/develop/README.md)
+- [DaggerML documentation](docs/start-here/index.qmd)
+- [Get started](docs/start-here/get-started.qmd)
+- [Use DaggerML](docs/use/projects.qmd)
+- [Extend DaggerML](docs/extend/codecs.qmd)
+- [Contributing](CONTRIBUTING.md)
 
 ## Contributing
 

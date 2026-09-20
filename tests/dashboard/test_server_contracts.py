@@ -8,6 +8,14 @@ from daggerml.dashboard.read_model import DashboardReadModel
 from daggerml.dashboard.server import create_app
 
 
+def _static_app(tmp_path, monkeypatch):
+    static = tmp_path / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("dashboard", encoding="utf-8")
+    monkeypatch.setattr("daggerml.dashboard.server.files", lambda _package: tmp_path)
+    return create_app(tmp_path / "config"), static
+
+
 class _Model:
     initialized = False
 
@@ -95,6 +103,33 @@ def test_dash_sec_002__configured_bearer_token_protects_api(tmp_path):
     assert client.get("/api/v1/status", headers={"authorization": "Bearer token"}).status_code == 200
     assert client.get("/api/v1/health?token=token").status_code == 401
     assert client.get("/api/v1/not-found/events?token=token").status_code == 404
+
+
+def test_dash_docs_001__docs_static_files_are_contained_and_do_not_fall_back_to_spa(tmp_path, monkeypatch):
+    app, static = _static_app(tmp_path, monkeypatch)
+    docs = static / "docs"
+    (docs / "fragments" / "start-here").mkdir(parents=True)
+    (docs / "fragments" / "start-here" / "index.html").write_text("<h1>DaggerML</h1>", encoding="utf-8")
+    client = TestClient(app)
+
+    assert client.get("/docs/start-here/index", headers={"host": "127.0.0.1:8765"}).text == "dashboard"
+    assert (
+        client.get("/docs/static/fragments/start-here/index.html", headers={"host": "127.0.0.1:8765"}).text
+        == "<h1>DaggerML</h1>"
+    )
+    assert client.get("/docs/static/fragments/missing.html", headers={"host": "127.0.0.1:8765"}).status_code == 404
+    assert client.get("/docs/static/%2e%2e/index.html", headers={"host": "127.0.0.1:8765"}).status_code == 404
+
+
+def test_dash_docs_002__swagger_is_under_api_and_retains_bearer_protection(tmp_path, monkeypatch):
+    app, _static = _static_app(tmp_path, monkeypatch)
+    client = TestClient(app)
+    assert client.get("/api/docs", headers={"host": "127.0.0.1:8765"}).status_code == 200
+    assert client.get("/docs", headers={"host": "127.0.0.1:8765"}).text == "dashboard"
+
+    protected = TestClient(create_app(tmp_path / "protected", auth_token="token"))
+    assert protected.get("/api/docs").status_code == 401
+    assert protected.get("/api/docs", headers={"authorization": "Bearer token"}).status_code == 200
 
 
 def test_dash_cancel_003__cancel_requires_json_content_type(tmp_path):

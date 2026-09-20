@@ -6,8 +6,8 @@ Use this file to identify which project docs to read before editing a code path,
 
 ## Global Docs (Always Read)
 
-- `docs/README.md`: audience-first documentation navigation.
-- `docs/develop/architecture/system-overview.md`: system-level layers and subsystem boundaries.
+- `docs/start-here/index.qmd`: audience-first documentation navigation.
+- `src/daggerml/README.md` and `src/daggerml/_core/README.md`: system-level package and core boundaries.
 
 ## Path Rules
 
@@ -15,155 +15,149 @@ Use this file to identify which project docs to read before editing a code path,
 
 - Match: `src/daggerml/api.py`, `src/daggerml/__init__.py`
 - Read:
-  - `docs/use/reference/python-authoring.md`
-  - `docs/use/concepts/dags-nodes-results.md`
-  - `docs/glossary.md`
-  - `docs/use/reference/errors.md`
-  - `docs/use/concepts/artifacts-data-codecs.md`
-  - `docs/develop/architecture/dag-storage-and-types.md`
+  - `docs/start-here/dags.qmd`
+  - `docs/start-here/funks.qmd`
+  - `docs/use/artifacts.qmd`
+  - `docs/use/inspection.qmd`
+  - `docs/glossary.qmd`
+  - `src/daggerml/_core/README.md`
 
 ### Codec module
 
 - Match: codec implementation in `src/daggerml/api.py` and `src/daggerml/contrib/codecs.py`
 - Read:
-  - `docs/use/concepts/artifacts-data-codecs.md`
-  - `docs/extend/reference/codec-contracts.md`
-  - `docs/use/reference/errors.md`
+  - `docs/use/artifacts.qmd`
+  - `docs/extend/codecs.qmd`
+  - `docs/use/inspection.qmd`
 
 ### CLI surface
 
 - Match: `src/daggerml/_cli.py`
 - Read:
-  - `docs/use/reference/cli.md`
-  - `docs/develop/architecture/public-api-and-cli.md`
-  - `docs/use/reference/errors.md`
+  - the owning workflow under `docs/use/`
+  - `src/daggerml/README.md`
+  - `docs/use/inspection.qmd`
 
 ### Core repository operations
 
 - Match: `src/daggerml/_core/commit.py`, `src/daggerml/_core/dag.py`, `src/daggerml/_core/head.py`, `src/daggerml/_core/index.py`
 - Read:
-  - `docs/develop/architecture/dag-storage-and-types.md`
-  - `docs/develop/architecture/execution-and-runtime-state.md`
-  - `docs/use/concepts/dags-nodes-results.md`
-  - `docs/use/concepts/history-remotes.md`
+  - `src/daggerml/_core/README.md`
+  - `docs/use/inspection.qmd`
+  - `docs/use/sharing.qmd`
 
 ### Core runtime orchestration
 
 - Match: `src/daggerml/_core/dml.py`, `src/daggerml/_core/config.py`, `src/daggerml/_core/revision.py`, `src/daggerml/_core/uri.py`
 - Read:
-  - `docs/use/reference/configuration.md`
-  - `docs/use/concepts/funks-execution-cache.md`
-  - `docs/develop/architecture/execution-and-runtime-state.md`
-  - `docs/use/reference/errors.md`
+  - `docs/use/projects.qmd`
+  - `docs/use/execution.qmd`
+  - `docs/use/runtimes.qmd`
+  - `src/daggerml/_core/README.md`
 
 ### Core types and serde
 
 - Match: `src/daggerml/_core/types.py`, `src/daggerml/_core/builtins.py`, `src/daggerml/_core/serde.py`
 - Read:
-  - `docs/glossary.md`
-  - `docs/use/concepts/dags-nodes-results.md`
-  - `docs/use/concepts/artifacts-data-codecs.md`
-  - `docs/develop/architecture/dag-storage-and-types.md`
-  - `docs/use/reference/errors.md`
+  - `docs/glossary.qmd`
+  - `docs/use/artifacts.qmd`
+  - `docs/use/inspection.qmd`
+  - `src/daggerml/_core/README.md`
 
 ### Core storage and database integration
 
 - Match: `src/daggerml/_core/db.pyx`, `src/daggerml/_core/util.py`
 - Read:
-  - `docs/use/concepts/artifacts-data-codecs.md`
-  - `docs/develop/architecture/dag-storage-and-types.md`
-  - `docs/use/guides/artifacts.md`
+  - `docs/use/artifacts.qmd`
+  - `src/daggerml/_core/README.md`
 
 ### Runtime and remote execution
 
 - Match: `src/daggerml/_core/dml.py`, `src/daggerml/_core/index.py`, `src/daggerml/_core/exec_state.py`, `src/daggerml/util.py`, `src/daggerml/_core/remote.py`, `src/daggerml/_core/s3_cas.py`
 - Read:
-  - `docs/use/concepts/funks-execution-cache.md`
-  - `docs/use/concepts/runtimes.md`
-  - `docs/use/concepts/history-remotes.md`
-  - `docs/develop/architecture/execution-and-runtime-state.md`
-  - `docs/develop/architecture/remotes-and-sync.md`
+  - `docs/use/execution.qmd`
+  - `docs/use/runtimes.qmd`
+  - `docs/use/sharing.qmd`
+  - `src/daggerml/_core/README.md`
 
 ### Contrib modules and integrations
 
 - Match: `src/daggerml/contrib/**`
 - Read:
-  - `docs/extend/README.md`
-  - `docs/extend/concepts/extension-model.md`
-  - `docs/extend/concepts/adapters-and-executors.md`
-  - `docs/extend/reference/adapter-operations.md`
-  - `docs/extend/reference/executor-lifecycle.md`
-  - `docs/extend/reference/codec-contracts.md`
-  - `docs/extend/reference/plugin-api.md`
+  - `docs/extend/codecs.qmd`
+  - `docs/extend/adapters.qmd`
+  - `docs/extend/executors.qmd`
 
 ### C implementation and headers
 
 - Match: `c/src/**`, `c/include/**`
 - Read:
   - `c/README.md`
-  - `docs/develop/architecture/dag-storage-and-types.md`
-  - `docs/use/concepts/dags-nodes-results.md`
+  - `src/daggerml/_core/README.md`
+  - `docs/use/artifacts.qmd`
+  - `docs/use/inspection.qmd`
 
 ### Tests
 
 - Match: `tests/**`
 - Read:
   - docs corresponding to the code under test using the rules above
-  - `docs/develop/testing.md`
   - `CONTRIBUTING.md`
 
-### Packaging, build, examples, and CI
+### Packaging, build, and CI
 
-- Match: `pyproject.toml`, `uv.lock`, `CMakeLists.txt`, `examples/**`, `.github/workflows/**`
+- Match: `pyproject.toml`, `uv.lock`, `CMakeLists.txt`, `docs/build*`, `.github/workflows/**`
 - Read:
   - `README.md`
   - `CONTRIBUTING.md`
-  - `docs/develop/architecture/system-overview.md`
+  - `src/daggerml/README.md`
   - `c/README.md` when changing the C build
 
 ### Documentation edits
 
 - Match: `docs/**`
 - Read:
-  - `docs/README.md`
-  - `docs/getting-started.md` when changing onboarding
-  - the target audience landing page under `docs/use/`, `docs/extend/`, or `docs/develop/` when changing an audience path
+  - `docs/start-here/index.qmd`
+  - `docs/start-here/get-started.qmd` when changing onboarding
+  - the target canonical course page under `docs/use/` or `docs/extend/` when changing an audience path
 
 ### Local research dashboard
 
 - Match: `src/daggerml/dashboard/**`, `dashboard-ui/**`
 - Read:
-  - `docs/develop/architecture/dashboard.md`
-  - `docs/develop/architecture/system-overview.md`
-  - `docs/develop/architecture/execution-and-runtime-state.md`
-  - `docs/develop/architecture/remotes-and-sync.md`
-  - `docs/sharp-bits-and-security.md`
+  - `src/daggerml/dashboard/README.md`
+  - `dashboard-ui/README.md`
+  - `src/daggerml/_core/README.md`
+  - `docs/sharp-bits-and-security.qmd`
 
 ## Topic Rules (Apply In Addition To Path Rules)
 
 - If changing adapter behavior:
-  - `docs/extend/concepts/adapters-and-executors.md`
-  - `docs/extend/reference/adapter-operations.md`
-  - `docs/extend/reference/executor-lifecycle.md`
-  - `docs/develop/architecture/execution-and-runtime-state.md`
+  - `docs/extend/adapters.qmd`
+  - `docs/extend/executors.qmd`
+  - `src/daggerml/_core/README.md`
 - If changing data/object representation:
-  - `docs/use/concepts/dags-nodes-results.md`
-  - `docs/glossary.md`
-  - `docs/develop/architecture/dag-storage-and-types.md`
+  - `docs/use/artifacts.qmd`
+  - `docs/use/inspection.qmd`
+  - `docs/glossary.qmd`
+  - `src/daggerml/_core/README.md`
 - If changing codec behavior or literal write normalization:
-  - `docs/use/concepts/artifacts-data-codecs.md`
-  - `docs/extend/reference/codec-contracts.md`
+  - `docs/use/artifacts.qmd`
+  - `docs/extend/codecs.qmd`
+- If changing Projection, committed collection traversal, or Projection reuse:
+  - `docs/use/inspection.qmd`
+  - `docs/extend/codecs.qmd` only when changing `ProjectionCodec` internals
 - If changing storage, references, GC, or artifacts:
-  - `docs/use/guides/artifacts.md`
-  - `docs/develop/architecture/dag-storage-and-types.md`
+  - `docs/use/artifacts.qmd`
+  - `src/daggerml/_core/README.md`
 - If changing user-facing errors:
-  - `docs/use/reference/errors.md`
+  - `docs/use/inspection.qmd`
 
 ## Ambiguity Rule
 
 If no rule clearly matches:
 
-- Read `docs/develop/architecture/system-overview.md` and `docs/README.md`.
+- Read `src/daggerml/README.md`, `src/daggerml/_core/README.md`, and `docs/start-here/index.qmd`.
 - Add or refine a mapping in this file in the same change.
 
 ## Maintenance

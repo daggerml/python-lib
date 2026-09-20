@@ -1,0 +1,89 @@
+---
+title: Runtimes
+engine: knitr
+dml-project-home: research-demo
+depends-on: use/inspection
+---
+
+A runtime is mutable state used while authoring a DAG or tracking execution.
+Finalizing it creates an immutable DAG. Use the CLI to inspect and administer
+open work; use named committed DAGs for completed research.
+
+## Freeze and resume authoring
+
+```{bash}
+runtime_ref="$(dml runtime create)"
+printf '["scalar",42]\n' | dml runtime put-literal "$runtime_ref" - --name answer >/dev/null
+frozen_ref="$(dml runtime freeze "$runtime_ref" --message "Review staged input")"
+
+dml runtime list | jq -e --arg frozen "$frozen_ref" '.[] | select(.id == $frozen)'
+dml runtime describe "$frozen_ref" | jq -e '.state == "frozen" and .frozen_message == "Review staged input"'
+answer_ref="$(dml runtime get-node "$frozen_ref" answer)"
+dml dag get-node "$answer_ref" | jq -e '.[1] == 42'
+
+resumed_ref="$(dml runtime unfreeze "$frozen_ref")"
+dml runtime freeze "$resumed_ref" --message "Leave the demonstration read-only" >/dev/null
+```
+
+Freezing preserves partial nodes, tags, and execution identity, but does not
+create a result. Its message is a reason, not a durable name. `Dag.freeze()`
+and `Dag.unfreeze()` manage the normal Python wrapper; `dml.resume(frozen,
+name=..., message=...)` resumes it in another process. Runtime and execution
+identities are complete `Ref` values (`index:` or `frozenindex:`), never bare
+IDs.
+
+## Inspect, cancel, and refresh deliberately
+
+`runtime describe`, `describe-graph`, and `read-execution-record` report graph,
+lifecycle, lineage, cancellation, invalidation, adapter continuation, shared
+retry deadlines, and cleanup. Cleanup may remain pending or fail without making
+an otherwise reusable result unavailable.
+
+```{bash}
+course_ref="$(dml show | jq -er '.dags["course-execution"]')"
+first_ref="$(dml dag get-node-by-name "$course_ref" script-first)"
+execution_dag_ref="$(dml dag describe-node "$first_ref" | jq -er '.dag')"
+cache_key="$(dml dag describe "$execution_dag_ref" | jq -er '.cache_key')"
+cache_description="$(dml cache describe "$cache_key")"
+execution_ref="$(jq -er '.execution' <<< "$cache_description")"
+
+jq -e --arg dag "$execution_dag_ref" '.dag == $dag and .lifecycle == "succeeded"' <<< "$cache_description"
+printf '%s\n' "$execution_ref" > "$DOCS_WORKSPACE_ROOT/invalidated-course-execution"
+dml cache invalidate "$execution_ref"
+```
+
+Rerunning the same stored runnable and argument produces a new execution for the
+same normalized cache key:
+
+```{python}
+import daggerml as dml
+
+course = dml.load("course-execution")
+with dml.new("course-refresh", message="refresh invalidated course work") as dag:
+    runnable = dag.put(course["script"], name="script")
+    source = dag.put(course["source"], name="source")
+    refreshed = runnable(source, name="refreshed")
+    dag.commit(refreshed)
+
+assert dml.load("course-refresh").result.value() == {"count": 3, "total": 10}
+```
+
+```{bash}
+refreshed_ref="$(dml show | jq -er '.dags["course-refresh"]')"
+refreshed_result="$(dml dag get-node-by-name "$refreshed_ref" refreshed)"
+refreshed_dag="$(dml dag describe-node "$refreshed_result" | jq -er '.dag')"
+refreshed_key="$(dml dag describe "$refreshed_dag" | jq -er '.cache_key')"
+new_execution="$(dml cache describe "$refreshed_key" | jq -er '.execution')"
+old_execution="$(cat "$DOCS_WORKSPACE_ROOT/invalidated-course-execution")"
+test "$new_execution" != "$old_execution"
+```
+
+Invalidate exact execution refs, not cache keys or DAG refs. This affects every
+caller sharing `remote.root`, so inspect the returned identity and coordinate
+before refreshing work. Cancellation first selects the complete unreferenced
+set as `cancel-pending`, conditionally removes matching cache pointers, then
+cancels adapters concurrently. Retry responses share `not_before`; repeated
+`dml runtime cancel index:... --max-retries 3` resumes pending cancellation.
+An execution that already finished is a successful no-op. Continue with
+[Sharing](sharing.qmd); cache invalidation is deliberately last among workflows
+that need the original cached result.

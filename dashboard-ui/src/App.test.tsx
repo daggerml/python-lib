@@ -6,7 +6,7 @@ import App from "./App";
 import { api } from "./api";
 import type { DashboardProject } from "./types";
 
-const { projects, eventHandlers, plotlyNew, plotlyPurge, vegaEmbed } = vi.hoisted(() => ({
+const { projects, eventHandlers, plotlyNew, plotlyPurge, vegaEmbed, clipboardWrite, mermaidInitialize, mermaidRender } = vi.hoisted(() => ({
   projects: [
     { id: "project-1", name: "research", path: "/workspace/research", local_available: true, path_context: { parent: "/workspace", leaf: "research" }, live_index_count: 2, availability: "complete", checkout: { branch: "main" }, sync: { state: "in-sync" }, last_activity: { state: "known", timestamp: "2026-01-01T00:00:00Z" } },
     { id: "project-2", name: "research", path: "/archive/research", local_available: false, path_context: { parent: "/archive", leaf: "research" }, live_index_count: 0, availability: "unavailable", checkout: { state: "unavailable" }, sync: { state: "unknown" }, last_activity: { state: "unavailable" } },
@@ -15,6 +15,9 @@ const { projects, eventHandlers, plotlyNew, plotlyPurge, vegaEmbed } = vi.hoiste
   plotlyNew: vi.fn().mockResolvedValue(undefined),
   plotlyPurge: vi.fn(),
   vegaEmbed: vi.fn().mockResolvedValue({ view: { finalize: vi.fn() } }),
+  clipboardWrite: vi.fn().mockResolvedValue(undefined),
+  mermaidInitialize: vi.fn(),
+  mermaidRender: vi.fn().mockResolvedValue({ svg: '<svg viewBox="0 0 100 40"><text>Rendered flow chart</text></svg>' }),
 }));
 vi.mock("./api", () => ({
   api: {
@@ -32,10 +35,12 @@ vi.mock("./api", () => ({
 vi.mock("./components/FlowGraph", () => ({ FlowGraph: () => <div aria-label="Flow graph" /> }));
 vi.mock("plotly.js-dist-min", () => ({ default: { newPlot: plotlyNew, purge: plotlyPurge } }));
 vi.mock("vega-embed", () => ({ default: vegaEmbed }));
+vi.mock("mermaid", () => ({ default: { initialize: mermaidInitialize, render: mermaidRender } }));
 
 beforeEach(() => {
   history.replaceState(null, "", "/");
   vi.stubGlobal("localStorage", { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() });
+  vi.stubGlobal("navigator", { clipboard: { writeText: clipboardWrite } });
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
   vi.mocked(api.overview).mockClear();
   vi.mocked(api.dags).mockClear();
@@ -53,6 +58,15 @@ beforeEach(() => {
   plotlyNew.mockClear();
   plotlyPurge.mockClear();
   vegaEmbed.mockClear();
+  clipboardWrite.mockClear();
+  mermaidInitialize.mockClear();
+  mermaidRender.mockClear();
+  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
+    if (input === "/docs/static/manifest.json") return new Response(JSON.stringify({ pages: [{ id: "start-here", title: "DaggerML", fragment: "fragments/start-here.html", order: 0, headings: [] }, { id: "start-here/dags", title: "DAGs", fragment: "fragments/start-here/dags.html", headings: [{ id: "example", level: 2, text: "Example" }] }] }));
+    if (input === "/docs/static/fragments/start-here.html") return new Response("<h1>DaggerML</h1>");
+    if (input === "/docs/static/fragments/start-here/dags.html") return new Response('<h1>Example</h1><h2 id="example">Example</h2><div class="sourceCode"><pre class="sourceCode python code-with-copy"><code>print("one")</code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div><div class="cell-output cell-output-stdout"><pre><code>one</code></pre></div><pre class="mermaid"><code>flowchart TD\nA--&gt;B</code></pre><a href="/docs/start-here/dags#example">Anchor</a>');
+    return new Response("Not found", { status: 404 });
+  }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -61,6 +75,147 @@ describe("canonical dashboard routes", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { name: "0 commits in the last year" })).toBeVisible();
     expect(location.pathname).toBe("/");
+  });
+
+  it("renders Docs without a project and preserves nested links and history", async () => {
+    history.replaceState(null, "", "/docs/start-here/dags#example");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "DAGs" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("link", { name: "Anchor" }));
+    expect(location.pathname).toBe("/docs/start-here/dags");
+    expect(location.hash).toBe("#example");
+    fireEvent.click(screen.getAllByRole("button", { name: "Home" })[0]);
+    expect(location.pathname).toBe("/");
+    history.back();
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(location.pathname).toBe("/docs/start-here/dags"));
+  });
+
+  it("groups and filters documentation navigation by reader path", async () => {
+    history.replaceState(null, "", "/docs/start-here/dags");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+    expect(screen.getByText("Start here", { selector: "summary" })).toBeVisible();
+    fireEvent.change(screen.getByRole("searchbox", { name: "Filter documentation" }), { target: { value: "dag" } });
+    expect(screen.getByRole("button", { name: "DAGs" })).toBeVisible();
+    expect(screen.getByText("Start here", { selector: "summary" })).toBeVisible();
+  });
+
+  it("uses canonical manifest sections and ordering", async () => {
+    const pages = [
+      { id: "use/sharing", title: "Sharing", order: 10 },
+      { id: "extend/executors", title: "Executors", order: 13 },
+      { id: "start-here/funks", title: "Funks", order: 3 },
+      { id: "use/artifacts", title: "Artifacts", order: 6 },
+      { id: "extend/codecs", title: "Codecs", order: 11 },
+      { id: "start-here", title: "DaggerML", order: 0 },
+      { id: "use/projects", title: "Projects", order: 5 },
+      { id: "extend/adapters", title: "Adapters", order: 12 },
+      { id: "start-here/dagclasses", title: "Dagclasses", order: 4 },
+      { id: "use/execution", title: "Execution", order: 7 },
+      { id: "start-here/dags", title: "DAGs", order: 2 },
+      { id: "use/inspection", title: "Inspection", order: 8 },
+      { id: "start-here/get-started", title: "Get started", order: 1 },
+      { id: "use/runtimes", title: "Runtimes", order: 9 },
+      { id: "glossary", title: "Glossary" },
+      { id: "sharp-bits-and-security", title: "Sharp bits and security" },
+    ].map((page) => ({ ...page, fragment: `fragments/${page.id}.html`, headings: [] }));
+    vi.mocked(fetch).mockImplementation(async (input: URL | RequestInfo) => String(input) === "/docs/static/manifest.json"
+      ? new Response(JSON.stringify({ pages }))
+      : new Response("<h1>Documentation page</h1>"));
+    history.replaceState(null, "", "/docs/use/artifacts");
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Documentation page" });
+    const start = screen.getByText("Start here", { selector: "summary" }).closest("details")!;
+    expect(within(start).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "DaggerML", "Get started", "DAGs", "Funks", "Dagclasses",
+    ]);
+    const use = screen.getByText("Use", { selector: "summary" }).closest("details")!;
+    expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Projects", "Artifacts", "Execution", "Inspection", "Runtimes", "Sharing",
+    ]);
+    const extend = screen.getByText("Extend", { selector: "summary" }).closest("details")!;
+    expect(within(extend).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Codecs", "Adapters", "Executors",
+    ]);
+    for (const removed of ["Concepts", "Guides", "Reference", "Examples", "Develop", "More"]) expect(screen.queryByText(removed, { selector: "summary" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Glossary" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Sharp bits and security" })).toBeVisible();
+  });
+
+  it("keeps manifest input order for equal or missing course positions", async () => {
+    const pages = [
+      { id: "use/first", title: "First", order: 7 },
+      { id: "use/second", title: "Second", order: 7 },
+      { id: "use/third", title: "Third", order: 6 },
+      { id: "use/unordered", title: "Unordered" },
+      { id: "start-here", title: "DaggerML", order: 0 },
+    ].map((page) => ({ ...page, fragment: `fragments/${page.id}.html`, headings: [] }));
+    vi.mocked(fetch).mockImplementation(async (input: URL | RequestInfo) => String(input) === "/docs/static/manifest.json"
+      ? new Response(JSON.stringify({ pages }))
+      : new Response("<h1>Documentation page</h1>"));
+    history.replaceState(null, "", "/docs/use/third");
+    render(<App />);
+
+    await screen.findByRole("heading", { name: "Documentation page" });
+    const use = screen.getByText("Use", { selector: "summary" }).closest("details")!;
+    expect(within(use).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Third", "First", "Second", "Unordered",
+    ]);
+  });
+
+  it("copies rendered source through an explicit code action", async () => {
+    history.replaceState(null, "", "/docs/start-here/dags");
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy code" }));
+    expect(clipboardWrite).toHaveBeenCalledWith('print("one")');
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeVisible();
+  });
+
+  it("renders packaged Mermaid diagrams in the active theme", async () => {
+    history.replaceState(null, "", "/docs/start-here/dags");
+    render(<App />);
+
+    expect(await screen.findByRole("img", { name: "Flow chart" })).toContainHTML("Rendered flow chart");
+    expect(mermaidInitialize).toHaveBeenCalledWith(expect.objectContaining({ startOnLoad: false, securityLevel: "strict", theme: "dark" }));
+    expect(mermaidRender).toHaveBeenCalledWith(expect.stringMatching(/^dml-docs-diagram-/), "flowchart TD\nA-->B");
+  });
+
+  it("renders the manifest start-here index at the docs root", async () => {
+    history.replaceState(null, "", "/docs");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "DaggerML", level: 1 })).toBeVisible();
+    expect(screen.getByRole("button", { name: "DaggerML" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("keeps Docs visible when switching themes", async () => {
+    history.replaceState(null, "", "/docs/start-here/dags");
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Use light theme" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(screen.getByRole("heading", { name: "Example", level: 1 })).toBeVisible();
+  });
+
+  it("restores a historical project route when navigating back from Docs", async () => {
+    history.replaceState(null, "", "/projects/project-1/commits/older");
+    render(<App />);
+    await screen.findByRole("heading", { name: "Repository snapshot" });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Docs" })[0]);
+    expect(await screen.findByRole("heading", { name: "DaggerML" })).toBeVisible();
+    history.pushState(null, "", "/projects/project-1/commits/older");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    await waitFor(() => expect(location.pathname).toBe("/projects/project-1/commits/older"));
+    expect(await screen.findByRole("heading", { name: "Repository snapshot" })).toBeVisible();
   });
 
   it("restores a direct concrete DAG route and scopes reads from its URL", async () => {
