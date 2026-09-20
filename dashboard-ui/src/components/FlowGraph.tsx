@@ -14,6 +14,7 @@ import {
 import type { GraphEdge, GraphNode, Selection } from "../types";
 import { FunctionIcon, DataIcon, NodeIcon, RunIcon } from "./ConceptIcon";
 import { StatusPill } from "./StatusPill";
+import { BrandIcon } from "./BrandIcon";
 
 type FlowData = Record<string, unknown> & { item: GraphNode; kind: "node" | "execution" };
 
@@ -145,7 +146,7 @@ export function FlowGraph({
     [edges],
   );
 
-  if (!nodes.length) return <div className="empty-graph"><span className="empty-graph__glyph">◇</span><p>No graph data is available</p></div>;
+  if (!nodes.length) return <div className="empty-graph"><BrandIcon expression="happy" size={64} /><p>No graph data is available</p></div>;
 
   return (
     <div className="flow-wrap" aria-label={`${kind} graph`}>

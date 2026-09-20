@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { DagIcon, CommitIcon, RunIcon, CacheIcon, RemoteIcon } from "./components/ConceptIcon";
-import dagMark from "./assets/daggerml-dag-mark.png";
+import { BrandIcon } from "./components/BrandIcon";
 import { api, subscribeToEvents, subscribeToLogs } from "./api";
 import { FlowGraph } from "./components/FlowGraph";
 import { CommitGraph } from "./components/CommitGraph";
@@ -489,7 +489,7 @@ export default function App() {
     <div className={`app-shell ${sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""} ${selection ? "app-shell--inspecting" : ""}`}>
       <aside id="primary-sidebar" className={`sidebar ${sidebarCollapsed ? "sidebar--collapsed" : ""} ${mobileNav ? "sidebar--open" : ""}`}>
         <div className="brand">
-          <img className="brand__mark" src={dagMark} alt="" />
+          <BrandIcon className="brand__mark" />
           <a className="brand__home" href="/" onClick={(event) => { event.preventDefault(); navigate("home"); }}><strong>DaggerML</strong><small>Research workbench</small></a>
           <button
             className="icon-button sidebar-toggle"
@@ -1464,13 +1464,13 @@ function Health({ icon, label, detail, status }: { icon: ReactNode; label: strin
   return <div><span className="health-icon">{icon}</span><span><strong>{label}</strong><small>{detail}</small></span><StatusPill value={status} /></div>;
 }
 function Loading() {
-  return <div className="loading" role="status"><span /><span /><span /><p>Inspecting project state…</p></div>;
+  return <div className="loading" role="status"><BrandIcon expression="tweaking" size={64} /><p>Inspecting project state…</p></div>;
 }
 function Problem({ title, detail }: { title: string; detail: string }) {
-  return <div className="problem"><span><AlertTriangle /></span><h2>{title}</h2><p>{detail}</p></div>;
+  return <div className="problem"><BrandIcon expression="x-eyes" size={64} /><h2>{title}</h2><p>{detail}</p></div>;
 }
 function InlineEmpty({ message }: { message: string }) {
-  return <div className="inline-empty"><span>◇</span>{message}</div>;
+  return <div className="inline-empty"><BrandIcon size={24} />{message}</div>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
