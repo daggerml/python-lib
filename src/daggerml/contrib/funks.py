@@ -52,8 +52,11 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
                 repo = repo.value() if repo is not None else None
                 if repo is not None:
                     remote_image = f"{repo.uri}:{tag}"
-                    _run("docker", "tag", local_image, remote_image)
-                    _run("docker", "push", remote_image)
+                    try:
+                        _run("docker", "tag", local_image, remote_image)
+                        _run("docker", "push", remote_image)
+                    finally:
+                        _remove_docker_image(remote_image)
                     return dag.put(Uri(remote_image), name="remote-image")
                 image_tar = "./image.tar"
                 _run("docker", "save", "-o", str(image_tar), local_image)
