@@ -1,5 +1,32 @@
 {% extends "default/module.html.jinja2" %}
-{% block nav_title %}
-<a href="{{ '../' * (module.modulename.count('.') + 1) }}start-here/index.html">← DaggerML documentation</a>
-{{ super() }}
+{% macro module_name() %}<h1>{{ module.modulename }}</h1>{% endmacro %}
+{% block module_contents %}
+    {% for m in module.flattened_own_members if is_public(m) | trim %}
+        <section class="api-member">
+            <h2 id="{{ m.qualname or m.name }}">{{ m.qualname or m.name }}</h2>
+            {{ member(m) }}
+            {% if m.kind == "class" %}
+                {% for child in m.own_members if child.kind != "class" and is_public(child) | trim %}
+                    <div class="classattr">
+                        <h3 id="{{ child.qualname }}">{{ child.qualname }}</h3>
+                        {{ member(child) }}
+                    </div>
+                {% endfor %}
+                {% set inherited_members = inherited(m) | trim %}
+                {% if inherited_members %}
+                    <div class="inherited"><h4>Inherited members</h4><dl>{{ inherited_members }}</dl></div>
+                {% endif %}
+            {% endif %}
+        </section>
+    {% endfor %}
 {% endblock %}
+{% macro view_source_state(doc) %}{% endmacro %}
+{% macro view_source_button(doc) %}{% endmacro %}
+{% macro view_source_code(doc) %}
+    {% if show_source and doc.source %}
+        <details class="api-source"><summary>View source</summary>{{ doc | highlight }}</details>
+    {% endif %}
+{% endmacro %}
+{% macro default_value(var) %}
+    {% if var.default_value_str %}= <span class="default_value">{{ var.default_value_str | escape | linkify }}</span>{% endif %}
+{% endmacro %}

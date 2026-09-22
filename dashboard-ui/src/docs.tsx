@@ -34,7 +34,7 @@ export function DocumentationSite() {
   return <div className="docs-site">
     <header className="docs-site__header">
       <a href="/" className="docs-site__brand"><BrandIcon />DaggerML</a>
-      <a href="/api/index.html">API reference</a>
+      <a href="/docs/api/">API reference</a>
       <button className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`}>
         {theme === "dark" ? <Sun /> : <Moon />}
       </button>

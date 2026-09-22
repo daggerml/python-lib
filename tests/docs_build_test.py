@@ -62,20 +62,34 @@ def test_standalone_site_shares_dashboard_assets_and_has_static_deep_links(tmp_p
     assert (output / "assets/docs.css").is_file()
     assert (output / "assets/docs.js").is_file()
     manifest = json.loads((output / "docs/static/manifest.json").read_text(encoding="utf-8"))
-    assert {page["id"] for page in manifest["pages"]} == {"start-here", "start-here/dags"}
+    assert {page["id"] for page in manifest["pages"] if not page["id"].startswith("api")} == {
+        "start-here", "start-here/dags"
+    }
+    assert {"api", "api/daggerml", "api/daggerml/contrib/api"} <= {
+        page["id"] for page in manifest["pages"]
+    }
     assert 'url=/' in (output / "start-here/index.html").read_text(encoding="utf-8")
     assert (output / ".nojekyll").is_file()
     assert not (output / "stale.html").exists()
     assert not (output / "start-here/dags.qmd").exists()
     assert (output / "api/index.html").is_file()
-    public_api = (output / "api/daggerml.html").read_text(encoding="utf-8")
+    assert (output / "docs/api/daggerml/index.html").read_text(encoding="utf-8") == shell
+    redirect = (output / "api/daggerml.html").read_text(encoding="utf-8")
+    assert "url=/docs/api/daggerml/" in redirect
+    assert "location.hash" in redirect
+    public_api = (output / "docs/static/fragments/api/daggerml.html").read_text(encoding="utf-8")
     assert 'id="Dml"' in public_api
     assert 'id="Dag"' in public_api
-    assert 'href="../start-here/index.html"' in public_api
-    contrib_api = (output / "api/daggerml/contrib/api.html").read_text(encoding="utf-8")
+    assert '<style' not in public_api
+    assert '<script' not in public_api
+    assert '<nav' not in public_api
+    assert '<details class="api-source">' in public_api
+    assert 'href="/docs/api/daggerml/api#' in public_api
+    contrib_api = (output / "docs/static/fragments/api/daggerml/contrib/api.html").read_text(encoding="utf-8")
     assert 'id="funkify"' in contrib_api
-    assert 'href="../../../start-here/index.html"' in contrib_api
-    assert (output / "api/search.js").is_file()
+    api_page = next(page for page in manifest["pages"] if page["id"] == "api/daggerml")
+    assert api_page["title"] == "daggerml"
+    assert {"id": "Dag", "level": 2, "text": "Dag"} in api_page["headings"]
 
 
 def test_docs_build_015__source_aware_lessons_execute_inline(tmp_path):
@@ -378,8 +392,27 @@ def test_docs_build_003__staging_creates_script_free_fragments_and_manifest(tmp_
     assert "<script" not in fragment
     assert 'href="/docs/use/guide#next"' in fragment
     assert 'src="/docs/static/assets/start-here/dags/chart.png"' in fragment
-    assert manifest["pages"][0]["headings"] == [{"id": "example", "level": 1, "text": "Example"}]
-    assert manifest["pages"][0]["title"] == "Example"
+    page = next(page for page in manifest["pages"] if page["id"] == "start-here/dags")
+    assert page["headings"] == [{"id": "example", "level": 1, "text": "Example"}]
+    assert page["title"] == "Example"
+
+
+def test_generated_api_inventory_and_cross_links_are_validated(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "index.qmd").write_text("---\ntitle: Docs\n---\n", encoding="utf-8")
+    shutil.copytree(ROOT / "docs/pdoc-templates", source / "pdoc-templates")
+    monkeypatch.setattr(build, "ROOT", source)
+    render = tmp_path / "render"
+    render.mkdir()
+    (render / "index.html").write_text("<main><h1>Docs</h1></main>", encoding="utf-8")
+    staging = tmp_path / "staging"
+    build.stage(render, staging, require_all=True)
+    manifest = json.loads((staging / "manifest.json").read_text(encoding="utf-8"))
+    assert any(page["id"] == "api/daggerml" for page in manifest["pages"])
+    (render / "unexpected.html").write_text("<main>Unexpected</main>", encoding="utf-8")
+    with pytest.raises(ValueError, match="inventory mismatch"):
+        build.stage(render, staging, require_all=True)
 
 
 def _wheel_contents(wheel):

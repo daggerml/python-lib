@@ -628,6 +628,22 @@ pre { background: #080b0e; color: #c8d1d8; border: 1px solid var(--border); bord
 .docs-content a { color: var(--accent); }
 .docs-content pre { overflow: auto; padding: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
 .docs-content code { font: 12px "DM Mono", monospace; }
+.docs-content .pdoc h1 { overflow-wrap: anywhere; }
+.docs-content .pdoc .attr { padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font: 12px/1.7 "DM Mono", monospace; overflow-wrap: anywhere; }
+.docs-content .pdoc .name { font-weight: 600; color: var(--accent); }
+.docs-content .pdoc .def, .docs-content .pdoc .decorator { color: var(--violet); }
+.docs-content .pdoc .classattr { padding-left: 18px; border-left: 1px solid var(--border); }
+.docs-content .pdoc dt { font-weight: 600; }
+.docs-content .pdoc dd { margin: 8px 0 16px 18px; }
+.docs-content .api-source { margin-block: 12px; }
+.docs-content .api-source summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.docs-content .api-source .linenos { margin-right: 16px; color: var(--subtle); user-select: none; }
+.docs-content .pdoc pre { font: 12px/1.7 "DM Mono", monospace; }
+.docs-content .pdoc .codehilite :is(.k, .kn, .kc, .kd) { color: var(--violet); }
+.docs-content .pdoc .codehilite :is(.nf, .nb, .nc) { color: var(--accent); }
+.docs-content .pdoc .codehilite :is(.s, .s1, .s2, .sd) { color: var(--lime); }
+.docs-content .pdoc .codehilite :is(.mi, .mf) { color: var(--amber); }
+.docs-content .pdoc .codehilite :is(.c, .c1, .cm) { color: var(--subtle); font-style: italic; }
 .docs-content div.sourceCode { position: relative; }
 .docs-content pre.sourceCode { padding: 16px 52px 16px 16px; }
 .docs-content .code-copy-button { position: absolute; z-index: 1; top: 9px; right: 9px; width: 30px; height: 30px; padding: 0; display: grid; place-items: center; color: var(--muted); background: color-mix(in srgb, var(--panel-raised) 92%, transparent); border: 1px solid var(--border); border-radius: 6px; }

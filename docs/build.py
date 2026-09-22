@@ -343,10 +343,32 @@ def rewrite_urls(content: str, source: Path, render: Path, *, standalone: bool =
     return re.sub(r"\b(href|src)=([\"'])([^\"']+)\2", replace, content)
 
 
-def site(render: Path, output: Path, frontend: Path) -> None:
-    """Export the dashboard docs UI and static routes for root-site hosting."""
+def generate_api(render: Path) -> set[str]:
+    """Render public API content into the shared documentation page tree."""
     import pdoc
 
+    output = render / "api"
+    if output.exists():
+        shutil.rmtree(output)
+    pdoc.render.configure(docformat="numpy", template_directory=ROOT / "pdoc-templates", search=False)
+    # The root package's __all__ lists exports, so name public submodules explicitly.
+    pdoc.pdoc("daggerml", "daggerml.api", "daggerml.contrib", "daggerml.util", output_directory=output)
+    modules = sorted(path for path in output.rglob("*.html") if path.name != "index.html")
+    links = "".join(
+        f'<li><a href="{path.relative_to(output).as_posix()}">'
+        f'{html.escape(path.relative_to(output).with_suffix("").as_posix().replace("/", "."))}</a></li>'
+        for path in modules
+    )
+    (output / "index.html").write_text(
+        '<main><h1 id="api-reference">API reference</h1>'
+        '<p>Public Python modules, signatures, and docstrings.</p>'
+        f'<ul>{links}</ul></main>', encoding="utf-8"
+    )
+    return {page_id(path, render) for path in [output / "index.html", *modules]}
+
+
+def site(render: Path, output: Path, frontend: Path) -> None:
+    """Export the dashboard docs UI and static routes for root-site hosting."""
     render = render.resolve()
     output = output.resolve()
     if not (render / "start-here/index.html").is_file():
@@ -370,6 +392,7 @@ def site(render: Path, output: Path, frontend: Path) -> None:
         destination = "/" if page == "start-here" else f"/docs/{page}/"
         legacy.write_text(
             '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<script>location.replace({json.dumps(destination)} + location.search + location.hash)</script>'
             f'<meta http-equiv="refresh" content="0;url={destination}">'
             f'<title>DaggerML documentation</title></head><body><a href="{destination}">'
             'DaggerML documentation</a></body></html>\n',
@@ -377,14 +400,12 @@ def site(render: Path, output: Path, frontend: Path) -> None:
         )
     (output / "index.html").write_text(shell, encoding="utf-8")
     (output / ".nojekyll").touch()
-    pdoc.render.configure(docformat="numpy", template_directory=ROOT / "pdoc-templates")
-    # The root package's __all__ lists exports, so name public submodules explicitly.
-    pdoc.pdoc("daggerml", "daggerml.api", "daggerml.contrib", "daggerml.util", output_directory=output / "api")
 
 
 def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
     render = render.resolve()
     staging = staging.resolve()
+    api_pages = generate_api(render)
     if staging.exists():
         shutil.rmtree(staging)
     fragments = staging / "fragments"
@@ -436,7 +457,7 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
                 "id": page,
                 "fragment": target.relative_to(staging).as_posix(),
                 "title": re.sub("<[^>]+>", "", title.group(1)).strip() if title else page.replace("/", " ").title(),
-                "order": execution_positions.get(page),
+                "order": 0 if page == "api" else execution_positions.get(page),
                 "headings": [
                     {"level": int(level), "id": ident, "text": re.sub("<[^>]+>", "", text)}
                     for level, ident, text in headings
@@ -449,6 +470,7 @@ def stage(render: Path, staging: Path, *, require_all: bool = False) -> None:
             for path in qmd_files(ROOT)
             if not path.name.startswith("build-")
         }
+        expected.update(api_pages)
         actual = {page_id(path, fragments) for path in fragments.rglob("*.html")}
         if expected != actual:
             raise ValueError(

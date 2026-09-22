@@ -731,6 +731,7 @@ function docsNavSections(pages: DocsManifestPage[], filter: string): DocsNavSect
     { id: "start", label: "Start here", matches: (id: string) => id === "start-here" || id.startsWith("start-here/") },
     { id: "use", label: "Use", matches: (id: string) => id === "use" || id.startsWith("use/") },
     { id: "extend", label: "Extend", matches: (id: string) => id === "extend" || id.startsWith("extend/") },
+    { id: "api", label: "API reference", matches: (id: string) => id === "api" || id.startsWith("api/") },
     { id: "glossary", label: "Glossary", matches: (id: string) => id === "glossary", direct: true },
     { id: "sharp-bits", label: "Sharp bits and security", matches: (id: string) => id === "sharp-bits-and-security", direct: true },
   ];

@@ -78,7 +78,7 @@ describe("canonical dashboard routes", () => {
     expect(await screen.findByRole("heading", { name: "DaggerML", level: 1 })).toBeVisible();
     expect(screen.getByLabelText("Documentation navigation")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "API reference" })).toHaveAttribute("href", "/api/index.html");
+    expect(screen.getByRole("link", { name: "API reference" })).toHaveAttribute("href", "/docs/api/");
     fireEvent.click(screen.getByRole("button", { name: "DAGs" }));
     expect(location.pathname).toBe("/docs/start-here/dags/");
     expect(await screen.findByRole("heading", { name: "Example", level: 1 })).toBeVisible();
@@ -138,6 +138,8 @@ describe("canonical dashboard routes", () => {
     const pages = [
       { id: "use/sharing", title: "Sharing", order: 10 },
       { id: "extend/executors", title: "Executors", order: 13 },
+      { id: "api/daggerml", title: "daggerml" },
+      { id: "api", title: "API reference", order: 0 },
       { id: "start-here/funks", title: "Funks", order: 3 },
       { id: "use/artifacts", title: "Artifacts", order: 6 },
       { id: "extend/codecs", title: "Codecs", order: 11 },
@@ -175,6 +177,13 @@ describe("canonical dashboard routes", () => {
     for (const removed of ["Concepts", "Guides", "Reference", "Examples", "Develop", "More"]) expect(screen.queryByText(removed, { selector: "summary" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Glossary" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Sharp bits and security" })).toBeVisible();
+    const api = screen.getByText("API reference", { selector: "summary" }).closest("details")!;
+    expect(within(api).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "API reference", "daggerml",
+    ]);
+    fireEvent.click(within(api).getByRole("button", { name: "daggerml" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/docs/static/fragments/api/daggerml.html"));
+    expect(location.pathname).toBe("/docs/api/daggerml");
   });
 
   it("keeps manifest input order for equal or missing course positions", async () => {
