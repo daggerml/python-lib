@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import tarfile
 import threading
 from dataclasses import asdict
 from types import SimpleNamespace
@@ -10,7 +12,7 @@ import pytest
 from daggerml._core.db import Ref
 from daggerml._core.types import Runnable, Uri
 from daggerml.contrib.adapters import AdapterBase
-from daggerml.contrib.executors.docker import DockerExecutor
+from daggerml.contrib.executors.docker import DockerExecutor, _cleanup_docker
 from daggerml.contrib.executors.script import ScriptExecutor
 from tests._core.contracts.test_execution_coordination import _record, _state
 
@@ -54,7 +56,6 @@ def test_registration_gap_leaves_existing_child_running(monkeypatch) -> None:
     assert state.read_execution_record("child")["state"]["lifecycle"] == "canceled"
 
 
-@pytest.mark.xfail(strict=True, reason="docker inspect transport failures are treated as exited containers")
 def test_docker_inspect_error_is_not_a_terminal_container_exit(monkeypatch) -> None:
     monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda _: "/docker")
     monkeypatch.setattr(
@@ -75,7 +76,6 @@ def test_docker_inspect_error_is_not_a_terminal_container_exit(monkeypatch) -> N
     assert result["status"] == "retry"
 
 
-@pytest.mark.xfail(strict=True, reason="nested cleanup errors escape before output.json is published")
 def test_nested_cleanup_failure_still_publishes_diagnostics(tmp_path, monkeypatch) -> None:
     class NestedAdapter(AdapterBase):
         @classmethod
@@ -99,10 +99,12 @@ def test_nested_cleanup_failure_still_publishes_diagnostics(tmp_path, monkeypatc
     }
     input_path, output_path = tmp_path / "input.json", tmp_path / "output.json"
     input_path.write_text(json.dumps(payload))
-    monkeypatch.setattr("daggerml.contrib.adapters.ExecutionState.from_execution_id", lambda *_args, **_kwargs: State())
+    monkeypatch.setattr("daggerml.contrib.adapters.Dml", lambda **_kwargs: SimpleNamespace(runtime=State()))
 
     assert NestedAdapter.cli(["--poll", "-i", str(input_path), "-o", str(output_path)]) == 0
-    assert "cleanup failed" in json.loads(output_path.read_text())["error"]
+    output = json.loads(output_path.read_text())
+    assert output["status"] == "failure"
+    assert "cleanup failed" in output["error"]
 
 
 def test_fresh_success_drives_outer_cleanup(monkeypatch) -> None:
@@ -124,6 +126,73 @@ def test_fresh_success_drives_outer_cleanup(monkeypatch) -> None:
         Ref("index:caller"), Runnable(Uri("target"), adapter="adapter"), Ref("node-argv:argv"), None
     ) == Ref("dag:result")
     assert calls == ["invoke", "cleanup"]
+
+
+def test_adapter_failure_before_worker_activation_retains_error_dag(monkeypatch) -> None:
+    state = _state()
+    assert state.create_execution_record(_record("caller", cache_key=None, argv_ref=None))
+    assert state.create_execution_record(_record("child", lifecycle="pending"))
+    assert state._create_cache("cache", "child")
+    errors = []
+    monkeypatch.setattr(state, "_call_adapter", lambda request: {"status": "failure", "error": "image missing"})
+
+    def error_dag(message, argv, db):
+        errors.append(message)
+        return Ref("dag:error")
+
+    monkeypatch.setattr(state, "_error_dag", error_dag)
+
+    result = state.get_or_start_fn(
+        Ref("index:caller"), Runnable(Uri("docker"), adapter="adapter"), Ref("node-argv:argv"), None
+    )
+
+    assert result == Ref("dag:error")
+    assert errors == ["image missing"]
+    assert state.read_execution_record("child")["state"]["lifecycle"] == "failed"
+
+
+@pytest.mark.parametrize("archive_mode", ["w", "w:gz"], ids=["tar", "tar-gzip"])
+def test_tar_image_cleanup_keeps_preexisting_worker_tag(monkeypatch, tmp_path, archive_mode) -> None:
+    tag = "daggerml-lifecycle:ci"
+    manifest = json.dumps([{"RepoTags": [tag]}]).encode()
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode=archive_mode) as tar:
+        member = tarfile.TarInfo("manifest.json")
+        member.size = len(manifest)
+        tar.addfile(member, io.BytesIO(manifest))
+        repositories = b'{}'
+        member = tarfile.TarInfo("repositories")
+        member.size = len(repositories)
+        tar.addfile(member, io.BytesIO(repositories))
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.docker.S3Store.from_remote_root",
+        lambda root: SimpleNamespace(get=lambda uri: archive.getvalue()),
+    )
+    images = {tag}
+    loaded_tags = []
+
+    def docker(command, **kwargs):
+        if command[1:3] == ["image", "rm"]:
+            images.discard(command[-1])
+        if command[1] == "load":
+            with tarfile.open(command[-1]) as tar:
+                assert "repositories" not in tar.getnames()
+                loaded = json.load(tar.extractfile("manifest.json"))
+            loaded_tags.extend(loaded[0]["RepoTags"])
+            images.update(loaded_tags)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda command: "/docker")
+    monkeypatch.setattr("daggerml.contrib.executors.docker.subprocess.run", docker)
+    image, cleanup_image = DockerExecutor._prepare_image(
+        {"kwargs": {"image": "s3://bucket/image.tar"}}, tmp_path, {"root": "s3://bucket/root"}
+    )
+    assert image != tag
+    assert cleanup_image == image
+    assert loaded_tags == [image]
+    _cleanup_docker("container", cleanup_image, "/docker")
+    assert tag in images
+    assert image not in images
 
 
 @pytest.mark.xfail(strict=True, reason="script cancellation acknowledges before process teardown")

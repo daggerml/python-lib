@@ -226,15 +226,28 @@ class ScriptExecutor(ExecutorBase):
         if isinstance(pid, int):
             try:
                 done_pid, _ = os.waitpid(pid, os.WNOHANG)
-                if done_pid == 0:
-                    return {"status": "retry", "error": None, "state": state}
+                active = done_pid == 0
             except ChildProcessError:
                 try:
                     os.kill(pid, 0)
-                    return {"status": "retry", "error": None, "state": state}
-                except (ProcessLookupError, PermissionError):
+                    active = True
+                except ProcessLookupError:
+                    active = False
+                except PermissionError as exc:
+                    return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
+            if active:
+                # The DML result is already published, so the supervisor is no longer needed.
+                # Stop its process group before removing scratch so it cannot keep writing there.
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                except ProcessLookupError:
                     pass
+                except PermissionError as exc:
+                    return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
         _cleanup_workdir(state)
+        workdir = state.get("workdir")
+        if isinstance(workdir, str) and os.path.exists(workdir):
+            return {"status": "failure", "error": f"script cleanup failed to remove {workdir}", "state": state}
         return {"status": "success", "error": None, "state": state}
 
     def cancel(

@@ -4,7 +4,7 @@ import pytest
 
 from daggerml._core import Dml
 from daggerml._core.head import Head
-from daggerml._core.types import Commit, Tree
+from daggerml._core.types import Commit, DmlRepoError, Tree
 from tests._core.helpers import commit_literal_dag, make_local_dml
 
 pytestmark = pytest.mark.slow
@@ -30,15 +30,52 @@ def test_clone_tag_detaches_head(tmp_path, monkeypatch, remote_env, s3_bucket) -
     source = make_local_dml(tmp_path / "source", monkeypatch, remote_root=root)
     commit = commit_literal_dag(source, "train", 1)
     source.tag.create("v1")
-    source.push()
-    # Tags are published through the direct remote transport API in this focused integration.
-    from daggerml._core.dml import _remote_ops
-
-    _remote_ops(source).put_ref(commit, "tag", "v1", source._db)
+    source.push(revision="@v1")
 
     clone = Dml.clone("@v1", project_home=str(tmp_path / "clone"), remote_root=root, user="reviewer")
     assert clone.status()["mode"] == "detached"
     assert clone.status()["commit"] == commit
+
+
+def test_push_tag_requires_local_tag_and_force_to_replace_remote(tmp_path, monkeypatch, remote_env, s3_bucket) -> None:
+    del remote_env, s3_bucket
+    root = f"s3://test-bucket/test-prefix/{tmp_path.name}"
+    source = make_local_dml(tmp_path / "source", monkeypatch, remote_root=root)
+    commit_literal_dag(source, "first", 1)
+    source.tag.create("v1")
+    source.push(revision="@v1")
+
+    later = commit_literal_dag(source, "later", 2)
+    Head(str(tmp_path / "source")).update_local_ref("v1", later, kind="tag")
+    with pytest.raises(DmlRepoError, match="already exists"):
+        source.push(revision="@v1")
+    source.push(revision="@v1", force=True)
+
+    clone = Dml.clone("@v1", project_home=str(tmp_path / "clone"), remote_root=root)
+    assert clone.status()["commit"] == later
+
+
+def test_push_named_branch_and_commit_revision_without_switching_head(tmp_path, monkeypatch, remote_env, s3_bucket):
+    del remote_env, s3_bucket
+    root = f"s3://test-bucket/test-prefix/{tmp_path.name}"
+    source = make_local_dml(tmp_path / "source", monkeypatch, remote_root=root)
+    first = commit_literal_dag(source, "first", 1)
+    source.branch.create("feature")
+    second = commit_literal_dag(source, "second", 2)
+
+    source.push(revision="feature")
+    assert source.status()["commit"] == second
+    feature = Dml.clone("feature", project_home=str(tmp_path / "feature"), remote_root=root)
+    assert feature.status()["commit"] == first
+
+    source.push(revision=first)
+    main = Dml.clone("main", project_home=str(tmp_path / "main"), remote_root=root)
+    assert main.status()["commit"] == first
+    source.push(revision="HEAD")
+    main.fetch("main")
+    assert {item["name"]: item["commit"] for item in main.branch.list(remote=True)}["main"] == second
+    source.push(revision="HEAD~1", force=True)
+    assert {item["name"]: item["commit"] for item in main.branch.list(remote=True)}["main"] == first
 
 
 def test_clone_depth_one_materializes_complete_tip_snapshot(tmp_path, monkeypatch, remote_env, s3_bucket) -> None:

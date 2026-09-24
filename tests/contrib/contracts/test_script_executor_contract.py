@@ -353,6 +353,21 @@ def test_contrib_script_cancel_reports_permission_failure(monkeypatch):
     assert "denied" in result["error"]
 
 
+def test_script_cleanup_preserves_workdir_if_supervisor_cannot_be_terminated(monkeypatch, tmp_path):
+    workdir = tmp_path / "scratch"
+    workdir.mkdir()
+    monkeypatch.setattr(script_mod.os, "waitpid", lambda pid, flags: (0, 0))
+    monkeypatch.setattr(
+        script_mod.os, "killpg", lambda pid, sig: (_ for _ in ()).throw(PermissionError("denied"))
+    )
+
+    result = ScriptExecutor().cleanup("ck", "exec", {}, {"pid": 123, "workdir": str(workdir)}, {}, "scratch", "dag:x")
+
+    assert result["status"] == "failure"
+    assert "denied" in result["error"]
+    assert workdir.exists()
+
+
 def test_run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_path):
     calls = {"put": []}
     tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))

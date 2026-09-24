@@ -7,12 +7,14 @@ from daggerml import Dml
 from daggerml._core import DmlRepoError
 
 
-@pytest.mark.xfail(strict=True, reason="Dml.show invokes diff against missing parent on a depth-one merge tip")
 def test_merge_tip_materializes_both_parents_and_deepens(shallow_merge_world):
     world = shallow_merge_world()
     tip = world.publisher.status()["commit"]
     source = world.publisher.log()["commits"]
     clone = world.clone("branch", depth=1)
+    assert clone.show()["diff"] is None
+    with pytest.raises(DmlRepoError, match="shallow"):
+        clone.diff()
     assert clone.status()["commit"] == tip
     assert api.load("main-input", dml=clone).result.value() == "main"
     assert api.load("side-input", dml=clone).result.value() == "side"
@@ -49,11 +51,12 @@ def test_shallow_branch_can_advance_observed_tip_but_not_create_new_branch(shall
         clone.push()
 
 
-@pytest.mark.xfail(strict=True, reason="public push publishes branches only; no public remote-tag publication API")
 def test_tagged_merge_tip_clones_by_public_tag(shallow_merge_world):
     world = shallow_merge_world()
     world.publisher.tag.create("merged")
-    world.publisher.push()
+    world.publisher.push(revision="@merged")
+    with pytest.raises(DmlRepoError, match="already exists"):
+        world.publisher.push(revision="@merged")
     tagged = world.clone("tagged", revision="@merged", depth=1)
     assert tagged.status()["mode"] == "detached"
     assert api.load("side-input", dml=tagged).result.value() == "side"

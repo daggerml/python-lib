@@ -3,7 +3,8 @@ from __future__ import annotations
 import pytest
 
 import daggerml.api as api
-from daggerml import Dml
+from daggerml import Dml, Runnable, Uri
+from daggerml._core.exec_state import ExecutionState
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
 
@@ -49,3 +50,21 @@ def test_raises(tmp_path, monkeypatch, remote_env, s3_bucket):
         fin_dag["err-val"]
     assert exc_info.value.node_ref == error_node_ref
     assert exc_info.value.context().ref == fn_dag_ref
+
+
+def test_early_adapter_failure_keeps_named_node(runtime_world, monkeypatch):
+    world = runtime_world
+
+    def fail_invoke(self, request):
+        if request["operation"] == "invoke":
+            return {"status": "failure", "error": "image missing"}
+        return {"status": "success"}
+
+    monkeypatch.setattr(ExecutionState, "_call_adapter", fail_invoke)
+    with api.new("missing-image", dml=world.publisher) as dag:
+        with pytest.raises(api.Error):
+            dag.call(dag.put(Runnable(Uri("docker"), adapter="dml-local-adapter")), 21, name="failed", timeout=2000)
+        dag.commit(dag.put("retained"))
+
+    with pytest.raises(api.NodeError, match="image missing"):
+        api.load("missing-image", dml=world.publisher)["failed"]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import io
 import json
 import shutil
 import subprocess
@@ -8,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from daggerml import Runnable, Uri
 from daggerml._core import validate_adapter_response
@@ -108,6 +111,28 @@ class DockerExecutor(ExecutorBase):
         return cast(str, repo_tags[0])
 
     @staticmethod
+    def _isolate_image_tar(tar_path: Path, isolated_path: Path) -> str:
+        DockerExecutor._image_tag_from_tar(tar_path)
+        isolated_tag = f"daggerml-execution:{uuid4().hex}"
+        with tarfile.open(tar_path, mode="r:*") as source, tarfile.open(isolated_path, mode="w") as target:
+            for member in source:
+                if member.name == "repositories":
+                    continue  # Legacy Docker metadata would also restore the original tag.
+                content = source.extractfile(member) if member.isfile() else None
+                if member.name == "manifest.json":
+                    assert content is not None
+                    manifest = json.load(content)
+                    if not isinstance(manifest, list) or len(manifest) != 1:
+                        raise DmlRepoError("docker image tar must contain exactly one image")
+                    manifest[0]["RepoTags"] = [isolated_tag]
+                    data = json.dumps(manifest).encode("utf-8")
+                    member = copy.copy(member)
+                    member.size = len(data)
+                    content = io.BytesIO(data)
+                target.addfile(member, content)
+        return isolated_tag
+
+    @staticmethod
     def _prepare_image(runnable: dict[str, Any], workdir: Path, remote: dict[str, Any]) -> tuple[str, str | None]:
         image = DockerExecutor._image_input(runnable)
         if not is_s3_uri(image):
@@ -115,8 +140,9 @@ class DockerExecutor(ExecutorBase):
         tar_path = workdir / "image.tar"
         store = S3Store.from_remote_root(cast(str, remote["root"]))
         tar_path.write_bytes(store.get(image))
-        image_ref = DockerExecutor._image_tag_from_tar(tar_path)
-        DockerExecutor._run_docker("load", "-i", str(tar_path))
+        isolated_path = workdir / "isolated.tar"
+        image_ref = DockerExecutor._isolate_image_tar(tar_path, isolated_path)
+        DockerExecutor._run_docker("load", "-i", str(isolated_path))
         return image_ref, image_ref
 
     def start(
@@ -211,7 +237,8 @@ class DockerExecutor(ExecutorBase):
             text=True,
         )
         if proc.returncode != 0:
-            container_status = "exited"
+            # An inspect error cannot establish that the container has exited.
+            return {"status": "retry", "error": None, "state": state}
         else:
             container_status = proc.stdout.strip()
 

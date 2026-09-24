@@ -72,10 +72,9 @@ def test_installed_launcher_serves_static_and_authenticated_project_api(installe
     finally:
         process.send_signal(signal.SIGINT)
         try:
-            if process.wait(timeout=10) != 0:
-                pytest.xfail("installed dashboard does not exit cleanly after SIGINT")
-            assert process.returncode == 0
+            exit_code = process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
             raise
+    assert exit_code == 0

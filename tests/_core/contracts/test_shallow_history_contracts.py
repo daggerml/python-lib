@@ -27,13 +27,15 @@ def test_log_reports_shallow_truncation_and_available_commits(tmp_path, monkeypa
     assert result["truncated"] is True
 
 
-def test_revision_and_implicit_parent_comparison_fail_at_shallow_boundary(tmp_path, monkeypatch) -> None:
+def test_revision_and_diff_fail_but_show_preserves_snapshot_at_shallow_boundary(tmp_path, monkeypatch) -> None:
     dml, _first, second, _third = _make_shallow_history(tmp_path, monkeypatch)
 
     with pytest.raises(DmlRepoError, match="fetch with greater depth or --unshallow"):
         dml.rev_parse("HEAD~2")
+    assert set(dml.show(second)["dags"]) == {"one", "two"}
+    assert dml.show(second)["diff"] is None
     with pytest.raises(DmlRepoError, match="fetch with greater depth or --unshallow"):
-        dml.show(second)
+        dml.diff(second)
 
 
 def test_explicit_diff_of_available_snapshots_works_with_shallow_history(tmp_path, monkeypatch) -> None:

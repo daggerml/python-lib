@@ -79,9 +79,11 @@ requests and appreciate your help in improving this project.
   ```
   uv run --dev --all-extras pytest -m "not slow" .
   ```
-- CI runs local/Moto deterministic coverage with `-m "not docker and not ssh and
-  not external"`; dedicated jobs run Docker and local-SSH coverage. Local quick
-  loops use `-m "not slow"`.
+- CI runs local/Moto deterministic coverage with `-m "not dashboard and not
+  docker and not ssh and not external"`; the dashboard job runs dashboard-marked
+  Python tests after building verified assets on pushes, pull requests, and tags.
+  Dedicated jobs run Docker and local-SSH coverage. Local quick loops use
+  `-m "not slow"`.
 - We mark tests under `tests/_core/` with `@pytest.mark.core`. Core tests are included by default. You can select or skip them with:
   ```
   uv run --dev --all-extras pytest -m core .
@@ -119,9 +121,10 @@ requests and appreciate your help in improving this project.
   ```
 - The build executes all QMD examples against disposable fixtures; do not use it as a substitute for the full test suite.
 - CI builds and verifies the dashboard and executable documentation once in the
-  Linux `dashboard` job. Wheel and source-distribution jobs download its
-  `dashboard-assets` artifact and package those same verified files. macOS wheel
-  runners therefore do not need Docker or the documentation build toolchain.
+  Linux `dashboard` job, then runs dashboard Python tests against those assets.
+  Wheel and source-distribution jobs download its `dashboard-assets` artifact and
+  package those same verified files. macOS wheel runners therefore do not need
+  Docker or the documentation build toolchain.
 
 ### GitHub Pages
 

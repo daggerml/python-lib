@@ -1461,18 +1461,30 @@ class Dml:
     def push(
         self,
         *,
-        revision: Annotated[Ref | str, "Revision to push. Defaults to the current HEAD."] = "HEAD",
+        revision: Annotated[Ref | str, "Local revision to publish; defaults to HEAD."] = "HEAD",
         force: Annotated[bool, "Overwrite a remote branch or tag without publication checks."] = False,
     ) -> None:
-        """Publish the attached branch to its configured upstream."""
+        """Publish a local revision as a tag or branch on the configured remote."""
         head = _head_ops(self)
-        if revision != "HEAD":
-            raise DmlRepoError("Push only publishes the current attached branch")
-        head_info = head.get_head()
-        branch = head_info["branch"]
+        commit_ref = _require_resolved_commit(resolve_rev(head, revision, db=self._db), revision)
+        if isinstance(revision, str) and revision.startswith("@"):
+            _remote_ops(self).put_ref(
+                commit_ref,
+                kind="tag",
+                name=revision[1:],
+                db=self._db,
+                force=force,
+                missing_commits=head.get_shallow_commits(),
+            )
+            return
+        named_branch = (
+            isinstance(revision, str)
+            and not revision.startswith("HEAD")
+            and re.fullmatch(r"(?:commit:)?[0-9a-f]{64}", revision) is None
+        )
+        branch = revision if named_branch and isinstance(revision, str) else head.get_head()["branch"]
         if branch is None:
-            raise DmlRepoError("Cannot push when HEAD is detached")
-        commit_ref = _require_resolved_commit(head_info["commit"], "HEAD")
+            raise DmlRepoError("Cannot push an unnamed revision when HEAD is detached")
         upstream = head.get_upstream(branch)
         if upstream is None:
             upstream = {"branch": branch}

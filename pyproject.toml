@@ -97,6 +97,7 @@ testpaths = [
   "src/daggerml",
 ]
 markers = [
+  "dashboard: dashboard server, CLI, and installed-wheel tests run after the verified dashboard build",
   "contrib: marks tests for daggerml.contrib (select with '-m contrib' or deselect with '-m \"not contrib\"')",
   "core: marks tests for daggerml._core (select with '-m core' or deselect with '-m \"not core\"')",
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",

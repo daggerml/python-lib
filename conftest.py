@@ -18,11 +18,18 @@ def pytest_addoption(parser):
 
 def pytest_collection_modifyitems(items):
     for item in items:
-        if "/tests/_core/" in str(item.fspath):
+        path = str(item.fspath)
+        if "/tests/dashboard/" in path or path.endswith((
+            "/tests/api/contracts/test_dashboard_cli_contracts.py",
+            "/tests/distribution/test_installed_dashboard_integration.py",
+            "/tests/distribution/test_installed_dashboard_plugin_integration.py",
+        )):
+            item.add_marker(pytest.mark.dashboard)
+        if "/tests/_core/" in path:
             item.add_marker(pytest.mark.core)
-        elif "tests/contrib/" in str(item.fspath):
+        elif "tests/contrib/" in path:
             item.add_marker(pytest.mark.contrib)
-        if "/integration/" in str(item.fspath):
+        if "/integration/" in path:
             item.add_marker(pytest.mark.slow)
         if item.get_closest_marker("external") and not item.config.getoption("--run-external"):
             item.add_marker(pytest.mark.skip(reason="external acceptance requires --run-external and credentials"))

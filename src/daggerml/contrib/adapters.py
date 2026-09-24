@@ -85,14 +85,17 @@ class AdapterBase:
             if result_ref is None:
                 raise DmlRepoError("Successful nested invoke did not publish a result")
             cleanup_payload = {**payload, "operation": "cleanup", "result_ref": result_ref}
-            result = cls.send(**cleanup_payload)
-            while result.get("status") == "retry":
-                state = result.get("adapter_state")
-                if not isinstance(state, dict):
-                    raise DmlRepoError("Retry adapter response requires object adapter_state")
-                cleanup_payload["adapter_state"] = state
-                time.sleep(0.1)
+            try:
                 result = cls.send(**cleanup_payload)
+                while result.get("status") == "retry":
+                    state = result.get("adapter_state")
+                    if not isinstance(state, dict):
+                        raise DmlRepoError("Retry adapter response requires object adapter_state")
+                    cleanup_payload["adapter_state"] = state
+                    time.sleep(0.1)
+                    result = cls.send(**cleanup_payload)
+            except Exception as exc:
+                result = {"status": "failure", "error": f"Nested cleanup failed: {exc}"}
         cls._write_output(args.output, json.dumps(result))
         return 0
 

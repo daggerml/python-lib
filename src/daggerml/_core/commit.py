@@ -35,7 +35,7 @@ class CommitDiffPayload(TypedDict):
 
 
 class CommitFullDescription(CommitDescription):
-    diff: CommitDiffPayload
+    diff: CommitDiffPayload | None
 
 
 class CommitOps:
@@ -224,7 +224,12 @@ class CommitOps:
     ) -> CommitFullDescription:
         with db.tx(readonly=True) as txn:
             desc = self._describe(commit, txn)
-        diff = self.diff(commit, db=db, missing_commits=missing_commits)
+        try:
+            diff = self.diff(commit, db=db, missing_commits=missing_commits)
+        except ShallowHistoryError:
+            # The tip is present, but its parent cannot provide a comparison.
+            # Preserve the snapshot without inventing changes at the boundary.
+            diff = None
         return {**desc, "diff": diff}
 
     def get_ancestor(

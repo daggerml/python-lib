@@ -19,12 +19,16 @@ dml tag create course-v1 >/dev/null
 dml tag list | jq -e '.[] | select(.name == "course-v1")'
 dml config show | jq -e --arg root "$DML_REMOTE_ROOT" '.remote.root == $root'
 dml push >/dev/null
+dml push --revision @course-v1 >/dev/null
 dml branch list --remote | jq -e '.[] | select(.name == "main")'
 ```
 
 `dml log`, `show`, and `diff` inspect history; branches can have one upstream,
-while tags do not. `push` publishes the current attached branch to its upstream;
-the local tag remains an exact name for the course commit. Endpoint listing is
+while tags do not. `push` publishes `HEAD` to the current attached branch's
+upstream by default. `push --revision BRANCH` publishes that local branch to its
+upstream without checking it out; `push --revision @NAME` publishes a local tag
+once without replacing an existing remote tag. A commit ref or ancestor revision
+publishes to the current attached branch's upstream. Endpoint listing is
 read-only: it does not fetch commits or update local tracking refs.
 
 ## Reuse from satellite projects
@@ -71,3 +75,7 @@ larger `fetch --depth N` to deepen history or `fetch --unshallow` to retrieve
 it all. Dependencies are import-only endpoints, not the project's cache or
 execution remote. A normal push can advance an observed shallow branch; creating
 a remote branch or forcing publication requires complete ancestry.
+
+`show` preserves the current snapshot at a shallow boundary and reports `diff:
+null` when its parent is unavailable. `diff` itself requires the parent; deepen
+the clone to compare changes.

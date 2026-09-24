@@ -39,7 +39,7 @@ jobs:
       - name: Sync dependencies
         run: uv sync --group dev --all-extras
       - name: Full deterministic suite (without Docker)
-        run: uv run pytest -m 'not docker and not ssh and not external' .
+        run: uv run pytest -m 'not dashboard and not docker and not ssh and not external' .
       - name: Report external acceptance (not executed without credentials)
         run: uv run pytest --collect-only -q -m external tests/external/
   docker-lifecycle:
@@ -109,7 +109,7 @@ jobs:
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: |
           LIBASAN=$(gcc -print-file-name=libasan.so)
-          LD_PRELOAD="$LIBASAN" uv run pytest -m 'not docker and not ssh and not external' .
+          LD_PRELOAD="$LIBASAN" uv run pytest -m 'not dashboard and not docker and not ssh and not external' .
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -127,9 +127,6 @@ jobs:
       - name: Run Pyright
         run: uv run pyright --project .
   dashboard:
-    if: >-
-      github.event_name == 'pull_request' ||
-      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -149,6 +146,8 @@ jobs:
         env:
           DOCS_PYTHON: ${{ github.workspace }}/.venv/bin/python
         run: bash ./docs/build.sh
+      - name: Dashboard Python tests
+        run: uv run pytest -m 'dashboard and not docker and not ssh and not external' .
       - name: Upload verified dashboard assets
         uses: actions/upload-artifact@v7
         with:

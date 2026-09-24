@@ -42,7 +42,7 @@ def test_local_adapter_crosses_process_boundary_and_cleans_scratch(runtime_world
         assert not Path(state["workdir"]).exists()
 
 
-def test_local_adapter_wire_retries_cleanup_across_fresh_processes(tmp_path):
+def test_local_adapter_wire_cleans_active_supervisor_across_fresh_processes(tmp_path):
     workdir = tmp_path / "scratch"
     workdir.mkdir()
     (workdir / "worker.log").write_text("scratch")
@@ -66,11 +66,14 @@ def test_local_adapter_wire_retries_cleanup_across_fresh_processes(tmp_path):
 
     try:
         first = send()
-        assert first["status"] == "retry"
+        assert first["status"] == "success"
         assert first["adapter_state"] == state
-    finally:
-        os.killpg(worker.pid, signal.SIGTERM)
         worker.wait(timeout=10)
+        assert not workdir.exists()
+    finally:
+        if worker.poll() is None:
+            os.killpg(worker.pid, signal.SIGTERM)
+            worker.wait(timeout=10)
     second = send()
     assert second["status"] == "success"
     assert not workdir.exists()

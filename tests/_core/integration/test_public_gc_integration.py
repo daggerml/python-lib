@@ -8,7 +8,6 @@ from daggerml import Dml
 from daggerml._core import DmlRepoError
 
 
-@pytest.mark.xfail(strict=True, reason="Dml.show traverses the missing shallow parent while describing the tip")
 def test_local_gc_preserves_live_branch_tag_and_shallow_boundary(collaboration_world):
     world = collaboration_world()
     producer = world.publisher
@@ -18,6 +17,7 @@ def test_local_gc_preserves_live_branch_tag_and_shallow_boundary(collaboration_w
     producer.push()
     shallow = world.clone("shallow", depth=1)
     shallow.gc()
+    assert shallow.show()["diff"] is None
     assert api.load("later", dml=shallow).result.value() == 2
     shallow.fetch(unshallow=True)
     shallow.gc()

@@ -931,6 +931,9 @@ class ExecutionState:
             dag = self._error_dag(
                 str(response.get("error") or "Adapter failed before publishing a result"), argv_node, db
             )
+            if self.read_execution_record(execution_id)["state"]["lifecycle"] == "pending":
+                # The adapter may fail before a worker has activated this execution.
+                self._mutate_state(execution_id, lambda value: value.update(lifecycle="running"), owner=owner)
             self._mutate_state(
                 execution_id,
                 lambda value: value.update(
