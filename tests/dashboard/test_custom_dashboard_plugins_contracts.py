@@ -37,7 +37,7 @@ def _points(monkeypatch):
     ]
 
 
-def test_dash_plugin_001__public_types_are_frozen_and_validate_fields():
+def test_public_types_are_frozen_and_validate_fields():
     dashboard = Dashboard("acme.metrics", _render, tags=["metrics.v1", "metrics.v1"])
     assert dashboard.tags == frozenset({"metrics.v1"})
     assert PlotlyDashboardResult([{"x": [1]}]).layout == {}
@@ -49,13 +49,13 @@ def test_dash_plugin_001__public_types_are_frozen_and_validate_fields():
         VegaLiteDashboardResult([])  # type: ignore[arg-type]
 
 
-def test_dash_plugin_002__discovery_is_stable_isolated_and_first_name_wins(monkeypatch):
+def test_discovery_is_stable_isolated_and_first_name_wins(monkeypatch):
     registered, diagnostics = load_dashboard_plugins(_points(monkeypatch))
     assert [item.definition.name for item in registered] == ["z.last", "a.first"]
     assert {item.code for item in diagnostics} == {"duplicate-name", "invalid-definition", "plugin-load-failed"}
 
 
-def test_dash_plugin_003__matching_requires_exact_tag_subset(monkeypatch):
+def test_matching_requires_exact_tag_subset(monkeypatch):
     registered, _ = load_dashboard_plugins(_points(monkeypatch))
     assert [item.definition.name for item in compatible_dashboards(registered, {"metrics.v1"})] == [
         "z.last",
@@ -64,7 +64,7 @@ def test_dash_plugin_003__matching_requires_exact_tag_subset(monkeypatch):
     assert [item.definition.name for item in compatible_dashboards(registered, {"Metrics.v1"})] == ["z.last"]
 
 
-def test_dash_plugin_004__public_import_does_not_load_server_or_read_model():
+def test_public_import_does_not_load_server_or_read_model():
     subprocess.run(
         [
             sys.executable,

@@ -12,7 +12,7 @@ pytest.importorskip("httpx")
 COMMIT = "a" * 64
 
 
-def test_dash_revision_001__head_and_concrete_commit_resolution_never_fall_back(tmp_path):
+def test_head_and_concrete_commit_resolution_never_fall_back(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -41,7 +41,7 @@ def test_dash_revision_001__head_and_concrete_commit_resolution_never_fall_back(
         model.resolve_revision("main")
 
 
-def test_dash_revision_002__workspace_routes_require_registered_project_and_revision_scope(tmp_path, monkeypatch):
+def test_workspace_routes_require_registered_project_and_revision_scope(tmp_path, monkeypatch):
     project = tmp_path / "project"
     project.mkdir()
     (project / ".dml").mkdir()
@@ -70,7 +70,7 @@ def test_dash_revision_002__workspace_routes_require_registered_project_and_revi
     assert response.json() == {"revision": {"requested": "HEAD"}}
 
 
-def test_dash_revision_003__workspace_detail_and_search_links_carry_explicit_scope(tmp_path):
+def test_workspace_detail_and_search_links_carry_explicit_scope(tmp_path):
     class Model:
         initialized = True
 
@@ -114,7 +114,7 @@ def test_dash_revision_003__workspace_detail_and_search_links_carry_explicit_sco
     }
 
 
-def test_dash_revision_004__concrete_revision_remains_stable_after_head_moves(tmp_path):
+def test_concrete_revision_remains_stable_after_head_moves(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     first = "a" * 64
@@ -175,7 +175,7 @@ def test_dash_revision_004__concrete_revision_remains_stable_after_head_moves(tm
     }
 
 
-def test_dash_revision_004a__function_context_navigation_caches_revision_membership(tmp_path):
+def test_function_context_navigation_caches_revision_membership(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     root = Ref("dag:root")
@@ -230,7 +230,7 @@ def test_dash_revision_004a__function_context_navigation_caches_revision_members
     assert descriptions[child] == child_descriptions
 
 
-def test_dash_revision_004b__nested_function_context_nodes_are_reachable_in_the_revision(tmp_path):
+def test_nested_function_context_nodes_are_reachable_in_the_revision(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     root = Ref("dag:root")
@@ -276,7 +276,7 @@ def test_dash_revision_004b__nested_function_context_nodes_are_reachable_in_the_
     assert model.node(inner_node.to, revision=COMMIT)["revision"]["commit"] == COMMIT
 
 
-def test_dash_revision_005__failure_matrix_is_stable_and_safe(tmp_path):
+def test_failure_matrix_is_stable_and_safe(tmp_path):
     app = create_app(tmp_path)
     client = TestClient(app)
     headers = {"host": "127.0.0.1:8765"}
@@ -325,7 +325,7 @@ def test_dash_revision_005__failure_matrix_is_stable_and_safe(tmp_path):
     assert all("Traceback" not in response.text for response in responses)
 
 
-def test_dash_revision_006__revision_overview_is_bounded_read_only_and_redacted(tmp_path):
+def test_revision_overview_is_bounded_read_only_and_redacted(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     calls = []
@@ -390,7 +390,7 @@ def test_dash_revision_006__revision_overview_is_bounded_read_only_and_redacted(
     ]
 
 
-def test_dash_revision_007__revision_workspace_reads_are_isolated_to_the_selected_project(tmp_path):
+def test_revision_workspace_reads_are_isolated_to_the_selected_project(tmp_path):
     app = create_app(tmp_path / "config")
     first = tmp_path / "first"
     second = tmp_path / "second"
@@ -423,7 +423,7 @@ def test_dash_revision_007__revision_workspace_reads_are_isolated_to_the_selecte
     assert calls == [(first_registered["id"], COMMIT)]
 
 
-def test_dash_revision_008__dag_inventory_and_detail_keep_revision_scope_and_live_gate(tmp_path):
+def test_dag_inventory_and_detail_keep_revision_scope_and_live_gate(tmp_path):
     project = tmp_path / "project"
     (project / ".dml").mkdir(parents=True)
     (project / ".dml" / "HEAD").write_text("", encoding="utf-8")
@@ -452,7 +452,7 @@ def test_dash_revision_008__dag_inventory_and_detail_keep_revision_scope_and_liv
     assert detail.json()["revision"]["commit"] == COMMIT
 
 
-def test_dash_revision_009__partial_dag_detail_is_available_only_at_current_head(tmp_path):
+def test_partial_dag_detail_is_available_only_at_current_head(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     current = "a" * 64

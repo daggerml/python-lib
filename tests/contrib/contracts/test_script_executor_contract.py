@@ -67,7 +67,7 @@ def _run_worker_script(monkeypatch, tmp_path: Path, source: str):
     return result, calls
 
 
-def test_contrib_script_001__script_kwargs_capture_fn_name_and_require_parameter():
+def test_script_kwargs_capture_fn_name_and_require_parameter():
     def fn(dag, x):
         return x.value()
 
@@ -82,7 +82,7 @@ def test_contrib_script_001__script_kwargs_capture_fn_name_and_require_parameter
         ScriptExecutor._script_kwargs({"fn": bad})
 
 
-def test_contrib_script_001a__script_kwargs_normalize_tags():
+def test_script_kwargs_normalize_tags():
     def fn(dag):
         return 1
 
@@ -93,7 +93,7 @@ def test_contrib_script_001a__script_kwargs_normalize_tags():
         ScriptExecutor._script_kwargs({"fn": fn, "tags": "candidate"})
 
 
-def test_contrib_script_001b__funkify_captures_script_before_staging(monkeypatch):
+def test_funkify_captures_script_before_staging(monkeypatch):
     def helper(value):
         return value + 1
 
@@ -115,7 +115,7 @@ def test_contrib_script_001b__funkify_captures_script_before_staging(monkeypatch
     assert staged == captured
 
 
-def test_contrib_script_001c__funkify_fails_immediately_when_source_is_unavailable(monkeypatch):
+def test_funkify_fails_immediately_when_source_is_unavailable(monkeypatch):
     def fn(dag):
         return 1
 
@@ -127,7 +127,7 @@ def test_contrib_script_001c__funkify_fails_immediately_when_source_is_unavailab
         api.funkify(fn)
 
 
-def test_contrib_script_001d__eager_capture_does_not_include_authoring_globals():
+def test_eager_capture_does_not_include_authoring_globals():
     authoring_secret = "must-not-be-captured"
 
     def fn(dag):
@@ -139,7 +139,7 @@ def test_contrib_script_001d__eager_capture_does_not_include_authoring_globals()
     assert "authoring_secret" in delayed.kwargs["script"]
 
 
-def test_contrib_script_002__rendered_source_rejects_pathological_wrapped_functions():
+def test_rendered_source_rejects_pathological_wrapped_functions():
     def fn(dag):
         return 1
 
@@ -148,7 +148,7 @@ def test_contrib_script_002__rendered_source_rejects_pathological_wrapped_functi
         ScriptExecutor._render_script(fn, extra_objs=[], post_lines=[])
 
 
-def test_contrib_script_003__resolve_runnable_rejects_sub_and_writes_script_to_s3(monkeypatch):
+def test_resolve_runnable_rejects_sub_and_writes_script_to_s3(monkeypatch):
     seen = {}
 
     class FakeStore:
@@ -170,7 +170,7 @@ def test_contrib_script_003__resolve_runnable_rejects_sub_and_writes_script_to_s
         ScriptExecutor.resolve_runnable("script", {"fn": fn}, Runnable(target=Uri("inner"), kwargs={}, adapter="x"))
 
 
-def test_contrib_script_004__start_returns_durable_running_state(monkeypatch):
+def test_start_returns_durable_running_state(monkeypatch):
     class FakePopen:
         pid = 123
 
@@ -190,7 +190,7 @@ def test_contrib_script_004__start_returns_durable_running_state(monkeypatch):
     assert "workdir" in result["state"]
 
 
-def test_contrib_script_005__poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_path):
+def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(script_mod.os, "waitpid", lambda pid, flags: (pid, 0))
 
     success_dir = tmp_path / "success"
@@ -319,7 +319,7 @@ def test_script_worker_dag_creation_passes_declared_tags(monkeypatch, tmp_path):
     }
 
 
-def test_contrib_script_006__cancel_without_launch_state_is_still_cancelled():
+def test_cancel_without_launch_state_is_still_cancelled():
     result = ScriptExecutor().cancel(
         cache_key="ck",
         execution_id="exec",
@@ -353,7 +353,7 @@ def test_contrib_script_cancel_reports_permission_failure(monkeypatch):
     assert "denied" in result["error"]
 
 
-def test_contrib_script_007__run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_path):
+def test_run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_path):
     calls = {"put": []}
     tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))
 
@@ -413,7 +413,7 @@ def test_contrib_script_007__run_payload_uses_prepop_and_script_uri_from_runnabl
     assert calls["commit"] == "result:arg-node"
 
 
-def test_contrib_script_008__worker_executes_file_backed_live_module(monkeypatch, tmp_path):
+def test_worker_executes_file_backed_live_module(monkeypatch, tmp_path):
     source = """
 import sys
 
@@ -451,7 +451,7 @@ def fn(dag, arg):
         sys.modules.pop("_daggerml_live", None)
 
 
-def test_contrib_script_009__failed_live_module_reports_source_and_cleans_sys_modules(monkeypatch, tmp_path):
+def test_failed_live_module_reports_source_and_cleans_sys_modules(monkeypatch, tmp_path):
     result, _ = _run_worker_script(monkeypatch, tmp_path, 'raise RuntimeError("module boom")\n')
 
     assert result["status"] == "failed"
@@ -460,7 +460,7 @@ def test_contrib_script_009__failed_live_module_reports_source_and_cleans_sys_mo
     assert "_daggerml_live" not in sys.modules
 
 
-def test_contrib_script_010__live_logger_writes_debug_once_without_changing_other_loggers(
+def test_live_logger_writes_debug_once_without_changing_other_loggers(
     monkeypatch, tmp_path, capsys
 ):
     dependency_logger = logging.getLogger("dependency-under-test")
@@ -493,7 +493,7 @@ def fn(dag, arg):
         sys.modules.pop("_daggerml_live", None)
 
 
-def test_contrib_script_011__funk_failure_reports_live_module_source_line(monkeypatch, tmp_path):
+def test_funk_failure_reports_live_module_source_line(monkeypatch, tmp_path):
     source = """
 def fn(dag, arg):
     raise ValueError("funk boom")

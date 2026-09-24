@@ -3,7 +3,7 @@ from daggerml._core.types import Runnable, Uri
 from daggerml.dashboard.serialization import bounded_json, project_runnable, redact
 
 
-def test_dash_safe_001__redaction_removes_secrets_environment_and_query_strings():
+def test_redaction_removes_secrets_environment_and_query_strings():
     value = {
         "authorization": "Bearer secret",
         "environment": {"TOKEN": "secret"},
@@ -19,7 +19,7 @@ def test_dash_safe_001__redaction_removes_secrets_environment_and_query_strings(
     }
 
 
-def test_dash_safe_002__bounded_json_limits_strings_collections_and_depth():
+def test_bounded_json_limits_strings_collections_and_depth():
     payload = bounded_json(
         {"long": "abcdefgh", "items": [1, 2, 3], "deep": {"a": {"b": 1}}},
         max_string=4,
@@ -31,11 +31,11 @@ def test_dash_safe_002__bounded_json_limits_strings_collections_and_depth():
     assert payload["_truncated"] == {"remaining": 1}
 
 
-def test_dash_safe_003__refs_use_stable_wire_format():
+def test_refs_use_stable_wire_format():
     assert bounded_json(Ref("commit:abc123")) == "commit:abc123"
 
 
-def test_dash_exec_001__runnable_projection_only_shows_pertinent_executor_fields():
+def test_runnable_projection_only_shows_pertinent_executor_fields():
     script = Runnable(
         target=Uri("script"),
         adapter="dml-local-adapter",
@@ -55,7 +55,7 @@ def test_dash_exec_001__runnable_projection_only_shows_pertinent_executor_fields
     assert projected["sub"]["details"] == {"fn_name": "train", "script_uri": "s3://bucket/code.py"}
 
 
-def test_dash_exec_002__lambda_batch_and_cfn_targets_are_recognized():
+def test_lambda_batch_and_cfn_targets_are_recognized():
     batch = project_runnable(
         {
             "target": "lambda:arn:aws:lambda:us-west-2:123:function:batch",
@@ -71,7 +71,7 @@ def test_dash_exec_002__lambda_batch_and_cfn_targets_are_recognized():
     assert cfn["kind"] == "cloudformation"
 
 
-def test_dash_exec_003__ssh_passes_nested_resume_state_to_batch():
+def test_ssh_passes_nested_resume_state_to_batch():
     projected = project_runnable(
         {
             "target": "ssh",

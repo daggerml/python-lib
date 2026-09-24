@@ -47,18 +47,18 @@ def reset_registry(monkeypatch):
     monkeypatch.setattr(reg, "_PLUGINS_LOADED", False)
 
 
-def test_contrib_ereg_001__registration_get_and_list_are_deterministic():
+def test_registration_get_and_list_are_deterministic():
     reg._EXECUTOR_SPECS[("local", "custom")] = ExecutorSpec("custom", "local")
     assert reg.get_executor("local", "custom").name == "custom"
     assert "custom" in reg.list_executors("local")
 
 
-def test_contrib_ereg_002__missing_executor_lookup_raises_repo_error():
+def test_missing_executor_lookup_raises_repo_error():
     with pytest.raises(DmlRepoError, match="is not registered"):
         reg.get_executor("local", "missing-start")
 
 
-def test_contrib_ereg_003__plugin_entries_load_declared_executor_specs(monkeypatch):
+def test_plugin_entries_load_declared_executor_specs(monkeypatch):
     monkeypatch.setattr(
         reg,
         "_entry_points",
@@ -72,7 +72,7 @@ def test_contrib_ereg_003__plugin_entries_load_declared_executor_specs(monkeypat
     assert reg.list_executors("lambda") == ["batch"]
 
 
-def test_contrib_ereg_004__builtin_executor_entry_points_remain_declared_in_pyproject():
+def test_builtin_executor_entry_points_remain_declared_in_pyproject():
     pyproject = (Path(__file__).resolve().parents[3] / "pyproject.toml").read_text()
     assert '[project.entry-points."daggerml.contrib.executors"]' in pyproject
     assert 'batch = "daggerml.contrib.executors:BatchExecutor"' in pyproject

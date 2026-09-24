@@ -3,7 +3,7 @@ from pathlib import Path
 from daggerml.dashboard.config import DashboardProjects
 
 
-def test_dash_project_001__registration_is_versioned_global_dashboard_config(tmp_path, monkeypatch):
+def test_registration_is_versioned_global_dashboard_config(tmp_path, monkeypatch):
     other = tmp_path / "other"
     other.mkdir()
     config_home = tmp_path / "config"
@@ -24,7 +24,7 @@ def test_dash_project_001__registration_is_versioned_global_dashboard_config(tmp
     assert registry.unregister(registered["id"]) is False
 
 
-def test_dash_project_002__default_project_is_inferred_from_config_directory(tmp_path):
+def test_default_project_is_inferred_from_config_directory(tmp_path):
     config_home = tmp_path / "config"
     project = tmp_path / "project"
     config_home.mkdir()
@@ -37,7 +37,7 @@ def test_dash_project_002__default_project_is_inferred_from_config_directory(tmp
     assert registry.list()["items"][0]["path"] == str(project.resolve())
 
 
-def test_dash_project_003__empty_config_does_not_treat_working_or_config_directory_as_a_project(tmp_path):
+def test_empty_config_does_not_treat_working_or_config_directory_as_a_project(tmp_path):
     config_home = tmp_path / "config"
 
     registry = DashboardProjects(config_home)

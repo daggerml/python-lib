@@ -2,7 +2,7 @@ import ast
 from pathlib import Path
 
 
-def test_dash_boundary_001__dashboard_avoids_core_submodules_and_private_dml_state():
+def test_dashboard_avoids_core_submodules_and_private_dml_state():
     dashboard = Path(__file__).parents[2] / "src" / "daggerml" / "dashboard"
     for path in dashboard.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))

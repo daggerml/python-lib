@@ -5,7 +5,7 @@ from daggerml.contrib.adapters import LambdaAdapter, LocalAdapter
 from daggerml.contrib.executors import BatchExecutor, DockerExecutor, ScriptExecutor, SshExecutor
 
 
-def test_contrib_status_001__executor_diagnostics_include_explicit_cleanup_requirement(monkeypatch):
+def test_executor_diagnostics_include_explicit_cleanup_requirement(monkeypatch):
     class IncompleteExecutor:
         resolve_runnable = staticmethod(lambda *args: None)
         start = staticmethod(lambda **kwargs: None)
@@ -42,7 +42,7 @@ def test_contrib_status_001__executor_diagnostics_include_explicit_cleanup_requi
     ]
 
 
-def test_contrib_status_002__builtins_report_new_operation_surface() -> None:
+def test_builtins_report_new_operation_surface() -> None:
     for adapter in (LocalAdapter, LambdaAdapter):
         registration = status_mod._registration("adapter", adapter.name, adapter)
         assert registration["effective"] is True

@@ -182,11 +182,12 @@ This section is for contributors maintaining or restructuring the test suite.
 
 #### Function naming and contract IDs
 
-- Prefer `test_<contract_id_slug>__<behavior>()` where practical.
-- Example: `test_exec_lc_003__resume_uses_launch_state()`.
-- Specify canonical contract IDs directly as literal strings.
+- Name test functions directly for the behavior they verify: `test_<behavior>()`.
+- Let the test module path own subsystem, surface, and contract-versus-integration context; do not repeat that context or numeric contract IDs in function names.
+- Group tests in a `Test<Subject>` class only when they share a public subject or fixture-backed scenario. Keep unrelated tests at module level.
+- Specify canonical contract IDs directly as literal strings where traceability is needed.
 - Use uppercase category prefixes and numeric suffixes such as `ADP-OUT-001`, `EXEC-LC-003`, and `EST-LOCK-004`.
-- For parameterized cases, include the canonical ID in `id=`, for example `id="EXEC-LC-003:resume-uses-launch-state"`.
+- For parameterized cases, retain the canonical ID in `id=`, for example `id="EXEC-LC-003:resume-uses-launch-state"`.
 
 #### Lifecycle parameterization
 

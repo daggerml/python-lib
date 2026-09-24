@@ -53,15 +53,15 @@ class FakeEntryPoint:
         return lambda: self.registrations or []
 
 
-def test_api_codec_001__mapping_like_values_convert_to_dict():
+def test_mapping_like_values_convert_to_dict():
     assert apply_codecs(UserDict({"items": CustomSequence((1, 2))}), dag=None) == {"items": [1, 2]}
 
 
-def test_api_codec_002__sequence_like_values_convert_to_list():
+def test_sequence_like_values_convert_to_list():
     assert apply_codecs(CustomSequence(("a", UserDict({"b": 2}))), dag=None) == ["a", {"b": 2}]
 
 
-def test_api_codec_003__string_and_bytes_values_are_not_sequence_encoded():
+def test_string_and_bytes_values_are_not_sequence_encoded():
     codec = MiscPyTypeCodec()
 
     assert not codec.can_encode("abc")
@@ -69,11 +69,11 @@ def test_api_codec_003__string_and_bytes_values_are_not_sequence_encoded():
     assert not codec.can_encode(bytearray(b"abc"))
 
 
-def test_api_codec_004__sets_are_not_list_like_values():
+def test_sets_are_not_list_like_values():
     assert not MiscPyTypeCodec().can_encode({1, 2})
 
 
-def test_api_codec_005__builtins_include_node_misc_and_projection_codecs():
+def test_builtins_include_node_misc_and_projection_codecs():
     registrations = api.codecs()
 
     assert [priority for priority, _codec in registrations] == [0, 0, 0]
@@ -82,7 +82,7 @@ def test_api_codec_005__builtins_include_node_misc_and_projection_codecs():
     assert any(isinstance(codec, api.ProjectionCodec) for _priority, codec in registrations)
 
 
-def test_api_codec_006__entry_points_load_once_and_sort_by_priority(monkeypatch):
+def test_entry_points_load_once_and_sort_by_priority(monkeypatch):
     low = MatchesTypeCodec(str, "low")
     first = MatchesTypeCodec(str, "first")
     second = MatchesTypeCodec(str, "second")
@@ -98,7 +98,7 @@ def test_api_codec_006__entry_points_load_once_and_sort_by_priority(monkeypatch)
     assert list(api.iter_codecs()) == [first, second, low]
 
 
-def test_api_codec_007__entry_point_failure_is_codec_error(monkeypatch):
+def test_entry_point_failure_is_codec_error(monkeypatch):
     monkeypatch.setattr(api, "_codecs", [])
     monkeypatch.setattr(api, "_plugins_loaded", False)
     monkeypatch.setattr(api, "_entry_points", lambda: [FakeEntryPoint("bad", "plugin:bad", error=RuntimeError("boom"))])
@@ -107,7 +107,7 @@ def test_api_codec_007__entry_point_failure_is_codec_error(monkeypatch):
         api.ensure_literal_codec_plugins_loaded()
 
 
-def test_api_codec_008__apply_codec_uses_first_matching_codec(dag, monkeypatch):
+def test_apply_codec_uses_first_matching_codec(dag, monkeypatch):
     no_match = MatchesTypeCodec(int, "wrong")
     match = MatchesTypeCodec(str, 42)
     monkeypatch.setattr(api, "_codecs", [(0, 1, no_match), (0, 2, match)])
@@ -118,7 +118,7 @@ def test_api_codec_008__apply_codec_uses_first_matching_codec(dag, monkeypatch):
         api.apply_codec(object(), dag=dag)
 
 
-def test_api_codec_009__apply_codec_error_semantics(dag, monkeypatch):
+def test_apply_codec_error_semantics(dag, monkeypatch):
     repo_error = DmlRepoError("repo failure")
     monkeypatch.setattr(api, "_codecs", [(0, 1, MatchesTypeCodec(str, error=repo_error))])
     monkeypatch.setattr(api, "_plugins_loaded", True)
@@ -132,7 +132,7 @@ def test_api_codec_009__apply_codec_error_semantics(dag, monkeypatch):
         api.apply_codec("raw", dag=dag)
 
 
-def test_api_codec_010__apply_codecs_normalizes_uri_and_runnable(dag):
+def test_apply_codecs_normalizes_uri_and_runnable(dag):
     runnable = Runnable(
         target=Uri(CustomSequence(("dml", "://", "target"))),
         adapter="local",
@@ -150,13 +150,13 @@ def test_api_codec_010__apply_codecs_normalizes_uri_and_runnable(dag):
         api.apply_codecs(err, dag=dag)
 
 
-def test_api_codec_011__node_codec_reuses_same_index_ref(dag, refs):
+def test_node_codec_reuses_same_index_ref(dag, refs):
     node = api.Node(dag, refs.scalar)
 
     assert api.NodeCodec().encode(node, dag) == refs.scalar
 
 
-def test_api_codec_012__node_codec_imports_committed_cross_dag_node(dag, fake_dml, refs):
+def test_node_codec_imports_committed_cross_dag_node(dag, fake_dml, refs):
     source = api.Dag(dml=fake_dml, ref=refs.dag2)
     node = api.Node(source, refs.scalar)
 
@@ -164,7 +164,7 @@ def test_api_codec_012__node_codec_imports_committed_cross_dag_node(dag, fake_dm
     fake_dml.runtime.put_import.assert_called_once_with(refs.index, refs.dag2, node=refs.scalar, name=None)
 
 
-def test_api_codec_013__node_codec_rejects_uncommitted_cross_index_node(dag, fake_dml, refs):
+def test_node_codec_rejects_uncommitted_cross_index_node(dag, fake_dml, refs):
     source = api.Dag(dml=fake_dml, token=refs.commit)
     node = api.Node(source, refs.scalar)
 
@@ -172,7 +172,7 @@ def test_api_codec_013__node_codec_rejects_uncommitted_cross_index_node(dag, fak
         api.NodeCodec().encode(node, dag)
 
 
-def test_api_codec_014__node_codec_wraps_import_failures(dag, fake_dml, refs):
+def test_node_codec_wraps_import_failures(dag, fake_dml, refs):
     source = api.Dag(dml=fake_dml, ref=refs.dag2)
     node = api.Node(source, refs.scalar)
     fake_dml.runtime.put_import.side_effect = RuntimeError("nope")
@@ -181,7 +181,7 @@ def test_api_codec_014__node_codec_wraps_import_failures(dag, fake_dml, refs):
         api.NodeCodec().encode(node, dag)
 
 
-def test_api_codec_015__projection_codec_imports_base_and_replays_path(dag, fake_dml, refs):
+def test_projection_codec_imports_base_and_replays_path(dag, fake_dml, refs):
     source = api.Dag(dml=fake_dml, ref=refs.dag2)
     base = api.DictNode(source, refs.dict, _info={"data_type": "dict", "length": 1, "keys": ["my_key"]})
     projection = api.Projection(dag=source, base=base, path=("my_key", 1, [0, 2]))
@@ -201,7 +201,7 @@ def test_api_codec_015__projection_codec_imports_base_and_replays_path(dag, fake
     ]
 
 
-def test_api_codec_016__projection_normalizes_directly_and_inside_collections(dag, refs):
+def test_projection_normalizes_directly_and_inside_collections(dag, refs):
     source = api.Dag(dml=dag.dml, ref=refs.dag2)
     base = api.DictNode(source, refs.dict, _info={"data_type": "dict", "length": 1, "keys": ["selected"]})
     projection = api.Projection(dag=source, base=base, path=("selected",))
@@ -216,7 +216,7 @@ def test_api_codec_016__projection_normalizes_directly_and_inside_collections(da
     ]
 
 
-def test_api_codec_017__put_names_final_projection_access_ref(dag, fake_dml, refs):
+def test_put_names_final_projection_access_ref(dag, fake_dml, refs):
     source = api.Dag(dml=fake_dml, ref=refs.dag2)
     base = api.DictNode(source, refs.dict, _info={"data_type": "dict", "length": 1, "keys": ["selected"]})
     projection = api.Projection(dag=source, base=base, path=("selected",))

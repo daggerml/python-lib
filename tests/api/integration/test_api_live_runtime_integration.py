@@ -32,7 +32,7 @@ def live_dml(tmp_path, monkeypatch):
     return Dml(str(tmp_path), remote_root="s3://bucket/root", user="tester")
 
 
-def test_api_live_001__new_put_commit_and_load_values(live_dml):
+def test_new_put_commit_and_load_values(live_dml):
     dag = api.new("values", message="store values", dml=live_dml)
     scalar = dag.put(42, name="answer")
     dag.put([1, scalar, 3], name="numbers")
@@ -45,7 +45,7 @@ def test_api_live_001__new_put_commit_and_load_values(live_dml):
     assert loaded.result.value() == {"answer": 42, "numbers": [1, 42, 3]}
 
 
-def test_api_live_002__named_result_lookup_differs_from_committed_result(live_dml):
+def test_named_result_lookup_differs_from_committed_result(live_dml):
     dag = api.new("result-semantics", dml=live_dml)
     dag.put("named result", name="result")
     final = dag.put("committed result")
@@ -56,7 +56,7 @@ def test_api_live_002__named_result_lookup_differs_from_committed_result(live_dm
     assert loaded.result.value() == "committed result"
 
 
-def test_api_live_003__require_imports_committed_source_node(live_dml):
+def test_require_imports_committed_source_node(live_dml):
     source = api.new("source", dml=live_dml)
     source.put({"a": 1, "b": [2, 3]}, name="data")
     source.commit(source["data"])
@@ -70,7 +70,7 @@ def test_api_live_003__require_imports_committed_source_node(live_dml):
     assert loaded.result.value() == {"a": 1, "b": [2, 3]}
 
 
-def test_api_live_004__collection_helpers_use_real_builtins(live_dml):
+def test_collection_helpers_use_real_builtins(live_dml):
     dag = api.new("collections", dml=live_dml)
     values = dag.put(["a", "b", "c"], name="values")
     mapping = dag.put({"x": 1}, name="mapping")
@@ -86,7 +86,7 @@ def test_api_live_004__collection_helpers_use_real_builtins(live_dml):
     assert mapping.assoc("y", 2, name="assoc").value() == {"x": 1, "y": 2}
 
 
-def test_api_live_005__scoped_default_drives_top_level_helpers(live_dml):
+def test_scoped_default_drives_top_level_helpers(live_dml):
     with api.use_default_dml(live_dml):
         dag = api.new("defaulted")
         answer = dag.put(42, name="answer")
@@ -96,7 +96,7 @@ def test_api_live_005__scoped_default_drives_top_level_helpers(live_dml):
     assert loaded["answer"].value() == 42
 
 
-def test_api_live_006__context_manager_commits_error_capture(live_dml):
+def test_context_manager_commits_error_capture(live_dml):
     dag = api.new("captured-error", dml=live_dml)
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -108,7 +108,7 @@ def test_api_live_006__context_manager_commits_error_capture(live_dml):
     assert isinstance(error_ref, Ref)
 
 
-def test_api_live_011__failed_dag_result_raises_persisted_error(live_dml):
+def test_failed_dag_result_raises_persisted_error(live_dml):
     dag = api.new("failed-result", dml=live_dml)
     dag.commit(api.Error("boom", origin="test", type="RuntimeError"))
 
@@ -121,7 +121,7 @@ def test_api_live_011__failed_dag_result_raises_persisted_error(live_dml):
     assert exc_info.value.type == "RuntimeError"
 
 
-def test_api_live_007__open_builtin_selection_context_skips_collection_builtins(live_dml):
+def test_open_builtin_selection_context_skips_collection_builtins(live_dml):
     dag = api.new("open-selection-context", dml=live_dml)
     answer = dag.put(42, name="answer")
     payload = dag.put({"answer": answer}, name="payload")
@@ -129,7 +129,7 @@ def test_api_live_007__open_builtin_selection_context_skips_collection_builtins(
     assert payload["answer"].context(root=False) is dag
 
 
-def test_api_live_008__committed_projection_value_and_context_follow_imported_structure(live_dml):
+def test_committed_projection_value_and_context_follow_imported_structure(live_dml):
     source = api.new("projection-source", dml=live_dml)
     answer = source.put(42, name="answer")
     payload = source.put({"answer": answer}, name="payload")
@@ -148,7 +148,7 @@ def test_api_live_008__committed_projection_value_and_context_follow_imported_st
     assert projection.context(root=True).ref == api.load("projection-source", dml=live_dml).ref
 
 
-def test_api_live_009__committed_projection_supports_nested_traversal(live_dml):
+def test_committed_projection_supports_nested_traversal(live_dml):
     dag = api.new("projection-nested", dml=live_dml)
     payload = dag.put({"outer": [{"inner": 7}]}, name="payload")
     dag.commit(payload)
@@ -158,7 +158,7 @@ def test_api_live_009__committed_projection_supports_nested_traversal(live_dml):
     assert loaded.result["outer"][0]["inner"].value() == 7
 
 
-def test_api_live_012__context_projection_materializes_as_import_and_access_nodes(live_dml):
+def test_context_projection_materializes_as_import_and_access_nodes(live_dml):
     source = api.new("projection-codec-source", dml=live_dml)
     root = source.put({"my_key": {"my_key1": 7}}, name="node_name")
     source.commit(root)
@@ -187,7 +187,7 @@ def test_api_live_012__context_projection_materializes_as_import_and_access_node
     assert target.selected.ref == selected.ref
 
 
-def test_api_live_010__frozen_dag_can_be_reconstructed_resumed_and_committed(live_dml):
+def test_frozen_dag_can_be_reconstructed_resumed_and_committed(live_dml):
     original = api.new("resumed", dml=live_dml, tags=["reviewed"])
     original.put({"status": "done"}, name="implementation")
     original.freeze("awaiting review")

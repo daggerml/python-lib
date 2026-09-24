@@ -23,7 +23,7 @@ def _identity(**changes):
     return DashboardCacheIdentity(**values)
 
 
-def test_dash_cache_001__identity_changes_and_strict_cache_hits(tmp_path):
+def test_identity_changes_and_strict_cache_hits(tmp_path):
     cache = DashboardResultCache(tmp_path)
     identity = _identity()
     result = {"kind": "vega-lite", "spec": {"mark": "point"}}
@@ -33,7 +33,7 @@ def test_dash_cache_001__identity_changes_and_strict_cache_hits(tmp_path):
     assert cache.get(_identity(cache_version="v2")) is None
 
 
-def test_dash_cache_002__malformed_expired_and_oversized_entries_are_removed(tmp_path):
+def test_malformed_expired_and_oversized_entries_are_removed(tmp_path):
     cache = DashboardResultCache(tmp_path, max_entry_bytes=180, max_age_seconds=1)
     malformed = tmp_path / "malformed.json"
     malformed.write_text("{", encoding="utf-8")
@@ -52,7 +52,7 @@ def test_dash_cache_002__malformed_expired_and_oversized_entries_are_removed(tmp
     assert not malformed.exists()
 
 
-def test_dash_cache_003__cleanup_evicts_least_recently_used(tmp_path):
+def test_cleanup_evicts_least_recently_used(tmp_path):
     cache = DashboardResultCache(tmp_path, max_bytes=450)
     first = _identity(dag_ref="dag:first")
     second = _identity(dag_ref="dag:second")
@@ -65,7 +65,7 @@ def test_dash_cache_003__cleanup_evicts_least_recently_used(tmp_path):
     assert cache.get(second) is not None
 
 
-def test_dash_cache_004__compatibility_metadata_is_ordered_and_selects_first_eager():
+def test_compatibility_metadata_is_ordered_and_selects_first_eager():
     def render(_dag):
         return VegaLiteDashboardResult({"mark": "point"})
 

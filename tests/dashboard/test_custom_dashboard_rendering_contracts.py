@@ -31,7 +31,7 @@ def _registered(name, render, *, tags=frozenset(), eager=False, version="v1"):
     )
 
 
-def test_dash_render_001__typed_results_are_cached_and_refresh_bypasses(tmp_path):
+def test_typed_results_are_cached_and_refresh_bypasses(tmp_path):
     calls = []
 
     def render(dag):
@@ -64,7 +64,7 @@ def test_dash_render_001__typed_results_are_cached_and_refresh_bypasses(tmp_path
         (VegaLiteDashboardResult({"value": float("nan")}), "invalid-dashboard-result"),
     ],
 )
-def test_dash_render_002__invalid_results_are_safe_and_uncached(tmp_path, result, code):
+def test_invalid_results_are_safe_and_uncached(tmp_path, result, code):
     service = CustomDashboardService([_registered("invalid", lambda _dag: result)], [], DashboardResultCache(tmp_path))
     try:
         with pytest.raises(CustomDashboardError) as raised:
@@ -75,7 +75,7 @@ def test_dash_render_002__invalid_results_are_safe_and_uncached(tmp_path, result
     assert not list(tmp_path.glob("*.json"))
 
 
-def test_dash_render_003__oversized_and_raised_results_do_not_replace_cache(tmp_path):
+def test_oversized_and_raised_results_do_not_replace_cache(tmp_path):
     current = {"fail": False}
 
     def render(_dag):
@@ -99,7 +99,7 @@ def test_dash_render_003__oversized_and_raised_results_do_not_replace_cache(tmp_
     assert "private" not in str(raised.value)
 
 
-def test_dash_render_004__concurrency_is_two_and_duplicate_identity_shares_work(tmp_path):
+def test_concurrency_is_two_and_duplicate_identity_shares_work(tmp_path):
     state = {"active": 0, "maximum": 0, "calls": 0}
     lock = threading.Lock()
 
@@ -132,7 +132,7 @@ def test_dash_render_004__concurrency_is_two_and_duplicate_identity_shares_work(
     assert state == {"active": 0, "maximum": 2, "calls": 3}
 
 
-def test_dash_render_005__unknown_and_incompatible_names_are_never_invoked(tmp_path):
+def test_unknown_and_incompatible_names_are_never_invoked(tmp_path):
     service = CustomDashboardService(
         [_registered("metrics", lambda _dag: VegaLiteDashboardResult({}), tags={"metrics.v1"})],
         [],

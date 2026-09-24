@@ -20,13 +20,13 @@ def _imported_module(node: ast.ImportFrom, importer: str, *, is_package: bool) -
     return resolve_name(f"{'.' * node.level}{node.module or ''}", package)
 
 
-def test_core_boundary_001__adapter_response_validator_is_exported():
+def test_adapter_response_validator_is_exported():
     response = {"status": "success", "error": None}
 
     assert validate_adapter_response(response) == response
 
 
-def test_core_boundary_002__non_core_modules_import_only_the_core_facade():
+def test_non_core_modules_import_only_the_core_facade():
     violations = []
     for path in sorted(SOURCE_ROOT.rglob("*.py")):
         importer = _module_name(path)

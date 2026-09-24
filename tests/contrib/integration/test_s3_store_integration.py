@@ -9,7 +9,7 @@ from daggerml.api import DmlRepoError
 from daggerml.contrib.s3 import S3Store
 
 
-def test_contrib_int_003__moto_backed_s3store_roundtrip_succeeds(remote_env, s3_bucket):
+def test_moto_backed_s3store_roundtrip_succeeds(remote_env, s3_bucket):
     store = S3Store()
     uri = store.put(data=b"abc", suffix=".txt")
     assert store.get(uri) == b"abc"
@@ -17,7 +17,7 @@ def test_contrib_int_003__moto_backed_s3store_roundtrip_succeeds(remote_env, s3_
     assert store.get_js(js) == {"a": 1}
 
 
-def test_contrib_int_004__tar_safety_rejects_traversal_and_accepts_safe_archives(remote_env, s3_bucket, tmp_path):
+def test_tar_safety_rejects_traversal_and_accepts_safe_archives(remote_env, s3_bucket, tmp_path):
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tf:
         payload = b"owned"

@@ -11,7 +11,7 @@ def _runnable() -> Runnable:
     return Runnable(target=Uri("script"), kwargs={"image": Uri("s3://bucket/image.tar")}, adapter="dml-local-adapter")
 
 
-def test_contrib_adapter_001__cli_passes_plain_payload_and_returns_raw_result(tmp_path):
+def test_cli_passes_plain_payload_and_returns_raw_result(tmp_path):
     calls = []
 
     class RecordingAdapter(AdapterBase):
@@ -42,7 +42,7 @@ def test_contrib_adapter_001__cli_passes_plain_payload_and_returns_raw_result(tm
     }
 
 
-def test_contrib_adapter_002__cli_polling_reuses_persisted_state_between_polls(tmp_path, monkeypatch):
+def test_cli_polling_reuses_persisted_state_between_polls(tmp_path, monkeypatch):
     calls = []
     inspected = {}
 
@@ -94,7 +94,7 @@ def test_contrib_adapter_002__cli_polling_reuses_persisted_state_between_polls(t
     assert calls[3]["adapter_state"] == {"cleanup": 1}
 
 
-def test_contrib_adapter_003__cli_supports_s3_input_and_output(monkeypatch):
+def test_cli_supports_s3_input_and_output(monkeypatch):
     calls = []
     writes = {}
 
@@ -136,7 +136,7 @@ def test_contrib_adapter_003__cli_supports_s3_input_and_output(monkeypatch):
     }
 
 
-def test_contrib_adapter_004__lambda_throttling_returns_resumable_retry(monkeypatch):
+def test_lambda_throttling_returns_resumable_retry(monkeypatch):
     class Throttled(Exception):
         response = {
             "Error": {"Code": "TooManyRequestsException"},

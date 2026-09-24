@@ -23,7 +23,7 @@ class _Model:
         return {"initialized": False, "diagnostic": "empty"}
 
 
-def test_dash_http_001__overview_requires_registered_project_and_revision_scope(tmp_path):
+def test_overview_requires_registered_project_and_revision_scope(tmp_path):
     app = create_app(tmp_path)
     app.state.read_model = _Model()
 
@@ -34,7 +34,7 @@ def test_dash_http_001__overview_requires_registered_project_and_revision_scope(
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_dash_http_002__projects_can_be_registered_without_mutating_the_project(tmp_path, monkeypatch):
+def test_projects_can_be_registered_without_mutating_the_project(tmp_path, monkeypatch):
     app = create_app(tmp_path)
     config_dir = tmp_path / "dashboard-config"
     monkeypatch.setattr(type(app.state.projects), "directory", property(lambda _self: config_dir))
@@ -53,7 +53,7 @@ def test_dash_http_002__projects_can_be_registered_without_mutating_the_project(
     assert client.get("/api/v1/projects", headers={"host": "127.0.0.1:8765"}).json()["items"]
 
 
-def test_dash_http_003__overview_degrades_when_runtime_execution_state_is_unavailable(tmp_path):
+def test_overview_degrades_when_runtime_execution_state_is_unavailable(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -81,7 +81,7 @@ def test_dash_http_003__overview_degrades_when_runtime_execution_state_is_unavai
     assert "project_uri" not in model.overview()
 
 
-def test_dash_sec_001__host_and_origin_checks_prevent_rebinding_and_csrf(tmp_path):
+def test_host_and_origin_checks_prevent_rebinding_and_csrf(tmp_path):
     client = TestClient(create_app(tmp_path))
 
     assert client.get("/api/v1/health", headers={"host": "evil.example"}).status_code == 403
@@ -94,7 +94,7 @@ def test_dash_sec_001__host_and_origin_checks_prevent_rebinding_and_csrf(tmp_pat
     )
 
 
-def test_dash_sec_002__configured_bearer_token_protects_api(tmp_path):
+def test_configured_bearer_token_protects_api(tmp_path):
     client = TestClient(create_app(tmp_path, auth_token="token"))
 
     assert client.get("/api/v1/health").status_code == 401
@@ -105,7 +105,7 @@ def test_dash_sec_002__configured_bearer_token_protects_api(tmp_path):
     assert client.get("/api/v1/not-found/events?token=token").status_code == 404
 
 
-def test_dash_docs_001__docs_static_files_are_contained_and_do_not_fall_back_to_spa(tmp_path, monkeypatch):
+def test_docs_static_files_are_contained_and_do_not_fall_back_to_spa(tmp_path, monkeypatch):
     app, static = _static_app(tmp_path, monkeypatch)
     docs = static / "docs"
     (docs / "fragments" / "start-here").mkdir(parents=True)
@@ -121,7 +121,7 @@ def test_dash_docs_001__docs_static_files_are_contained_and_do_not_fall_back_to_
     assert client.get("/docs/static/%2e%2e/index.html", headers={"host": "127.0.0.1:8765"}).status_code == 404
 
 
-def test_dash_docs_002__swagger_is_under_api_and_retains_bearer_protection(tmp_path, monkeypatch):
+def test_swagger_is_under_api_and_retains_bearer_protection(tmp_path, monkeypatch):
     app, _static = _static_app(tmp_path, monkeypatch)
     client = TestClient(app)
     assert client.get("/api/docs", headers={"host": "127.0.0.1:8765"}).status_code == 200
@@ -132,7 +132,7 @@ def test_dash_docs_002__swagger_is_under_api_and_retains_bearer_protection(tmp_p
     assert protected.get("/api/docs", headers={"authorization": "Bearer token"}).status_code == 200
 
 
-def test_dash_cancel_003__cancel_requires_json_content_type(tmp_path):
+def test_cancel_requires_json_content_type(tmp_path):
     client = TestClient(create_app(tmp_path))
 
     response = client.post(
@@ -145,7 +145,7 @@ def test_dash_cancel_003__cancel_requires_json_content_type(tmp_path):
     assert response.json()["error"]["code"] == "invalid-content-type"
 
 
-def test_dash_http_004__function_dag_script_route_uses_the_persisted_context(tmp_path):
+def test_function_dag_script_route_uses_the_persisted_context(tmp_path):
     app = create_app(tmp_path)
 
     class Model:
@@ -168,7 +168,7 @@ def test_dash_http_004__function_dag_script_route_uses_the_persisted_context(tmp
     assert response.json()["source"].startswith("def train")
 
 
-def test_dash_http_005__function_dag_log_route_uses_the_persisted_context(tmp_path):
+def test_function_dag_log_route_uses_the_persisted_context(tmp_path):
     app = create_app(tmp_path)
 
     class Model:
@@ -189,7 +189,7 @@ def test_dash_http_005__function_dag_log_route_uses_the_persisted_context(tmp_pa
     assert response.json()["events"] == [{"message": "done"}]
 
 
-def test_dash_http_005a__node_value_script_route_preserves_project_and_revision_scope(tmp_path):
+def test_node_value_script_route_preserves_project_and_revision_scope(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     (project / ".dml").mkdir()
@@ -214,7 +214,7 @@ def test_dash_http_005a__node_value_script_route_preserves_project_and_revision_
     assert response.json() == {"source": "return 1", "truncated": False}
 
 
-def test_dash_sec_003__status_uses_only_registered_paths_and_returns_safe_diagnostics(tmp_path):
+def test_status_uses_only_registered_paths_and_returns_safe_diagnostics(tmp_path):
     app = create_app(tmp_path)
 
     class Status:

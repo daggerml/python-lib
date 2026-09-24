@@ -7,7 +7,7 @@ from daggerml._core.types import Runnable, Uri
 from daggerml.dashboard.read_model import DashboardReadModel, ScriptReadError
 
 
-def test_dash_remote_001__dashboard_accepts_the_current_remote_descriptor(tmp_path):
+def test_dashboard_accepts_the_current_remote_descriptor(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     descriptor = {
@@ -40,7 +40,7 @@ def test_dash_remote_001__dashboard_accepts_the_current_remote_descriptor(tmp_pa
     assert model._remote_descriptor_verified is True
 
 
-def test_dash_fndag_001__fndag_preserves_dml_execution_runtime_argv_and_output_boundaries(tmp_path):
+def test_fndag_preserves_dml_execution_runtime_argv_and_output_boundaries(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -73,7 +73,7 @@ def test_dash_fndag_001__fndag_preserves_dml_execution_runtime_argv_and_output_b
     assert result["timing"]["duration_seconds"] == 5
 
 
-def test_dash_fndag_002__fndag_accepts_runtime_refs_from_the_runs_list(tmp_path):
+def test_fndag_accepts_runtime_refs_from_the_runs_list(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -104,7 +104,7 @@ def test_dash_fndag_002__fndag_accepts_runtime_refs_from_the_runs_list(tmp_path)
     assert result["script"]["href"] == "/api/v1/executions/run/script"
 
 
-def test_dash_fndag_003__completed_function_execution_resolves_its_cached_dag(tmp_path):
+def test_completed_function_execution_resolves_its_cached_dag(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -140,7 +140,7 @@ def test_dash_fndag_003__completed_function_execution_resolves_its_cached_dag(tm
     assert result["output"] == {"ref": "dag:result", "href": "/api/v1/dags/dag:result"}
 
 
-def test_dash_fndag_004__fn_node_and_context_dag_expose_navigation_and_runnable_resources(tmp_path):
+def test_fn_node_and_context_dag_expose_navigation_and_runnable_resources(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     fn = Ref("node-fn:call")
@@ -192,7 +192,7 @@ def test_dash_fndag_004__fn_node_and_context_dag_expose_navigation_and_runnable_
     assert dag["function"]["runnable"]["script"]["href"] == f"/api/v1/function-dags/{context.to}/script"
 
 
-def test_dash_fndag_005__function_context_uses_only_argv_zero_as_the_applied_runnable(tmp_path):
+def test_function_context_uses_only_argv_zero_as_the_applied_runnable(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     context = Ref("dag:context")
@@ -226,7 +226,7 @@ def test_dash_fndag_005__function_context_uses_only_argv_zero_as_the_applied_run
     assert function["runnable"]["script"]["state"] == "available"
 
 
-def test_dash_fndag_005a__runnable_value_and_prepopulation_are_explicit_and_bounded(tmp_path):
+def test_runnable_value_and_prepopulation_are_explicit_and_bounded(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     node_ref = Ref("node-literal:runnable")
@@ -266,7 +266,7 @@ def test_dash_fndag_005a__runnable_value_and_prepopulation_are_explicit_and_boun
     assert "do-not-serialize" not in str(payload["value_runnable"])
 
 
-def test_dash_fndag_005b__script_failures_have_stable_cause_specific_codes(tmp_path):
+def test_script_failures_have_stable_cause_specific_codes(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -312,7 +312,7 @@ def test_dash_fndag_005b__script_failures_have_stable_cause_specific_codes(tmp_p
     assert forbidden.value.code == "script-outside-remote-root"
 
 
-def test_dash_fndag_006__completed_function_dag_reads_logs_by_persisted_cache_key(tmp_path):
+def test_completed_function_dag_reads_logs_by_persisted_cache_key(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     context = Ref("dag:context")
@@ -344,7 +344,7 @@ def test_dash_fndag_006__completed_function_dag_reads_logs_by_persisted_cache_ke
     assert result["events"] == [{"timestamp": 1, "message": "completed"}]
 
 
-def test_dash_dag_006__dag_collection_includes_accurate_counts_and_terminal_status(tmp_path):
+def test_dag_collection_includes_accurate_counts_and_terminal_status(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     ready = Ref("dag:ready")

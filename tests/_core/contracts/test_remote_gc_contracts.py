@@ -15,7 +15,7 @@ def make_db(path) -> DmlDB:
     return db
 
 
-def test_remote_gc_001__reachable_objects_include_nested_objects_for_liveness(tmp_path) -> None:
+def test_reachable_objects_include_nested_objects_for_liveness(tmp_path) -> None:
     db = make_db(tmp_path / "db")
     with db.tx() as txn:
         scalar = txn.put(ScalarDatum("done"))

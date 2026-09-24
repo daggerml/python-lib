@@ -3,12 +3,12 @@ import pytest
 from daggerml.dashboard.logs import read_cloudwatch_log
 
 
-def test_dash_log_001__cloudwatch_rejects_noncanonical_streams():
+def test_cloudwatch_rejects_noncanonical_streams():
     with pytest.raises(ValueError, match="stdout or stderr"):
         read_cloudwatch_log(object(), "cache", "local")
 
 
-def test_dash_log_003__cloudwatch_uses_canonical_stream_and_hides_response_metadata():
+def test_cloudwatch_uses_canonical_stream_and_hides_response_metadata():
     class Client:
         def get_log_events(self, **kwargs):
             assert kwargs["logGroupName"] == "dml"

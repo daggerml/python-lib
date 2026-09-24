@@ -39,7 +39,7 @@ class ReadBeforeAssignmentCalculation:
         return output
 
 
-def test_contrib_int_005__decorated_local_funk_runs_through_full_pipeline(tmp_path, monkeypatch, remote_env, s3_bucket):
+def test_decorated_local_funk_runs_through_full_pipeline(tmp_path, monkeypatch, remote_env, s3_bucket):
     del remote_env, s3_bucket
     monkeypatch.setenv("DML_DEFAULT_DB_MAP_SIZE_MAX", str(64 * 1024 * 1024))
     monkeypatch.setattr(
@@ -83,7 +83,7 @@ def test_contrib_int_005__decorated_local_funk_runs_through_full_pipeline(tmp_pa
     assert reused_loaded.result.value() == 100
 
 
-def test_contrib_int_006__dagclass_method_uses_its_namespace_in_caller_dag(
+def test_dagclass_method_uses_its_namespace_in_caller_dag(
     tmp_path, monkeypatch, remote_env, s3_bucket
 ):
     del remote_env, s3_bucket
@@ -112,7 +112,7 @@ def test_contrib_int_006__dagclass_method_uses_its_namespace_in_caller_dag(
     assert isolated_result.value() == 8
 
 
-def test_contrib_int_007__run_executes_compiled_dagclass_entrypoint(
+def test_run_executes_compiled_dagclass_entrypoint(
     tmp_path, monkeypatch, remote_env, s3_bucket
 ):
     del remote_env, s3_bucket
@@ -130,7 +130,7 @@ def test_contrib_int_007__run_executes_compiled_dagclass_entrypoint(
     assert api.load("dagclass-api-run", dml=runtime).result.value() == 8
 
 
-def test_contrib_int_008__dagclass_attributes_follow_worker_dag_semantics(
+def test_dagclass_attributes_follow_worker_dag_semantics(
     tmp_path, monkeypatch, remote_env, s3_bucket
 ):
     del remote_env, s3_bucket

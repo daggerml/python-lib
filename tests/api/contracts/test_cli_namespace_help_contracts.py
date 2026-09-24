@@ -8,7 +8,7 @@ from daggerml._cli import MethodCLI
 from daggerml._core import Dml, Ref
 
 
-def test_cli_namespace_help_001__uses_property_annotation_and_docstring() -> None:
+def test_uses_property_annotation_and_docstring() -> None:
     cli = MethodCLI(Dml, prog="dml")
 
     root_help = cli.parser.format_help()
@@ -20,7 +20,7 @@ def test_cli_namespace_help_001__uses_property_annotation_and_docstring() -> Non
     assert "Expose committed DAG inspection commands." in dag_help
 
 
-def test_cli_namespace_help_002__root_help_lists_commands_before_namespaces() -> None:
+def test_root_help_lists_commands_before_namespaces() -> None:
     cli = MethodCLI(Dml, prog="dml")
 
     root_help = cli.parser.format_help()
@@ -32,7 +32,7 @@ def test_cli_namespace_help_002__root_help_lists_commands_before_namespaces() ->
     assert root_help.index("commands:") < root_help.index("namespaces:")
 
 
-def test_cli_namespace_help_003__skills_help_lists_commands_before_namespaces() -> None:
+def test_skills_help_lists_commands_before_namespaces() -> None:
     cli = MethodCLI(Dml, prog="dml")
 
     subparsers = next(action for action in cli.parser._actions if isinstance(action, argparse._SubParsersAction))

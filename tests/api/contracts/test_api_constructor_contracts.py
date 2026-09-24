@@ -27,7 +27,7 @@ def _config(*, project_home: str = "/tmp/project", remote_root: str | None = "s3
     )
 
 
-def test_api_ctor_001__dml_constructor_and_init_expose_full_config_surface() -> None:
+def test_dml_constructor_and_init_expose_full_config_surface() -> None:
     constructor_params = list(inspect.signature(Dml.__init__).parameters)
     init_params = list(inspect.signature(Dml.init).parameters)
     clone_params = list(inspect.signature(Dml.clone).parameters)
@@ -84,7 +84,7 @@ def test_api_ctor_001__dml_constructor_and_init_expose_full_config_surface() -> 
     ]
 
 
-def test_api_ctor_002__constructor_maps_python_kwargs_to_canonical_config_vars() -> None:
+def test_constructor_maps_python_kwargs_to_canonical_config_vars() -> None:
     resolved = _config()
 
     with (
@@ -118,7 +118,7 @@ def test_api_ctor_002__constructor_maps_python_kwargs_to_canonical_config_vars()
     }
 
 
-def test_api_ctor_003__from_config_vars_passes_flattened_keys_directly_to_shared_resolution() -> None:
+def test_from_config_vars_passes_flattened_keys_directly_to_shared_resolution() -> None:
     resolved = _config(project_home="/tmp/from-config")
     config_vars = {
         "project_home": "/tmp/from-config",
@@ -137,7 +137,7 @@ def test_api_ctor_003__from_config_vars_passes_flattened_keys_directly_to_shared
     assert resolve.call_args.kwargs["explicit"] == config_vars
 
 
-def test_api_ctor_004__init_reuses_shared_config_surface_and_returns_runtime() -> None:
+def test_init_reuses_shared_config_surface_and_returns_runtime() -> None:
     bootstrap = _config(project_home="/tmp/bootstrap", remote_root="s3://bucket/bootstrap")
     runtime = SimpleNamespace(_config=_config(project_home="/tmp/bootstrap", user="worker"), _db=MagicMock())
     head = MagicMock()

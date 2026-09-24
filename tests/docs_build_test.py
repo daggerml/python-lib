@@ -92,7 +92,7 @@ def test_standalone_site_shares_dashboard_assets_and_has_static_deep_links(tmp_p
     assert {"id": "Dag", "level": 2, "text": "Dag"} in api_page["headings"]
 
 
-def test_docs_build_015__source_aware_lessons_execute_inline(tmp_path):
+def test_source_aware_lessons_execute_inline(tmp_path):
     work = tmp_path / "source"
     build.validate()
     build.prepare(work)
@@ -118,7 +118,7 @@ def test_docs_build_015__source_aware_lessons_execute_inline(tmp_path):
     assert not (ROOT / "docs/examples/start-here/dagclasses.py").exists()
 
 
-def test_docs_build_009__single_project_pages_export_frontmatter_project_home(tmp_path):
+def test_single_project_pages_export_frontmatter_project_home(tmp_path):
     work = tmp_path / "source"
     build.validate()
     build.prepare(work)
@@ -178,7 +178,7 @@ def test_docs_build_009__single_project_pages_export_frontmatter_project_home(tm
     assert "knitr::opts_knit$set(root.dir = page_workdir)" in dags
 
 
-def test_docs_build_014__use_pages_allow_executable_cells(tmp_path):
+def test_use_pages_allow_executable_cells(tmp_path):
     concepts = tmp_path / "use"
     concepts.mkdir()
     (concepts / "bad.qmd").write_text(
@@ -188,7 +188,7 @@ def test_docs_build_014__use_pages_allow_executable_cells(tmp_path):
     build.validate(tmp_path)
 
 
-def test_docs_build_017__canonical_course_sources_define_inventory_and_prerequisites():
+def test_canonical_course_sources_define_inventory_and_prerequisites():
     courses = {
         "use": {
             "projects": ("start-here/dagclasses", "research-demo"),
@@ -215,7 +215,7 @@ def test_docs_build_017__canonical_course_sources_define_inventory_and_prerequis
             assert build.dml_project_home(page, text) == project_home
 
 
-def test_docs_build_018__canonical_pages_keep_projection_and_delayed_action_ownership():
+def test_canonical_pages_keep_projection_and_delayed_action_ownership():
     inspection = (ROOT / "docs/use/inspection.qmd").read_text(encoding="utf-8")
     artifacts = (ROOT / "docs/use/artifacts.qmd").read_text(encoding="utf-8")
     codecs = (ROOT / "docs/extend/codecs.qmd").read_text(encoding="utf-8")
@@ -232,7 +232,7 @@ def test_docs_build_018__canonical_pages_keep_projection_and_delayed_action_owne
 
 
 @pytest.mark.parametrize("language", ["bash", "r"])
-def test_docs_build_016__jupyter_pages_reject_non_python_executable_cells(tmp_path, language):
+def test_jupyter_pages_reject_non_python_executable_cells(tmp_path, language):
     (tmp_path / "bad.qmd").write_text(
         f"---\ntitle: Bad Jupyter page\nengine: jupyter\njupyter: python3\n---\n\n"
         f"```{{{language}}}\ntrue\n```\n",
@@ -243,7 +243,7 @@ def test_docs_build_016__jupyter_pages_reject_non_python_executable_cells(tmp_pa
 
 
 @pytest.mark.parametrize("project_home", ["", "/absolute", "../outside", "nested/../../outside", "windows\\path"])
-def test_docs_build_010__project_home_must_stay_inside_page_fixture(tmp_path, project_home):
+def test_project_home_must_stay_inside_page_fixture(tmp_path, project_home):
     page = tmp_path / "bad.qmd"
     page.write_text(
         f"---\ntitle: Bad\nengine: knitr\ndml-project-home: '{project_home}'\n---\n",
@@ -253,7 +253,7 @@ def test_docs_build_010__project_home_must_stay_inside_page_fixture(tmp_path, pr
         build.validate(tmp_path)
 
 
-def test_docs_build_011__dependency_graph_is_stable_and_topological(tmp_path):
+def test_dependency_graph_is_stable_and_topological(tmp_path):
     for name, dependencies in {
         "alpha": ["zulu"],
         "middle": [],
@@ -278,7 +278,7 @@ def test_docs_build_011__dependency_graph_is_stable_and_topological(tmp_path):
         ("depends-on: base.qmd", "canonical page IDs"),
     ],
 )
-def test_docs_build_012__dependency_graph_rejects_invalid_edges(tmp_path, frontmatter, message):
+def test_dependency_graph_rejects_invalid_edges(tmp_path, frontmatter, message):
     (tmp_path / "base.qmd").write_text("---\ntitle: Base\nengine: knitr\n---\n", encoding="utf-8")
     (tmp_path / "page.qmd").write_text(
         f"---\ntitle: Page\nengine: knitr\n{frontmatter}\n---\n", encoding="utf-8"
@@ -287,7 +287,7 @@ def test_docs_build_012__dependency_graph_rejects_invalid_edges(tmp_path, frontm
         build.validate(tmp_path)
 
 
-def test_docs_build_013__dependency_graph_rejects_cycles(tmp_path):
+def test_dependency_graph_rejects_cycles(tmp_path):
     (tmp_path / "alpha.qmd").write_text(
         "---\ntitle: Alpha\nengine: knitr\ndepends-on: beta\n---\n", encoding="utf-8"
     )
@@ -298,7 +298,7 @@ def test_docs_build_013__dependency_graph_rejects_cycles(tmp_path):
         build.validate(tmp_path)
 
 
-def test_docs_build_004__tooling_stays_out_of_published_dependencies():
+def test_tooling_stays_out_of_published_dependencies():
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = metadata["project"]["dependencies"]
     optional = metadata["project"]["optional-dependencies"]
@@ -312,7 +312,7 @@ def test_docs_build_004__tooling_stays_out_of_published_dependencies():
     )
 
 
-def test_docs_build__released_package_install_is_not_executed():
+def test_released_package_install_is_not_executed():
     page = (ROOT / "docs/start-here/get-started.qmd").read_text(encoding="utf-8")
 
     assert "```bash\npip install daggerml\n```" in page
@@ -341,7 +341,7 @@ def test_docs_build__released_package_install_is_not_executed():
         ("<!-- docs:pseudocode: one only -->\n```text\nfirst\n```\n\n```python\nsecond\n```", "static 'python' fence"),
     ],
 )
-def test_docs_build_002__validation_rejects_execution_bypasses(tmp_path, content, message):
+def test_validation_rejects_execution_bypasses(tmp_path, content, message):
     page = tmp_path / "bad.qmd"
     page.write_text(content, encoding="utf-8")
     original = build.qmd_files
@@ -355,13 +355,13 @@ def test_docs_build_002__validation_rejects_execution_bypasses(tmp_path, content
 
 @pytest.mark.parametrize("filename", ["_quarto.yml", "_quarto-ci.yml", "_metadata.yml"])
 @pytest.mark.parametrize("setting", ["freeze: auto", "eval: false", "error: true", "cache: true"])
-def test_docs_build_policy__project_and_directory_overrides_fail(tmp_path, filename, setting):
+def test_project_and_directory_overrides_fail(tmp_path, filename, setting):
     (tmp_path / filename).write_text(f"execute:\n  {setting}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="execution policy"):
         build.validate(tmp_path)
 
 
-def test_docs_build_policy__only_authored_executable_options_are_validated(tmp_path):
+def test_only_authored_executable_options_are_validated(tmp_path):
     (tmp_path / "valid.qmd").write_text(
         "<!-- docs:pseudocode: deliberately disabled configuration -->\n"
         "```yaml\neval: false\n```\n"
@@ -372,7 +372,7 @@ def test_docs_build_policy__only_authored_executable_options_are_validated(tmp_p
     build.validate(tmp_path)
 
 
-def test_docs_build_003__staging_creates_script_free_fragments_and_manifest(tmp_path):
+def test_staging_creates_script_free_fragments_and_manifest(tmp_path):
     render = tmp_path / "render/start-here/dags"
     render.mkdir(parents=True)
     (render / "index.html").write_text(
@@ -427,7 +427,7 @@ def _wheel_metadata(wheel):
 
 
 @pytest.mark.slow
-def test_docs_build_008__wheels_package_and_serve_completed_docs_without_build_tools(tmp_path):
+def test_wheels_package_and_serve_completed_docs_without_build_tools(tmp_path):
     source = tmp_path / "source"
     shutil.copytree(
         ROOT,

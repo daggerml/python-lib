@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_contrib_docs_003__tutorial_dockerfile_installs_a_minimal_runtime():
+def test_tutorial_dockerfile_installs_a_minimal_runtime():
     repo_root = Path(__file__).resolve().parents[3]
     dockerfile = (repo_root / "docs/Dockerfile").read_text()
     builder, runtime = dockerfile.split("FROM python:3.13-alpine AS runtime")

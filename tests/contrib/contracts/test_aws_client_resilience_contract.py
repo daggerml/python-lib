@@ -10,7 +10,7 @@ from daggerml.contrib.executors.batch import BatchExecutor
 from daggerml.util import get_client
 
 
-def test_contrib_aws_client_001__get_client_uses_default_resilience_policy(monkeypatch):
+def test_get_client_uses_default_resilience_policy(monkeypatch):
     captured = {}
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setattr(
@@ -29,7 +29,7 @@ def test_contrib_aws_client_001__get_client_uses_default_resilience_policy(monke
     assert captured["kwargs"] == {}
 
 
-def test_contrib_aws_client_002__get_client_passes_resilience_overrides(monkeypatch):
+def test_get_client_passes_resilience_overrides(monkeypatch):
     captured = {}
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setattr(
@@ -54,7 +54,7 @@ def test_contrib_aws_client_002__get_client_passes_resilience_overrides(monkeypa
     assert captured["kwargs"] == {}
 
 
-def test_contrib_aws_client_003__batch_launch_and_poll_use_high_resilience_clients(monkeypatch):
+def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch):
     clients = []
     writes = []
 
@@ -130,7 +130,7 @@ def test_contrib_aws_client_003__batch_launch_and_poll_use_high_resilience_clien
     ]
 
 
-def test_contrib_batch_cleanup_004__active_retry_then_terminal_cleanup_is_repeatable(monkeypatch):
+def test_active_retry_then_terminal_cleanup_is_repeatable(monkeypatch):
     jobs = iter(([{"status": "RUNNING"}], [{"status": "SUCCEEDED"}], []))
     deregistered = []
 

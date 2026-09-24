@@ -110,7 +110,7 @@ def _object_version_count(s3_client, key: str) -> int:
 
 
 @pytest.mark.slow
-def test_contrib_int_008__tagged_funk_results_survive_cache_reuse(tmp_path, monkeypatch, remote_env, s3_bucket):
+def test_tagged_funk_results_survive_cache_reuse(tmp_path, monkeypatch, remote_env, s3_bucket):
     del remote_env, s3_bucket
     home = tmp_path / "tagged-funk"
     home.mkdir()
@@ -127,7 +127,7 @@ def test_contrib_int_008__tagged_funk_results_survive_cache_reuse(tmp_path, monk
 
 
 @pytest.mark.slow
-def test_contrib_int_009__concurrent_equivalent_funks_share_one_execution_and_body(
+def test_concurrent_equivalent_funks_share_one_execution_and_body(
     tmp_path, monkeypatch, remote_env, s3_bucket, s3_client
 ):
     """Twelve simultaneous calls to one real funk converge on one execution.
@@ -183,7 +183,7 @@ def _spawned_execution(dml, caller_index):
 
 @pytest.mark.slow
 @pytest.mark.flaky(reruns=2)
-def test_contrib_int_010__canceling_one_dag_preserves_shared_dependency_for_another(
+def test_canceling_one_dag_preserves_shared_dependency_for_another(
     tmp_path, monkeypatch, remote_env, s3_bucket, s3_client
 ):
     """Cancel D0's exclusive leaf while D1 keeps its shared leaf alive.
@@ -266,7 +266,7 @@ def test_contrib_int_010__canceling_one_dag_preserves_shared_dependency_for_anot
 
 
 @pytest.mark.slow
-def test_contrib_int_011__public_invalidation_removes_completed_funk_cache_and_reexecutes(
+def test_public_invalidation_removes_completed_funk_cache_and_reexecutes(
     tmp_path, monkeypatch, remote_env, s3_bucket, s3_client
 ):
     """Invalidate a completed execution by public execution ref, then recompute it."""

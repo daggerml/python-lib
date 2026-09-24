@@ -43,7 +43,7 @@ def _app(tmp_path, render):
     return app
 
 
-def test_dash_custom_api_001__metadata_render_cache_and_refresh_are_revision_scoped(tmp_path):
+def test_metadata_render_cache_and_refresh_are_revision_scoped(tmp_path):
     calls = []
 
     def render(dag):
@@ -66,7 +66,7 @@ def test_dash_custom_api_001__metadata_render_cache_and_refresh_are_revision_sco
     assert refreshed.json()["spec"]["call"] == 2
 
 
-def test_dash_custom_api_002__errors_and_refresh_content_type_are_safe(tmp_path):
+def test_errors_and_refresh_content_type_are_safe(tmp_path):
     def render(_dag):
         raise RuntimeError("private traceback detail")
 

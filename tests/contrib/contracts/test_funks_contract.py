@@ -10,7 +10,7 @@ from daggerml.contrib.executors.script import ScriptExecutor
 from daggerml.contrib.funks import _gzip_file, _remove_docker_image, _run, docker_build
 
 
-def test_contrib_funks_001__run_streams_output_and_reports_exit_code(monkeypatch):
+def test_run_streams_output_and_reports_exit_code(monkeypatch):
     calls = []
 
     def fake_run(*args, **kwargs):
@@ -25,7 +25,7 @@ def test_contrib_funks_001__run_streams_output_and_reports_exit_code(monkeypatch
     assert calls == [((("docker", "build", "."),), {"check": False})]
 
 
-def test_contrib_funks_002__docker_build_isolated_script_context():
+def test_docker_build_isolated_script_context():
     _, script = ScriptExecutor._script_kwargs(docker_build.kwargs)
 
     assert "from contextlib import chdir" in script
@@ -39,7 +39,7 @@ def test_contrib_funks_002__docker_build_isolated_script_context():
     )
 
 
-def test_contrib_funks_003__gzip_file_writes_gzip_stream(tmp_path):
+def test_gzip_file_writes_gzip_stream(tmp_path):
     source = tmp_path / "image.tar"
     destination = tmp_path / "image.tar.gz"
     source.write_bytes(b"docker-image-archive")
@@ -49,7 +49,7 @@ def test_contrib_funks_003__gzip_file_writes_gzip_stream(tmp_path):
     assert gzip.decompress(destination.read_bytes()) == source.read_bytes()
 
 
-def test_contrib_funks_004__remove_docker_image_is_best_effort(monkeypatch):
+def test_remove_docker_image_is_best_effort(monkeypatch):
     calls = []
 
     def fake_run(*args, **kwargs):

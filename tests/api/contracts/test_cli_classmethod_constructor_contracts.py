@@ -44,7 +44,7 @@ def _command_help(cli: MethodCLI, *path: str) -> str:
     return _command_parser(cli, *path).format_help()
 
 
-def test_cli_cm_001__same_name_same_type_classmethod_param_is_root_only(capsys) -> None:
+def test_same_name_same_type_classmethod_param_is_root_only(capsys) -> None:
     _ClassmethodFixture.calls.clear()
     cli = MethodCLI(_ClassmethodFixture, prog="fixture")
 
@@ -60,7 +60,7 @@ def test_cli_cm_001__same_name_same_type_classmethod_param_is_root_only(capsys) 
     assert capsys.readouterr().out == '{"different":"method-default","local":null,"shared":"root-value"}\n'
 
 
-def test_cli_cm_002__same_name_different_type_classmethod_param_stays_command_local() -> None:
+def test_same_name_different_type_classmethod_param_stays_command_local() -> None:
     cli = MethodCLI(_ClassmethodFixture, prog="fixture")
 
     root_help = cli.parser.format_help()
@@ -70,7 +70,7 @@ def test_cli_cm_002__same_name_different_type_classmethod_param_stays_command_lo
     assert "--different DIFFERENT" in build_help
 
 
-def test_cli_cm_003__dml_init_intersected_options_are_root_only() -> None:
+def test_dml_init_intersected_options_are_root_only() -> None:
     cli = MethodCLI(Dml, prog="dml")
 
     root_help = cli.parser.format_help()
@@ -102,7 +102,7 @@ def test_cli_cm_003__dml_init_intersected_options_are_root_only() -> None:
         cli.parser.parse_args(["init", "--remote-root", "s3://bucket/project"])
 
 
-def test_cli_cm_004__constructor_metavars_do_not_expose_init_prefix() -> None:
+def test_constructor_metavars_do_not_expose_init_prefix() -> None:
     cli = MethodCLI(Dml, prog="dml")
 
     root_help = cli.parser.format_help()
@@ -112,7 +112,7 @@ def test_cli_cm_004__constructor_metavars_do_not_expose_init_prefix() -> None:
     assert "--project-home PROJECT_HOME" in root_help
 
 
-def test_cli_cm_005__intersected_root_values_are_dispatched_by_parameter_name(capsys) -> None:
+def test_intersected_root_values_are_dispatched_by_parameter_name(capsys) -> None:
     _ClassmethodFixture.calls.clear()
     cli = MethodCLI(_ClassmethodFixture, prog="fixture")
 
@@ -124,7 +124,7 @@ def test_cli_cm_005__intersected_root_values_are_dispatched_by_parameter_name(ca
     assert capsys.readouterr().out == '{"different":"method-value","local":"leaf-value","shared":"root-value"}\n'
 
 
-def test_cli_cm_006__dml_init_serializes_projected_status_payload(tmp_path: Path, capsys) -> None:
+def test_dml_init_serializes_projected_status_payload(tmp_path: Path, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     cli = MethodCLI(Dml, prog="dml")
@@ -135,7 +135,7 @@ def test_cli_cm_006__dml_init_serializes_projected_status_payload(tmp_path: Path
     assert json.loads(capsys.readouterr().out) == expected
 
 
-def test_cli_cm_007__dml_clone_serializes_projected_status_payload(tmp_path: Path, capsys) -> None:
+def test_dml_clone_serializes_projected_status_payload(tmp_path: Path, capsys) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
 

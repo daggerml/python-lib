@@ -13,7 +13,7 @@ class _Dag:
         return ["features", "score"]
 
 
-def test_dash_example_001__installable_provider_returns_both_json_result_variants(monkeypatch):
+def test_installable_provider_returns_both_json_result_variants(monkeypatch):
     source = Path(__file__).parent / "fixtures" / "dashboard-plugin" / "src"
     monkeypatch.syspath_prepend(source)
     point = EntryPoint("example", "example_dashboard_plugin:dashboards", "daggerml.dashboards")

@@ -16,7 +16,7 @@ def _load_docs_module(name: str, relative_path: str):
     return module
 
 
-def test_contrib_docs_001__moto_helper_binds_for_docker_and_publishes_loopback_endpoint():
+def test_moto_helper_binds_for_docker_and_publishes_loopback_endpoint():
     helper = _load_docs_module("moto_server_env", "docs/moto_server_env.py")
 
     with patch.object(helper.platform, "system", return_value="Linux"):
@@ -26,7 +26,7 @@ def test_contrib_docs_001__moto_helper_binds_for_docker_and_publishes_loopback_e
     assert endpoint == "http://127.0.0.1:39209"
 
 
-def test_contrib_docs_002__moto_helper_uses_loopback_binding_on_macos():
+def test_moto_helper_uses_loopback_binding_on_macos():
     helper = _load_docs_module("moto_server_env", "docs/moto_server_env.py")
 
     with patch.object(helper.platform, "system", return_value="Darwin"):

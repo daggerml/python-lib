@@ -39,7 +39,7 @@ def _skill(name: str) -> str:
 
 
 @pytest.mark.parametrize("name", SKILLS)
-def test_agent_skill_001__skills_help_and_commands_export_bundled_resources(
+def test_skills_help_and_commands_export_bundled_resources(
     capsys, monkeypatch, tmp_path, name
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -59,7 +59,7 @@ def test_agent_skill_001__skills_help_and_commands_export_bundled_resources(
 
 
 @pytest.mark.parametrize(("name", "contract"), SKILLS.items())
-def test_agent_skill_002__resources_are_portable_compact_and_topic_specific(name, contract) -> None:
+def test_resources_are_portable_compact_and_topic_specific(name, contract) -> None:
     skill = _skill(name)
 
     assert skill.startswith(f"---\nname: daggerml-{name}\ndescription: {contract['description']}\n---\n")

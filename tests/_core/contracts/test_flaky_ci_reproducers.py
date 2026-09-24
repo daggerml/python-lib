@@ -16,7 +16,7 @@ from tests._core.contracts.test_execution_coordination import _record, _state
 
 
 @pytest.mark.xfail(strict=True, reason="child registration can race parent cancellation")
-def test_flaky_ci_001__registration_gap_leaves_existing_child_running(monkeypatch) -> None:
+def test_registration_gap_leaves_existing_child_running(monkeypatch) -> None:
     """Pause between reverse-edge creation and the caller spawned summary write."""
     state = _state()
     assert state.create_execution_record(_record("parent", cache_key=None, argv_ref=None))
@@ -55,7 +55,7 @@ def test_flaky_ci_001__registration_gap_leaves_existing_child_running(monkeypatc
 
 
 @pytest.mark.xfail(strict=True, reason="docker inspect transport failures are treated as exited containers")
-def test_flaky_ci_003__docker_inspect_error_is_not_a_terminal_container_exit(monkeypatch) -> None:
+def test_docker_inspect_error_is_not_a_terminal_container_exit(monkeypatch) -> None:
     monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda _: "/docker")
     monkeypatch.setattr(
         "daggerml.contrib.executors.docker.subprocess.run",
@@ -76,7 +76,7 @@ def test_flaky_ci_003__docker_inspect_error_is_not_a_terminal_container_exit(mon
 
 
 @pytest.mark.xfail(strict=True, reason="nested cleanup errors escape before output.json is published")
-def test_flaky_ci_004__nested_cleanup_failure_still_publishes_diagnostics(tmp_path, monkeypatch) -> None:
+def test_nested_cleanup_failure_still_publishes_diagnostics(tmp_path, monkeypatch) -> None:
     class NestedAdapter(AdapterBase):
         @classmethod
         def send(cls, **kwargs):
@@ -105,7 +105,7 @@ def test_flaky_ci_004__nested_cleanup_failure_still_publishes_diagnostics(tmp_pa
     assert "cleanup failed" in json.loads(output_path.read_text())["error"]
 
 
-def test_flaky_ci_005__fresh_success_drives_outer_cleanup(monkeypatch) -> None:
+def test_fresh_success_drives_outer_cleanup(monkeypatch) -> None:
     state = _state()
     assert state.create_execution_record(_record("caller", cache_key=None, argv_ref=None))
     assert state.create_execution_record(_record("child"))
@@ -127,7 +127,7 @@ def test_flaky_ci_005__fresh_success_drives_outer_cleanup(monkeypatch) -> None:
 
 
 @pytest.mark.xfail(strict=True, reason="script cancellation acknowledges before process teardown")
-def test_flaky_ci_006__script_cancel_waits_for_terminated_process_group(monkeypatch, tmp_path) -> None:
+def test_script_cancel_waits_for_terminated_process_group(monkeypatch, tmp_path) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
     monkeypatch.setattr("daggerml.contrib.executors.script.os.killpg", lambda *_: None)

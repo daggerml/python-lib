@@ -66,33 +66,33 @@ class DualStateExecutor(ExecutorBase):
         return {"status": "success", "state": None, "adapter_state": {}}
 
 
-def test_contrib_exec_base_001__handle_routes_missing_state_to_start():
+def test_handle_routes_missing_state_to_start():
     TrackingExecutor.calls = []
     result = TrackingExecutor.handle(**_adapter_request(operation="invoke", adapter_state=None))
     assert TrackingExecutor.calls == ["start"]
     assert result["status"] == "retry"
 
 
-def test_contrib_exec_base_002__handle_routes_existing_state_to_poll():
+def test_handle_routes_existing_state_to_poll():
     TrackingExecutor.calls = []
     result = TrackingExecutor.handle(**_adapter_request(operation="invoke", adapter_state={"existing": True}))
     assert TrackingExecutor.calls == ["poll"]
     assert result["adapter_state"] == {"existing": True}
 
 
-def test_contrib_exec_base_002__explicit_null_state_is_forwarded() -> None:
+def test_explicit_null_state_is_forwarded() -> None:
     result = ClearingExecutor.handle(**_adapter_request(operation="invoke", adapter_state={"existing": True}))
 
     assert "adapter_state" in result
     assert result["adapter_state"] is None
 
 
-def test_contrib_exec_base_002__dual_state_fields_are_rejected() -> None:
+def test_dual_state_fields_are_rejected() -> None:
     with pytest.raises(DmlRepoError, match="both state and adapter_state"):
         DualStateExecutor.handle(**_adapter_request(operation="invoke", adapter_state={"existing": True}))
 
 
-def test_contrib_exec_base_003__cancel_operation_routes_to_cancel():
+def test_cancel_operation_routes_to_cancel():
     TrackingExecutor.calls = []
     TrackingExecutor.cancel_argv_ref = None
     result = TrackingExecutor.handle(
@@ -108,7 +108,7 @@ def test_contrib_exec_base_003__cancel_operation_routes_to_cancel():
     assert result == {"status": "cancelled", "error": None}
 
 
-def test_contrib_exec_base_003__cancel_requires_exact_wire_fields():
+def test_cancel_requires_exact_wire_fields():
     TrackingExecutor.calls = []
     payload = _adapter_request(operation="cancel", adapter_state=None, argv_ref="node-argv:target")
     del payload["adapter_state"]
@@ -118,26 +118,26 @@ def test_contrib_exec_base_003__cancel_requires_exact_wire_fields():
     assert TrackingExecutor.calls == []
 
 
-def test_contrib_exec_base_004__unknown_operation_is_rejected_before_dispatch():
+def test_unknown_operation_is_rejected_before_dispatch():
     TrackingExecutor.calls = []
     with pytest.raises(DmlRepoError, match="Unsupported adapter operation"):
         TrackingExecutor.handle(**_adapter_request(operation="unknown", adapter_state=None))
     assert TrackingExecutor.calls == []
 
 
-def test_contrib_exec_base_005__cancel_requires_argv_ref():
+def test_cancel_requires_argv_ref():
     TrackingExecutor.calls = []
     with pytest.raises(DmlRepoError, match="requires a node-argv ref"):
         TrackingExecutor.handle(**_adapter_request(operation="cancel", adapter_state={}))
     assert TrackingExecutor.calls == []
 
 
-def test_contrib_exec_base_006__adapter_state_must_be_object_or_null():
+def test_adapter_state_must_be_object_or_null():
     with pytest.raises(DmlRepoError, match="adapter_state must be an object or null"):
         TrackingExecutor.handle(**_adapter_request(operation="invoke", adapter_state="bad"))
 
 
-def test_contrib_exec_base_007__cleanup_requires_result_and_routes_idempotently():
+def test_cleanup_requires_result_and_routes_idempotently():
     TrackingExecutor.calls = []
     payload = _adapter_request(operation="cleanup", adapter_state={"job": "done"})
     payload["result_ref"] = "dag:" + "a" * 64
@@ -146,6 +146,6 @@ def test_contrib_exec_base_007__cleanup_requires_result_and_routes_idempotently(
     assert result == {"status": "success", "error": None, "adapter_state": {"job": "done"}}
 
 
-def test_contrib_exec_base_008__poll_operation_is_rejected():
+def test_poll_operation_is_rejected():
     with pytest.raises(DmlRepoError, match="Unsupported adapter operation: poll"):
         TrackingExecutor.handle(**_adapter_request(operation="poll", adapter_state=None))

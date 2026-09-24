@@ -42,7 +42,7 @@ def reset_registry(monkeypatch):
     monkeypatch.setattr(reg, "_PLUGINS_LOADED", False)
 
 
-def test_contrib_areg_002__plugin_entries_load_declared_adapter_specs(monkeypatch):
+def test_plugin_entries_load_declared_adapter_specs(monkeypatch):
     monkeypatch.setattr(
         reg,
         "_entry_points",
@@ -56,13 +56,13 @@ def test_contrib_areg_002__plugin_entries_load_declared_adapter_specs(monkeypatc
     assert reg.get_adapter("local").executable == "local-exec"
 
 
-def test_contrib_areg_003__invalid_plugin_values_fail_with_repo_error(monkeypatch):
+def test_invalid_plugin_values_fail_with_repo_error(monkeypatch):
     monkeypatch.setattr(reg, "_entry_points", lambda group: [FakeEntryPoint("bad", "mod:bad", object())])
     with pytest.raises(DmlRepoError, match=r"Adapter plugin 'bad \(mod:bad\)' failed"):
         reg.load_adapter_plugins()
 
 
-def test_contrib_areg_004__builtin_adapter_entry_points_remain_declared_in_pyproject():
+def test_builtin_adapter_entry_points_remain_declared_in_pyproject():
     pyproject = (Path(__file__).resolve().parents[3] / "pyproject.toml").read_text()
     assert '[project.entry-points."daggerml.contrib.adapters"]' in pyproject
     assert 'local = "daggerml.contrib.adapters:LocalAdapter"' in pyproject

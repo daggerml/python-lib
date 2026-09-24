@@ -26,7 +26,7 @@ class _Model:
         return {"record": {"execution_id": execution_id}}
 
 
-def test_dash_cancel_001__nonce_is_target_bound_one_use_and_full_is_planned_once():
+def test_nonce_is_target_bound_one_use_and_full_is_planned_once():
     model = _Model()
     coordinator = CancellationCoordinator(model, interval=0, drive_timeout=1)
     nonce = coordinator.issue_nonce("one")["nonce"]
@@ -39,7 +39,7 @@ def test_dash_cancel_001__nonce_is_target_bound_one_use_and_full_is_planned_once
         coordinator.start("one", nonce)
 
 
-def test_dash_cancel_002__nonce_cannot_cancel_another_execution():
+def test_nonce_cannot_cancel_another_execution():
     model = _Model()
     coordinator = CancellationCoordinator(model)
     nonce = coordinator.issue_nonce("one")["nonce"]

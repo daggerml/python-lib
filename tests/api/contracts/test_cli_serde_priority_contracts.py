@@ -59,7 +59,7 @@ def _command_help(cli: MethodCLI, *path: str) -> str:
     return parser.format_help()
 
 
-def test_cli_sp_001__public_union_commands_drop_type_selectors() -> None:
+def test_public_union_commands_drop_type_selectors() -> None:
     cli = MethodCLI(Dml, prog="dml")
 
     checkout_help = _command_help(cli, "checkout")
@@ -111,7 +111,7 @@ def test_execution_record_serializes_as_exact_split_sections() -> None:
     assert json.loads(serialized) == result
 
 
-def test_cli_sp_002__ref_or_str_prefers_string(capsys) -> None:
+def test_ref_or_str_prefers_string(capsys) -> None:
     cli = MethodCLI(_SerdeFixture, prog="fixture")
 
     assert cli.run(["ref-or-str", "node:abc"]) == 0
@@ -119,7 +119,7 @@ def test_cli_sp_002__ref_or_str_prefers_string(capsys) -> None:
     assert capsys.readouterr().out == "str:node:abc\n"
 
 
-def test_cli_sp_003__nullable_string_preserves_null_and_prefers_string(capsys) -> None:
+def test_nullable_string_preserves_null_and_prefers_string(capsys) -> None:
     cli = MethodCLI(_SerdeFixture, prog="fixture")
 
     assert cli.run(["nullable-text", "123"]) == 0
@@ -129,7 +129,7 @@ def test_cli_sp_003__nullable_string_preserves_null_and_prefers_string(capsys) -
     assert capsys.readouterr().out == "NoneType:None\n"
 
 
-def test_cli_sp_004__ref_or_error_tries_dml_before_ref(tmp_path: Path, capsys) -> None:
+def test_ref_or_error_tries_dml_before_ref(tmp_path: Path, capsys) -> None:
     payload = tmp_path / "error.dml"
     payload.write_text(dml_dumps(Error("boom", origin="test", type="ValueError")), encoding="utf-8")
     cli = MethodCLI(_SerdeFixture, prog="fixture")
@@ -141,7 +141,7 @@ def test_cli_sp_004__ref_or_error_tries_dml_before_ref(tmp_path: Path, capsys) -
     assert capsys.readouterr().out == "Ref:node:abc\n"
 
 
-def test_cli_sp_005__any_error_or_ref_accepts_any_dml_value(tmp_path: Path, capsys) -> None:
+def test_any_error_or_ref_accepts_any_dml_value(tmp_path: Path, capsys) -> None:
     payload = tmp_path / "value.dml"
     payload.write_text(dml_dumps(7), encoding="utf-8")
     cli = MethodCLI(_SerdeFixture, prog="fixture")
@@ -150,7 +150,7 @@ def test_cli_sp_005__any_error_or_ref_accepts_any_dml_value(tmp_path: Path, caps
     assert capsys.readouterr().out == "int:7\n"
 
 
-def test_cli_sp_006__collection_or_ref_uses_json_file_before_ref(tmp_path: Path, capsys) -> None:
+def test_collection_or_ref_uses_json_file_before_ref(tmp_path: Path, capsys) -> None:
     payload = tmp_path / "value.json"
     payload.write_text(json.dumps(["a", "b"]), encoding="utf-8")
     cli = MethodCLI(_SerdeFixture, prog="fixture")
@@ -162,7 +162,7 @@ def test_cli_sp_006__collection_or_ref_uses_json_file_before_ref(tmp_path: Path,
     assert capsys.readouterr().out == "Ref:node:abc\n"
 
 
-def test_cli_sp_007__union_output_uses_runtime_compatible_serializer(capsys) -> None:
+def test_union_output_uses_runtime_compatible_serializer(capsys) -> None:
     cli = MethodCLI(_SerdeFixture, prog="fixture")
 
     assert cli.run(["emit-ref-or-error", "ref"]) == 0
@@ -172,7 +172,7 @@ def test_cli_sp_007__union_output_uses_runtime_compatible_serializer(capsys) -> 
     assert capsys.readouterr().out == dml_dumps(Error("boom", origin="test", type="ValueError")) + "\n"
 
 
-def test_cli_sp_008__any_union_output_prefers_dml_serializer(capsys) -> None:
+def test_any_union_output_prefers_dml_serializer(capsys) -> None:
     cli = MethodCLI(_SerdeFixture, prog="fixture")
 
     assert cli.run(["emit-any-error-or-ref", "ref"]) == 0
@@ -182,7 +182,7 @@ def test_cli_sp_008__any_union_output_prefers_dml_serializer(capsys) -> None:
     assert capsys.readouterr().out == dml_dumps(7) + "\n"
 
 
-def test_cli_sp_009__none_return_prints_nothing(capsys) -> None:
+def test_none_return_prints_nothing(capsys) -> None:
     cli = MethodCLI(_SerdeFixture, prog="fixture")
 
     assert cli.run(["emit-none"]) == 0
@@ -190,7 +190,7 @@ def test_cli_sp_009__none_return_prints_nothing(capsys) -> None:
     assert capsys.readouterr().out == ""
 
 
-def test_cli_sp_010__dml_describe_graph_visual_flag_suppresses_json_output(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_dml_describe_graph_visual_flag_suppresses_json_output(tmp_path: Path, monkeypatch, capsys) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     index = dml.runtime.create()
     cli = MethodCLI(Dml, prog="dml")
@@ -206,7 +206,7 @@ def test_cli_sp_010__dml_describe_graph_visual_flag_suppresses_json_output(tmp_p
     assert capsys.readouterr().out == "rendered-graph\n"
 
 
-def test_cli_sp_011__dml_describe_graph_raw_path_still_emits_json(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_dml_describe_graph_raw_path_still_emits_json(tmp_path: Path, monkeypatch, capsys) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     index = dml.runtime.create()
     cli = MethodCLI(Dml, prog="dml")
@@ -218,7 +218,7 @@ def test_cli_sp_011__dml_describe_graph_raw_path_still_emits_json(tmp_path: Path
     assert payload["nodes"][index.id()]["execution_id"] == index.id()
 
 
-def test_cli_sp_012__runtime_freeze_and_unfreeze_emit_replacement_refs(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_runtime_freeze_and_unfreeze_emit_replacement_refs(tmp_path: Path, monkeypatch, capsys) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     index = dml.runtime.create()
     cli = MethodCLI(Dml, prog="dml")
@@ -244,7 +244,7 @@ def test_cli_sp_012__runtime_freeze_and_unfreeze_emit_replacement_refs(tmp_path:
     assert capsys.readouterr().out == f"{index.to}\n"
 
 
-def test_cli_sp_013__gc_union_serializes_local_and_remote_summaries(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_gc_union_serializes_local_and_remote_summaries(tmp_path: Path, monkeypatch, capsys) -> None:
     make_local_dml(tmp_path, monkeypatch)
     cli = MethodCLI(Dml, prog="dml")
 

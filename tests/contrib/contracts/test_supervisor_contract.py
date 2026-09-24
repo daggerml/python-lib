@@ -10,7 +10,7 @@ import daggerml.contrib.supervisor as supervisor_mod
 from daggerml import Ref
 
 
-def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellation(monkeypatch, tmp_path: Path):
+def test_run_uses_lifecycle_field_to_trigger_cancellation(monkeypatch, tmp_path: Path):
     calls: list[tuple[Ref, str | None]] = []
 
     class FakeRuntime:
@@ -82,7 +82,7 @@ def test_contrib_supervisor_001__run_uses_lifecycle_field_to_trigger_cancellatio
     assert "Worker killed by signal SIGTERM" in result["error"]
 
 
-def test_contrib_supervisor_002__invalid_worker_result_includes_received_payload():
+def test_invalid_worker_result_includes_received_payload():
     result = {"status": "failed", "error": "docker build failed", "dag_id": None}
 
     with pytest.raises(supervisor_mod.DmlRepoError, match="received:") as exc_info:
@@ -98,5 +98,5 @@ def test_contrib_supervisor_002__invalid_worker_result_includes_received_payload
         {"status": "failed", "error": "worker failed"},
     ],
 )
-def test_contrib_supervisor_003__worker_terminal_schema_matches_script_output(result):
+def test_worker_terminal_schema_matches_script_output(result):
     assert supervisor_mod._validate_output(result) == result

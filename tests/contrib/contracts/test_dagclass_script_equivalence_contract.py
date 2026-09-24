@@ -230,7 +230,7 @@ def _install_staging_codecs(monkeypatch, *extra_codecs):
     monkeypatch.setattr(core_api, "_codecs", [(1, index, codec) for index, codec in enumerate(codecs, 1)])
 
 
-def test_contrib_dagclass_001__matching_funkify_definition_renders_identical_script():
+def test_matching_funkify_definition_renders_identical_script():
     dagclass_main = DagclassPipeline().main
 
     assert isinstance(dagclass_main, DelayedRunnable)
@@ -241,7 +241,7 @@ def test_contrib_dagclass_001__matching_funkify_definition_renders_identical_scr
     assert dagclass_script == funkify_script
 
 
-def test_contrib_dagclass_002__nested_instance_embeds_child_member_graph():
+def test_nested_instance_embeds_child_member_graph():
     child = ParentPipeline().__dagclass_members__["child"]
 
     assert isinstance(child, DelayedRunnable)
@@ -249,19 +249,19 @@ def test_contrib_dagclass_002__nested_instance_embeds_child_member_graph():
     assert isinstance(child.kwargs["prepop"]["summarize"], DelayedRunnable)
 
 
-def test_contrib_dagclass_003__comprehension_collects_member_dependency():
+def test_comprehension_collects_member_dependency():
     main = ComprehensionPipeline().main
 
     assert main.kwargs["prepop"] == {"summarize": summarize}
 
 
-def test_contrib_dagclass_004__member_defined_before_read_is_not_dependency():
+def test_member_defined_before_read_is_not_dependency():
     main = DefinedMemberPipeline().main
 
     assert main.kwargs["prepop"] == {}
 
 
-def test_contrib_dagclass_005__comprehension_captures_nested_dagclass():
+def test_comprehension_captures_nested_dagclass():
     pipeline = NestedComprehensionPipeline()
     main = pipeline.main
 
@@ -269,7 +269,7 @@ def test_contrib_dagclass_005__comprehension_captures_nested_dagclass():
     assert isinstance(pipeline.__dagclass_members__["child"], DelayedRunnable)
 
 
-def test_contrib_dagclass_006__direct_method_closes_over_constructor_attributes_and_methods():
+def test_direct_method_closes_over_constructor_attributes_and_methods():
     pipeline = ConfiguredPipeline(offset=1, scale=2)
 
     assert pipeline.__dagclass_compiled__ is True
@@ -277,14 +277,14 @@ def test_contrib_dagclass_006__direct_method_closes_over_constructor_attributes_
     assert pipeline.adjust.kwargs["prepop"] == {"offset": 1}
 
 
-def test_contrib_dagclass_007__external_funk_ref_binds_to_namespace_attribute():
+def test_external_funk_ref_binds_to_namespace_attribute():
     pipeline = ExternalFunkPipeline(offset=7)
 
     assert pipeline.adjusted.kwargs["prepop"] == {"offset": 7}
     assert pipeline.main.kwargs["prepop"] == {"adjusted": pipeline.adjusted}
 
 
-def test_contrib_dagclass_008__concrete_runnable_refs_bind_recursively():
+def test_concrete_runnable_refs_bind_recursively():
     @api.dagclass
     class ConcreteRunnablePipeline:
         config: int
@@ -298,31 +298,31 @@ def test_contrib_dagclass_008__concrete_runnable_refs_bind_recursively():
     assert pipeline.wrapped.kwargs == {"config": 11}
 
 
-def test_contrib_dagclass_009__unknown_external_funk_ref_fails_at_instantiation():
+def test_unknown_external_funk_ref_fails_at_instantiation():
     with pytest.raises(DmlRepoError, match="Unknown dagclass member reference: missing"):
         InvalidExternalFunkPipeline()
 
 
-def test_contrib_dagclass_010__method_cycle_fails_at_instantiation():
+def test_method_cycle_fails_at_instantiation():
     with pytest.raises(DmlRepoError, match="dagclass member dependency cycle detected"):
         CyclicPipeline()
 
 
-def test_contrib_dagclass_011__run_rejects_uncompiled_dagclass_object():
+def test_run_rejects_uncompiled_dagclass_object():
     pipeline = object.__new__(ConfiguredPipeline)
 
     with pytest.raises(DmlRepoError, match="api.run instance is not compiled"):
         api.run(pipeline, 3)
 
 
-def test_contrib_dagclass_012__decorated_method_refs_share_dagclass_namespace():
+def test_decorated_method_refs_share_dagclass_namespace():
     pipeline = DecoratedMethodPipeline(offset=1, scale=2, image="python:3.10")
 
     assert pipeline.main.kwargs["prepop"] == {"offset": 1, "scale": 2}
     assert pipeline.main.kwargs["kwargs"] == {"image": "python:3.10"}
 
 
-def test_contrib_dagclass_013__dag_resolved_names_are_not_dependencies():
+def test_dag_resolved_names_are_not_dependencies():
     assert api._DAGCLASS_RESERVED_NAMES == {
         "argv",
         "call",
@@ -345,29 +345,29 @@ def test_contrib_dagclass_013__dag_resolved_names_are_not_dependencies():
     assert DagOperationPipeline().main.kwargs["prepop"] == {}
 
 
-def test_contrib_dagclass_014__dag_is_a_normal_member_name():
+def test_dag_is_a_normal_member_name():
     pipeline = DagNamedMemberPipeline()
 
     assert pipeline.main.kwargs["prepop"] == {"dag": preprocess}
 
 
-def test_contrib_dagclass_015__any_attribute_assignment_removes_dependency():
+def test_any_attribute_assignment_removes_dependency():
     assert UndeclaredAssignmentPipeline().main.kwargs["prepop"] == {}
     assert ConditionalAssignmentPipeline().main.kwargs["prepop"] == {}
     assert LaterAssignmentPipeline().main.kwargs["prepop"] == {}
 
 
-def test_contrib_dagclass_016__unknown_final_edge_fails_compilation():
+def test_unknown_final_edge_fails_compilation():
     with pytest.raises(DmlRepoError, match="Unknown dagclass member reference: self.missing"):
         UnknownReferencePipeline()
 
 
-def test_contrib_dagclass_017__reserved_assignment_fails_compilation():
+def test_reserved_assignment_fails_compilation():
     with pytest.raises(DmlRepoError, match="Cannot assign to reserved dagclass names: put"):
         ReservedAssignmentPipeline()
 
 
-def test_contrib_dagclass_018__reserved_class_member_fails_compilation():
+def test_reserved_class_member_fails_compilation():
     @api.dagclass
     class ReservedMemberPipeline:
         put = preprocess
@@ -379,7 +379,7 @@ def test_contrib_dagclass_018__reserved_class_member_fails_compilation():
         ReservedMemberPipeline()
 
 
-def test_contrib_dagclass_019__item_access_is_opaque_to_compilation():
+def test_item_access_is_opaque_to_compilation():
     assert ItemAccessPipeline().main.kwargs["prepop"] == {}
     assert ItemAssignmentPipeline().main.kwargs["prepop"] == {"output": 1}
 
@@ -391,7 +391,7 @@ def test_contrib_dagclass_019__item_access_is_opaque_to_compilation():
     assert UnknownItemPipeline().main.kwargs["prepop"] == {}
 
 
-def test_contrib_dagclass_020__ordinary_fields_and_class_members_are_preserved():
+def test_ordinary_fields_and_class_members_are_preserved():
     class_value = CallableMember()
     field_value = CallableMember()
 
@@ -420,7 +420,7 @@ def test_contrib_dagclass_020__ordinary_fields_and_class_members_are_preserved()
     }
 
 
-def test_contrib_dagclass_021__preserved_members_use_normal_codec_staging(monkeypatch, dag, fake_dml, refs):
+def test_preserved_members_use_normal_codec_staging(monkeypatch, dag, fake_dml, refs):
     _install_staging_codecs(monkeypatch, CallableMemberCodec())
     source = core_api.Dag(dml=fake_dml, ref=refs.dag2)
     source_node = core_api.Node(source, refs.scalar)
@@ -448,7 +448,7 @@ def test_contrib_dagclass_021__preserved_members_use_normal_codec_staging(monkey
     }
 
 
-def test_contrib_dagclass_022__preserved_member_errors_are_deferred_to_staging(monkeypatch, dag, fake_dml, refs):
+def test_preserved_member_errors_are_deferred_to_staging(monkeypatch, dag, fake_dml, refs):
     _install_staging_codecs(monkeypatch)
     unsupported = CallableMember()
 

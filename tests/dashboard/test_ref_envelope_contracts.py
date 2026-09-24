@@ -46,7 +46,7 @@ def _model(tmp_path):
     return DashboardReadModel(tmp_path, dml_factory=lambda **_kwargs: Dml())
 
 
-def test_dash_refs_001__groups_public_local_and_live_ref_sources(tmp_path):
+def test_groups_public_local_and_live_ref_sources(tmp_path):
     payload = _model(tmp_path).refs(LOCAL)
 
     assert payload["checkout"] == {"mode": "attached", "branch": "main", "state": "ready"}
@@ -71,7 +71,7 @@ def test_dash_refs_001__groups_public_local_and_live_ref_sources(tmp_path):
     ]
 
 
-def test_dash_refs_002__dependency_ref_reads_use_public_source_selectors(tmp_path):
+def test_dependency_ref_reads_use_public_source_selectors(tmp_path):
     payload = _model(tmp_path).refs(LOCAL)
 
     dependency = payload["dependencies"]["items"][0]

@@ -7,7 +7,7 @@ from daggerml import Runnable, Uri
 from daggerml.contrib.codecs import DelayedActionCodec, DelayedLoad, DelayedRef, DelayedRunnable
 
 
-def test_contrib_codec_001__delayed_ref_resolves_named_node(monkeypatch):
+def test_delayed_ref_resolves_named_node(monkeypatch):
     codec = DelayedActionCodec()
     dag = MagicMock()
     node = object()
@@ -28,7 +28,7 @@ def test_contrib_codec_001__delayed_ref_resolves_named_node(monkeypatch):
     assert seen == [(node, dag)]
 
 
-def test_contrib_codec_002__delayed_load_imports_requested_node(monkeypatch):
+def test_delayed_load_imports_requested_node(monkeypatch):
     codec = DelayedActionCodec()
     dag = MagicMock()
     node = object()
@@ -49,7 +49,7 @@ def test_contrib_codec_002__delayed_load_imports_requested_node(monkeypatch):
     assert seen == [(node, dag)]
 
 
-def test_contrib_codec_003__delayed_runnable_resolves_through_adapter(monkeypatch):
+def test_delayed_runnable_resolves_through_adapter(monkeypatch):
     codec = DelayedActionCodec()
     adapter = SimpleNamespace()
     delayed = DelayedRunnable(

@@ -77,7 +77,7 @@ def _registered(count=3):
     ]
 
 
-def test_dash_status_001__initial_and_continuation_pages_share_one_stable_snapshot():
+def test_initial_and_continuation_pages_share_one_stable_snapshot():
     projects = _Projects(_registered())
     status = DashboardStatus(
         projects,
@@ -97,7 +97,7 @@ def test_dash_status_001__initial_and_continuation_pages_share_one_stable_snapsh
     assert continued["recent_commits"] == {"items": [], "next_cursor": None}
 
 
-def test_dash_status_001__status_uses_the_rolling_one_year_cutoff():
+def test_status_uses_the_rolling_one_year_cutoff():
     cutoffs = []
 
     class CapturingStatusModel(_StatusModel):
@@ -118,7 +118,7 @@ def test_dash_status_001__status_uses_the_rolling_one_year_cutoff():
     assert cutoffs == [datetime(2025, 8, 8, 14, tzinfo=timezone.utc)]
 
 
-def test_dash_status_002__cursors_reject_collection_mismatch_snapshot_mismatch_and_expiry():
+def test_cursors_reject_collection_mismatch_snapshot_mismatch_and_expiry():
     now = [0.0]
     status = DashboardStatus(
         _Projects(_registered()),
@@ -146,7 +146,7 @@ def test_dash_status_002__cursors_reject_collection_mismatch_snapshot_mismatch_a
     assert expired.value.code == "status-cursor-expired"
 
 
-def test_dash_status_003__project_failures_are_isolated_and_do_not_leak_exception_detail():
+def test_project_failures_are_isolated_and_do_not_leak_exception_detail():
     projects = _Projects(_registered(2))
 
     def factory(project_id):
@@ -165,7 +165,7 @@ def test_dash_status_003__project_failures_are_isolated_and_do_not_leak_exceptio
     assert payload["projects"]["items"][1]["path"] == "/registered/p1"
 
 
-def test_dash_status_009__project_envelopes_include_snapshot_activity_checkout_and_path_context():
+def test_project_envelopes_include_snapshot_activity_checkout_and_path_context():
     projects = _Projects(
         [
             {"id": "first", "name": "Research", "path": "/work/first/Research"},
@@ -190,7 +190,7 @@ def test_dash_status_009__project_envelopes_include_snapshot_activity_checkout_a
     assert second["path_context"] == {"parent": "/work/second", "leaf": "Research"}
 
 
-def test_dash_status_010__unavailable_unborn_absent_and_truncated_activity_are_explicit():
+def test_unavailable_unborn_absent_and_truncated_activity_are_explicit():
     class Unavailable(_StatusModel):
         initialized = False
 
@@ -236,11 +236,11 @@ def test_dash_status_010__unavailable_unborn_absent_and_truncated_activity_are_e
         ({"state": "active"}, None, "in-progress"),
     ],
 )
-def test_dash_status_004__root_execution_state_has_deterministic_precedence(runtime, record, expected):
+def test_root_execution_state_has_deterministic_precedence(runtime, record, expected):
     assert _live_state(runtime, record)[0] == expected
 
 
-def test_dash_status_005__predating_requires_a_terminal_record_updated_before_index_creation():
+def test_predating_requires_a_terminal_record_updated_before_index_creation():
     index_created = "2026-08-08T12:00:00Z"
 
     predating = _timeline_record(
@@ -258,7 +258,7 @@ def test_dash_status_005__predating_requires_a_terminal_record_updated_before_in
     assert unknown["created_at"] is None
 
 
-def test_dash_status_006__recent_commits_walk_all_parents_without_timestamp_pruning(tmp_path, monkeypatch):
+def test_recent_commits_walk_all_parents_without_timestamp_pruning(tmp_path, monkeypatch):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
     cutoff = datetime(2026, 7, 9, tzinfo=timezone.utc)
@@ -332,7 +332,7 @@ def test_dash_status_006__recent_commits_walk_all_parents_without_timestamp_prun
     assert truncated is False
 
 
-def test_dash_status_007__commit_scan_cap_reports_truncation(tmp_path, monkeypatch):
+def test_commit_scan_cap_reports_truncation(tmp_path, monkeypatch):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -367,7 +367,7 @@ def test_dash_status_007__commit_scan_cap_reports_truncation(tmp_path, monkeypat
     assert truncated is True
 
 
-def test_dash_status_008__one_live_row_does_not_expand_descendant_execution_state(tmp_path):
+def test_one_live_row_does_not_expand_descendant_execution_state(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -407,7 +407,7 @@ def test_dash_status_008__one_live_row_does_not_expand_descendant_execution_stat
     }
 
 
-def test_dash_status_008a__aggregate_links_use_concrete_head_or_unborn_context(tmp_path):
+def test_aggregate_links_use_concrete_head_or_unborn_context(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
@@ -430,7 +430,7 @@ def test_dash_status_008a__aggregate_links_use_concrete_head_or_unborn_context(t
     }
 
 
-def test_dash_live_001__lineage_nests_and_retains_terminal_descendants():
+def test_lineage_nests_and_retains_terminal_descendants():
     graph = {
         "roots": ["root"],
         "nodes": {
@@ -467,7 +467,7 @@ def test_dash_live_001__lineage_nests_and_retains_terminal_descendants():
     assert rows[2]["lifecycle"] == "succeeded"
 
 
-def test_dash_live_002__live_index_exposes_expected_partial_dag_and_safe_missing_evidence(tmp_path):
+def test_live_index_exposes_expected_partial_dag_and_safe_missing_evidence(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
 
