@@ -9,6 +9,12 @@ import pytest
 import daggerml as dml
 from daggerml._core.remote import Remote
 
+pytest_plugins = ("lifecycle_fixtures",)
+
+
+def pytest_addoption(parser):
+    parser.addoption("--run-external", action="store_true", help="run credential-gated external acceptance")
+
 
 def pytest_collection_modifyitems(items):
     for item in items:
@@ -18,6 +24,8 @@ def pytest_collection_modifyitems(items):
             item.add_marker(pytest.mark.contrib)
         if "/integration/" in str(item.fspath):
             item.add_marker(pytest.mark.slow)
+        if item.get_closest_marker("external") and not item.config.getoption("--run-external"):
+            item.add_marker(pytest.mark.skip(reason="external acceptance requires --run-external and credentials"))
 
 
 @pytest.fixture(autouse=True)

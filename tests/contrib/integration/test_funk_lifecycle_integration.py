@@ -7,6 +7,9 @@ script executor serializes function source rather than test-module globals.
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
 from time import monotonic
@@ -302,3 +305,65 @@ def test_public_invalidation_removes_completed_funk_cache_and_reexecutes(
     assert second_description is not None
     assert second_description["execution"] != first_description["execution"]
     assert _object_version_count(s3_client, marker_key) == 2
+
+
+@pytest.mark.slow
+def test_remote_gc_retains_live_execution_record_and_cached_result(tmp_path, monkeypatch, remote_env, s3_bucket):
+    del remote_env, s3_bucket
+    home = tmp_path / "gc-runtime"
+    home.mkdir()
+    dml = _configure_real_runtime(monkeypatch, home)
+    dag = api.new("gc-result", dml=dml)
+    first = dag.put(tagged_identity)(19, sleep=lambda: 0, timeout=30_000)
+    key = _cache_key_for_result(dml, first)
+    execution = dml.cache.describe(key)["execution"]
+
+    dml.gc(remote=True)
+
+    assert dml.runtime.read_execution_record(execution)["state"]["lifecycle"] == "succeeded"
+    assert dml.cache.get(key) == first.context().ref
+    assert dag.put(tagged_identity)(19, sleep=lambda: 0, timeout=30_000).value() == 19
+
+
+@pytest.mark.slow
+@pytest.mark.serial
+def test_real_cache_survives_adapter_cleanup_retry_in_new_process(tmp_path, monkeypatch, remote_env, s3_bucket):
+    del remote_env, s3_bucket
+    real_adapter = shutil.which("dml-local-adapter")
+    assert real_adapter is not None
+    directory = tmp_path / "adapter-bin"
+    directory.mkdir()
+    marker = tmp_path / "cleanup-retried"
+    wrapper = directory / "dml-local-adapter"
+    wrapper.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, subprocess, sys\n"
+        "request = json.load(sys.stdin)\n"
+        f"marker = {str(marker)!r}\n"
+        "if request['operation'] == 'cleanup' and not os.path.exists(marker):\n"
+        "    open(marker, 'w').close()\n"
+        "    print(json.dumps({'status': 'retry', 'error': None, "
+        "'adapter_state': request['adapter_state'], 'retry_after_ms': 0}))\n"
+        "else:\n"
+        f"    result = subprocess.run([{real_adapter!r}], input=json.dumps(request), text=True, capture_output=True)\n"
+        "    sys.stdout.write(result.stdout)\n"
+        "    sys.stderr.write(result.stderr)\n"
+        "    sys.exit(result.returncode)\n"
+    )
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{directory}{os.pathsep}{os.environ['PATH']}")
+    home = tmp_path / "cleanup-runtime"
+    home.mkdir()
+    dml = _configure_real_runtime(monkeypatch, home)
+    dag = api.new("retry", dml=dml)
+    result = dag.put(tagged_identity)(12, sleep=lambda: 0, timeout=30_000)
+    key = _cache_key_for_result(dml, result)
+    execution = dml.cache.describe(key)["execution"]
+    assert marker.exists()
+    assert dml.runtime.read_execution_record(execution)["driver"]["cleanup"] is None
+
+    assert dml.cache.get(key) == result.context().ref
+    record = dml.runtime.read_execution_record(execution)
+    assert record["state"]["lifecycle"] == "succeeded"
+    assert record["driver"]["cleanup"]["status"] == "complete"
+    assert dag.put(tagged_identity)(12, sleep=lambda: 0, timeout=30_000).value() == 12

@@ -79,7 +79,9 @@ requests and appreciate your help in improving this project.
   ```
   uv run --dev --all-extras pytest -m "not slow" .
   ```
-- CI continues to run the full suite (`uv run pytest .`) to preserve complete coverage while local quick loops use `-m "not slow"`.
+- CI runs local/Moto deterministic coverage with `-m "not docker and not ssh and
+  not external"`; dedicated jobs run Docker and local-SSH coverage. Local quick
+  loops use `-m "not slow"`.
 - We mark tests under `tests/_core/` with `@pytest.mark.core`. Core tests are included by default. You can select or skip them with:
   ```
   uv run --dev --all-extras pytest -m core .
@@ -199,6 +201,29 @@ This section is for contributors maintaining or restructuring the test suite.
 - Integration tests that require external processes, polling loops, remote roundtrips, or significant runtime orchestration must be marked `@pytest.mark.slow`.
 - Contract tests in `tests/contracts/` should stay unmarked and fast by default.
 - Tests under `tests/_core/` are marked `@pytest.mark.core` by `tests/_core/conftest.py` and remain included in default pytest runs.
+
+#### Lifecycle and acceptance selection
+
+- Deterministic `slow` tests use disposable LMDB projects, a local Moto S3 server,
+  or isolated subprocesses. Run them with `uv run --dev --all-extras pytest -m
+  "slow and not docker and not ssh and not external" tests/`. Fixture worlds
+  and capability ownership are documented in `tests/lifecycle_fixtures.py`
+  and `tests/LIFECYCLE_COVERAGE.md`.
+- `docker` tests also require a running Docker daemon and the test-owned image;
+  they skip if unavailable. Run separately with `uv run --dev --all-extras pytest
+  -m "docker and not external" tests/` on a Docker-capable worker.
+- `ssh` tests start a disposable loopback OpenSSH server with generated keys and
+  use Moto for the worker's S3 access. Run `uv run --dev --all-extras pytest -m
+  "ssh and not external" tests/contrib/integration/` with an OpenSSH client,
+  server, and keygen installed. CI provisions the server in its SSH job.
+- Mark process-global tests `serial` and run them without xdist/parallel workers.
+  Give all spawned processes bounded readiness and termination timeouts and
+  clean up subprocesses/containers in fixture finalizers.
+- Mark real AWS Lambda/Batch acceptance `slow` **and** `external`. These tests
+  are skipped by default even in the full suite. Opt in with `--run-external -m external`
+  after provisioning the environment described in `tests/external/README.md`.
+  Record unrun/skipped external checks as unverified, not passing. Moto and local
+  SSH verify integration behavior but are not evidence of production AWS deployment.
 
 #### Taxonomy maintenance
 

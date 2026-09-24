@@ -100,7 +100,10 @@ markers = [
   "contrib: marks tests for daggerml.contrib (select with '-m contrib' or deselect with '-m \"not contrib\"')",
   "core: marks tests for daggerml._core (select with '-m core' or deselect with '-m \"not core\"')",
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-  "serial",
+  "docker: requires a running Docker daemon and a suitable image",
+  "ssh: requires a locally installed OpenSSH client and server",
+  "external: credential-gated external acceptance, skipped unless --run-external is supplied",
+  "serial: process-global resources; run without parallel test workers",
 ]
 
 [tool.ruff]
