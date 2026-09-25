@@ -1,85 +1,85 @@
 ---
 name: daggerml-repository
-description: Set up and manage DaggerML projects, history, remotes, dependencies, cache, and garbage collection.
+description: Use when managing DaggerML project state, history, remotes, dependencies, cache, or garbage collection. Applies DML-specific repository and shared-state conventions.
 ---
 
 # DaggerML Repository Management
 
-Use the CLI for repository operations. Never edit managed `.dml/` files, refs,
-configuration, or database state directly.
+Treat the DaggerML docs and current source as the authority for command behavior.
+Use this skill to decide **which state to inspect and when to change it**, not
+to replace CLI help. Use `dml` for repository operations; never edit managed
+`.dml/` state directly.
 
-## Initialize Or Clone A Project
+## Establish The Project And Endpoint
 
-Run `dml init` inside an existing project directory. DaggerML does not search
-parent directories for a project; run commands from that directory or pass
-`--project-home`. A new repository begins on an unborn branch, and its first DAG
-commit creates history.
+Run commands from an initialized project (`dml init`) or select its project home
+explicitly. DML does not search parent directories for a project. Use `dml clone`
+when starting from existing remote history rather than initializing over it.
 
-Use `dml clone` for an existing remote project. The destination must not already
-be initialized. Cloning a branch attaches `HEAD` and configures its upstream;
-cloning a tag or exact commit creates a detached checkout.
+Before syncing or executing remote-backed work, verify the effective
+`remote.root` with `dml config show`. It is the shared synchronization,
+execution, cache, and artifact endpoint, not a dependency registry.
+Configuration can be overridden by environment or explicit options, so inspect
+the effective setting rather than assuming the project file is authoritative.
 
-## Configure The Project
+## Inspect Before Changing History
 
-`remote.root` is the project's synchronization, execution, cache, and artifact
-endpoint. Configuration precedence is defaults, global, project, environment,
-then explicit command or Python overrides.
+Use `dml status` to establish the current branch, checkout, and revision; use
+`dml log`, `dml show`, and `dml diff` to understand the history or DAG snapshot
+you intend to change. Resolve ambiguous revision names before checkout,
+branch/tag movement, merge, rebase, or revert. Branches and tags name commits;
+a detached checkout is not an attached branch for new history.
 
-```bash
-mkdir research && cd research
-dml init
-dml config set remote.root s3://bucket/research
-dml config show
-dml status
-```
+Check status again after a revision-changing operation. Do not treat a DAG
+name at the current tip as an exact historical result; keep the commit or DAG
+ref when the distinction matters.
 
-## Inspect Repository State
+## Coordinate Remote And Dependency State
 
-Use `status` before and after mutations. Use `log` for history, `show` for a
-revision's DAGs, `diff` for changes between revisions, and `rev-parse` to resolve
-`HEAD`, `HEAD~N`, branch names, `@tag`, or exact commit hashes.
+Decide whether you need to fetch remote history, integrate an upstream branch,
+or publish local history. `fetch` updates local tracking state; `pull`
+integrates the upstream (fast-forward-only by default); `push` publishes an
+attached branch. A remote-tracking revision is a fetched local view, not a live
+read of the endpoint. Inspect branch attachment and upstream before publishing.
 
-Branches and tags point to commit tips. Before `checkout`, `merge`, `rebase`,
-`revert`, branch movement, or ref deletion, confirm the current branch and
-revision. A non-local checkout detaches `HEAD`; create or attach a branch before
-recording new history.
+A shallow clone or fetch has a complete selected snapshot but may lack older
+ancestry. Deepen or unshallow before operations that need to compare or prove
+history across that boundary.
 
-## Synchronize A Remote
+Use dependencies for importing another project's DAGs, not for execution or
+cache coordination. Configure the dependency endpoint and fetch its desired
+branch or tag before using its results. Dependencies are import-only; do not
+push to them or target them with garbage collection.
 
-`fetch` updates one local remote-tracking revision. `pull` fetches and integrates
-the current branch's upstream, fast-forward-only by default. `push` publishes the
-attached branch. For revision-reading commands, `--remote` selects fetched
-tracking state rather than querying the live endpoint.
+## Investigate Cache Identity Before Invalidation
 
-Shallow fetches retain a complete selected snapshot but omit older ancestry.
-Before an operation that must prove ancestry, fetch a greater `--depth` or use
-`--unshallow`.
+A cache key identifies a computation; invalidation targets an **exact execution
+ref**. First inspect the cache description and its associated execution record.
+Confirm which execution is selected and whether its result remains reusable;
+cleanup state can differ from result state. If invalidation is intentional,
+retain and use the returned `index:` or `frozenindex:` execution ref, not the
+cache key, DAG ref, bare ID, or a guessed execution.
 
-## Use Dependencies
+Invalidation affects other users of the same `remote.root`. Treat unexpected
+reuse as a question about the runnable and normalized inputs before refreshing
+shared work. Use CLI cache and runtime inspection for the recorded identity and
+lifecycle; CLI help supplies the current commands.
 
-`dml dep add NAME ROOT` configures an import-only project. Fetch its branch or
-tag with `dml fetch --dep NAME ...` before loading its DAGs. Dependencies are
-read-only: never push to them or target them with garbage collection.
+## Collect Only Unreachable State
 
-## Inspect And Invalidate Cache State
+Local and remote GC collect unreachable objects; remote GC uses the configured
+`remote.root`, not a dependency. Confirm which refs must remain reachable before
+collecting, and do not run GC while synchronization or endpoint execution is
+active. Never run it concurrently with fetch, pull, or push. There is no GC dry
+run or dependency target.
 
-Cache keys identify computations; invalidation targets executions. `cache describe`
-returns the pointer's exact `execution` ref, optional reusable `dag`, and
-`lifecycle`, or null when no pointer exists. Inspect the execution record before
-mutation, then invalidate only the exact `index:` or `frozenindex:` ref. Never
-pass a cache key, bare ID, or guessed ref. Invalidation affects other users of
-the same `remote.root`.
+## Review Shared-State Decisions
 
-```bash
-dml cache describe CACHE_KEY
-dml runtime read-execution-record index:EXACT_EXECUTION_ID
-dml cache invalidate index:EXACT_EXECUTION_ID
-dml cache describe CACHE_KEY
-```
+Before finishing, check:
 
-## Garbage Collect
-
-`dml gc` collects unreachable local objects; `dml gc --remote` collects the
-configured remote. There is no dry run or dependency target. Preserve needed
-refs first, and run GC only when synchronization and endpoint execution are
-idle. Never run it concurrently with fetch, pull, or push.
+- Is this the intended project, revision, branch, and endpoint?
+- Was remote-tracking state fetched, and is shallow ancestry sufficient?
+- Is a dependency being treated as import-only?
+- Was cache reuse explained before considering invalidation?
+- Does an invalidation use the exact execution ref?
+- Are needed refs retained and synchronization idle before GC?

@@ -1,129 +1,90 @@
 ---
 name: daggerml-querying
-description: Extract data, traverse DAGs and provenance, and capture persisted errors.
+description: Use when reading or investigating DaggerML results. Applies DML-specific guidance for selecting data, tracing provenance, and interpreting persisted failures.
 ---
 
-# DaggerML Data Querying
+# DaggerML Querying
 
-Start from a project initialized with `dml init`. Query through Python when
-selecting data or following provenance; use `dml` CLI inspection when you only
-have refs. Do not modify managed `.dml/` files to read data.
+Treat the DaggerML docs and current source as the authority for API behavior.
 
-## Load A DAG
+Use this skill to decide what to inspect and how to interpret it, not to
+replace the CLI or Python API reference.
 
-Use `dml show` to discover committed DAG names and `dml.load(name,
-revision="HEAD")` to load one. A loaded DAG is complete and immutable.
-`dag.result` is its terminal node. A node merely named `"result"` is unrelated
-and is accessed as `dag["result"]`.
+Start with `dml show` to discover DAGs and `dml dag --help` to find the relevant
+inspection command for recorded graph state, provenance, refs, and errors.
+Use Python when working interactively with a specific DAG's nodes, nested
+values, projections, artifacts, or provenance traversal is more useful than
+inspecting recorded metadata through the CLI.
 
-Use `dml show` to obtain a DAG name or ref at the desired revision before
-loading. Choose `.result` if the committed terminal output is what you want;
-choose `dag["name"]` when the author explicitly retained an intermediate. The
-two can point to different nodes. A missing name is not the same as a failed
-named call: retain any error rather than silently substituting a fallback.
+## Establish The Object Of Investigation
 
-## Get Nodes And Values
+Identify the intended DAG and revision before interpreting a result. A name at
+`HEAD` may no longer identify the result under investigation; preserve exact
+refs for historical results.
 
-Read named nodes with `dag.foo` or `dag["foo"]`. Use item syntax for names that
-collide with `Dag` attributes or methods. `dag.keys()` lists names and
-`dag.values()` returns their nodes.
+A committed DAG is immutable and has a terminal `.result`. An active runtime
+can still change; a frozen runtime exposes a stable, read-only partial DAG.
+Both partial states expose named nodes and `argv`, but neither has a committed
+terminal result. Querying an active DAG does not freeze or commit it.
 
-Nodes remain graph objects until `.value()` materializes Python data. Materialize
-only when concrete data is needed; nodes and projections can be traversed and
-inspected without materializing their parent values.
+## Select The Intended Result
 
-## Access Collections
+Distinguish the committed terminal output from a named intermediate. In Python,
+`dag.result` is the terminal result and `dag["name"]` selects a named node.
+A node named `"result"` has no special relationship to `.result`.
 
-Collection-valued nodes support key, index, and slice access. A completed DAG
-cannot record new access nodes, so `dag.foo["bar"]` returns a read-only
-`Projection`, not a new node. It follows the same value semantics:
-`dag.foo["bar"].value() == dag.foo.value()["bar"]`. Chain projections to select
-only the required data. Projections also support `.context()`.
+When using Python, select the narrowest relevant part of a collection before
+calling `.value()`; avoid materializing an entire collection to read one item.
 
-A projection has a `base` node and a `path`; it has no independent node `ref`.
-On an open DAG, indexing instead records a new builtin access node in that
-mutable graph. Do not assume an indexed value is always a new node.
+Indexing a committed collection yields a read-only `Projection` with a base
+node and path, not its own node ref. Indexing in an open DAG instead records an
+access node. Do not infer a new persisted node from every selection. A missing
+name is distinct from a named call that exists but failed.
 
-```python
-import daggerml as dml
-import daggerml.api as api
+## Follow Provenance
 
-dag = dml.load("experiment")
-terminal = dag.result
-predictions = dag["predictions"]
-first_score = predictions["rows"][0]["score"]
+Trace recorded provenance rather than inferring origins from values. Distinguish
+the immediate producing context from rooted provenance across function or import
+boundaries. Collection construction and access are implemented as builtin funks;
+their execution DAGs are generally plumbing, not the producer you want to
+attribute a selected value to. Context traversal follows through those builtin
+layers in either mode.
 
-print(first_score.value())
-print(first_score.context(root=False).keys())
+In Python, `node.context(root=False)` finds the nearest producing function or
+import DAG, while `node.context()` follows those boundaries to rooted provenance.
+The `root` option controls whether traversal continues past that nearest
+non-builtin boundary, not whether builtin collection layers are skipped.
+Projections support the same traversal.
 
-try:
-    dag["failed-call"]
-except api.NodeError as error:
-    print(error.origin, error.type, error.message, error.stack)
-    failed_call = error.context()
-```
+Compare both contexts for nested funks; inspect the producing DAG's inputs,
+names, and result before attributing a value to a particular worker. Distinct
+authoring nodes may share one execution DAG, so compare immediate execution
+refs when investigating reuse.
 
-In the example, `terminal` is the committed DAG's chosen output, while
-`predictions` is a named node. Materialize `first_score`, not the whole
-collection, if only that selection is needed. `context(root=False)` is useful
-when looking for the function call that directly produced a value.
+## Treat Errors As Results Of Investigation
 
-## Traverse Provenance
+Persisted failures are evidence, not missing values. Preserve the error's
+origin, type, message, stack, failing node ref, and producing context. In
+Python, failed named calls and failed terminal results surface differently;
+do not mistake either for an absent value or silently use another result.
 
-`node.context(root=False)` returns the nearest non-builtin function or import DAG
-that produced the value. `node.context()` follows those boundaries to rooted
-provenance. Builtin collection construction and access are transparent. The
-returned object is another queryable `Dag`; inspect its names, `argv`, terminal
-result, and errors.
+Inspect producing inputs and intermediate nodes before attributing cause or
+retrying.
 
-For a result of a nested funk, compare `node.context(root=False)` with
-`node.context()` before attributing a value to the outer authoring DAG. The
-nearest context can be the inner execution DAG; the rooted context follows
-function/import boundaries further. Inspect `context.keys()` and `context.argv`
-to connect a value to the inputs and intermediate names actually recorded
-there. Collection access alone is transparent to this traversal.
+## Follow Refs, Don't Guess
 
-## Capture Persisted Errors
+Use CLI inspection to follow the recorded DAG-to-node-to-producing-DAG-to-error
+chain when only refs are available. Keep namespace-qualified refs intact; do
+not infer producing functions, revisions, or failures from materialized values
+alone.
 
-Failed work is durable data, not a missing node. Accessing a failed named
-function node raises `daggerml.api.NodeError`. Retain its `origin`, `type`,
-`message`, `stack`, and `node_ref`; `error.context()` returns the failed function
-DAG. Accessing a failed terminal `dag.result` raises the persisted `Error`
-directly.
+## Check The Interpretation
 
-The two failure paths differ: `dag["failed-call"]` raises `NodeError` with
-`origin`, `type`, `message`, `stack`, and `node_ref`; `dag.result` of a failed
-execution raises the persisted `Error`. Do not treat either as an absent value
-or replace it with `None`. Retain the exact ref and failure context when
-reporting an error so the producing execution can be inspected later.
+Before concluding:
 
-When only refs are available, use a `Dml` session's `dag.describe`,
-`dag.describe_node`, `dag.get_node`, and `dag.get_error` methods to follow the
-node-to-function-DAG-to-error chain without discarding exact refs.
-
-For CLI-only investigation, start with the committed ref and follow names to
-node refs, then inspect the producing graph and error ref:
-
-```bash
-dml show
-dml dag describe 'dag:YOUR_DAG_REF'
-dml dag get-node-by-name 'dag:YOUR_DAG_REF' predictions
-dml dag describe-node 'node:YOUR_NODE_REF'
-# If the DAG description contains an error ref:
-dml dag get-error 'error:YOUR_ERROR_REF'
-```
-
-Replace the placeholders with complete refs returned by the preceding
-commands; do not strip their namespace prefixes. `describe-node` identifies
-the producing DAG, whose description exposes result, names, and any error ref.
-
-## Query A Partial DAG
-
-An active runtime is mutable; a frozen runtime exposes its partial DAG as
-read-only. Named nodes, `keys()`, `values()`, and `argv` remain queryable, but
-`result` is unavailable until the DAG is committed.
-
-When a runtime is active, querying a name does not freeze or commit it; other
-work can still change the graph. A frozen runtime exposes a stable partial view
-but is not a committed result. Select a named node or inspect `argv` when
-working with either partial state, and only use `.result` after commit.
+- Right revision and committed or partial state?
+- Terminal result or named intermediate?
+- Projection or independently recorded node?
+- Immediate vs rooted provenance understood?
+- Persisted error details and producing context preserved?
+- Conclusion supported by refs/context rather than just the Python value?

@@ -1,134 +1,114 @@
 ---
 name: daggerml-authoring
-description: Build reproducible DaggerML DAGs and script-backed funks.
+description: Use when writing or reviewing DaggerML code. Applies DML-specific graph, caching, provenance, and execution conventions.
 ---
 
 # DaggerML Authoring
 
-Use the Python API to build computation graphs; use `dml` commands to initialize
-projects and inspect repository state. Work in an initialized project (`dml
-init`); configure `remote.root` before remote-backed script execution and cache
-coordination. Keep `.dml/` managed by DaggerML tooling.
+Treat the DaggerML docs and current source as the authority for API behavior.
 
-## Create And Commit A DAG
+Use this skill to decide **how DML code should be structured**, not to replace the API reference.
 
-`dml.new(name, message=...)` creates a mutable DAG. Stage data and functions,
-record calls, then explicitly commit one node as the terminal result. Successful
-exit from a `with` block does not commit automatically. A committed DAG is
-immutable; load it with `dml.load(name)` and read its terminal node through
-`.result`.
+For runnable examples, see the `examples/` directory in this skill; they're all tested against this version of dml.
 
-## Put And Get Data
+## Preserve The Graph
 
-`dag.put(value, name=...)` stages a value and returns its node. Assignment is a
-short form for staging named data: `dag.foo = value` and `dag["foo"] = value`.
-Use item syntax for names that collide with `Dag` attributes or methods.
+Keep values represented as DML nodes or projections for as long as they remain part of the computation graph.
 
-Read named nodes with `dag.foo` or `dag["foo"]`; inspect available names with
-`dag.keys()` and their nodes with `dag.values()`. A name is a label, not a copy.
-`dag.result` is available only on a committed DAG and means its terminal node; a
-node named `"result"` is just `dag["result"]`.
+Pass nodes, projections, and collections containing them directly between DML operations.
 
-Keep nodes in the graph. Nodes can be staged inside lists or dictionaries,
-passed to functions, or indexed. Call `.value()` only for inspection or when
-ordinary Python code needs concrete data. Collection-valued nodes support normal
-key, index, and slice access: `dag.foo["bar"]` returns another node in the same
-DAG, and `dag.foo["bar"].value() == dag.foo.value()["bar"]`. Pass the selected
-node directly into calls or other collections to avoid materializing the parent.
+Do not call `.value()` merely to pass a result into another funk or DAG operation. Materializing and restaging a value discards graph structure that DML could otherwise preserve.
+
+Materialize only when ordinary Python execution actually requires the concrete value, such as:
+
+- arithmetic inside a worker;
+- iteration required by a library;
+- passing data to an external Python API;
+- explicit inspection or debugging.
+
+When reusing existing DML state, import or stage the existing node rather than its materialized Python value.
+
+Prefer:
 
 ```python
-import daggerml as dml
-from daggerml.contrib import api
-
-
-@api.funkify
-def square(dag, number):
-    return number.value() ** 2
-
-
-with dml.new("squares", message="square an input") as dag:
-    number = dag.put(3, name="number")
-    dag["metadata"] = {"unit": "meters"}
-
-    assert dag.number == number
-    assert dag["metadata"].value() == {"unit": "meters"}
-
-    direct = dag.call(square, number, name="direct")
-    dag.square = square
-    result = dag.square(direct, name="squared-again")
-    dag.commit(result)
-
-assert dml.load("squares").result.value() == 81
+features = dag.require("features")
+prediction = dag.call(model, features)
 ```
 
-The first call receives the `number` node, not its Python value; the second
-receives the `direct` call result node. The worker materializes each input only
-when performing arithmetic. If a call fails during authoring, the named call
-and its execution DAG remain inspectable even if you catch the error and commit
-another result.
+over:
 
-## Call Functions
+```python
+features = dml.load("features").result.value()
+prediction = dag.call(model, dag.put(features))
+```
 
-Call a funk directly with `dag.call(fn, *args, name=...)`, or stage it as a node
-and call that node: `dag.fn = fn; dag.fn(*args, name=...)`. `dag.put(fn,
-name="fn")` is the explicit equivalent of assignment. In both forms, arguments
-may be literals, nodes, projections, or nested collections containing them, and
-the returned node records the call result. The call's `name=` labels that result;
-it does not name the function.
+When only part of a collection is needed, preserve the projection when possible rather than materializing the parent collection first.
 
-Pass node-like arguments unchanged to nested funks. Do not call `.value()`
-between graph calls: that materializes and restages a copy instead of preserving
-the dependency edge. Write calls in their logical order without trying to stage,
-schedule, or deduplicate them: DaggerML ensures a given funk and normalized
-arguments run only once and reuses the cached result thereafter.
+## Make Dependencies Explicit
 
-## Load Nodes From Other DAGs
+If changing some state can change a computation's result, represent that state explicitly in DML.
 
-There are two general forms: `dag.require(...)`, or load a committed DAG and
-stage one of its nodes with `dag.put(...)`, item assignment, or attribute
-assignment.
+Behavior-affecting state should normally appear in one of:
 
-With `dag.require(dag_name, name=...)`, the source DAG's terminal result is
-imported. `dag.require(dag_name, node_name, name=...)` always imports the named
-node. Therefore `dag.require("other-dag", "result")` imports
-`dml.load("other-dag")["result"]`, not `dml.load("other-dag").result`.
-`name=` labels the imported node in the target DAG; it does not select or rename
-the source node.
+- the runnable itself;
+- funk arguments;
+- staged configuration;
+- explicitly injected worker source;
+- explicit DML dependencies.
 
-For `source = dml.load("other-dag")`, `dag.require("other-dag")` is equivalent
-to `dag.put(source.result)`. `dag.require("other-dag", "bar", name="foo")` is
-equivalent to `dag.put(source["bar"], name="foo")` or
-`dag.foo = source["bar"]`.
+Do not silently depend on mutable ambient Python state.
 
-`dag.require(source)` also accepts a loaded committed `Dag`; its second argument
-selects a named node. This form preserves an explicit revision, fetched remote,
-or dependency selected when loading `source`. The loaded DAG must belong to the
-target DAG's `Dml` session. Importing an uncommitted DAG or a node from another
-open runtime fails.
+Prefer explicit graph dependencies over hidden filesystem state, module globals, closures, process state, or implicit configuration.
 
-For an existing result, prefer `input_node = dag.require("upstream",
-name="input")` and pass `input_node` into downstream calls. When you need a
-specific named intermediate, use `dag.require("upstream", "intermediate")`.
-To reuse only part of a committed collection, select it before staging:
-`dag.put(source["records"][0], name="first")`. This keeps the committed
-base and selection path rather than copying a materialized value.
+This is especially important when the value should affect provenance or cache identity.
 
-## Author Funks
+## Choose Funk Boundaries Deliberately
 
-`@api.funkify` packages delayed work. Worker arguments are node-like: materialize
-with `.value()` for arithmetic, iteration, or library calls, but pass them
-unchanged to nested funks. Other funks must be explicit through arguments,
-`prepop`, or dagclass members.
+Treat a funk as an **execution, caching, provenance, and potentially runtime boundary**, not merely as a Python function.
 
-Script workers receive rendered function source plus `extra_objs` and
-`post_lines`, not module globals, closures, module imports, constants, or
-transitive helpers. Import dependencies inside the function and inject all
-behavior-affecting helper source. `prepop` creates named nodes on the worker DAG;
-`api.ref("name")` resolves configuration from an already-named authoring node.
-`logger` is injected.
+Create a separate funk when the computation has a meaningful independent execution boundary, for example when it:
 
-For example, a worker that needs a library can import it in the body; a
-source-defined helper must be included explicitly:
+- is expensive;
+- is independently reusable;
+- benefits from independent caching;
+- should be separately inspectable;
+- should run under a different executor or environment;
+- represents a meaningful persisted stage of a computation.
+
+Do not turn every Python helper into a funk.
+
+Use ordinary Python functions for local implementation structure when they do not need independent DML semantics.
+
+Prefer coarse enough funks to avoid meaningless graph fragmentation, but fine enough funks that expensive reusable results can be cached independently.
+
+## Keep Funk Inputs Minimal
+
+A leaf funk should accept the inputs that actually determine its behavior.
+
+Do not thread unrelated configuration or large context objects through every funk for convenience.
+
+Unrelated arguments can unnecessarily distinguish otherwise identical executions and reduce cache reuse.
+
+If an argument is intentionally included only to invalidate cache identity, make that intent clear.
+
+## Treat Script Workers As Isolated Programs
+
+Reason about every script-executed funk as though its function body were copied into a fresh Python module.
+
+Do not assume access to:
+
+- module-level imports;
+- module globals;
+- constants defined elsewhere in the file;
+- closures;
+- neighboring helper functions;
+- transitive helper dependencies.
+
+Import external packages inside the worker when appropriate.
+
+Explicitly inject source helpers through the supported source-injection mechanisms when they belong to the runnable.
+
+For example:
 
 ```python
 def clean(value):
@@ -136,68 +116,166 @@ def clean(value):
 
 
 @api.funkify(extra_objs=(clean,))
-def normalize(dag, text):
-    return clean(text.value())
-
-
-with dml.new("cleaned", message="normalize a label") as dag:
-    raw = dag.put("  EXAMPLE  ", name="raw")
-    cleaned = dag.call(normalize, raw, name="cleaned")
-    dag.commit(cleaned)
+def normalize(dag, value):
+    return clean(value.value())
 ```
 
-The generated script contains `clean`; an unlisted module global or closure
-would not be available to this worker. Use `post_lines` for explicit module
-definitions when appropriate. `defunkify()` can test plain funk logic quickly,
-but only a real call checks worker isolation, storage, and cache behavior.
+Do not rely on a helper merely because it is importable or happens to exist beside the funk in the authoring source.
 
-## Compose A Dagclass
+If changing helper code should change execution identity, ensure that helper code is actually part of the runnable.
 
-Use a dagclass when several named steps and parameters form a reusable
-pipeline. Open `examples/dagclass.py` in this skill directory for a complete
-airline-delay regression example. It stages the public Vega flights sample as
-an artifact, splits it deterministically, and returns Polars DataFrames so the
-installed codec persists each cut as Parquet. Later Docker funks read the
-Parquet URIs directly with Polars, train and pickle decision trees, predict
-both cuts, compute R²/MSE/MAE, and select the best out-of-sample R².
-The `search` method retains every `{params, objective}` as the named `trials`
-node in its execution DAG. `main` prints the winning parameters and score and
-returns the best trial. Run from an initialized project with `remote.root`
-configured: `python path/to/daggerml-authoring/examples/dagclass.py IMAGE`,
-where IMAGE contains DaggerML, polars, and scikit-learn. The example's `run()`
-also accepts a staged dataset URI and Docker flags for other environments.
-For S3-compatible endpoints, pass `AWS_ENDPOINT_URL` into the Docker worker;
-the script explicitly gives that endpoint to Polars's cloud reader.
+## Distinguish Python Testing From DML Testing
 
-Annotated fields are constructor inputs; direct `self.member` reads let the
-compiler discover method dependencies. `api.run()` stages class members, calls
-`main`, and commits its result. In each method's worker, `self` is a DAG:
-`self.trials` creates an invocation-local node, not an instance attribute shared
-with later calls. Keep the model and dataset as artifact URIs and pass graph
-nodes between methods; call `.value()` only to train, compute metrics, iterate
-the parameter sets, or choose and print the best result. Each script method is
-isolated from module-level imports and globals.
+Use lightweight execution such as `defunkify()` when testing ordinary Python logic.
 
-## Manage Cache Identity
+Do not treat that as sufficient validation of DML execution semantics.
 
-Cache reuse keys on the staged runnable and normalized DaggerML input identity.
-Chunk expensive input work when independently reusable chunk results will avoid
-recomputing the whole dataset, but do not create funks without a meaningful
-reuse boundary. A leaf funk should accept only arguments it uses: unrelated
-arguments cause cache misses unless intentionally supplied as a cache breaker.
-Editable imported package code is not automatically part of that identity, so
-pin environments and package changing helpers. Put supported complex values
-directly and let installed codecs normalize them; the included pandas and polars
-DataFrame codecs persist Parquet artifacts automatically. For other files,
-directories, bytes, or JSON artifacts, store them with
-`daggerml.contrib.s3.S3Store` and put the returned `Uri` in the DAG.
+Exercise a real DML call when the change concerns:
 
-## Check An Authored Result
+- worker isolation;
+- source capture;
+- helper injection;
+- serialization or codecs;
+- artifacts;
+- executor behavior;
+- cache identity;
+- provenance;
+- execution DAG structure.
 
-After committing, reload the DAG and compare `result` with any named nodes you
-intend to expose. Follow a returned call node with `.context(root=False)` to
-inspect its immediate execution DAG; repeated calls with the same runnable and
-normalized inputs can have distinct authoring nodes but share that execution
-DAG. If work unexpectedly reused a result, check the rendered script and its
-explicit helper source, staged runnable configuration, and actual node inputs.
-Changing unrelated authoring code does not necessarily change cache identity.
+A function that works as ordinary Python can still fail as a DML worker.
+
+## Let DML Own Scheduling And Reuse
+
+Write graph operations in their logical dependency order.
+
+Do not manually deduplicate calls because two authoring calls appear equivalent.
+
+Do not build application-level scheduling logic merely to avoid repeated execution.
+
+DML may represent multiple authoring call nodes while reusing the same underlying execution when the runnable and normalized inputs are identical.
+
+Design the graph around logical computation structure and let DML manage execution reuse.
+
+## Design Cache Boundaries, Not Cache Tricks
+
+Think about cache structure when choosing the shape of the computation.
+
+Split expensive work when independently reusable intermediate results are likely to matter.
+
+Do not split cheap work solely to increase the number of cached nodes.
+
+Do not assume that changing nearby authoring code invalidates an existing execution.
+
+When cache behavior appears surprising, inspect the actual runnable and its DML inputs rather than assuming source-file changes imply a new identity.
+
+## Keep Dagclass Topology Explicit
+
+Use a dagclass when a reusable computation has meaningful named topology, parameters, and multiple related stages.
+
+Do not introduce a dagclass merely to namespace unrelated functions.
+
+Write dependencies using direct `self.member` references so the topology remains statically visible to DML.
+
+Avoid hiding graph dependencies behind:
+
+- `getattr`;
+- dynamic item lookup;
+- reflection;
+- dynamically constructed member names;
+- helper abstractions that obscure which members are read.
+
+Inside a dagclass worker, remember that `self` participates in DML execution semantics; do not reason about it as an ordinary persistent Python instance.
+
+Treat assignment to `self.<name>` inside a worker as graph construction, not ordinary mutation of shared object state.
+
+Prefer explicit, readable topology over clever Python indirection.
+
+## Keep Large Data And Artifacts In Their Native DML Form
+
+Avoid unnecessary materialization and copying of persisted datasets, files, models, or other artifacts.
+
+When DML already has an appropriate codec or artifact representation, preserve that representation through the graph.
+
+Pass artifact references or graph nodes between stages rather than loading data into Python and immediately writing the same data back out.
+
+Materialize data where computation actually happens.
+
+## Make Results Intentional
+
+Explicitly choose the terminal result of an authored DAG.
+
+Do not assume successful exit from a DAG authoring context implies that the intended result was committed.
+
+Use names for nodes that are useful for inspection, debugging, or downstream reuse, not merely to mirror every temporary Python variable.
+
+Treat the committed result as the public output of the DAG and named intermediate nodes as useful exposed structure.
+
+## Preserve Failure Information
+
+Treat failures as inspectable computation state rather than something to immediately erase and recompute.
+
+When a named call fails, inspect its execution context before restructuring the graph or retrying blindly.
+
+Preserve enough graph structure that the failed runnable, its inputs, and relevant intermediate state remain diagnosable.
+
+## Prefer Provenance Over Convenience
+
+When two implementations are otherwise equivalent, prefer the one that leaves DML with a more accurate description of:
+
+- where data came from;
+- what computation produced it;
+- which inputs affected it;
+- which runnable executed;
+- which intermediate results can be reused.
+
+Avoid Python conveniences that turn explicit DML relationships into opaque concrete values.
+
+## Do Not Over-DML Ordinary Python
+
+DML should describe meaningful computation and persisted dependencies.
+
+Do not force ordinary local control flow, formatting, tiny transformations, or implementation helpers into graph nodes unless doing so provides useful DML semantics.
+
+A useful test is:
+
+> Would independently identifying, caching, persisting, inspecting, or executing this operation be valuable?
+
+If not, ordinary Python is usually the better abstraction.
+
+## Verify Semantics After Meaningful Changes
+
+For nontrivial authoring changes, verify the DML behavior that matters rather than only checking the final Python value.
+
+Depending on the change, inspect:
+
+- the committed DAG result;
+- important named nodes;
+- execution DAGs;
+- immediate call context;
+- actual funk inputs;
+- the rendered runnable/source;
+- whether repeated calls reuse execution as expected;
+- whether changed behavior correctly changes execution identity.
+
+Use `.context(root=False)` on representative call results when execution identity, provenance, or reuse matters.
+
+Reload committed DAGs when testing persisted behavior rather than relying only on the still-open authoring object.
+
+## Review For Common DML Mistakes
+
+Before finishing authored DML code, check for:
+
+- `.value()` calls between DML operations;
+- materialized values being unnecessarily restaged;
+- hidden module globals or closures in script funks;
+- helpers omitted from worker source;
+- arguments unrelated to a funk's behavior;
+- unnecessary funk boundaries;
+- expensive work grouped so broadly that useful cache reuse is lost;
+- dynamic dagclass dependency lookup;
+- hidden behavior-affecting configuration;
+- assumptions that ordinary Python tests validate worker execution;
+- assumptions that authoring-source changes automatically invalidate cache identity;
+- graph structure replaced with ordinary Python plumbing.
+
+Prefer fixing the underlying graph semantics over adding procedural workarounds.

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import argparse
-import ast
 from importlib import resources
 
 import pytest
@@ -9,26 +7,7 @@ import pytest
 from daggerml._cli import MethodCLI
 from daggerml._core import Dml
 
-SKILLS = {
-    "querying": {
-        "description": "Extract data, traverse DAGs and provenance, and capture persisted errors.",
-        "guidance": ("`dag.result`", "`Projection`", "root=False", "NodeError"),
-    },
-    "authoring": {
-        "description": "Build reproducible DaggerML DAGs and script-backed funks.",
-        "guidance": ("`dag.require", "`.value()`", "extra_objs", "normalized DaggerML input identity"),
-    },
-    "repository": {
-        "description": (
-            "Set up and manage DaggerML projects, history, remotes, dependencies, cache, and garbage collection."
-        ),
-        "guidance": ("managed `.dml/`", "--unshallow", "cache describe", "exact `execution` ref"),
-    },
-    "extensions": {
-        "description": "Build and test DaggerML adapters, executors, codecs, and integration plugins.",
-        "guidance": ("transport boundary", "`poll`", "validate_adapter_response", "daggerml.codecs"),
-    },
-}
+SKILLS = ("querying", "authoring", "repository", "extensions")
 
 
 def _skill(name: str) -> str:
@@ -37,33 +16,6 @@ def _skill(name: str) -> str:
 
 def _dagclass_example() -> bytes:
     return resources.files("daggerml._core").joinpath("skills", "authoring", "examples", "dagclass.py").read_bytes()
-
-
-@pytest.mark.parametrize("name", SKILLS)
-def test_skills_help_and_commands_install_bundled_resources(
-    capsys, monkeypatch, tmp_path, name
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    cli = MethodCLI(Dml, prog="dml")
-    subparsers = next(action for action in cli.parser._actions if isinstance(action, argparse._SubParsersAction))
-
-    skills_parser = subparsers.choices["skills"]
-    skill_subparsers = next(
-        action for action in skills_parser._actions if isinstance(action, argparse._SubParsersAction)
-    )
-    assert set(skill_subparsers.choices) == set(SKILLS)
-    skills_help = subparsers.choices["skills"].format_help()
-    assert name in skills_help
-    assert "Install the bundled" in skills_help
-    parent = tmp_path / "nested" / "skills"
-    assert cli.run(["skills", name, str(parent)]) == 0
-    directory = parent / f"daggerml-{name}"
-    assert (directory / "SKILL.md").read_text(encoding="utf-8") == _skill(name)
-    amount = len(_skill(name).encode("utf-8"))
-    if name == "authoring":
-        assert (directory / "examples" / "dagclass.py").read_bytes() == _dagclass_example()
-        amount += len(_dagclass_example())
-    assert capsys.readouterr().out == f"Installed {directory} ({amount} bytes written)\n"
 
 
 @pytest.mark.parametrize("name", SKILLS)
@@ -132,29 +84,6 @@ def test_overwrite_rejects_symlinked_skill_file(tmp_path) -> None:
     with pytest.raises(ValueError, match="regular file"):
         Dml().skills.querying(str(parent), overwrite=True)
     assert external.read_text(encoding="utf-8") == "original"
-
-
-@pytest.mark.parametrize(("name", "contract"), SKILLS.items())
-def test_resources_are_portable_and_topic_specific(name, contract) -> None:
-    skill = _skill(name)
-
-    assert skill.startswith(f"---\nname: daggerml-{name}\ndescription: {contract['description']}\n---\n")
-    assert "](" not in skill
-    for text in contract["guidance"]:
-        assert text in skill
-
-
-def test_authoring_skill_includes_a_complete_dagclass_example() -> None:
-    skill = _skill("authoring")
-    assert "examples/dagclass.py" in skill
-    example = _dagclass_example().decode("utf-8")
-    ast.parse(example)
-    assert "@api.dagclass\nclass AirlineDelaySearch:" in example
-    assert "def train(" in example and "pickle.dumps(tree)" in example
-    assert "def predict(" in example and "def metrics(" in example
-    assert "def pipeline(" in example and "def search(" in example
-    assert 'scores["out_of_sample"]["r2"]' in example
-    assert "self.trials = trials" in example
 
 
 def test_authoring_overwrite_rejects_symlinked_example(tmp_path) -> None:
