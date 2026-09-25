@@ -4,13 +4,18 @@ engine: knitr
 depends-on: start-here
 ---
 
-DaggerML requires Python 3.11 or later. Install it, then create a project with
-the CLI.
+DaggerML turns research computations into reproducible, shareable building
+blocks. Share functions as well as results: run them on your own inputs without
+reconciling environments, and reuse completed work when inputs match. Each
+result retains its provenance, and its computation remains runnable as long as
+the infrastructure it needs exists.
 
 <!-- docs:pseudocode: reader installation command; the docs build must use the current repository environment rather than install a released package. -->
 ```bash
 pip install daggerml
 ```
+
+## Start a project
 
 ```{bash}
 mkdir research-demo
@@ -18,10 +23,9 @@ cd research-demo
 dml init
 ```
 
-The commands remain in one shell block so `dml init` runs inside the new
-`research-demo` directory. It creates `.dml/` there. The next page uses that
-same project to create and query a live DAG.
+## Built-in agent skills
 
-Continue with [DAGs](dags.qmd). Use `dml --help` for generated command details;
-the ordered [Use course](../use/projects.qmd) applies administrative commands in
-their project, runtime, and sharing workflows.
+DaggerML includes skills for agents to help author DAGs, query results, manage
+projects, and build extensions (see: `dml skills --help`).
+
+Continue with [DAGs](dags.qmd) to create and query a result.

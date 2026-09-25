@@ -156,10 +156,10 @@ def test_cli_removed_maintenance_routes_are_rejected(route) -> None:
         ["cache", "invalidate", "index:e1"],
         ["gc"],
         ["gc", "--remote"],
-        ["skills", "querying"],
-        ["skills", "authoring"],
-        ["skills", "repository"],
-        ["skills", "extensions"],
+        ["skills", "querying", ".agents/skills"],
+        ["skills", "authoring", ".agents/skills"],
+        ["skills", "repository", ".agents/skills"],
+        ["skills", "extensions", ".agents/skills"],
     ],
 )
 def test_cli_canonical_maintenance_routes_are_accepted(route) -> None:

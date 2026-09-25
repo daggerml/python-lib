@@ -1,8 +1,4 @@
-## Purpose
-
-Provide concise, task-focused portable guidance that lets coding agents use DaggerML correctly without receiving an unrelated general-purpose skill.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: DaggerML SHALL bundle four focused agent skills
 DaggerML SHALL bundle portable skill directories named `querying`, `authoring`, `repository`, and `extensions`, each containing a `SKILL.md` document and any supporting examples. Each document SHALL begin with YAML frontmatter naming the skill and describing its purpose, be independently useful when installed without the other skill documents or repository-local documentation, and support substituting a user-chosen installation name in its frontmatter. A skill MAY direct readers to installed source modules for deeper investigation.
@@ -27,19 +23,6 @@ The `authoring` skill SHALL cover DAG construction and explicit commit lifecycle
 - **THEN** it finds an installed Python example that stages airline delays, returns Polars train/test DataFrames for codec normalization, trains and persists tree models, predicts and scores both cuts, and searches over parameter sets by out-of-sample R²
 - **AND** it can see how the dagclass retains parameter/objective pairs as nodes, prints the best parameters and score, and uses `.value()` only where Python computation needs concrete data
 
-### Requirement: Repository skill SHALL guide project and shared-state management
-The `repository` skill SHALL concisely cover project initialization and configuration, status and history inspection, branches and tags, revision-changing operations, remote synchronization, import-only dependencies, shallow-history boundaries, safe garbage collection, and cache inspection and control. It SHALL direct agents to validate cache identity and retain the exact execution ref before intentional invalidation. It SHALL state that managed `.dml/` state is not for manual modification, include at most two minimal command sequences, and provide all operational guidance without links to repository documentation or examples.
-
-#### Scenario: An agent retrieves repository guidance
-- **WHEN** an agent uses the `repository` skill to set up or manage a research project
-- **THEN** it is directed to configure the repository and inspect state before mutation
-- **AND** it is warned not to run garbage collection concurrently with synchronization
-
-#### Scenario: An agent validates a cached result
-- **WHEN** an agent uses the `repository` skill to investigate cache reuse
-- **THEN** it is directed to inspect the cache entry and associated execution state
-- **AND** intentional invalidation uses the exact execution ref rather than a cache key
-
 ### Requirement: Querying skill SHALL guide data extraction and graph traversal
 The `querying` skill SHALL cover locating and loading DAGs, distinguishing terminal results from named nodes, traversing nodes and read-only projections, materializing values, following nearest and rooted provenance, and capturing persisted function errors with their context. It SHALL provide actionable workflows for selecting data, interpreting graph state, and investigating failed results using Python or available CLI inspection commands. It SHALL explain committed, active, and frozen graph-state distinctions necessary to read available data without turning into a repository-control or cache-management guide. It SHALL provide operational guidance without requiring repository-local documentation or examples.
 
@@ -52,15 +35,3 @@ The `querying` skill SHALL cover locating and loading DAGs, distinguishing termi
 - **WHEN** node lookup or materialization encounters a persisted function error
 - **THEN** the skill directs the agent to retain the error origin, type, message, stack, and producing context
 - **AND** the failure is not treated as absent data
-
-### Requirement: Extensions skill SHALL guide integration development
-The `extensions` skill SHALL distinguish adapters as transport boundaries, executors as backend lifecycle implementations, and codecs as deterministic staging normalization. It SHALL cover adapter operations, executor lowering and lifecycle responsibilities, runtime-owned state, response validation, nested runnable forwarding, plugin registration, script-worker source isolation, and contract-first extension testing. It SHALL include at most two minimal examples and provide all operational guidance without links to repository documentation or examples.
-
-#### Scenario: An agent chooses an extension boundary
-- **WHEN** an agent designs a new integration
-- **THEN** transport behavior is assigned to an adapter, backend launch and teardown to an executor, and value normalization to a codec
-
-#### Scenario: An agent implements an extension lifecycle
-- **WHEN** an agent writes or wraps an executor
-- **THEN** it is directed to preserve operation context and implement retry-safe, idempotent lifecycle behavior
-- **AND** it is directed to validate contracts and plugin discovery before infrastructure-dependent testing

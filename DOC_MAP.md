@@ -38,6 +38,18 @@ Use this file to identify which project docs to read before editing a code path,
   - `src/daggerml/README.md`
   - `docs/use/inspection.qmd`
 
+### Bundled agent skills
+
+- Match: `src/daggerml/_core/skills/**`, skill installation methods in `src/daggerml/_core/dml.py`
+- Read:
+  - `docs/start-here/get-started.qmd`
+  - `docs/start-here/dags.qmd`
+  - `docs/start-here/funks.qmd`
+  - `docs/start-here/dagclasses.qmd`
+  - `docs/use/inspection.qmd`
+  - `openspec/specs/bundled-agent-skills/spec.md`
+  - `openspec/specs/admin-cli-controls/spec.md`
+
 ### Core repository operations
 
 - Match: `src/daggerml/_core/commit.py`, `src/daggerml/_core/dag.py`, `src/daggerml/_core/head.py`, `src/daggerml/_core/index.py`

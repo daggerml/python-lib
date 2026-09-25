@@ -5,6 +5,11 @@ description: Build reproducible DaggerML DAGs and script-backed funks.
 
 # DaggerML Authoring
 
+Use the Python API to build computation graphs; use `dml` commands to initialize
+projects and inspect repository state. Work in an initialized project (`dml
+init`); configure `remote.root` before remote-backed script execution and cache
+coordination. Keep `.dml/` managed by DaggerML tooling.
+
 ## Create And Commit A DAG
 
 `dml.new(name, message=...)` creates a mutable DAG. Stage data and functions,
@@ -56,6 +61,12 @@ with dml.new("squares", message="square an input") as dag:
 assert dml.load("squares").result.value() == 81
 ```
 
+The first call receives the `number` node, not its Python value; the second
+receives the `direct` call result node. The worker materializes each input only
+when performing arithmetic. If a call fails during authoring, the named call
+and its execution DAG remain inspectable even if you catch the error and commit
+another result.
+
 ## Call Functions
 
 Call a funk directly with `dag.call(fn, *args, name=...)`, or stage it as a node
@@ -95,6 +106,13 @@ or dependency selected when loading `source`. The loaded DAG must belong to the
 target DAG's `Dml` session. Importing an uncommitted DAG or a node from another
 open runtime fails.
 
+For an existing result, prefer `input_node = dag.require("upstream",
+name="input")` and pass `input_node` into downstream calls. When you need a
+specific named intermediate, use `dag.require("upstream", "intermediate")`.
+To reuse only part of a committed collection, select it before staging:
+`dag.put(source["records"][0], name="first")`. This keeps the committed
+base and selection path rather than copying a materialized value.
+
 ## Author Funks
 
 `@api.funkify` packages delayed work. Worker arguments are node-like: materialize
@@ -109,40 +127,56 @@ behavior-affecting helper source. `prepop` creates named nodes on the worker DAG
 `api.ref("name")` resolves configuration from an already-named authoring node.
 `logger` is injected.
 
-## Compose A Dagclass
+For example, a worker that needs a library can import it in the body; a
+source-defined helper must be included explicitly:
 
 ```python
-@api.funkify
-def add(dag, left, right):
-    return left.value() + right.value()
+def clean(value):
+    return value.strip().lower()
 
 
-@api.dagclass
-class Pipeline:
-    add = add
-    offset = 23
-
-    def prepare(self, value):
-        self.foo = 23
-        return self.add(value, self.foo)
-
-    def main(self, value):
-        self.prepare(value)
-        return self.add(value, self.offset)
+@api.funkify(extra_objs=(clean,))
+def normalize(dag, text):
+    return clean(text.value())
 
 
-assert type(Pipeline().main) is type(add)
-api.run(Pipeline(), 19, name="answer")
+with dml.new("cleaned", message="normalize a label") as dag:
+    raw = dag.put("  EXAMPLE  ", name="raw")
+    cleaned = dag.call(normalize, raw, name="cleaned")
+    dag.commit(cleaned)
 ```
 
-A dagclass is compiled composition syntax, not a normal stateful class. The
-compiler resolves direct `self.add`, `self.offset`, and `self.prepare`
-references to declared members and packages each method as an isolated funk.
-When `prepare` executes, `self` is that invocation's worker `Dag`; setting
-`self.foo = 23` creates a node only there. It does not mutate the `Pipeline`
-instance and has no effect on `main` or any later method execution. Referencing
-`self.foo` from `main` would therefore require a declared class member named
-`foo`; it cannot observe the assignment performed by `prepare`.
+The generated script contains `clean`; an unlisted module global or closure
+would not be available to this worker. Use `post_lines` for explicit module
+definitions when appropriate. `defunkify()` can test plain funk logic quickly,
+but only a real call checks worker isolation, storage, and cache behavior.
+
+## Compose A Dagclass
+
+Use a dagclass when several named steps and parameters form a reusable
+pipeline. Open `examples/dagclass.py` in this skill directory for a complete
+airline-delay regression example. It stages the public Vega flights sample as
+an artifact, splits it deterministically, and returns Polars DataFrames so the
+installed codec persists each cut as Parquet. Later Docker funks read the
+Parquet URIs directly with Polars, train and pickle decision trees, predict
+both cuts, compute R²/MSE/MAE, and select the best out-of-sample R².
+The `search` method retains every `{params, objective}` as the named `trials`
+node in its execution DAG. `main` prints the winning parameters and score and
+returns the best trial. Run from an initialized project with `remote.root`
+configured: `python path/to/daggerml-authoring/examples/dagclass.py IMAGE`,
+where IMAGE contains DaggerML, polars, and scikit-learn. The example's `run()`
+also accepts a staged dataset URI and Docker flags for other environments.
+For S3-compatible endpoints, pass `AWS_ENDPOINT_URL` into the Docker worker;
+the script explicitly gives that endpoint to Polars's cloud reader.
+
+Annotated fields are constructor inputs; direct `self.member` reads let the
+compiler discover method dependencies. `api.run()` stages class members, calls
+`main`, and commits its result. In each method's worker, `self` is a DAG:
+`self.trials` creates an invocation-local node, not an instance attribute shared
+with later calls. Keep the model and dataset as artifact URIs and pass graph
+nodes between methods; call `.value()` only to train, compute metrics, iterate
+the parameter sets, or choose and print the best result. Each script method is
+isolated from module-level imports and globals.
 
 ## Manage Cache Identity
 
@@ -157,3 +191,13 @@ directly and let installed codecs normalize them; the included pandas and polars
 DataFrame codecs persist Parquet artifacts automatically. For other files,
 directories, bytes, or JSON artifacts, store them with
 `daggerml.contrib.s3.S3Store` and put the returned `Uri` in the DAG.
+
+## Check An Authored Result
+
+After committing, reload the DAG and compare `result` with any named nodes you
+intend to expose. Follow a returned call node with `.context(root=False)` to
+inspect its immediate execution DAG; repeated calls with the same runnable and
+normalized inputs can have distinct authoring nodes but share that execution
+DAG. If work unexpectedly reused a result, check the rendered script and its
+explicit helper source, staged runnable configuration, and actual node inputs.
+Changing unrelated authoring code does not necessarily change cache identity.

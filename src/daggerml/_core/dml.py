@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+import tempfile
 from dataclasses import asdict, dataclass
 from functools import wraps
 from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from time import time
 from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict, cast, overload
@@ -962,24 +964,85 @@ def _local_gc(dml: "Dml") -> LocalGCSummary:
 class _SkillsNamespace:
     _dml: "Dml"
 
-    def _read(self, name: str) -> str:
-        return resources.files("daggerml._core").joinpath("skills", name).read_text(encoding="utf-8").removesuffix("\n")
+    def _install(self, kind: str, parent: str, name: str | None, overwrite: bool) -> str:
+        skill_name = name if name is not None else f"daggerml-{kind}"
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", skill_name):
+            raise ValueError("skill name must be a lowercase, hyphen-separated name")
 
-    def authoring(self) -> str:
-        """Print the bundled DAG-authoring skill as portable Markdown."""
-        return self._read("authoring.md")
+        bundled = resources.files("daggerml._core").joinpath("skills", kind)
+        files: dict[Path, bytes] = {}
 
-    def repository(self) -> str:
-        """Print the bundled repository-management skill as portable Markdown."""
-        return self._read("repository.md")
+        def collect(folder: Traversable, prefix: Path) -> None:
+            for item in folder.iterdir():
+                if item.name.startswith(".") or item.name == "__pycache__" or item.name.endswith(".pyc"):
+                    continue
+                relative = prefix / item.name
+                if item.is_dir():
+                    collect(item, relative)
+                elif item.is_file():
+                    files[relative] = item.read_bytes()
 
-    def querying(self) -> str:
-        """Print the bundled data-querying skill as portable Markdown."""
-        return self._read("querying.md")
+        collect(bundled, Path())
+        text = files[Path("SKILL.md")].decode("utf-8")
+        marker = f"name: daggerml-{kind}\n"
+        if text.count(marker) != 1:
+            raise ValueError(f"bundled {kind} skill has unexpected frontmatter")
+        files[Path("SKILL.md")] = text.replace(marker, f"name: {skill_name}\n", 1).encode("utf-8")
 
-    def extensions(self) -> str:
-        """Print the bundled extension-development skill as portable Markdown."""
-        return self._read("extensions.md")
+        directory = Path(parent) / skill_name
+        if directory.is_symlink():
+            raise ValueError(f"skill directory is a symlink: {directory}")
+        if directory.exists():
+            if not overwrite:
+                raise FileExistsError(f"skill directory already exists: {directory}")
+            if not directory.is_dir():
+                raise NotADirectoryError(directory)
+        for relative in files:
+            destination = directory / relative
+            subdirectory = directory
+            for part in relative.parts[:-1]:
+                subdirectory /= part
+                if subdirectory.is_symlink() or (subdirectory.exists() and not subdirectory.is_dir()):
+                    raise ValueError(f"skill subdirectory is not a regular directory: {subdirectory}")
+            if destination.is_symlink() or (destination.exists() and not destination.is_file()):
+                raise ValueError(f"skill file is not a regular file: {destination}")
+
+        if not directory.exists():
+            directory.mkdir(parents=True, exist_ok=False)
+
+        for relative, content in sorted(files.items()):
+            destination = directory / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=destination.parent, prefix=f".{destination.name}-", delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                try:
+                    handle.write(content)
+                except BaseException:
+                    temporary.unlink()
+                    raise
+            try:
+                temporary.replace(destination)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return f"Installed {directory} ({sum(map(len, files.values()))} bytes written)"
+
+    def authoring(self, parent: str, *, name: str | None = None, overwrite: bool = False) -> str:
+        """Install the bundled DAG-authoring skill in a skills directory."""
+        return self._install("authoring", parent, name, overwrite)
+
+    def repository(self, parent: str, *, name: str | None = None, overwrite: bool = False) -> str:
+        """Install the bundled repository-management skill in a skills directory."""
+        return self._install("repository", parent, name, overwrite)
+
+    def querying(self, parent: str, *, name: str | None = None, overwrite: bool = False) -> str:
+        """Install the bundled data-querying skill in a skills directory."""
+        return self._install("querying", parent, name, overwrite)
+
+    def extensions(self, parent: str, *, name: str | None = None, overwrite: bool = False) -> str:
+        """Install the bundled extension-development skill in a skills directory."""
+        return self._install("extensions", parent, name, overwrite)
 
 
 class StatusPayload(TypedDict):
