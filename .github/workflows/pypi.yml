@@ -1,0 +1,168 @@
+name: PyPI
+
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify-tag:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download tested release ref
+        uses: actions/download-artifact@v8
+        with:
+          name: release-ref-${{ github.event.workflow_run.run_attempt }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Verify tested release tag
+        env:
+          TESTED_TAG: ${{ github.event.workflow_run.head_branch }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          [[ "$TESTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(< "$RUNNER_TEMP/release/release-ref")" == "refs/tags/$TESTED_TAG" ]]
+          [[ "$(git rev-parse "refs/tags/$TESTED_TAG^{commit}")" == "$TESTED_SHA" ]]
+  build-wheels:
+    needs: verify-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - version: "3.11"
+            identifier: cp311
+          - version: "3.12"
+            identifier: cp312
+          - version: "3.13"
+            identifier: cp313
+          - version: "3.14"
+            identifier: cp314
+        platform:
+          - id: linux
+            os: ubuntu-latest
+          - id: macos
+            os: macos-latest
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Download verified dashboard assets
+        uses: actions/download-artifact@v8
+        with:
+          name: dashboard-assets-${{ github.event.workflow_run.run_attempt }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: src/daggerml/dashboard/static/
+      - name: Build wheel
+        uses: pypa/cibuildwheel@v3.2.1
+        env:
+          CIBW_BUILD: "${{ matrix.python.identifier }}-*"
+          CIBW_ARCHS: auto
+          CIBW_TEST_EXTRAS: dashboard
+          CIBW_TEST_REQUIRES: httpx
+          CIBW_TEST_COMMAND: python -I {project}/tests/distribution/check_installed_docs.py
+      - name: Upload wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.platform.id }}-${{ matrix.python.identifier }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+          retention-days: 2
+  build-sdist:
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Download verified dashboard assets
+        uses: actions/download-artifact@v8
+        with:
+          name: dashboard-assets-${{ github.event.workflow_run.run_attempt }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: src/daggerml/dashboard/static/
+      - name: Build source distribution
+        run: |
+          pip install hatch
+          hatch build --target sdist
+      - name: Check installed sdist-derived wheel
+        run: |
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/sdist-wheel" dist/*.tar.gz
+          python -m venv "$RUNNER_TEMP/sdist-docs"
+          "$RUNNER_TEMP/sdist-docs/bin/python" -m pip install "$RUNNER_TEMP"/sdist-wheel/*.whl
+          "$RUNNER_TEMP/sdist-docs/bin/python" -m pip install 'daggerml[dashboard]' httpx
+          "$RUNNER_TEMP/sdist-docs/bin/python" -I tests/distribution/check_installed_docs.py
+      - name: Upload source distribution
+        uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 2
+  publish:
+    needs: [verify-tag, build-wheels, build-sdist]
+    name: Upload release to PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Download wheels
+        uses: actions/download-artifact@v8
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - name: Download source distribution
+        uses: actions/download-artifact@v8
+        with:
+          name: sdist
+          path: dist
+      - name: Cache pip
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-3.13-publish-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-3.13-
+            ${{ runner.os }}-pip-
+      - name: Install hatch
+        run: pip install hatch
+      - name: Publish distributions
+        env:
+          HATCH_INDEX_USER: __token__
+          HATCH_INDEX_AUTH: ${{ secrets.PYPI_TOKEN }}
+        run: hatch publish

@@ -79,9 +79,11 @@ requests and appreciate your help in improving this project.
   ```
   uv run --dev --all-extras pytest -m "not slow" .
   ```
-- CI runs local/Moto deterministic coverage with `-m "not dashboard and not
-  docker and not ssh and not external"`; the dashboard job runs dashboard-marked
-  Python tests after building verified assets on pushes, pull requests, and tags.
+- The `Test` workflow runs on every push, as well as pull
+  requests. It runs local/Moto deterministic coverage with `-m "not dashboard and
+  not docker and not ssh and not external"`; the dashboard job runs
+  dashboard-marked Python tests after building verified assets. On release tags,
+  it retains those assets for two days for the `PyPI` workflow.
   Dedicated jobs run Docker and local-SSH coverage. Local quick loops use
   `-m "not slow"`.
 - We mark tests under `tests/_core/` with `@pytest.mark.core`. Core tests are included by default. You can select or skip them with:
@@ -120,25 +122,27 @@ requests and appreciate your help in improving this project.
   DOCS_PYTHON="/path/to/python" bash docs/build.sh
   ```
 - The build executes all QMD examples against disposable fixtures; do not use it as a substitute for the full test suite.
-- CI builds and verifies the dashboard and executable documentation once in the
-  Linux `dashboard` job, then runs dashboard Python tests against those assets.
-  Wheel and source-distribution jobs download its `dashboard-assets` artifact and
-  package those same verified files. macOS wheel runners therefore do not need
-  Docker or the documentation build toolchain.
+- `Test` builds and verifies the dashboard and executable documentation once in
+  the Linux `dashboard` job, then runs dashboard Python tests against those
+  assets. After a successful release-tag run, `PyPI` builds wheels and a source
+  distribution using the verified dashboard artifact from that exact Test run
+  and attempt. macOS wheel runners therefore do not need Docker or the
+  documentation build toolchain.
 
 ### GitHub Pages
 
-The separate `Documentation Pages` workflow runs after `CI` completes successfully
-for a push to `master`. It checks out the exact commit that passed CI, executes
-the documentation build, and replaces the entire organization website by publishing
+The `Docs` and `PyPI` workflows run after `Test` succeeds for a release-tag push.
+Both verify a tag-only release marker from the triggering Test run and check
+that the tag still points to the exact tested commit. `Docs` executes the
+documentation build and replaces the entire organization website by publishing
 to the root of `daggerml/daggerml.github.io`'s `gh-pages` branch. Stale website
 files are removed, and the `daggerml.com` custom domain is preserved.
-Pull requests, tags, other branches, and unsuccessful CI runs do not deploy.
+Pull requests, branch pushes, and unsuccessful Test runs do not deploy.
 The site URL is <https://daggerml.com/> (the organization Pages site).
-Configure `DOCS_PUBLISH_TOKEN` in this repository or its `github-pages` environment
-as a fine-grained token with **Contents: read and write** on
-`daggerml/daggerml.github.io`. The built-in `GITHUB_TOKEN` cannot publish to a
-different repository. In the destination repository's **Settings → Pages**, keep
+Configure `DOCS_DEPLOY_KEY` in this repository or its `github-pages` environment
+as a deploy key with write access to `daggerml/daggerml.github.io`. The built-in
+`GITHUB_TOKEN` cannot publish to a different repository. In the destination
+repository's **Settings → Pages**, keep
 the source set to **Deploy from a branch**, `gh-pages`, `/ (root)`.
 
 To generate the same standalone output locally:

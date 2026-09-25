@@ -1,13 +1,13 @@
-name: Documentation Pages
+name: Docs
 
 on:
   workflow_run:
-    workflows: [CI]
+    workflows: [Test]
     types: [completed]
-    branches: [master]
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: documentation-pages
@@ -18,18 +18,36 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     environment:
       name: github-pages
       url: https://daggerml.com/
     steps:
+      - name: Download tested release ref
+        uses: actions/download-artifact@v8
+        with:
+          name: release-ref-${{ github.event.workflow_run.run_attempt }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/release
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          fetch-tags: true
+      - name: Verify tested release tag
+        env:
+          TESTED_TAG: ${{ github.event.workflow_run.head_branch }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          [[ "$TESTED_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(< "$RUNNER_TEMP/release/release-ref")" == "refs/tags/$TESTED_TAG" ]]
+          [[ "$(git rev-parse "refs/tags/$TESTED_TAG^{commit}")" == "$TESTED_SHA" ]]
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
