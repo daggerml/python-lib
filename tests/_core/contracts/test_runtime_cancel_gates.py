@@ -95,18 +95,55 @@ def test_put_literal_rejects_non_running_execution_states(tmp_path, lifecycle: s
         ops.put_literal(index, 42, db=db)
 
 
-def test_execution_aware_create_activates_pending_execution(tmp_path) -> None:
+def test_execution_aware_create_activates_pending_execution(tmp_path, monkeypatch) -> None:
     db = make_db(tmp_path)
     state = NoopExecutionState()
     ops = local_index_ops(state)
     argv_ref = _put_argv_node(db)
     _put_reserved_execution(state, "exec", lifecycle="pending", argv_ref=argv_ref)
-    ops._remote.materialized_ref = argv_ref
+    unlocks = []
+    monkeypatch.setattr(state, "unlock", lambda execution_id, owner: unlocks.append((execution_id, owner)) or True)
+
+    def materialize(ref, db):
+        assert ref == argv_ref
+        assert state.read_execution_record("exec")["state"]["lifecycle"] == "running"
+        assert unlocks == [("exec", "owner")]
+        with pytest.raises(BadExecutionStatusError):
+            state.activate("exec", db)
+        return argv_ref
+
+    monkeypatch.setattr(ops._remote, "materialize_ref", materialize)
 
     index = ops.create("user", commit=db.init(), cache_key="ck1", execution_id="exec", db=db)
 
     assert index == Ref("index:exec")
     assert state.read_execution_record("exec")["state"]["lifecycle"] == "running"
+
+
+@pytest.mark.parametrize("lifecycle", ["cancel-pending", "canceled"])
+def test_execution_aware_create_blocks_local_index_after_cancellation_during_pull(
+    tmp_path, monkeypatch, lifecycle: str
+) -> None:
+    db = make_db(tmp_path)
+    state = NoopExecutionState()
+    ops = local_index_ops(state)
+    argv_ref = _put_argv_node(db)
+    commit = db.init()
+    _put_reserved_execution(state, "exec", lifecycle="pending", argv_ref=argv_ref)
+
+    def materialize(ref, db):
+        record = state.read_execution_record("exec")
+        record["state"]["lifecycle"] = lifecycle
+        state.update_execution_record(record)
+        return argv_ref
+
+    monkeypatch.setattr(ops._remote, "materialize_ref", materialize)
+    with pytest.raises(CanceledExecutionError):
+        ops.create("user", commit=commit, cache_key="ck1", execution_id="exec", db=db)
+
+    with db.tx(readonly=True) as txn:
+        with pytest.raises(DmlRepoError, match="Object not found"):
+            txn.get(Ref("index:exec"))
 
 
 @pytest.mark.parametrize("lifecycle", ["running", "succeeded", "failed"])
@@ -179,3 +216,4 @@ def test_execution_aware_create_unlocks_activation_owner_after_setup_failure(
         ops.create("user", commit=commit, cache_key="ck1", execution_id="exec", db=db)
 
     assert unlocks == [("exec", "owner")]
+    assert state.read_execution_record("exec")["state"]["lifecycle"] == "running"

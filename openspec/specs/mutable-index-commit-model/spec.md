@@ -31,13 +31,22 @@ The system SHALL preserve the current external runtime and history behavior whil
 ### Requirement: Mutating index workflows SHALL check execution lifecycle before each write transaction
 Every mutating `IndexOps` workflow SHALL instantiate `ExecutionState`, use execution lifecycle state in S3 as the sole mutation authority, and call `ExecutionState.require_mutation(execution_id, db, mode=...)` before each LMDB write transaction that can change index or DAG state.
 
-Execution-aware `IndexOps.create(cache_key, execution_id)` SHALL use `mode = "activation"`.
+Execution-aware `IndexOps.create(cache_key, execution_id)` SHALL use `mode = "activation"` while holding the driver lock to claim a pending execution. After validating the cache key and required argv reference, it SHALL transition the execution to `running` and release the driver lock before materializing argv or creating local index state. It SHALL use `mode = "mutation"` after argv materialization and before the LMDB write transaction that creates local index state. A `running` execution denotes claimed, started work, including input materialization and index initialization; it does not require local index state to exist yet.
 
 `put_literal`, `put_import`, `set_node_name`, `start_fn`, and `commit` SHALL use `mode = "mutation"`.
 
 #### Scenario: Execution-aware create activates only from pending
 - **WHEN** `IndexOps.create(cache_key="ck1", execution_id="e1")` begins activation
-- **THEN** it SHALL call `ExecutionState.require_mutation("e1", db, mode="activation")` before creating local index state
+- **THEN** it SHALL call `ExecutionState.require_mutation("e1", db, mode="activation")` while holding the driver lock before claiming the execution as `running`
+
+#### Scenario: Input materialization does not hold the activation lock
+- **WHEN** execution-aware create begins materializing argv
+- **THEN** the execution SHALL already be `running` and its activation owner SHALL have released the driver lock
+- **AND** another worker SHALL not activate that running execution
+
+#### Scenario: Cancellation during input materialization blocks index creation
+- **WHEN** argv materialization completes after the execution has entered `cancel-pending` or `canceled`
+- **THEN** the `mode="mutation"` guard SHALL reject local index creation before its write transaction
 
 #### Scenario: Mutating index op writes only from running
 - **WHEN** `put_literal`, `put_import`, `set_node_name`, `start_fn`, or `commit` begins a write transaction for execution `e1`

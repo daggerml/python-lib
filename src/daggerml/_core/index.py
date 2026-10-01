@@ -104,13 +104,15 @@ class IndexOps:
         if execution_id is not None:
             record, owner = state.activate(exec_id, db)
             try:
+                state.require_mutation(exec_id, db, mode="activation")
                 metadata = record["metadata"]
                 if metadata["cache_key"] != cache_key or metadata["argv_ref"] is None:
                     raise DmlRepoError(f"Invalid execution payload for cache key: {cache_key}")
-                argv = self._remote.materialize_ref(Ref(metadata["argv_ref"]), db)
+                state.mark_running(exec_id, owner)
             except Exception:
                 state.unlock(exec_id, owner)
                 raise
+            argv = self._remote.materialize_ref(Ref(metadata["argv_ref"]), db)
         else:
             argv = None
             _, owner, _ = state.reserve_execution(None, execution_id=exec_id)
@@ -139,15 +141,8 @@ class IndexOps:
             )
 
         if execution_id is not None:
-            try:
-                index = db.write_with_growth(create_index)
-                state.mark_running(exec_id, owner)
-            except Exception:
-                state.unlock(exec_id, owner)
-                raise
-        else:
-            index = db.write_with_growth(create_index)
-        return index
+            state.require_mutation(exec_id, db, mode="mutation")
+        return db.write_with_growth(create_index)
 
     def freeze(self, index: Ref, message: str | None, *, db: DmlDB) -> Ref:
         """Replace a user runtime index with its frozen representation."""

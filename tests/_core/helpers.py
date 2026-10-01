@@ -160,6 +160,7 @@ class NoopExecutionState:
         record = self.read_execution_record(execution_id)
         record["state"]["lifecycle"] = "running"
         self.update_execution_record(record)
+        self.unlock(execution_id, owner)
 
     def unlock(self, execution_id, owner):
         return True
