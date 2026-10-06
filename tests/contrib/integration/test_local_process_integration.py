@@ -12,6 +12,7 @@ import daggerml.api as api
 from daggerml import Runnable, Uri
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
+from daggerml.contrib.executors._ownership import _current_owner
 
 
 @funkify(uri="script")
@@ -38,6 +39,7 @@ def test_local_adapter_crosses_process_boundary_and_cleans_scratch(runtime_world
     record = dml.runtime.read_execution_record(execution)
     assert record["state"]["lifecycle"] == "succeeded"
     state = record["driver"]["adapter_state"]
+    assert state["owner"] == _current_owner()
     if state and isinstance(state, dict) and state.get("workdir"):
         assert not Path(state["workdir"]).exists()
 
@@ -47,7 +49,7 @@ def test_local_adapter_wire_cleans_active_supervisor_across_fresh_processes(tmp_
     workdir.mkdir()
     (workdir / "worker.log").write_text("scratch")
     worker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
-    state = {"pid": worker.pid, "workdir": str(workdir)}
+    state = {"owner": _current_owner(), "pid": worker.pid, "workdir": str(workdir)}
     request = {
         "operation": "cleanup", "cache_key": "process-cleanup", "execution_id": "process-cleanup",
         "runnable": asdict(Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter")),
@@ -95,7 +97,7 @@ def test_script_cancel_reaps_worker_process_group_via_adapter_wire(tmp_path):
         "runnable": asdict(Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter")),
         "remote": {"root": "s3://test-bucket/test-prefix"},
         "scratch_uri": "s3://test-bucket/test-prefix/scratch",
-        "adapter_state": {"pid": parent.pid, "workdir": str(workdir)},
+        "adapter_state": {"owner": _current_owner(), "pid": parent.pid, "workdir": str(workdir)},
         "argv_ref": "node-argv:process-cancel", "requested_by": "tester",
     }
     try:

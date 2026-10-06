@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from daggerml._core.types import DmlRepoError
+from daggerml.contrib.executors._ownership import _current_owner
 from daggerml.contrib.executors.docker import DockerExecutor
 from daggerml.contrib.executors.lambda_ import LambdaExecutorBase
 from daggerml.contrib.executors.script import ScriptExecutor
@@ -31,7 +32,7 @@ def test_docker_start_uses_execution_id_temp_prefix_and_adapter_state(tmp_path, 
         lambda uri, payload, raw: payloads.append(json.loads(payload)),
     )
 
-    DockerExecutor().start(
+    result = DockerExecutor().start(
         cache_key="ck",
         execution_id="exec-123",
         runnable={"sub": {"adapter": "nested"}, "kwargs": {"image": "image"}},
@@ -40,6 +41,7 @@ def test_docker_start_uses_execution_id_temp_prefix_and_adapter_state(tmp_path, 
     )
 
     assert prefixes == ["dml-docker-exec-123-"]
+    assert result["state"]["owner"] == _current_owner()
     assert payloads[0]["adapter_state"] is None
     assert "state" not in payloads[0]
 
@@ -59,7 +61,7 @@ def test_script_start_uses_execution_id_temp_prefix(tmp_path, monkeypatch) -> No
         lambda *args, **kwargs: SimpleNamespace(pid=123),
     )
 
-    ScriptExecutor().start(
+    result = ScriptExecutor().start(
         cache_key="ck",
         execution_id="exec-123456789",
         runnable={},
@@ -68,6 +70,7 @@ def test_script_start_uses_execution_id_temp_prefix(tmp_path, monkeypatch) -> No
     )
 
     assert prefixes == ["dml-script-exec-123456789-"]
+    assert result["state"]["owner"] == _current_owner()
 
 
 def test_docker_cancel_preserves_adapter_state(monkeypatch) -> None:
@@ -77,14 +80,14 @@ def test_docker_cancel_preserves_adapter_state(monkeypatch) -> None:
         cache_key="ck",
         execution_id="exec",
         runnable={},
-        state={"container_id": "container-1"},
+        state={"owner": _current_owner(), "container_id": "container-1"},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec/",
         cancel_requested_by="user",
         argv_ref="node-argv:abc",
     )
 
-    assert result["state"] == {"container_id": "container-1"}
+    assert result["state"] == {"owner": _current_owner(), "container_id": "container-1"}
     assert result["status"] == "failure"
 
 
@@ -104,7 +107,7 @@ def test_docker_poll_rejects_malformed_nested_response(monkeypatch) -> None:
             cache_key="ck",
             execution_id="exec",
             runnable={},
-            state={"container_id": "container-1"},
+            state={"owner": _current_owner(), "container_id": "container-1"},
             remote={"root": "s3://bucket/root"},
             scratch_uri="s3://bucket/root/exec/io/exec/",
         )
@@ -124,7 +127,7 @@ def test_docker_cleanup_retries_active_then_prunes_idempotently(monkeypatch) -> 
         "cache_key": "ck",
         "execution_id": "exec",
         "runnable": {},
-        "state": {"container_id": "container-1", "cleanup_image": "image-1"},
+        "state": {"owner": _current_owner(), "container_id": "container-1", "cleanup_image": "image-1"},
         "remote": {"root": "s3://bucket/root"},
         "scratch_uri": "s3://bucket/root/exec/io/exec/",
         "result_ref": "dag:result",

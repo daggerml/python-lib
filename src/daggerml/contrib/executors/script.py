@@ -23,6 +23,7 @@ from daggerml import Runnable, Uri
 from daggerml._core import AdapterCancelResponse, AdapterInvokeResponse
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
+from daggerml.contrib.executors._ownership import _current_owner
 from daggerml.contrib.s3 import S3Store
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ class ScriptExecutor(ExecutorBase):
                 env={**os.environ, "PYTHONUNBUFFERED": "1", **payload["env"]},
             )
         launch_state = {
+            "owner": _current_owner(),
             "pid": proc.pid,
             "workdir": str(workdir),
             "result_path": str(result_path),
@@ -179,6 +181,8 @@ class ScriptExecutor(ExecutorBase):
         scratch_uri: str,
     ) -> AdapterInvokeResponse:
         del cache_key, execution_id, runnable, remote, scratch_uri
+        if state["owner"] != _current_owner():
+            return {"status": "retry", "error": None, "state": state}
         result_path = Path(state.get("result_path", ""))
         pid = state.get("pid")
         # Polls may run either in the launching adapter process or in a later
@@ -221,6 +225,8 @@ class ScriptExecutor(ExecutorBase):
 
     def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
         del cache_key, execution_id, runnable, remote, scratch_uri, result_ref
+        if isinstance(state, dict) and state["owner"] != _current_owner():
+            return {"status": "retry", "error": None, "state": state}
         state = state if isinstance(state, dict) else {}
         pid = state.get("pid")
         if isinstance(pid, int):
@@ -264,6 +270,8 @@ class ScriptExecutor(ExecutorBase):
         del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ref
         if not isinstance(state, dict):
             return {"status": "cancelled", "error": None, "state": {}}
+        if state["owner"] != _current_owner():
+            return {"status": "retry", "error": None, "state": state}
         pid = state.get("pid")
         if isinstance(pid, int):
             try:

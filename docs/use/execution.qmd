@@ -89,6 +89,11 @@ the Lambda adapter. SSH can source `env_files`; Batch additionally needs a
 Lambda integration, container image, queues, task role, and AWS credentials.
 Other schedulers or cloud integrations require an installed extension.
 
+Script and local Docker continuation/teardown must run on their launching
+environment, identified by `effective-UID@hostname`; other users/hosts safely retry. Use distinct
+host/container names. SSH callers may differ when they reach the same owning
+destination and effective user. Ownerless or hostname-only saved adapter state is unsupported.
+
 <!-- docs:pseudocode: An SSH host, scheduler, or cloud adapter is not owned by the documentation fixture. Configure its credentials and installed integration before composing this wrapper. -->
 ```python
 remote_docker = api.funkify(

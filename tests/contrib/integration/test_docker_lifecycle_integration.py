@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,6 +17,8 @@ from daggerml import Runnable, Uri
 from daggerml.contrib import api as contrib_api
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
+from daggerml.contrib.executors._ownership import _current_owner
+from daggerml.contrib.executors.docker import _read_scratch_output
 from daggerml.contrib.s3 import S3Store
 
 pytestmark = [pytest.mark.slow, pytest.mark.docker, pytest.mark.serial]
@@ -74,8 +77,21 @@ def test_docker_poll_result_and_image_loading(docker_world, tmp_path, monkeypatc
         image = S3Store().put(filepath=archive, suffix=".tar").uri
     wrapped = funkify(docker_value, uri="docker", image=image, flags=flags)
     with api.new("docker-result", dml=world.publisher) as dag:
-        dag.commit(dag.put(wrapped)(21, timeout=120_000))
+        result = dag.put(wrapped)(21, timeout=120_000)
+        dag.commit(result)
     assert api.load("docker-result", dml=world.publisher).result.value() == 42
+    key = world.publisher.dag.describe(result.context().ref)["cache_key"]
+    execution = world.publisher.cache.describe(key)["execution"]
+    record = world.publisher.runtime.read_execution_record(execution)
+    state = record["driver"]["adapter_state"]
+    assert state["owner"] == _current_owner()
+    assert "container_id" in state and "pid" not in state
+    output_uri = f"{world.root}/exec/io/{execution.id()}/local:docker/output.json"
+    deadline = time.monotonic() + 30
+    while (raw := _read_scratch_output(output_uri)) is None:
+        assert time.monotonic() < deadline, "nested driver did not write terminal output"
+        time.sleep(0.1)
+    assert json.loads(raw) == {"status": "success", "error": None}
 
 
 def test_docker_reports_worker_failure(docker_world):
@@ -110,7 +126,7 @@ def test_docker_cleanup_retry_and_cancel_cross_adapter_processes(docker_world):
             "operation": operation, "cache_key": "docker-lifecycle", "execution_id": container_id,
             "runnable": runnable, "remote": {"root": world.root},
             "scratch_uri": f"{world.root}/exec/io/{container_id}/",
-            "adapter_state": {"container_id": container_id},
+            "adapter_state": {"owner": _current_owner(), "container_id": container_id},
         }
         if operation == "cleanup":
             request["result_ref"] = "dag:result"

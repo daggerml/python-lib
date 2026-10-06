@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from daggerml._core.types import DmlRepoError
+from daggerml.contrib.executors.script import ScriptExecutor
 from daggerml.contrib.executors.ssh import SshExecutor
 
 
@@ -16,6 +17,25 @@ def _runnable() -> dict:
         "adapter": "dml-local-adapter",
         "sub": {"target": {"uri": "script"}, "kwargs": {}, "adapter": "nested-adapter", "sub": None},
     }
+
+
+@pytest.mark.parametrize("caller", ["A", "B"])
+def test_ssh_forwards_remote_ownership_from_any_caller(monkeypatch, caller):
+    state = {"owner": "C", "pid": 123}
+    monkeypatch.setattr("daggerml.contrib.executors._ownership.socket.gethostname", lambda: caller)
+    monkeypatch.setattr("daggerml.contrib.executors.script.os.waitpid", lambda *args: (0, 0))
+
+    def run(command, *, input, **kwargs):
+        payload = json.loads(input)
+        assert payload["adapter_state"] == state
+        with monkeypatch.context() as remote:
+            remote.setattr("daggerml.contrib.executors.script._current_owner", lambda: "C")
+            result = ScriptExecutor.handle(**payload)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(result), stderr="")
+
+    monkeypatch.setattr("daggerml.contrib.executors.ssh.subprocess.run", run)
+    result = SshExecutor().poll("ck", "exec", _runnable(), state, {"root": "s3://bucket/root"}, "s3://bucket/scratch")
+    assert result == {"status": "retry", "error": None, "adapter_state": state}
 
 
 def test_ssh_poll_forwards_adapter_state_on_nested_wire(monkeypatch) -> None:

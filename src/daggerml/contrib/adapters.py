@@ -78,6 +78,7 @@ class AdapterBase:
             time.sleep(0.1)
             result = cls.send(**payload)
         if args.poll and payload.get("operation") == "invoke" and result.get("status") == "success":
+            payload["adapter_state"] = result.get("adapter_state", payload["adapter_state"])
             record = Dml(remote_root=payload["remote"]["root"]).runtime.read_execution_record(
                 Ref(f"index:{payload['execution_id']}")
             )
@@ -86,16 +87,23 @@ class AdapterBase:
                 raise DmlRepoError("Successful nested invoke did not publish a result")
             cleanup_payload = {**payload, "operation": "cleanup", "result_ref": result_ref}
             try:
-                result = cls.send(**cleanup_payload)
-                while result.get("status") == "retry":
-                    state = result.get("adapter_state")
+                cleanup_result = cls.send(**cleanup_payload)
+                while cleanup_result.get("status") == "retry":
+                    state = cleanup_result.get("adapter_state")
                     if not isinstance(state, dict):
                         raise DmlRepoError("Retry adapter response requires object adapter_state")
                     cleanup_payload["adapter_state"] = state
                     time.sleep(0.1)
-                    result = cls.send(**cleanup_payload)
+                    cleanup_result = cls.send(**cleanup_payload)
+                if cleanup_result.get("status") != "success":
+                    print(
+                        f"Nested cleanup failed for {payload['execution_id']}: {cleanup_result.get('error')}",
+                        file=sys.stderr,
+                    )
             except Exception as exc:
-                result = {"status": "failure", "error": f"Nested cleanup failed: {exc}"}
+                print(f"Nested cleanup failed for {payload['execution_id']}: {exc}", file=sys.stderr)
+        if args.poll and payload.get("operation") == "invoke":
+            result = {key: value for key, value in result.items() if key != "adapter_state"}
         cls._write_output(args.output, json.dumps(result))
         return 0
 
