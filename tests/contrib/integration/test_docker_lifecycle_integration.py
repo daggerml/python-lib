@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import pytest
 
 import daggerml.api as api
-from daggerml import Ref, Runnable, Uri
+from daggerml import Runnable, Uri
 from daggerml.contrib import api as contrib_api
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
@@ -86,7 +86,7 @@ def test_docker_poll_result_and_image_loading(docker_world, tmp_path, monkeypatc
     state = record["driver"]["adapter_state"]
     assert state["owner"] == _current_owner()
     assert "container_id" in state and "pid" not in state
-    output_uri = f"{world.root}/exec/io/{Ref(str(execution)).id()}/local:docker/output.json"
+    output_uri = f"{world.root}/exec/io/{execution.id()}/local:docker/output.json"
     deadline = time.monotonic() + 30
     while (raw := _read_scratch_output(output_uri)) is None:
         assert time.monotonic() < deadline, "nested driver did not write terminal output"
