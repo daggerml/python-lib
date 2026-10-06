@@ -13,6 +13,7 @@ import daggerml.contrib.executors.script as script_mod
 from daggerml import Runnable, Uri
 from daggerml.api import DmlRepoError
 from daggerml.contrib import api
+from daggerml.contrib.executors._ownership import _current_owner
 from daggerml.contrib.executors.script import ScriptExecutor
 
 
@@ -196,6 +197,7 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     success_dir = tmp_path / "success"
     success_dir.mkdir()
     success_state = {
+        "owner": _current_owner(),
         "pid": 1,
         "workdir": str(success_dir),
         "result_path": str(success_dir / "result.json"),
@@ -220,6 +222,7 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     bad_dir = tmp_path / "bad"
     bad_dir.mkdir()
     bad_state = {
+        "owner": _current_owner(),
         "pid": 1,
         "workdir": str(bad_dir),
         "result_path": str(bad_dir / "result.json"),
@@ -248,6 +251,7 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
     empty_state = {
+        "owner": _current_owner(),
         "pid": 1,
         "workdir": str(empty_dir),
         "result_path": str(empty_dir / "result.json"),
@@ -343,7 +347,7 @@ def test_contrib_script_cancel_reports_permission_failure(monkeypatch):
         cache_key="ck",
         execution_id="exec",
         runnable={},
-        state={"pid": 123},
+        state={"owner": _current_owner(), "pid": 123},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
         cancel_requested_by="user",
@@ -361,7 +365,8 @@ def test_script_cleanup_preserves_workdir_if_supervisor_cannot_be_terminated(mon
         script_mod.os, "killpg", lambda pid, sig: (_ for _ in ()).throw(PermissionError("denied"))
     )
 
-    result = ScriptExecutor().cleanup("ck", "exec", {}, {"pid": 123, "workdir": str(workdir)}, {}, "scratch", "dag:x")
+    state = {"owner": _current_owner(), "pid": 123, "workdir": str(workdir)}
+    result = ScriptExecutor().cleanup("ck", "exec", {}, state, {}, "scratch", "dag:x")
 
     assert result["status"] == "failure"
     assert "denied" in result["error"]

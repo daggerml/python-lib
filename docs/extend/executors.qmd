@@ -115,6 +115,19 @@ invoke, cleanup, and cancel operations to its nested adapter. Docker and Batch
 are wrappers that own detached job state and resource teardown while their
 nested adapter runs in the detached environment.
 
+Script and Docker launch state includes `owner`, formatted as
+`effective-UID@hostname` in the environment where that executor starts.
+Poll, cleanup, and cancel from a different user or hostname
+return retry with unchanged state before accessing local resources. Distinct
+hosts and containers must use distinct hostnames; ownership is not authentication
+or automatic failover. Ownerless or hostname-only saved state is unsupported.
+
+Script uses the same detached supervisor path inside and outside Docker. Docker
+retains its own owner/container/image state when returning nested outcomes; its
+container's `--poll` driver privately maintains child continuation through
+cleanup. SSH forwards state unchanged, so either caller can drive an SSH-wrapped
+execution on the same owning destination. Batch has no local ownership restriction.
+
 Use the supplied remote scratch URI for detached input/output, not process-local
 handoff state. Runtime coordination records own durable execution state, shared
 retry timing, locking, result, lineage, cancellation, and invalidation.

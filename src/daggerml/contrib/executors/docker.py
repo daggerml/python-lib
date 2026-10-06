@@ -16,6 +16,7 @@ from daggerml import Runnable, Uri
 from daggerml._core import validate_adapter_response
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
+from daggerml.contrib.executors._ownership import _current_owner
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 from daggerml.util import get_client
 
@@ -198,6 +199,7 @@ class DockerExecutor(ExecutorBase):
             "status": "retry",
             "error": None,
             "state": {
+                "owner": _current_owner(),
                 "container_id": container_id,
                 "cleanup_image": cleanup_image,
             },
@@ -213,13 +215,15 @@ class DockerExecutor(ExecutorBase):
         scratch_uri: str,
     ) -> dict[str, Any]:
         del cache_key, execution_id, runnable, remote
+        if state["owner"] != _current_owner():
+            return {"status": "retry", "error": None, "state": state}
         container_id = state.get("container_id")
 
         if not isinstance(container_id, str) or not container_id:
             return {
                 "status": "failure",
                 "error": "docker poll: missing container_id in job state",
-                "state": None,
+                "state": state,
             }
 
         docker_bin = shutil.which("docker")
@@ -227,7 +231,7 @@ class DockerExecutor(ExecutorBase):
             return {
                 "status": "failure",
                 "error": "docker poll: docker executable not found",
-                "state": None,
+                "state": state,
             }
 
         proc = subprocess.run(
@@ -249,18 +253,21 @@ class DockerExecutor(ExecutorBase):
         if raw is not None:
             try:
                 result = validate_adapter_response(json.loads(raw))
-                return result
+                result.pop("adapter_state", None)
+                return {**result, "state": state}
             except Exception as e:
                 raise DmlRepoError(f"docker poll: invalid nested adapter output: {e}") from e
 
         return {
             "status": "failure",
             "error": f"docker container {container_id} exited without output",
-            "state": None,
+            "state": state,
         }
 
     def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
         del cache_key, execution_id, runnable, remote, scratch_uri, result_ref
+        if isinstance(state, dict) and state["owner"] != _current_owner():
+            return {"status": "retry", "error": None, "state": state}
         state = state if isinstance(state, dict) else {}
         container_id = state.get("container_id")
         docker_bin = shutil.which("docker")
@@ -286,6 +293,8 @@ class DockerExecutor(ExecutorBase):
         argv_ref: str | None = None,
     ) -> dict[str, Any]:
         del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ref
+        if isinstance(state, dict) and state["owner"] != _current_owner():
+            return {"status": "retry", "error": None, "state": state}
         state = state if isinstance(state, dict) else {}
         docker_bin = shutil.which("docker")
         container_id = state.get("container_id")

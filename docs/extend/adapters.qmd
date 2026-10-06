@@ -124,6 +124,13 @@ ephemeral helper for a nested Docker or Batch adapter: it repeats **invoke** on
 `retry`, then drives nested cleanup after success. It never sends
 `operation="poll"` and cannot coordinate cancellation.
 
+For `--poll` invoke, the helper keeps continuation state private through invoke
+and cleanup, including state returned by terminal invoke. Its final output omits
+`adapter_state`; ordinary CLI calls still forward state unchanged. Nested cleanup
+failure is reported on stderr with execution identity without replacing the
+published invocation outcome. The private state cannot be recovered if that
+ephemeral driver exits unexpectedly.
+
 Register one class per installed entry point. The entry-point key is descriptive;
 lookup uses the class's `name`. Discovery is lazy, retains loaded objects, warns
 on duplicates with the last registration winning, and raises `DmlRepoError` on a

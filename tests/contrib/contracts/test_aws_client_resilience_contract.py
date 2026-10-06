@@ -54,7 +54,8 @@ def test_get_client_passes_resilience_overrides(monkeypatch):
     assert captured["kwargs"] == {}
 
 
-def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch):
+@pytest.mark.parametrize("nested_state", [False, True])
+def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch, nested_state):
     clients = []
     writes = []
 
@@ -63,7 +64,9 @@ def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch):
             writes.append(kwargs)
 
         def get_object(self, **kwargs):
-            response = {"status": "success", "error": None, "adapter_state": {"nested": "done"}}
+            response = {"status": "success", "error": None}
+            if nested_state:
+                response["adapter_state"] = {"nested": "done"}
             return {"Body": type("Body", (), {"read": lambda self: json.dumps(response).encode()})()}
 
     class BatchClient:
@@ -107,7 +110,7 @@ def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch):
         "state": {
             "job_id": "job-1",
             "job_definition": "arn:job-definition",
-            "nested_adapter_state": {"nested": "done"},
+            **({"nested_adapter_state": {"nested": "done"}} if nested_state else {}),
         },
     }
     nested_payload = json.loads(writes[0]["Body"])

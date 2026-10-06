@@ -12,6 +12,7 @@ import pytest
 from daggerml._core.db import Ref
 from daggerml._core.types import Runnable, Uri
 from daggerml.contrib.adapters import AdapterBase
+from daggerml.contrib.executors._ownership import _current_owner
 from daggerml.contrib.executors.docker import DockerExecutor, _cleanup_docker
 from daggerml.contrib.executors.script import ScriptExecutor
 from tests._core.contracts.test_execution_coordination import _record, _state
@@ -68,7 +69,7 @@ def test_docker_inspect_error_is_not_a_terminal_container_exit(monkeypatch) -> N
         cache_key="cache",
         execution_id="exec",
         runnable={},
-        state={"container_id": "container"},
+        state={"owner": _current_owner(), "container_id": "container"},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec",
     )
@@ -76,7 +77,7 @@ def test_docker_inspect_error_is_not_a_terminal_container_exit(monkeypatch) -> N
     assert result["status"] == "retry"
 
 
-def test_nested_cleanup_failure_still_publishes_diagnostics(tmp_path, monkeypatch) -> None:
+def test_nested_cleanup_failure_still_publishes_diagnostics(tmp_path, monkeypatch, capsys) -> None:
     class NestedAdapter(AdapterBase):
         @classmethod
         def send(cls, **kwargs):
@@ -103,8 +104,8 @@ def test_nested_cleanup_failure_still_publishes_diagnostics(tmp_path, monkeypatc
 
     assert NestedAdapter.cli(["--poll", "-i", str(input_path), "-o", str(output_path)]) == 0
     output = json.loads(output_path.read_text())
-    assert output["status"] == "failure"
-    assert "cleanup failed" in output["error"]
+    assert output == {"status": "success", "error": None}
+    assert "cleanup failed" in capsys.readouterr().err
 
 
 def test_fresh_success_drives_outer_cleanup(monkeypatch) -> None:
@@ -206,7 +207,7 @@ def test_script_cancel_waits_for_terminated_process_group(monkeypatch, tmp_path)
         cache_key="cache",
         execution_id="exec",
         runnable={},
-        state={"pid": 123, "workdir": str(workdir)},
+        state={"owner": _current_owner(), "pid": 123, "workdir": str(workdir)},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec",
         cancel_requested_by="user",

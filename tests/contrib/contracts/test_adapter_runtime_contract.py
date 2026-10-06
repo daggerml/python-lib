@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from types import SimpleNamespace
+
+import pytest
 
 from daggerml import Ref, Runnable, Uri
 from daggerml.contrib.adapters import AdapterBase
@@ -86,12 +89,84 @@ def test_cli_polling_reuses_persisted_state_between_polls(tmp_path, monkeypatch)
     assert PollingAdapter.cli(["--poll", "-i", str(input_path), "-o", str(output_path)]) == 0
     persisted = json.loads(output_path.read_text())
     assert persisted["status"] == "success"
+    assert "adapter_state" not in persisted
     assert inspected == {"remote_root": "s3://bucket/root", "execution": Ref("index:exec")}
     assert calls[1]["adapter_state"] == {"token": "abc"}
     assert calls[2]["operation"] == "cleanup"
     assert calls[2]["result_ref"] == "dag:result"
     assert calls[3]["operation"] == "cleanup"
     assert calls[3]["adapter_state"] == {"cleanup": 1}
+
+
+@pytest.mark.parametrize("terminal_state", ["omitted", None, {"terminal": 1}])
+@pytest.mark.parametrize("cleanup_outcome", ["success", "failure", "exception"])
+def test_private_poll_state_and_cleanup_outcome(tmp_path, monkeypatch, capsys, terminal_state, cleanup_outcome):
+    calls = []
+    terminal = {"status": "success", "error": None}
+    if terminal_state != "omitted":
+        terminal["adapter_state"] = terminal_state
+
+    class PollingAdapter(AdapterBase):
+        @classmethod
+        def send(cls, **payload):
+            calls.append(payload)
+            if len(calls) == 1:
+                return {"status": "retry", "adapter_state": {"first": 1}, "error": None}
+            if len(calls) == 2:
+                return terminal
+            if len(calls) == 3:
+                return {"status": "retry", "adapter_state": {"cleanup": 1}, "error": None}
+            if cleanup_outcome == "exception":
+                raise RuntimeError("cleanup exploded")
+            return {"status": cleanup_outcome, "error": "cleanup failed" if cleanup_outcome == "failure" else None}
+
+    monkeypatch.setattr("daggerml.contrib.adapters.time.sleep", lambda _: None)
+    runtime = SimpleNamespace(read_execution_record=lambda _: {"state": {"result_ref": "dag:result"}})
+    monkeypatch.setattr("daggerml.contrib.adapters.Dml", lambda **kwargs: SimpleNamespace(runtime=runtime))
+    payload = dict(operation="invoke", cache_key="ck", execution_id="exec", runnable={},
+                   remote={"root": "s3://bucket/root"}, scratch_uri="s3://bucket/scratch", adapter_state=None)
+    input_path, output_path = tmp_path / "input.json", tmp_path / "output.json"
+    input_path.write_text(json.dumps(payload))
+    PollingAdapter.cli(["--poll", "-i", str(input_path), "-o", str(output_path)])
+    assert calls[2]["adapter_state"] == ({"first": 1} if terminal_state == "omitted" else terminal_state)
+    assert calls[3]["adapter_state"] == {"cleanup": 1}
+    assert json.loads(output_path.read_text()) == {"status": "success", "error": None}
+    stderr = capsys.readouterr().err
+    if cleanup_outcome == "success":
+        assert not stderr
+    else:
+        assert "exec" in stderr and "cleanup" in stderr
+
+
+def test_private_failed_invoke_hides_state_without_cleanup(tmp_path):
+    class FailedAdapter(AdapterBase):
+        @classmethod
+        def send(cls, **payload):
+            assert payload["operation"] == "invoke"
+            return {"status": "failure", "error": "worker failed", "adapter_state": {"pid": 1}}
+
+    input_path, output_path = tmp_path / "input.json", tmp_path / "output.json"
+    input_path.write_text(json.dumps({"operation": "invoke"}))
+    FailedAdapter.cli(["--poll", "-i", str(input_path), "-o", str(output_path)])
+    assert json.loads(output_path.read_text()) == {"status": "failure", "error": "worker failed"}
+
+
+def test_private_success_requires_publication(tmp_path, monkeypatch):
+    class UnpublishedAdapter(AdapterBase):
+        @classmethod
+        def send(cls, **payload):
+            assert payload["operation"] == "invoke"
+            return {"status": "success", "error": None}
+
+    runtime = SimpleNamespace(read_execution_record=lambda _: {"state": {"result_ref": None}})
+    monkeypatch.setattr("daggerml.contrib.adapters.Dml", lambda **kwargs: SimpleNamespace(runtime=runtime))
+    input_path = tmp_path / "input.json"
+    input_path.write_text(json.dumps({"operation": "invoke", "adapter_state": None,
+                                     "execution_id": "exec", "remote": {"root": "s3://bucket/root"}}))
+    from daggerml.api import DmlRepoError
+
+    with pytest.raises(DmlRepoError, match="did not publish"):
+        UnpublishedAdapter.cli(["--poll", "-i", str(input_path), "-o", str(tmp_path / "output.json")])
 
 
 def test_cli_supports_s3_input_and_output(monkeypatch):

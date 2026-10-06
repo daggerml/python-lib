@@ -39,6 +39,11 @@ lifecycle, lineage, cancellation, invalidation, adapter continuation, shared
 retry deadlines, and cleanup. Cleanup may remain pending or fail without making
 an otherwise reusable result unavailable.
 
+For script and local Docker, the launching effective user and hostname must
+participate in polling, cleanup, and cancellation. Other users/hosts return retry without touching local
+resources; there is no automatic takeover. A published result remains reusable
+while owner-dependent cleanup is pending.
+
 ```{bash}
 course_ref="$(dml show | jq -er '.dags["course-execution"]')"
 first_ref="$(dml dag get-node-by-name "$course_ref" script-first)"
