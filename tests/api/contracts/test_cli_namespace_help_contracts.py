@@ -4,8 +4,8 @@ import argparse
 
 import pytest
 
-from daggerml._cli import MethodCLI
 from daggerml._core import Dml, Ref
+from daggerml._core.cli import MethodCLI
 
 
 def test_uses_property_annotation_and_docstring() -> None:
@@ -30,6 +30,25 @@ def test_root_help_lists_commands_before_namespaces() -> None:
     assert "checkout            Check out a different revision." in root_help
     assert "skills              Bundled agent-guidance exports." in root_help
     assert root_help.index("commands:") < root_help.index("namespaces:")
+
+
+@pytest.mark.parametrize("has_external", [False, True])
+def test_root_help_groups_external_commands_separately(tmp_path, monkeypatch, has_external):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    if has_external:
+        executable = tmp_path / "daggerml-cli-example"
+        executable.write_text("#!/bin/sh\nexit 1\n")
+        executable.chmod(0o755)
+
+    help_text = MethodCLI(Dml, prog="dml", external_commands=True).parser.format_help()
+    if not has_external:
+        assert "external:" not in help_text
+        return
+
+    assert help_text.index("commands:") < help_text.index("namespaces:") < help_text.index("external:")
+    builtin_help, external_help = help_text.split("external:", 1)
+    assert "External command (daggerml-cli-example)." not in builtin_help
+    assert "External command (daggerml-cli-example)." in external_help
 
 
 def test_skills_help_lists_commands_before_namespaces() -> None:

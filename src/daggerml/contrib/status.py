@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import json
 from typing import Any
 
 import daggerml.api as codec_mod
@@ -106,3 +108,15 @@ def status() -> dict[str, object]:
         "codecs": codecs,
         "diagnostics": diagnostics,
     }
+
+
+def cli(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="dml contrib", allow_abbrev=False)
+    parser.add_argument(
+        "command",
+        choices=["status"],
+        help="Report adapter, executor, and codec registrations and diagnostics.",
+    )
+    parser.parse_args(argv)
+    print(json.dumps(status(), separators=(",", ":"), sort_keys=True))
+    return 0

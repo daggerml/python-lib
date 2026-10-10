@@ -1,5 +1,6 @@
 """DML Repository Native Implementation."""
 
+from .aws import get_client
 from .dml import Dml, DmlRepoError
 from .exec_state import (
     AdapterCancelRequest,
@@ -34,6 +35,7 @@ __all__ = [
     "CleanupRecord",
     "dml_dumps",
     "dml_loads",
+    "get_client",
     "Error",
     "ExecutionDriver",
     "ExecutionMetadata",

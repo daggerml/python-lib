@@ -53,3 +53,28 @@ def test_wheel_cli_authors_and_shares_shallow_project(installed_wheel, remote_en
     value_ref = run("dag", "get-node-by-name", show["dags"]["installed-result"], "value", cwd=clone)
     assert json.loads(run("dag", "get-node", value_ref, cwd=clone))[1] == 42
     run("fetch", "--unshallow", "main", cwd=clone)
+
+
+def test_wheel_cli_discovers_and_runs_bundled_extensions(installed_wheel, tmp_path):
+    scripts = installed_wheel / "bin"
+    env = {**os.environ, "PYTHONPATH": "", "PATH": str(scripts) + os.pathsep + os.environ["PATH"]}
+
+    def run(*args):
+        result = subprocess.run(
+            [str(scripts / "dml"), *args], cwd=tmp_path, env=env,
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    help_text = run("--help")
+    assert "daggerml-cli-contrib" in help_text
+    for name in ("local-adapter", "lambda-adapter"):
+        assert f"daggerml-cli-{name}" not in help_text
+        assert not (scripts / f"daggerml-cli-{name}").exists()
+        assert (scripts / f"dml-{name}").is_file()
+    assert "Report adapter, executor, and codec" in run("contrib", "--help")
+    report = json.loads(run("contrib", "status"))
+    assert report["summary"]["adapter_registration_count"] == 2
+    assert report["summary"]["executor_registration_count"] == 4
+    assert report["summary"]["has_errors"] is False

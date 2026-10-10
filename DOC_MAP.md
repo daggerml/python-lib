@@ -32,7 +32,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 ### CLI surface
 
-- Match: `src/daggerml/_cli.py`
+- Match: `src/daggerml/_core/cli.py`
 - Read:
   - the owning workflow under `docs/use/`
   - `src/daggerml/README.md`
@@ -85,7 +85,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 ### Runtime and remote execution
 
-- Match: `src/daggerml/_core/dml.py`, `src/daggerml/_core/index.py`, `src/daggerml/_core/exec_state.py`, `src/daggerml/util.py`, `src/daggerml/_core/remote.py`, `src/daggerml/_core/s3_cas.py`
+- Match: `src/daggerml/_core/dml.py`, `src/daggerml/_core/index.py`, `src/daggerml/_core/exec_state.py`, `src/daggerml/util.py`, `src/daggerml/_core/aws.py`, `src/daggerml/_core/remote.py`, `src/daggerml/_core/s3_cas.py`
 - Read:
   - `docs/use/execution.qmd`
   - `docs/use/runtimes.qmd`

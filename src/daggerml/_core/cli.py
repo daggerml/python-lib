@@ -4,17 +4,22 @@ import argparse
 import inspect
 import json
 import logging
+import os
+import re
+import shutil
+import subprocess
 import sys
 import types
 import typing
 from dataclasses import dataclass
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union, cast, get_args, get_origin
 
 try:
-    from daggerml.__about__ import __version__
-except ImportError:
+    __version__ = version("daggerml")
+except PackageNotFoundError:
     __version__ = "local"
 
 from daggerml._core import Dml, Error, Ref, Runnable, Uri, dml_dumps, dml_loads
@@ -111,6 +116,33 @@ CLI_FAMILY_SERIALIZERS: dict[str, Callable[[Any], str]] = {
 CLI_SERDE_PRIORITY = ("none", "dml", "json", "float", "int", "bool", "str", "ref")
 CLI_COLLECTION_TYPES = (dict, list)
 CLI_LITERAL_SCALARS = {float, int, bool, str}
+
+EXTERNAL_COMMAND_PREFIX = "daggerml-cli-"
+_CONTEXT_ENV_NAMES = {
+    "db_map_size_headroom": "DML_DEFAULT_DB_MAP_SIZE_HEADROOM",
+    "db_map_size_max": "DML_DEFAULT_DB_MAP_SIZE_MAX",
+    "default_branch_name": "DML_DEFAULT_BRANCH_NAME",
+}
+
+
+def _external_commands() -> dict[str, str]:
+    commands = {}
+    for directory in os.get_exec_path():
+        try:
+            entries = list(Path(directory or ".").iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.startswith(EXTERNAL_COMMAND_PREFIX):
+                continue
+            name = entry.name[len(EXTERNAL_COMMAND_PREFIX) :]
+            if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", name):
+                continue
+            if name not in commands and entry.is_file() and os.access(entry, os.X_OK):
+                executable = shutil.which(entry.name)
+                if executable:
+                    commands[name] = executable
+    return dict(sorted(commands.items()))
 
 
 def _union_members(typ: Any) -> tuple[Any, ...]:
@@ -227,6 +259,7 @@ class PrettyHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
         groups = (
             ("command", "commands"),
             ("namespace", "namespaces"),
+            ("external", "external"),
         )
         for category, heading in groups:
             subactions = [
@@ -298,12 +331,15 @@ class MethodCLI:
         *,
         prog: str | None = None,
         parsers: dict[Any, Callable[[str], Any]] | None = None,
+        external_commands: bool = False,
     ) -> None:
         if not isinstance(cls, type):
             raise TypeError("MethodCLI expects a class, not an instance")
         self.cls = cls
         self.parsers = dict(parsers or {})
         self._constructor_params = self._constructor_param_metadata()
+        self._external_commands = {}
+        self._external_dispatch = external_commands
         self.parser = PrettyArgumentParser(
             prog=prog or self._kebab(cls.__name__),
             formatter_class=PrettyHelpFormatter,
@@ -319,6 +355,16 @@ class MethodCLI:
         self.parser.add_argument("--version", action="version", version=f"%(prog)s, version {__version__}")
         self._add_constructor_args(self.parser)
         self._build_namespace_from_type(cls, self.parser, path=())
+        if external_commands:
+            subparsers = next(
+                action for action in self.parser._actions if isinstance(action, argparse._SubParsersAction)
+            )
+            for name, executable in _external_commands().items():
+                if name not in subparsers.choices:
+                    self._external_commands[name] = executable
+                    subparsers.add_parser(
+                        name, category="external", help=f"External command ({EXTERNAL_COMMAND_PREFIX}{name})."
+                    )
 
     def main(self, argv: list[str] | None = None) -> int:
         try:
@@ -332,6 +378,40 @@ class MethodCLI:
             return 1
 
     def run(self, argv: list[str] | None = None) -> int:
+        argv = list(sys.argv[1:] if argv is None else argv)
+        if self._external_dispatch:
+            # Parse only the root prefix. Everything after the command belongs
+            # to the executable, including --help and unknown option names.
+            prefix = PrettyArgumentParser(prog=self.parser.prog, add_help=False, allow_abbrev=False)
+            prefix.add_argument("-h", "--help", action="store_true")
+            prefix.add_argument("--version", action="store_true")
+            prefix.add_argument("-v", dest="_verbosity", action="count", default=0)
+            self._add_constructor_args(prefix)
+            prefix.add_argument("_command", nargs="?")
+            prefix.add_argument("_args", nargs=argparse.REMAINDER)
+            root = vars(prefix.parse_args(argv))
+            if not root["help"] and not root["version"] and root["_command"] in self._external_commands:
+                env = os.environ.copy()
+                for param in self._constructor_params.values():
+                    value = root.get(param.dest)
+                    if value is not None:
+                        key = _CONTEXT_ENV_NAMES.get(param.name, f"DML_{param.name.upper()}")
+                        env[key] = str(value)
+                env["DML_CLI_CONTEXT"] = json.dumps(
+                    {
+                        "version": 1,
+                        "options": {
+                            param.name: root[param.dest]
+                            for param in self._constructor_params.values()
+                            if root.get(param.dest) is not None
+                        },
+                        "verbosity": root["_verbosity"],
+                    }
+                )
+                completed = subprocess.run(
+                    [self._external_commands[root["_command"]], *root["_args"]], env=env, check=False
+                )
+                return completed.returncode if completed.returncode >= 0 else 128 - completed.returncode
         ns = self.parser.parse_args(argv)
         data = vars(ns)
         verbosity = data.pop("_verbosity", 0)
@@ -810,4 +890,4 @@ class _Namespace:
 
 
 def cli() -> None:
-    raise SystemExit(MethodCLI(Dml, prog="dml").main())
+    raise SystemExit(MethodCLI(Dml, prog="dml", external_commands=True).main())

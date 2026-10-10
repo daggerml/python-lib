@@ -12,6 +12,9 @@ package-level exports. Normative storage, execution, remote, and lifecycle
 contracts are owned by the relevant OpenSpec capabilities listed in
 [`openspec/spec-overview.md`](../../../openspec/spec-overview.md).
 
+Core runtime modules do not import the Python authoring API, contrib, or other
+package namespaces.
+
 ## Execution records
 
 Remote execution state is split by ownership. Immutable metadata records cache,
