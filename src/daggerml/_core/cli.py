@@ -13,12 +13,13 @@ import types
 import typing
 from dataclasses import dataclass
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union, cast, get_args, get_origin
 
 try:
-    from daggerml.__about__ import __version__
-except ImportError:
+    __version__ = version("daggerml")
+except PackageNotFoundError:
     __version__ = "local"
 
 from daggerml._core import Dml, Error, Ref, Runnable, Uri, dml_dumps, dml_loads

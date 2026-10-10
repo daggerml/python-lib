@@ -4,8 +4,8 @@ from importlib import resources
 
 import pytest
 
-from daggerml._cli import MethodCLI
 from daggerml._core import Dml
+from daggerml._core.cli import MethodCLI
 
 SKILLS = ("querying", "authoring", "repository", "extensions")
 

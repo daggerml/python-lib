@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 import daggerml._core.dml as dml_mod
-from daggerml._cli import MethodCLI
 from daggerml._core import Dml, Error, Ref, dml_dumps
+from daggerml._core.cli import MethodCLI
 from tests._core.helpers import make_local_dml
 
 

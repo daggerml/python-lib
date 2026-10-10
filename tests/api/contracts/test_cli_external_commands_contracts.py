@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from daggerml._cli import MethodCLI, _external_commands
 from daggerml._core import Dml
+from daggerml._core.cli import MethodCLI, _external_commands
 
 
 class Commands:
@@ -134,7 +134,7 @@ sys.stderr.write('plugin diagnostic\\n')
 sys.exit(23)
 """)
     result = subprocess.run(
-        [sys.executable, "-c", "from daggerml._cli import cli; cli()", "echo"],
+        [sys.executable, "-c", "from daggerml._core.cli import cli; cli()", "echo"],
         input="stdin payload\n", text=True, capture_output=True, check=False, timeout=30,
     )
     assert result.returncode == 23
@@ -160,4 +160,8 @@ def test_core_runtime_has_no_imports_outside_core():
                 [alias.name for alias in node.names] if isinstance(node, ast.Import) else []
             )
             for module in modules:
-                assert not module.startswith("daggerml.") or module.startswith("daggerml._core."), (file, module)
+                assert (
+                    not module.startswith("daggerml.")
+                    or module == "daggerml._core"
+                    or module.startswith("daggerml._core.")
+                ), (file, module)

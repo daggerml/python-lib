@@ -32,7 +32,7 @@ Use this file to identify which project docs to read before editing a code path,
 
 ### CLI surface
 
-- Match: `src/daggerml/_cli.py`
+- Match: `src/daggerml/_core/cli.py`
 - Read:
   - the owning workflow under `docs/use/`
   - `src/daggerml/README.md`
