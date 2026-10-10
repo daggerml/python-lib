@@ -95,6 +95,15 @@ requests and appreciate your help in improving this project.
 - Ensure your code passes all tests and does not decrease code coverage.
 - If your changes introduce new dependencies, please update `pyproject.toml`, but we prefer to keep the dependencies to a minimum.
 
+## Documentation
+
+- Docs explain concepts and how to extend the system. Omit anything obvious
+  from the code or help messages.
+- Help messages explain how to use commands; code comments explain
+  implementation details.
+- Describe the current system only, without version comparisons or migration
+  narratives.
+
 ## Documentation Build
 
 - Python, Node.js/npm, `uv`, Git, `curl`, `tar`, and the native package build

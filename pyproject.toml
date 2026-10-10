@@ -36,10 +36,11 @@ dashboard = [
 ]
 
 [project.scripts]
-dml = "daggerml._cli:cli"
+dml = "daggerml._core.cli:cli"
 dml-dashboard = "daggerml.dashboard.cli:main"
 dml-local-adapter = "daggerml.contrib.adapters:LocalAdapter.cli"
 dml-lambda-adapter = "daggerml.contrib.adapters:LambdaAdapter.cli"
+daggerml-cli-contrib = "daggerml.contrib.status:cli"
 
 [project.entry-points."daggerml.contrib.adapters"]
 local = "daggerml.contrib.adapters:LocalAdapter"
@@ -83,6 +84,7 @@ template = "__version__ = \"${version}\"\n"
 
 [tool.uv]
 cache-keys = [
+  { file = "pyproject.toml" },
   { file = "c/**/*.c" },
   { file = "c/**/*.h" },
   { file = "src/**/*.pyx" },

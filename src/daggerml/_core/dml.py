@@ -8,8 +8,9 @@ from importlib import resources
 from importlib.resources.abc import Traversable
 from pathlib import Path
 from time import time
-from typing import Annotated, Any, Literal, Mapping, NotRequired, TypedDict, cast, overload
+from typing import Annotated, Any, Literal, Mapping, TypedDict, cast, overload
 
+from daggerml._core.aws import get_client
 from daggerml._core.commit import (
     CommitDescription,
     CommitDiffPayload,
@@ -32,7 +33,6 @@ from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItemConflict
 from daggerml._core.types import DmlDB, DmlRepoError, Error, FrozenIndex, Index, TxnWithValid
-from daggerml.util import get_client
 
 
 def _format_graph_age(seconds: int | float | None) -> str:
@@ -304,21 +304,15 @@ class ConfigStatus(TypedDict):
     remote: RemoteConfig
     user: str
     config_home: str
-    contrib: NotRequired[dict]
 
 
 @dataclass(frozen=True)
 class _ConfigNamespace:
     _dml: "Dml"
 
-    def show(self, *, contrib: Annotated[bool, "Include contrib runtime status."] = False) -> ConfigStatus:
+    def show(self) -> ConfigStatus:
         """Return the resolved runtime configuration."""
-        payload = asdict(self._dml._config)
-        if contrib:
-            from daggerml.contrib import status as contrib_status
-
-            payload["contrib"] = contrib_status.status()
-        return cast(ConfigStatus, payload)
+        return cast(ConfigStatus, asdict(self._dml._config))
 
     def get(self, key: Annotated[str, "Flattened config key to read."]) -> str | int | None:
         """Return one resolved config value by flattened key."""

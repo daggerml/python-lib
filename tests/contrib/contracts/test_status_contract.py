@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from daggerml.contrib import status as status_mod
 from daggerml.contrib.adapters import LambdaAdapter, LocalAdapter
 from daggerml.contrib.executors import BatchExecutor, DockerExecutor, ScriptExecutor, SshExecutor
@@ -64,3 +68,36 @@ def test_builtins_report_new_operation_surface() -> None:
             "cancel": True,
         }
         assert "gc" not in registration["implements"]
+
+
+def test_cli_prints_status_as_json(monkeypatch, capsys):
+    report = {"summary": {"has_errors": True}, "diagnostics": [{"message": "plugin failure"}]}
+    monkeypatch.setattr(status_mod, "status", lambda: report)
+
+    assert status_mod.cli(["status"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == report
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("args", [["--help"], ["status", "--help"]])
+def test_cli_help_does_not_load_plugins(monkeypatch, capsys, args):
+    def unexpected_status():
+        raise AssertionError("help must not load plugins")
+
+    monkeypatch.setattr(status_mod, "status", unexpected_status)
+    with pytest.raises(SystemExit) as error:
+        status_mod.cli(args)
+    assert error.value.code == 0
+    assert "Report adapter, executor, and codec" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("args", [[], ["unknown"], ["status", "extra"], ["status", "--unknown"]])
+def test_cli_rejects_invalid_arguments(monkeypatch, args):
+    def unexpected_status():
+        raise AssertionError("invalid arguments must not load plugins")
+
+    monkeypatch.setattr(status_mod, "status", unexpected_status)
+    with pytest.raises(SystemExit) as error:
+        status_mod.cli(args)
+    assert error.value.code == 2

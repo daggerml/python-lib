@@ -9,6 +9,14 @@ An adapter is the executable boundary between DaggerML core and a backend. This
 page follows [Codecs](codecs.qmd); [Executors](executors.qmd) documents the
 optional contrib implementation used by the built-in adapters.
 
+## Extend the CLI
+
+Extend `dml` with a `daggerml-cli-<name>` executable on `PATH`, rather than
+adding optional integrations to core.
+
+Extensions own their parsing and help. `DML_CLI_CONTEXT` carries overrides,
+not resolved configuration, so extensions can choose whether to open a repository.
+
 ## DML executable request and response contract
 
 For a non-builtin `Runnable`, core locates `runnable.adapter` as an executable

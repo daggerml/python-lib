@@ -14,6 +14,7 @@ from dataclasses import InitVar, asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence, TypedDict, cast
 from uuid import uuid4
 
+from daggerml._core.aws import get_client
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItem, CasItemConflict, S3Remote
 from daggerml._core.types import (
@@ -27,7 +28,6 @@ from daggerml._core.types import (
     Runnable,
 )
 from daggerml._core.util import uuid7
-from daggerml.util import get_client
 
 if TYPE_CHECKING:
     import boto3
