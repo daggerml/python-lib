@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from botocore.exceptions import ClientError
 
 from daggerml import Uri
 from daggerml._core.types import DmlRepoError
@@ -65,6 +66,8 @@ def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch, nested_s
             writes.append(kwargs)
 
         def get_object(self, **kwargs):
+            if kwargs["Key"].endswith("submission.json"):
+                raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
             response = {"status": "success", "error": None}
             if nested_state:
                 response["adapter_state"] = {"nested": "done"}
@@ -76,7 +79,11 @@ def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch, nested_s
         def register_job_definition(self, **kwargs):
             return {"jobDefinitionArn": "arn:job-definition"}
 
+        def describe_job_queues(self, **kwargs):
+            return {"jobQueues": [{"jobQueueArn": "arn:queue"}]}
+
         def submit_job(self, **kwargs):
+            assert clients[-1][1]["max_attempts"] == 0
             return {"jobId": "job-1"}
 
         def describe_jobs(self, **kwargs):
@@ -111,8 +118,7 @@ def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch, nested_s
         "status": "success",
         "error": None,
         "state": {
-            "job_id": "job-1",
-            "job_definition": "arn:job-definition",
+            **start["state"],
             **({"nested_adapter_state": {"nested": "done"}} if nested_state else {}),
         },
     }
@@ -127,17 +133,16 @@ def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch, nested_s
         "max_pool_connections": 100,
     }
     expected_poll_policy = {**expected_start_policy, "max_attempts": 25}
-    assert [name for name, _ in clients] == ["s3", "batch", "batch", "s3"]
+    assert [name for name, _ in clients] == ["s3", "s3", "batch", "s3", "batch", "s3", "batch", "s3"]
     assert [kwargs for _, kwargs in clients] == [
-        expected_start_policy,
-        expected_start_policy,
-        expected_poll_policy,
-        expected_poll_policy,
+        expected_poll_policy, expected_start_policy, expected_start_policy, expected_start_policy,
+        {**expected_start_policy, "max_attempts": 0}, expected_start_policy,
+        expected_poll_policy, expected_poll_policy,
     ]
 
 
 def test_active_retry_then_terminal_cleanup_is_repeatable(monkeypatch):
-    jobs = iter(([{"status": "RUNNING"}], [{"status": "SUCCEEDED"}], []))
+    jobs = iter(([{"status": "RUNNING"}], [{"status": "SUCCEEDED"}], [{"status": "SUCCEEDED"}]))
     deregistered = []
 
     class Client:

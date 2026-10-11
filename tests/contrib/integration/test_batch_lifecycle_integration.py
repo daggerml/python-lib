@@ -1,11 +1,14 @@
 """Moto control-plane/S3 simulation; no containers or production isolation proof."""
 
 import json
+import os
+import subprocess
+import sys
 from uuid import uuid4
 
 import boto3
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ConnectionClosedError, ReadTimeoutError
 from moto import mock_aws
 from moto.batch.models import batch_backends
 
@@ -275,7 +278,7 @@ def test_throttled_launch_resumes_without_leaking_definitions(batch_world, monke
     assert result["error"] is None
     assert result["retry_after_ms"] == 2000
     state = result["adapter_state"]
-    assert set(state) == ({"job_definition"} if stage == "submit" else set())
+    assert set(state) == ({"job_definition", "identity"} if stage == "submit" else set())
     resumed = {**request, "adapter_state": state}
     assert BatchExecutor.handler(resumed, None) == result
     assert len(client.describe_job_definitions(status="ACTIVE")["jobDefinitions"]) == (stage == "submit")
@@ -293,15 +296,430 @@ def test_throttled_launch_resumes_without_leaking_definitions(batch_world, monke
     assert BatchExecutor.handle(**resumed)["status"] == "success"
 
 
-def test_ambiguous_submission_is_not_retried_as_throttling(batch_world, monkeypatch):
+@pytest.mark.parametrize("lost_continuation", [False, True])
+@pytest.mark.parametrize("fault", ["read-timeout", "connection-closed", "crash", "save"])
+def test_accepted_submission_recovers_without_resubmission(batch_world, monkeypatch, lost_continuation, fault):
+    client, s3, request = batch_world
+    monkeypatch.setattr(BatchExecutor, "_client", lambda self, **kwargs: client)
+    submit = client.submit_job
+    accepted = []
+
+    def lose_response(**kwargs):
+        record = json.loads(s3.get_object(
+            Bucket="batch-test", Key=_scratch_uri(request["scratch_uri"], "submission.json").split("/", 3)[3],
+        )["Body"].read())
+        assert record["state"]["phase"] == "unknown"
+        accepted.append(submit(**kwargs)["jobId"])
+        if fault == "crash":
+            raise KeyboardInterrupt("handler process died")
+        if fault == "read-timeout":
+            raise ReadTimeoutError(endpoint_url=client.meta.endpoint_url)
+        if fault == "connection-closed":
+            raise ConnectionClosedError(endpoint_url=client.meta.endpoint_url)
+        return {"jobId": accepted[-1]}
+
+    monkeypatch.setattr(client, "submit_job", lose_response)
+    save = BatchExecutor._save_submission
+
+    def fail_accepted_save(self, state, *args):
+        if state.get("phase") == "submitted":
+            raise TimeoutError("continuation write lost")
+        return save(self, state, *args)
+
+    if fault == "save":
+        monkeypatch.setattr(BatchExecutor, "_save_submission", fail_accepted_save)
+    if fault == "crash":
+        with pytest.raises(KeyboardInterrupt):
+            BatchExecutor.handler(request, None)
+        state = None
+    else:
+        result = BatchExecutor.handler(request, None)
+        assert result["status"] == "retry"
+        state = result["adapter_state"]
+    monkeypatch.setattr(BatchExecutor, "_save_submission", save)
+    assert client.describe_job_definitions(status="INACTIVE")["jobDefinitions"] == []
+    job = job_model({
+        "job_id": accepted[0], "job_definition": client.describe_jobs(jobs=accepted)["jobs"][0]["jobDefinition"],
+    })
+    job.status = "RUNNING"
+    job.job_stopped = False
+    resumed = {**request, "adapter_state": None if lost_continuation else state}
+    recovered = BatchExecutor.handler(json.loads(json.dumps(resumed)), None)
+    assert recovered["status"] == "retry"
+    assert recovered["adapter_state"]["job_id"] == accepted[0]
+    assert len(accepted) == 1
+    job._mark_stopped(success=True)
+    put_output(s3, request, {"status": "success", "error": None})
+    assert BatchExecutor.handler({**request, "adapter_state": recovered["adapter_state"]}, None)["status"] == "success"
+
+
+def test_fresh_process_recovers_crash_after_accepted_submission(batch_world):
+    from moto.server import ThreadedMotoServer
+
+    client, s3, request = batch_world
+    # The HTTP server shares Moto's backend, but the handler processes share no
+    # Python objects or continuation: only the durable S3 intent remains.
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    env = {**os.environ, "AWS_ENDPOINT_URL": f"http://{host}:{port}"}
+    crash = """
+import json, os, sys
+from daggerml.contrib.executors.batch import BatchExecutor
+client = BatchExecutor._client(max_attempts=0)
+submit = client.submit_job
+
+def accepted_then_crash(**kwargs):
+    submit(**kwargs)
+    os._exit(77)
+
+client.submit_job = accepted_then_crash
+BatchExecutor._client = staticmethod(lambda **kwargs: client)
+BatchExecutor.handler(json.load(sys.stdin), None)
+"""
+    recover = """
+import json, sys
+from daggerml.contrib.executors.batch import BatchExecutor
+print(json.dumps(BatchExecutor.handler(json.load(sys.stdin), None)))
+"""
+    try:
+        died = subprocess.run(
+            [sys.executable, "-c", crash], input=json.dumps(request), text=True,
+            capture_output=True, env=env, timeout=30,
+        )
+        assert died.returncode == 77, died.stderr + died.stdout
+        definitions = client.describe_job_definitions(status="ACTIVE")["jobDefinitions"]
+        assert len(definitions) == 1
+        returned = subprocess.run(
+            [sys.executable, "-c", recover], input=json.dumps(request), text=True,
+            capture_output=True, env=env, timeout=30, check=True,
+        )
+        result = json.loads(returned.stdout)
+        assert result["status"] == "retry", result
+        state = result["adapter_state"]
+        assert state["job_definition"] == definitions[0]["jobDefinitionArn"]
+        assert state["job_id"]
+        jobs = client.list_jobs(jobQueue=state["job_queue"], filters=[{
+            "name": "JOB_NAME", "values": [state["job_name"]],
+        }])["jobSummaryList"]
+        assert [job["jobId"] for job in jobs] == [state["job_id"]]
+        put_output(s3, request, {"status": "success", "error": None})
+        resumed = {**request, "adapter_state": state}
+        returned = subprocess.run(
+            [sys.executable, "-c", recover], input=json.dumps(resumed), text=True,
+            capture_output=True, env=env, timeout=30, check=True,
+        )
+        assert json.loads(returned.stdout)["status"] == "success"
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize("fault", ["disconnect", "server", "throttle"])
+def test_submit_job_sdk_sends_only_one_http_attempt(monkeypatch, fault):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    from botocore.exceptions import BotoCoreError
+
+    attempts = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            attempts.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            if fault == "disconnect":
+                self.close_connection = True
+                return
+            body = json.dumps({
+                "__type": "ThrottlingException" if fault == "throttle" else "ServerException",
+                "message": "fault injection",
+            }).encode()
+            self.send_response(400 if fault == "throttle" else 500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        monkeypatch.setenv("AWS_ENDPOINT_URL", f"http://127.0.0.1:{server.server_port}")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+        try:
+            client = BatchExecutor._client(max_attempts=0)
+            assert client.meta.config.retries["total_max_attempts"] == 1
+            with pytest.raises((BotoCoreError, ClientError)):
+                client.submit_job(jobName="test", jobQueue="queue", jobDefinition="definition")
+            assert len(attempts) == 1
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    "code,confirmed", [("ClientException", True), ("ServerException", False), ("RequestTimeout", False)],
+)
+def test_submission_rejection_is_explicit_not_any_client_exception(batch_world, monkeypatch, code, confirmed):
     client, _, request = batch_world
     monkeypatch.setattr(BatchExecutor, "_client", lambda self, **kwargs: client)
 
-    def timeout(**kwargs):
+    def fail(**kwargs):
+        raise ClientError({"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": 400}}, "SubmitJob")
+
+    monkeypatch.setattr(client, "submit_job", fail)
+    result = BatchExecutor.handler(request, None)
+    assert result["status"] == ("failure" if confirmed else "retry")
+    if confirmed:
+        assert client.describe_job_definitions(status="ACTIVE")["jobDefinitions"] == []
+        assert code in result["error"]
+    else:
+        assert result["adapter_state"]["phase"] == "unknown"
+        assert len(client.describe_job_definitions(status="ACTIVE")["jobDefinitions"]) == 1
+
+
+def unknown_submission(client, request, monkeypatch, *, count=1):
+    monkeypatch.setattr(BatchExecutor, "_client", lambda self, **kwargs: client)
+    submit = client.submit_job
+    ids = []
+
+    def lose_response(**kwargs):
+        ids.extend(submit(**kwargs)["jobId"] for _ in range(count))
         raise TimeoutError("submission response lost")
 
-    monkeypatch.setattr(client, "submit_job", timeout)
+    monkeypatch.setattr(client, "submit_job", lose_response)
+    result = BatchExecutor.handler(request, None)
+    assert result["status"] == "retry"
+    assert result["adapter_state"]["phase"] == "unknown"
+    monkeypatch.setattr(client, "submit_job", lambda **kwargs: pytest.fail("resubmitted ambiguous intent"))
+    return result["adapter_state"], ids
+
+
+@pytest.mark.parametrize("operation", ["invoke", "cleanup", "cancel"])
+def test_crash_before_submission_stays_unresolved_without_resubmitting(batch_world, monkeypatch, operation):
+    client, _, request = batch_world
+    monkeypatch.setattr(BatchExecutor, "_client", lambda self, **kwargs: client)
+
+    def die_before_request(**kwargs):
+        raise KeyboardInterrupt("died before sending SubmitJob")
+
+    monkeypatch.setattr(client, "submit_job", die_before_request)
+    with pytest.raises(KeyboardInterrupt):
+        BatchExecutor.handler(request, None)
+    monkeypatch.setattr(client, "submit_job", lambda **kwargs: pytest.fail("unsafe resubmission"))
+    event = {**request, "operation": operation}
+    if operation == "cleanup":
+        event["result_ref"] = "dag:result"
+    if operation == "cancel":
+        event.update(argv_ref="node-argv:test", requested_by="user")
+    for _ in range(2):
+        result = BatchExecutor.handler(event, None)
+        assert result["status"] == "retry"
+        assert result["adapter_state"]["phase"] == "unknown"
+        event["adapter_state"] = result["adapter_state"]
+    assert client.describe_job_definitions(status="INACTIVE")["jobDefinitions"] == []
+
+
+def test_incomplete_candidate_description_replays_discovery_page(batch_world, monkeypatch):
+    client, _, request = batch_world
+    state, ids = unknown_submission(client, request, monkeypatch)
+    describe = client.describe_jobs
+    monkeypatch.setattr(client, "describe_jobs", lambda **kwargs: {"jobs": []})
+    result = BatchExecutor.handler({**request, "adapter_state": state}, None)
+    assert result["status"] == "retry"
+    assert result["adapter_state"] == state
+    monkeypatch.setattr(client, "describe_jobs", describe)
+    recovered = BatchExecutor.handler({**request, "adapter_state": result["adapter_state"]}, None)
+    assert recovered["adapter_state"]["job_id"] == ids[0]
+
+
+@pytest.mark.parametrize("saved_state", ["unknown", "none", "definition"])
+@pytest.mark.parametrize("operation", ["invoke", "cleanup", "cancel"])
+def test_unknown_submission_waits_for_visibility_before_poll_or_teardown(
+    batch_world, monkeypatch, operation, saved_state,
+):
+    client, _, request = batch_world
+    state, ids = unknown_submission(client, request, monkeypatch)
+    listing = client.list_jobs
+    monkeypatch.setattr(client, "list_jobs", lambda **kwargs: {"jobSummaryList": []})
+    continuation = {"unknown": state, "none": None, "definition": {"job_definition": state["job_definition"]}}
+    event = {**request, "adapter_state": continuation[saved_state], "operation": operation}
+    if operation == "cleanup":
+        event["result_ref"] = "dag:result"
+    if operation == "cancel":
+        event.update(argv_ref="node-argv:test", requested_by="user")
+    for _ in range(2):
+        result = BatchExecutor.handler(event, None)
+        assert result["status"] == "retry"
+        assert result["retry_after_ms"] == 2000
+        event["adapter_state"] = result["adapter_state"]
+        assert event["adapter_state"]["phase"] == "unknown"
+        assert client.describe_job_definitions(status="INACTIVE")["jobDefinitions"] == []
+    monkeypatch.setattr(client, "list_jobs", listing)
+    result = BatchExecutor.handler(event, None)
+    assert result["adapter_state"]["job_id"] == ids[0]
+    if operation != "invoke":
+        event["adapter_state"] = result["adapter_state"]
+        assert BatchExecutor.handler(event, None)["status"] == ("cancelled" if operation == "cancel" else "success")
+
+
+@pytest.mark.parametrize("stage", ["list", "describe"])
+def test_reconciliation_throttling_keeps_identity_and_retry_timing(batch_world, monkeypatch, stage):
+    client, _, request = batch_world
+    state, ids = unknown_submission(client, request, monkeypatch)
+    method = "list_jobs" if stage == "list" else "describe_jobs"
+    original = getattr(client, method)
+
+    def throttle(**kwargs):
+        raise ClientError({
+            "Error": {"Code": "ThrottlingException"},
+            "ResponseMetadata": {"HTTPHeaders": {"retry-after": "3"}},
+        }, method)
+
+    monkeypatch.setattr(client, method, throttle)
+    result = BatchExecutor.handler({**request, "adapter_state": state}, None)
+    assert result["status"] == "retry"
+    assert result["adapter_state"] == state
+    assert result["retry_after_ms"] == 3000
+    monkeypatch.setattr(client, method, original)
+    assert BatchExecutor.handler({**request, "adapter_state": state}, None)["adapter_state"]["job_id"] == ids[0]
+
+
+@pytest.mark.parametrize("operation", ["cleanup", "cancel"])
+def test_paginated_duplicates_are_all_retained_and_torn_down(batch_world, monkeypatch, operation):
+    client, _, request = batch_world
+    state, ids = unknown_submission(client, request, monkeypatch, count=2)
+    calls = []
+
+    def paginated(**kwargs):
+        calls.append(kwargs)
+        assert "jobStatus" not in kwargs
+        assert kwargs["jobQueue"] == state["job_queue"]
+        assert kwargs["filters"] == [{"name": "JOB_NAME", "values": [state["job_name"]]}]
+        if kwargs.get("nextToken") == "second":
+            return {"jobSummaryList": [{"jobId": ids[1]}]}
+        return {"jobSummaryList": [{"jobId": ids[0]}], "nextToken": "second"}
+
+    monkeypatch.setattr(client, "list_jobs", paginated)
+    first = BatchExecutor.handler({**request, "adapter_state": state}, None)
+    assert len(calls) == 1
+    assert first["adapter_state"]["next_token"] == "second"
+    assert first["adapter_state"]["phase"] == "unknown"
+    second = BatchExecutor.handler({**request, "adapter_state": first["adapter_state"]}, None)
+    state = second["adapter_state"]
+    assert state["phase"] == "duplicates"
+    assert state["job_ids"] == sorted(ids)
+    assert "job_id" not in state
+    failed = BatchExecutor.handler({**request, "adapter_state": state}, None)
+    assert failed["status"] == "failure"
+    assert all(job_id in failed["error"] for job_id in ids)
+    for job_id in ids:
+        job = job_model({"job_id": job_id, "job_definition": state["job_definition"]})
+        job.status = "RUNNING"
+        job.job_stopped = False
+    event = {**request, "adapter_state": state, "operation": operation}
+    event.update({"result_ref": "dag:result"} if operation == "cleanup" else {
+        "argv_ref": "node-argv:test", "requested_by": "user",
+    })
+    assert BatchExecutor.handler(event, None)["status"] == "retry"
+    assert client.describe_job_definitions(status="INACTIVE")["jobDefinitions"] == []
+    for job_id in ids:
+        job = job_model({"job_id": job_id, "job_definition": state["job_definition"]})
+        if operation == "cancel":
+            assert job.stop is True
+        job._mark_stopped(success=False)
+    assert BatchExecutor.handler(event, None)["status"] == ("cancelled" if operation == "cancel" else "success")
+
+
+@pytest.mark.parametrize("field", ["jobDefinition", "jobQueue", "jobName", "tags", "createdAt"])
+def test_reconciliation_rejects_foreign_candidates(batch_world, monkeypatch, field):
+    client, _, request = batch_world
+    state, _ = unknown_submission(client, request, monkeypatch)
+    describe = client.describe_jobs
+
+    def foreign(**kwargs):
+        result = describe(**kwargs)
+        result["jobs"][0][field] = {} if field == "tags" else (0 if field == "createdAt" else "foreign")
+        return result
+
+    monkeypatch.setattr(client, "describe_jobs", foreign)
+    result = BatchExecutor.handler({**request, "adapter_state": state}, None)
+    assert result["status"] == "retry"
+    assert result["adapter_state"]["phase"] == "unknown"
+    assert result["adapter_state"]["job_ids"] == []
+
+
+@pytest.mark.parametrize("phase", ["definition", "unknown", "submitted", "duplicates"])
+@pytest.mark.parametrize("operation", ["invoke", "cleanup", "cancel"])
+@pytest.mark.parametrize("change", ["execution", "remote"])
+def test_continuation_cannot_cross_execution_or_remote(batch_world, monkeypatch, change, operation, phase):
+    client, _, request = batch_world
+    if phase == "definition":
+        monkeypatch.setattr(BatchExecutor, "_client", lambda self, **kwargs: client)
+
+        def throttle(**kwargs):
+            raise ClientError({"Error": {"Code": "ThrottlingException"}}, "SubmitJob")
+
+        monkeypatch.setattr(client, "submit_job", throttle)
+        state = BatchExecutor.handler(request, None)["adapter_state"]
+        assert set(state) == {"job_definition", "identity"}
+    else:
+        state, _ = unknown_submission(client, request, monkeypatch, count=2 if phase == "duplicates" else 1)
+    if phase not in {"definition", "unknown"}:
+        state = BatchExecutor.handler({**request, "adapter_state": state}, None)["adapter_state"]
+        assert state["phase"] == phase
+    monkeypatch.setattr(client, "terminate_job", lambda **kwargs: pytest.fail("terminated another execution"))
+    monkeypatch.setattr(
+        client, "deregister_job_definition", lambda **kwargs: pytest.fail("deregistered another execution"),
+    )
+    other = {**request, "adapter_state": state, "operation": operation}
+    if operation == "cleanup":
+        other["result_ref"] = "dag:result"
+    if operation == "cancel":
+        other.update(argv_ref="node-argv:test", requested_by="user")
+    if change == "execution":
+        other["execution_id"] = uuid4().hex
+    else:
+        other["remote"] = {"root": "s3://batch-test/other-root"}
+    assert BatchExecutor.handler(other, None)["status"] == "failure"
+    other["adapter_state"] = None
+    assert BatchExecutor.handler(other, None)["status"] == "failure"
+
+
+@pytest.mark.parametrize("stored", [False, True])
+@pytest.mark.parametrize("stage", ["intent", "rejection"])
+def test_submission_record_write_failure_retains_definition_for_teardown(batch_world, monkeypatch, stage, stored):
+    client, _, request = batch_world
+    monkeypatch.setattr(BatchExecutor, "_client", lambda self, **kwargs: client)
+    save = BatchExecutor._save_submission
+    submits = []
+
+    def reject(**kwargs):
+        submits.append(kwargs)
+        raise ClientError({"Error": {"Code": "ClientException", "Message": "confirmed rejection"}}, "SubmitJob")
+
+    monkeypatch.setattr(client, "submit_job", reject)
+
+    def fail_write(self, state, *args):
+        if (stage == "intent") == (state.get("phase") == "unknown"):
+            if stored:
+                save(self, state, *args)
+            raise ReadTimeoutError(endpoint_url="s3")
+        return save(self, state, *args)
+
+    monkeypatch.setattr(BatchExecutor, "_save_submission", fail_write)
     result = BatchExecutor.handler(request, None)
     assert result["status"] == "failure"
-    assert "submission response lost" in result["error"]
+    state = result["adapter_state"]
+    assert state["job_definition"]
+    assert len(submits) == (stage == "rejection")
+    monkeypatch.setattr(BatchExecutor, "_save_submission", save)
+    cleaned = BatchExecutor.handler({
+        **request, "adapter_state": state, "operation": "cleanup", "result_ref": "dag:failure",
+    }, None)
+    assert cleaned["status"] == "success", cleaned
     assert client.describe_job_definitions(status="ACTIVE")["jobDefinitions"] == []

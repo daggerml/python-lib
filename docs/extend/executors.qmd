@@ -96,6 +96,35 @@ restriction.
 Use the supplied remote scratch URI for detached input/output. Runtime records
 own execution coordination; `S3Store` under `remote.root/data/` is for artifacts.
 
+## Batch submission recovery
+
+Batch writes submission intent to `lambda:batch/submission.json` under execution
+scratch before calling `SubmitJob`, with SDK retries disabled for that call.
+The record binds the execution, remote root, scratch path, resolved queue,
+job name, definition ARN, and submission search bound. Explicit throttling
+retains the definition for another submission; ambiguous outcomes only observe.
+All submission continuations are checked against execution/remote/scratch identity
+before polling or teardown. Failed intent writes roll back known-unsubmitted
+definitions and retain their handles if rollback fails.
+
+Recovery scans one `ListJobs` job-name-filtered page per invoke, including terminal
+jobs, and verifies candidates through `DescribeJobs`. State retains pagination
+and every matching ID. One match resumes normal polling; multiple matches report
+failure with all IDs retained for cancellation/cleanup. Teardown waits for every
+tracked job to become terminal before deregistering its definition.
+
+An empty discovery result cannot authorize resubmission. A crash after intent
+persistence but before submission, jobs no longer discoverable, inaccessible
+queues, or persistent identity mismatches can therefore leave an unresolved
+retry requiring operator investigation. Keep scratch records until teardown.
+Recovery is not an exactly-once guarantee: a discovery scan can miss a duplicate
+that becomes visible later. The search bound allows one minute of clock skew.
+
+The Lambda role needs scratch S3 read/write, job registration/submission/tagging,
+`DescribeJobQueues`, `ListJobs`, `DescribeJobs`, termination, and deregistration
+permissions. Moto coverage proves control-plane recovery, not production IAM or
+container execution.
+
 ## Batch isolation
 
 `AWS_EC2_METADATA_DISABLED` is not a sandbox: job code can unset it or request
