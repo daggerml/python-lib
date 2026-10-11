@@ -84,11 +84,6 @@ Script workers receive function source plus explicit `extra_objs` and
 `post_lines`, not the authoring module's imports or globals. Put dependencies
 inside the function or inject them explicitly.
 
-Script workers scope the default Dml session to the job, so bare `S3Store()`
-calls and codecs use its artifact root. The supervisor and worker use payload
-environment overrides; the explicit `remote.root` takes precedence over
-inherited or payload `DML_REMOTE_ROOT`.
-
 Script and Docker handles belong to their launching user and host. Foreign
 callers retry without touching local resources; hosts and containers must have
 distinct hostnames. Ownership is not authentication or automatic failover.
