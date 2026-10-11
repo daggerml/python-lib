@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import boto3
+
 from daggerml import Dml, Ref
 from daggerml.api import DmlRepoError
 
@@ -203,6 +205,8 @@ def _parse_cmd_payload(
 
     merged_env = os.environ.copy()
     merged_env.update(env)
+    # The explicit job remote wins over inherited and payload environment roots.
+    merged_env["DML_REMOTE_ROOT"] = remote["root"]
     return cache_key, execution_id, cmd, merged_env, {"root": remote["root"]}
 
 
@@ -240,6 +244,23 @@ def _validate_output(result: Any) -> dict[str, Any]:
 def run(payload: dict[str, Any]) -> dict[str, Any]:
     """Launch a worker subprocess, wait for it to exit, and return the terminal result."""
     cache_key, execution_id, cmd, env, remote = _parse_cmd_payload(payload)
+    # Supervisors own a dedicated process. Apply the child's configuration before
+    # constructing our clients, including a fresh boto session for profile changes.
+    previous_env = os.environ.copy()
+    previous_session = boto3.DEFAULT_SESSION
+    try:
+        os.environ.update(env)
+        boto3.DEFAULT_SESSION = None
+        return _run(cache_key, execution_id, cmd, env, remote)
+    finally:
+        os.environ.clear()
+        os.environ.update(previous_env)
+        boto3.DEFAULT_SESSION = previous_session
+
+
+def _run(
+    cache_key: str, execution_id: str, cmd: list[str], env: dict[str, str], remote: dict[str, str]
+) -> dict[str, Any]:
     workdir = tempfile.mkdtemp(prefix=f"dml-supervisor-{execution_id[:8]}-")
     repo_dir = Path(workdir) / "repo"
     repo_dir.mkdir(parents=True, exist_ok=True)

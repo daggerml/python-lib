@@ -1,13 +1,95 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import boto3
 import pytest
 
 import daggerml.contrib.supervisor as supervisor_mod
 from daggerml import Ref
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize("constructor_fails", [False, True])
+def test_payload_environment_configures_supervisor_and_child(monkeypatch, tmp_path, constructor_fails):
+    credentials = tmp_path / "credentials"
+    credentials.write_text(
+        "[ambient]\naws_access_key_id=ambient\naws_secret_access_key=ambient-secret\n"
+        "[job]\naws_access_key_id=job\naws_secret_access_key=job-secret\n"
+    )
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("AWS_PROFILE", "ambient")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("DML_REMOTE_ROOT", "s3://ambient/project")
+    monkeypatch.setattr(boto3, "DEFAULT_SESSION", boto3.Session())
+    original_session = boto3.DEFAULT_SESSION
+    original_env = dict(os.environ)
+    seen = {}
+
+    def init(project_home, remote_root, user):
+        seen["dml_env"] = dict(os.environ)
+        assert remote_root == "s3://job/project"
+        if constructor_fails:
+            raise RuntimeError("constructor failed")
+        return SimpleNamespace()
+
+    class Sink:
+        def __init__(self, **kwargs):
+            client = supervisor_mod._create_logs_client()
+            assert client.meta.region_name == "eu-west-1"
+            assert client.meta.endpoint_url == "http://127.0.0.1:9"
+            assert boto3.DEFAULT_SESSION.get_credentials().access_key == "job"
+            client.close()
+            seen["logs"] = True
+
+        def close(self, **kwargs):
+            pass
+
+    class Proc:
+        def __init__(self, cmd, **kwargs):
+            seen["child_env"] = kwargs["env"]
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
+            self.returncode = 0
+
+        def poll(self):
+            return 0
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(supervisor_mod, "Dml", SimpleNamespace(init=init))
+    monkeypatch.setattr(supervisor_mod, "_CloudWatchStream", Sink)
+    monkeypatch.setattr(supervisor_mod.subprocess, "Popen", Proc)
+    monkeypatch.setattr(supervisor_mod.tempfile, "mkdtemp", lambda prefix: str(tmp_path / "workdir"))
+    payload = {
+        "version": 0, "cache_key": "cache", "execution_id": "exec",
+        "cmd": ["python", "worker.py"], "remote": {"root": "s3://job/project"},
+        "env": {
+            "DML_REMOTE_ROOT": "s3://conflicting/project", "DML_REMOTE_FETCH_WORKERS": "3",
+            "AWS_REGION": "eu-west-1", "AWS_PROFILE": "job",
+            "AWS_ENDPOINT_URL_CLOUDWATCH_LOGS": "http://127.0.0.1:9",
+        },
+    }
+    if constructor_fails:
+        with pytest.raises(RuntimeError, match="constructor failed"):
+            supervisor_mod.run(payload)
+    else:
+        assert supervisor_mod.run(payload)["status"] == "failed"
+        assert seen["logs"]
+        assert seen["child_env"]["DML_REMOTE_ROOT"] == "s3://job/project"
+        assert seen["child_env"]["AWS_PROFILE"] == "job"
+    assert seen["dml_env"]["DML_REMOTE_ROOT"] == "s3://job/project"
+    assert seen["dml_env"]["DML_REMOTE_FETCH_WORKERS"] == "3"
+    assert seen["dml_env"]["AWS_PROFILE"] == "job"
+    assert dict(os.environ) == original_env
+    assert boto3.DEFAULT_SESSION is original_session
 
 
 def test_run_uses_lifecycle_field_to_trigger_cancellation(monkeypatch, tmp_path: Path):

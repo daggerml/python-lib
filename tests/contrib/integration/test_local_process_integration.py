@@ -13,6 +13,7 @@ from daggerml import Runnable, Uri
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
 from daggerml.contrib.executors._ownership import _current_owner
+from daggerml.contrib.s3 import S3Store
 
 
 @funkify(uri="script")
@@ -20,6 +21,32 @@ def worker_pid(dag, value):
     import os
 
     return {"pid": os.getpid(), "value": value.value()}
+
+
+@funkify(uri="script")
+def worker_artifact(dag):
+    import daggerml as dml
+    from daggerml.contrib.s3 import S3Store
+
+    uri = S3Store().put(data=b"job artifact")
+    return {"uri": uri.uri, "root": dml.get_default_dml().config.show()["remote"]["root"]}
+
+
+def test_script_artifacts_use_job_root_despite_conflicting_environment(runtime_world, monkeypatch):
+    dml = runtime_world.publisher
+    monkeypatch.setattr(
+        api, "_codecs",
+        [(1, 1, DelayedActionCodec()), (0, 2, api.NodeCodec()), (0, 3, api.MiscPyTypeCodec())],
+    )
+    with api.use_default_dml(dml), api.new("job-artifact", dml=dml) as dag:
+        runnable = dag.put(worker_artifact)
+        monkeypatch.setenv("DML_REMOTE_ROOT", "s3://unrelated-missing-bucket/project")
+        result = runnable(sleep=lambda: 0, timeout=30_000)
+        dag.commit(result)
+    value = api.load("job-artifact", dml=dml).result.value()
+    assert value["root"] == runtime_world.root
+    assert value["uri"].startswith(runtime_world.root + "/data/")
+    assert S3Store.from_remote_root(runtime_world.root).get(value["uri"]) == b"job artifact"
 
 
 def test_local_adapter_crosses_process_boundary_and_cleans_scratch(runtime_world, monkeypatch):

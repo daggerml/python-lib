@@ -141,7 +141,7 @@ class ScriptExecutor(ExecutorBase):
             "execution_id": execution_id,
             "cmd": cmd,
             "remote": remote,
-            "env": {},
+            "env": {"DML_REMOTE_ROOT": remote["root"]},
         }
         payload_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         with stdout_path.open("w") as stdout_f, stderr_path.open("w") as stderr_f:
@@ -296,7 +296,11 @@ def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
 def run_payload(
     *, execution_id: str, cache_key: str, remote_root: str, tags: list[str] | None = None
 ) -> dict[str, Any]:
-    with dml.temporary(remote_root=remote_root) as tmpdml, chdir(tmpdml._config.project_home):
+    with (
+        dml.temporary(remote_root=remote_root) as tmpdml,
+        dml.use_default_dml(tmpdml),
+        chdir(tmpdml._config.project_home),
+    ):
         try:
             new_kwargs = {"dml": tmpdml, "cache_key": cache_key, "execution_id": execution_id}
             if tags:
