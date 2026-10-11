@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import io
 import json
 import logging
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import daggerml.api as authoring_api
 import daggerml.contrib.executors.script as script_mod
 from daggerml import Runnable, Uri
 from daggerml.api import DmlRepoError
@@ -17,9 +19,12 @@ from daggerml.contrib.executors._ownership import _current_owner
 from daggerml.contrib.executors.script import ScriptExecutor
 
 
-def _run_worker_script(monkeypatch, tmp_path: Path, source: str):
+def _run_worker_script(monkeypatch, tmp_path: Path, source: str, *, real_store=False):
     calls = {"put": []}
-    tmpdml = SimpleNamespace(_config=SimpleNamespace(project_home=str(tmp_path)))
+    tmpdml = SimpleNamespace(
+        _config=SimpleNamespace(project_home=str(tmp_path)),
+        config=SimpleNamespace(show=lambda: {"remote": {"root": "s3://bucket/root"}}),
+    )
 
     class FakeDag:
         def __init__(self):
@@ -63,9 +68,52 @@ def _run_worker_script(monkeypatch, tmp_path: Path, source: str):
 
     monkeypatch.setattr(script_mod.dml, "temporary", fake_temporary)
     monkeypatch.setattr(script_mod.dml, "new", lambda **kwargs: FakeDag())
-    monkeypatch.setattr(script_mod, "S3Store", lambda: FakeStore())
+    if real_store:
+        class FakeClient:
+            def get_object(self, **kwargs):
+                calls["get_object"] = kwargs
+                return {"Body": io.BytesIO(source.encode("utf-8"))}
+
+            def put_object(self, **kwargs):
+                calls["put_object"] = kwargs
+
+        monkeypatch.setattr("daggerml.contrib.s3.get_client", lambda name: FakeClient())
+    else:
+        monkeypatch.setattr(script_mod, "S3Store", lambda: FakeStore())
     result = script_mod.run_payload(execution_id="exec-1", cache_key="cache-1", remote_root="s3://bucket/root")
     return result, calls
+
+
+@pytest.mark.parametrize("ambient_default", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_worker_scopes_artifacts_to_job_and_restores_default(monkeypatch, tmp_path, ambient_default, fail):
+    monkeypatch.setenv("DML_REMOTE_ROOT", "s3://ambient/project")
+    monkeypatch.setattr(authoring_api, "_PROCESS_DEFAULT_DML", None)
+    ambient = SimpleNamespace(config=SimpleNamespace(show=lambda: {"remote": {"root": "s3://ambient/project"}}))
+    scope = script_mod.dml.use_default_dml(ambient) if ambient_default else nullcontext()
+    source = """
+from daggerml.contrib.s3 import S3Store
+
+def fn(dag, arg):
+    return S3Store().put(data=b"job artifact")
+"""
+    if fail:
+        source += '    raise RuntimeError("job failed")\n'
+        source = source.replace('    return S3Store()', '    S3Store()')
+    try:
+        with scope:
+            result, calls = _run_worker_script(monkeypatch, tmp_path, source, real_store=True)
+            assert result["status"] == ("failed" if fail else "succeeded"), result
+            assert calls["get_object"] == {"Bucket": "bucket", "Key": "script.py"}
+            assert calls["put_object"]["Bucket"] == "bucket"
+            assert calls["put_object"]["Key"].startswith("root/data/")
+            if ambient_default:
+                assert script_mod.dml.get_default_dml() is ambient
+            else:
+                with pytest.raises(DmlRepoError, match="No default Dml"):
+                    authoring_api._resolve_default_dml(create=False)
+    finally:
+        sys.modules.pop("_daggerml_live", None)
 
 
 def test_script_kwargs_capture_fn_name_and_require_parameter():
