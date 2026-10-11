@@ -11,23 +11,9 @@ executable; it neither discovers executors nor imports `ExecutorBase`.
 
 ## Registry, discovery, and lowering
 
-The contrib registry discovers executor entry points by `(adapter name, input
-executor name)`. `AdapterBase.resolve_runnable(uri, kwargs, sub)` looks up
-`(adapter name, uri)` before resolution; the entry-point key is descriptive, but
-lookup uses `MyExecutor.adapter` and `MyExecutor.name`. Discovery is lazy,
-retains loaded objects, warns on duplicate keys with the last registration
-winning, and raises `DmlRepoError` if an entry point fails while loading.
-
-An executor's `resolve_runnable()` validates backend options and nesting,
-normalizes kwargs, and returns a `Runnable` with its target URI, optional nested
-runnable, and adapter executable. The executable must be available to the
-runtime process on `PATH` or as a fully specified path.
-
-For example, the built-in Batch executor is looked up with the input name
-`batch` under adapter `lambda`, but resolves its `Runnable.target` to the
-`lambda_uri` option. Its output adapter is `dml-lambda-adapter`; core still
-requires that executable locally, and it synchronously invokes the deployed
-Lambda.
+Executor lookup uses `(MyExecutor.adapter, MyExecutor.name)`, not the entry-point
+key. The authoring name can differ from the resolved target: `batch` under
+`lambda` resolves to the deployed `lambda_uri` and `dml-lambda-adapter`.
 
 <!-- docs:pseudocode: This metadata belongs in an installable executor distribution. -->
 ```toml
@@ -45,12 +31,9 @@ assert {"local:script", "local:docker", "local:ssh"} <= executor_keys
 
 ## Dispatch and lifecycle
 
-`ExecutorBase` creates a fresh instance for every `handle()` call. `handle()`
-accepts only invoke, cleanup, and cancel, validates the adapter request and
-response schemas, and dispatches invoke without `adapter_state` to `start` or
-invoke with saved object state to `poll`. Cleanup calls `cleanup`; cancel calls
-`cancel`, regardless of state. Repeated `operation="invoke"` performs polling;
-there is no wire `poll` operation.
+`ExecutorBase` creates a fresh instance for each call. Durable continuation must
+therefore be returned as state, not retained on the instance. Repeated invoke
+requests perform polling; there is no wire `poll` operation.
 
 ```{python}
 from daggerml import Runnable, Uri
@@ -82,71 +65,59 @@ assert ExampleExecutor.handle(**payload)["adapter_state"] == {"job": "1"}
 assert ExampleExecutor.handle(**{**payload, "adapter_state": {"job": "1"}})["status"] == "retry"
 ```
 
-This is a minimal resolve-and-dispatch illustration, not a complete deployable
-backend.
+This illustrates resolve-and-dispatch, not a complete deployable backend.
+Later calls may come from different processes or repositories; continuation
+must support safe status checks rather than repeated launches.
 
-`start(cache_key, execution_id, runnable, remote, scratch_uri)` launches work or
-returns a terminal response. `poll(..., state, ...)` idempotently checks the
-work using only durable state. An asynchronous response is
-`{"status": "retry", "adapter_state": {...}, "error": None}` and may include
-`retry_after_ms`; later fresh processes receive that saved state. Repeated calls
-for an execution ID must therefore be safe status checks, not repeated launches.
+The runtime owns result publication and lifecycle/cache updates. Required
+teardown belongs in `cleanup`, not only terminal polling: publication can stop
+further invokes. Cleanup must not alter the result, and returning a result does
+not wait for cleanup retries.
 
-The runtime independently publishes normal results and owns lifecycle/cache
-updates. Invoke success is valid only once a result is published. `cleanup(...,
-state, ..., result_ref)` is idempotent normal teardown after publication; it may
-retry but must not publish, alter, or invalidate the result. Do not put required
-teardown only in terminal `poll`, because publication can stop further invokes.
-The runtime gives eligible cleanup one call before returning a fresh or cached
-terminal result, without synchronously waiting for cleanup retries.
-
-`cancel(..., cancel_requested_by, argv_ref)` is called only after the runtime
-selects `cancel-pending`. Return `cancelled` only after backend teardown;
-repeated cancel must be safe, and the runtime—not the executor—performs the CAS
-transition to `canceled`. Return retry with durable state while cancellation is
-incomplete.
+Return `cancelled` only after confirmed teardown, not merely an accepted
+termination request. The runtime owns the transition to `canceled`; retain state
+and retry while teardown is incomplete.
 
 ## Backend implementation and built-ins
 
-A leaf `script` executor serializes a global function and accepts no `sub`.
-Only its source plus explicitly supplied `extra_objs` and `post_lines` reaches
-the worker: imports and globals from the authoring module do not. SSH forwards
-invoke, cleanup, and cancel operations to its nested adapter. Docker and Batch
-are wrappers that own detached job state and resource teardown while their
-nested adapter runs in the detached environment.
+Script workers receive function source plus explicit `extra_objs` and
+`post_lines`, not the authoring module's imports or globals. Put dependencies
+inside the function or inject them explicitly.
 
-Script and Docker launch state includes `owner`, formatted as
-`effective-UID@hostname` in the environment where that executor starts.
-Poll, cleanup, and cancel from a different user or hostname
-return retry with unchanged state before accessing local resources. Distinct
-hosts and containers must use distinct hostnames; ownership is not authentication
-or automatic failover. Ownerless or hostname-only saved state is unsupported.
+Script and Docker handles belong to their launching user and host. Foreign
+callers retry without touching local resources; hosts and containers must have
+distinct hostnames. Ownership is not authentication or automatic failover.
 
-Script uses the same detached supervisor path inside and outside Docker. Docker
-retains its own owner/container/image state when returning nested outcomes; its
-container's `--poll` driver privately maintains child continuation through
-cleanup. SSH forwards state unchanged, so either caller can drive an SSH-wrapped
-execution on the same owning destination. Batch has no local ownership restriction.
+Docker and Batch own wrapper resources independently of their nested adapter's
+outcome. Their nested `--poll` driver retains child continuation through cleanup.
+SSH forwards continuation to its destination; Batch has no local ownership
+restriction.
 
-Use the supplied remote scratch URI for detached input/output, not process-local
-handoff state. Runtime coordination records own durable execution state, shared
-retry timing, locking, result, lineage, cancellation, and invalidation.
-`S3Store` under `remote.root/data/` is only for integration-owned artifacts.
+Use the supplied remote scratch URI for detached input/output. Runtime records
+own execution coordination; `S3Store` under `remote.root/data/` is for artifacts.
 
-Built-ins are `script`/local, `docker`/local, `ssh`/local, and `batch`/lambda.
-Docker needs an image; SSH needs a nonempty host; Batch needs a Lambda URI,
-image, and `CPU_QUEUE` or `GPU_QUEUE` plus `BATCH_TASK_ROLE_ARN` deployment
-configuration. Docker can load a compressed S3 image tar; `docker_build` either
-uploads that artifact or pushes a repository tag and best-effort removes its
-temporary local image.
+## Batch isolation
 
-The script worker writes the rendered source as `_daggerml_live.py`, imports it
-as the top-level `_daggerml_live` module, and supplies normal module metadata.
-It injects a DEBUG `_daggerml_live` logger whose stderr is captured by the
-supervisor without enabling DEBUG output for dependency loggers. Put imports
-inside the function, include inspectable helpers in `extra_objs`, or use
-`post_lines` deliberately; ambient authoring globals are never transferred.
+`AWS_EC2_METADATA_DISABLED` is not a sandbox: job code can unset it or request
+metadata directly. EC2-backed Batch operators must block container access to
+host IMDS, including IPv6 when enabled. For Docker bridge networking, install
+these rules before admitting work and persist them across reboot:
 
-SSH requires a reachable host and its nested adapter executable. Docker requires
-a Docker daemon and an image. Batch requires deployed Lambda and Batch
-infrastructure, including `CPU_QUEUE` or `GPU_QUEUE` and `BATCH_TASK_ROLE_ARN`.
+<!-- docs:pseudocode: Run only on an operator-owned Batch ECS host using Docker bridge networking; the documentation fixture does not administer hosts. -->
+```sh
+iptables -I DOCKER-USER 1 -d 169.254.169.254/32 -j DROP
+ip6tables -I DOCKER-USER 1 -d fd00:ec2::254/128 -j DROP
+```
+
+Other network modes need the corresponding ECS IMDS block. IMDSv2 alone is not
+container isolation. Preserve ECS task credentials at `169.254.170.2`, scope
+the task role to required remote/scratch prefixes, and restrict `iam:PassRole`
+to that role. Do not use host networking or privileged containers for untrusted
+work. EC2-backed containers share a kernel; mutually untrusted workloads need
+separate compute boundaries.
+
+Moto verifies control-plane requests and S3 handoff, not container execution,
+IAM enforcement, or network isolation. Verify IPv4/IPv6 IMDS requests fail and
+task-role S3 access succeeds inside a real job before claiming isolation.
+See AWS's [task role isolation guidance](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html)
+and [IMDS credential provider settings](https://docs.aws.amazon.com/sdkref/latest/guide/feature-imds-credentials.html).
