@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Any
@@ -80,7 +81,7 @@ class BatchExecutor(LambdaExecutorBase):
     def _int(name: str, value: Any, *, default: int, min_value: int = 0) -> int:
         if value is None:
             return default
-        if not isinstance(value, int) or value < min_value:
+        if isinstance(value, bool) or not isinstance(value, int) or value < min_value:
             raise DmlRepoError(f"batch executor {name} must be an int >= {min_value}")
         return value
 
@@ -88,6 +89,7 @@ class BatchExecutor(LambdaExecutorBase):
     def _image_uri(cls, value: Any) -> Uri:
         if not isinstance(value, Uri):
             raise DmlRepoError("batch executor image must be a Uri")
+        cls._string("image URI", value.uri)
         return value
 
     @classmethod
@@ -137,9 +139,34 @@ class BatchExecutor(LambdaExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
     ) -> dict[str, Any]:
+        return self._launch(cache_key, execution_id, runnable, {}, remote, scratch_uri)
+
+    def _launch(self, cache_key, execution_id, runnable, state, remote, scratch_uri) -> dict[str, Any]:
+        state = dict(state)
+        try:
+            return self._start(cache_key, execution_id, runnable, state, remote, scratch_uri)
+        except Exception as exc:
+            if not self._is_throttling(exc):
+                raise
+            result = {"status": "retry", "error": None, "state": state}
+            retry_after = self._retry_after(exc)
+            if retry_after is not None:
+                result["retry_after_ms"] = retry_after
+            return result
+
+    def _start(self, cache_key, execution_id, runnable, state, remote, scratch_uri) -> dict[str, Any]:
         sub = runnable.get("sub")
         if sub is None:
             raise DmlRepoError("batch executor start requires runnable with sub runnable")
+        kwargs = runnable.get("kwargs", {})
+        reqs, job_queue = self._resource_requirements(kwargs)
+        image = kwargs.get("image")
+        # Runtime requests carry JSON URI objects, not authoring-time dataclasses.
+        if isinstance(image, dict) and set(image) == {"uri"}:
+            image = Uri(image["uri"])
+        image = self._image_uri(image).uri
+        adapter = self._string("sub adapter", sub.get("adapter"))
+        task_role = self._string("BATCH_TASK_ROLE_ARN", os.environ.get("BATCH_TASK_ROLE_ARN"))
         input_uri = _scratch_uri(scratch_uri, "input.json")
         output_uri = _scratch_uri(scratch_uri, "output.json")
         payload = json.dumps(
@@ -155,22 +182,40 @@ class BatchExecutor(LambdaExecutorBase):
         )
         _write_scratch_json(input_uri, payload, raw=True)
         client = self._client(max_attempts=_BATCH_START_MAX_ATTEMPTS)
-        kwargs = runnable.get("kwargs", {})
-        reqs, job_queue = self._resource_requirements(kwargs)
-        image = self._image_uri(kwargs.get("image"))
-        job_name = f"dml-batch-{cache_key}"
-        job_def = client.register_job_definition(
+        region = self._string("AWS region", client.meta.region_name)
+        job_name = f"dml-batch-{hashlib.sha256(execution_id.encode()).hexdigest()}"
+        job_def = state.get("job_definition") or client.register_job_definition(
             jobDefinitionName=job_name,
             type="container",
             containerProperties={
                 "image": image,
-                "command": [sub["adapter"], "--poll", "-i", input_uri, "-o", output_uri],
-                "environment": [],
-                "jobRoleArn": self._string("BATCH_TASK_ROLE_ARN", os.environ.get("BATCH_TASK_ROLE_ARN")),
+                "command": [adapter, "--poll", "-i", input_uri, "-o", output_uri],
+                "environment": [
+                    {"name": "AWS_EC2_METADATA_DISABLED", "value": "true"},
+                    {"name": "AWS_REGION", "value": region},
+                    {"name": "AWS_DEFAULT_REGION", "value": region},
+                ],
+                "privileged": False,
+                "jobRoleArn": task_role,
                 "resourceRequirements": reqs,
             },
         )["jobDefinitionArn"]
-        job_id = client.submit_job(jobName=job_name, jobQueue=job_queue, jobDefinition=job_def)["jobId"]
+        state["job_definition"] = job_def
+        try:
+            job_id = client.submit_job(jobName=job_name, jobQueue=job_queue, jobDefinition=job_def)["jobId"]
+        except Exception as exc:
+            if self._is_throttling(exc):
+                # A rejected submission can resume using the registered definition.
+                raise
+            try:
+                client.deregister_job_definition(jobDefinition=job_def)
+            except Exception as cleanup_exc:
+                return {
+                    "status": "failure",
+                    "error": f"batch submission failed: {exc}; rollback failed for {job_def}: {cleanup_exc}",
+                    "state": {"job_definition": job_def},
+                }
+            raise
         return {
             "status": "retry",
             "error": None,
@@ -189,6 +234,8 @@ class BatchExecutor(LambdaExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
     ) -> dict[str, Any]:
+        if not state or (state.get("job_definition") and not state.get("job_id")):
+            return self._launch(cache_key, execution_id, runnable, state, remote, scratch_uri)
         del cache_key, execution_id, runnable, remote
         job_id = state.get("job_id")
         if not isinstance(job_id, str) or not job_id:
@@ -309,27 +356,34 @@ class BatchExecutor(LambdaExecutorBase):
         argv_ref: str | None = None,
     ) -> dict[str, Any]:
         del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ref
+        state = state if isinstance(state, dict) else {}
         client = self._client()
         job_id = state.get("job_id")
         job_definition = state.get("job_definition")
         if isinstance(job_id, str) and job_id:
             try:
-                client.cancel_job(jobId=job_id, reason="daggerml cancellation requested")
-            except Exception as cancel_exc:
-                try:
-                    client.terminate_job(jobId=job_id, reason="daggerml cancellation requested")
-                except Exception as terminate_exc:
-                    exc = terminate_exc if self._is_throttling(terminate_exc) else cancel_exc
-                    if self._is_throttling(exc):
-                        result = {"status": "retry", "error": None, "state": state}
-                        retry_after = self._retry_after(exc)
-                        if retry_after is not None:
-                            result["retry_after_ms"] = retry_after
-                        return result
-                    return {"status": "failure", "error": f"batch cancellation failed: {terminate_exc}", "state": state}
+                # TerminateJob also cancels queued jobs; CancelJob is a no-op once started.
+                client.terminate_job(jobId=job_id, reason="daggerml cancellation requested")
+                jobs = client.describe_jobs(jobs=[job_id]).get("jobs", [])
+                if not jobs or jobs[0].get("status") not in {"SUCCEEDED", "FAILED"}:
+                    return {"status": "retry", "error": None, "state": state}
+            except Exception as exc:
+                if self._is_throttling(exc):
+                    result = {"status": "retry", "error": None, "state": state}
+                    retry_after = self._retry_after(exc)
+                    if retry_after is not None:
+                        result["retry_after_ms"] = retry_after
+                    return result
+                return {"status": "failure", "error": f"batch cancellation failed: {exc}", "state": state}
         if isinstance(job_definition, str) and job_definition:
             try:
                 client.deregister_job_definition(jobDefinition=job_definition)
             except Exception as exc:
+                if self._is_throttling(exc):
+                    result = {"status": "retry", "error": None, "state": state}
+                    retry_after = self._retry_after(exc)
+                    if retry_after is not None:
+                        result["retry_after_ms"] = retry_after
+                    return result
                 return {"status": "failure", "error": f"batch cancellation failed: {exc}", "state": state}
         return {"status": "cancelled", "error": None, "state": state}

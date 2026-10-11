@@ -34,6 +34,8 @@ def _get_region_from_metadata():
         except Exception as e:
             logger.warning("Failed to get region from ECS metadata: %s", e)
     # EC2 fallback: use IMDSv2
+    if os.environ.get("AWS_EC2_METADATA_DISABLED", "").lower() == "true":
+        return None
     try:
         token_req = urllib.request.Request(
             "http://169.254.169.254/latest/api/token",

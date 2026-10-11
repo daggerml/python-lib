@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -70,6 +71,8 @@ def test_batch_launch_and_poll_use_high_resilience_clients(monkeypatch, nested_s
             return {"Body": type("Body", (), {"read": lambda self: json.dumps(response).encode()})()}
 
     class BatchClient:
+        meta = SimpleNamespace(region_name="us-east-1")
+
         def register_job_definition(self, **kwargs):
             return {"jobDefinitionArn": "arn:job-definition"}
 
