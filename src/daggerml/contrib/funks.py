@@ -37,6 +37,7 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
     from uuid import uuid4
 
     from daggerml import Uri
+    from daggerml.contrib.executors.docker import _image_lock
     from daggerml.contrib.s3 import S3Store
 
     build_flags = tuple(build_flags.value())
@@ -44,7 +45,7 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
     store = S3Store()
     tag = uuid4().hex
     local_image = f"daggerml-archive:{tag}"
-    with TemporaryDirectory(prefix="dml-docker-build-") as build_dir:
+    with _image_lock(), TemporaryDirectory(prefix="dml-docker-build-") as build_dir:
         store.untar(context_tarball.value(), build_dir)
         try:
             with chdir(build_dir):

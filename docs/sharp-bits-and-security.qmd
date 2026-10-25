@@ -5,6 +5,19 @@ engine: knitr
 
 ## Sharp bits
 
+### Docker archives can overwrite local image tags
+
+The Docker executor loads archives unchanged, including all their tags. A tag
+already bound to another local image is reassigned by Docker; DaggerML does not
+preserve or restore the previous binding. `docker_build` uses unique
+`daggerml-archive:<uuid>` tags to avoid ordinary collisions, but the executor also
+accepts archives from other sources. Use unique tags or a dedicated Docker daemon
+when loading those archives. Execution uses the loaded image's ID, not its tags.
+
+Docker resources are retained until separately collected. The optional
+`dml contrib install-docker-gc --all` timer applies to the entire selected daemon,
+not just DaggerML resources; prefer its DML-only default on shared hosts.
+
 ### A repository without `remote.root` is read-only
 
 A `Dml` instance without a configured `remote.root` supports read-only inspection. Runtime authoring and mutation methods require `remote.root`; configure one before creating, staging, committing, or executing a DAG.

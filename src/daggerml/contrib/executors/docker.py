@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import json
-import logging
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -17,17 +15,13 @@ from daggerml import Runnable, Uri
 from daggerml._core import validate_adapter_response
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
+from daggerml.contrib.executors._docker_archive import image_id_from_archive
 from daggerml.contrib.executors._ownership import _current_owner
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 from daggerml.util import get_client
 
-logger = logging.getLogger(__name__)
-_ARCHIVE_PREFIX = "daggerml-archive:"
+_CONTAINER_LABEL = "daggerml.managed=true"
 _IMAGE_LOCK_PATH = Path(os.getenv("XDG_CACHE_HOME") or Path.home() / ".cache") / "daggerml" / "docker-images.lock"
-
-
-def _canonical_image_tag(tag: str) -> str:
-    return tag.removeprefix("docker.io/library/").removeprefix("index.docker.io/library/")
 
 
 @contextmanager
@@ -54,19 +48,6 @@ def _inspect_image(image: str, docker_bin: str | None = None) -> dict[str, Any] 
             or not isinstance(inspection[0], dict) or not isinstance(inspection[0].get("Id"), str)):
         raise DmlRepoError("docker image inspect returned invalid image metadata")
     return inspection[0]
-
-
-def _cleanup_images_locked(cleanup_image: str | None, archive_image: str | None, docker_bin: str | None) -> None:
-    """Remove our consumer tag; prune the archive tag only without other tags."""
-    if cleanup_image and _inspect_image(cleanup_image, docker_bin) is not None:
-        DockerExecutor._run_docker("image", "rm", cleanup_image, docker_bin=docker_bin)
-    if archive_image and _canonical_image_tag(archive_image).startswith(_ARCHIVE_PREFIX):
-        inspection = _inspect_image(archive_image, docker_bin)
-        tags = inspection.get("RepoTags") if inspection is not None else None
-        if (isinstance(tags, list) and len(tags) == 1
-                and _canonical_image_tag(tags[0]) == _canonical_image_tag(archive_image)):
-            # Docker itself protects containers and other references; never force.
-            DockerExecutor._run_docker("image", "rm", archive_image, docker_bin=docker_bin)
 
 
 def _scratch_uri(scratch_uri: str, filename: str) -> str:
@@ -150,38 +131,21 @@ class DockerExecutor(ExecutorBase):
     @staticmethod
     def _prepare_image(
         runnable: dict[str, Any], workdir: Path, remote: dict[str, Any], execution_id: str,
-    ) -> tuple[str, str | None, str | None]:
+    ) -> str:
+        """Load one archive image by config ID; caller holds the lock through launch."""
+        del execution_id
         image = DockerExecutor._image_input(runnable)
         if not is_s3_uri(image):
-            return image, None, None
-        if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}", execution_id):
-            raise DmlRepoError("Docker execution ID must be a valid image tag")
+            return image
         tar_path = workdir / "image.tar"
         store = S3Store.from_remote_root(cast(str, remote["root"]))
         tar_path.write_bytes(store.get(image))
-        execution_tag = f"daggerml-execution:{execution_id}"
-        with _image_lock():
-            output = DockerExecutor._run_docker("load", "-i", str(tar_path))
-            loaded = []
-            for line in output.splitlines():
-                for prefix in ("Loaded image: ", "Loaded image ID: "):
-                    if line.startswith(prefix):
-                        loaded.append(line.removeprefix(prefix).strip())
-            if len(loaded) != 1 or not loaded[0]:
-                raise DmlRepoError("docker load must report exactly one loaded image")
-            archive_tag = loaded[0] if _canonical_image_tag(loaded[0]).startswith(_ARCHIVE_PREFIX) else None
-            try:
-                inspection = _inspect_image(loaded[0])
-                if inspection is None:
-                    raise DmlRepoError("docker load did not make the reported image available")
-                DockerExecutor._run_docker("image", "tag", inspection["Id"], execution_tag)
-            except Exception:
-                try:
-                    _cleanup_images_locked(None, archive_tag, None)
-                except Exception:
-                    logger.warning("Could not clean up a failed Docker image load", exc_info=True)
-                raise
-        return execution_tag, execution_tag, archive_tag
+        image_id = image_id_from_archive(tar_path)
+        DockerExecutor._run_docker("load", "-i", str(tar_path))
+        inspection = _inspect_image(image_id)
+        if inspection is None or inspection["Id"] != image_id:
+            raise DmlRepoError("docker load did not make the expected image ID available")
+        return image_id
 
     def start(
         self,
@@ -199,11 +163,6 @@ class DockerExecutor(ExecutorBase):
         output_uri = _scratch_uri(scratch_uri, "output.json")
 
         workdir = Path(tempfile.mkdtemp(prefix=f"dml-docker-{execution_id}-"))
-        try:
-            image_ref, cleanup_image, archive_image = self._prepare_image(runnable, workdir, remote, execution_id)
-        finally:
-            shutil.rmtree(workdir, ignore_errors=True)
-
         payload = json.dumps(
             {
                 "operation": "invoke",
@@ -217,28 +176,26 @@ class DockerExecutor(ExecutorBase):
         )
         try:
             _write_scratch_json(input_uri, payload, raw=True)
-            container_id = self._run_docker(
-                "run",
-                "-d",
-                *cast(list[str], runnable.get("kwargs", {}).get("flags", [])),
-                "-e",
-                f"DML_REMOTE_ROOT={remote['root']}",
-                image_ref,
-                sub["adapter"],
-                "--poll",
-                "-i",
-                input_uri,
-                "-o",
-                output_uri,
-            )
-        except Exception:
-            docker_bin = shutil.which("docker")
-            if cleanup_image and docker_bin:
-                try:
-                    _cleanup_docker(None, cleanup_image, docker_bin, archive_image)
-                except Exception:
-                    logger.warning("Could not clean up Docker images after launch failure", exc_info=True)
-            raise
+            with _image_lock():
+                image_ref = self._prepare_image(runnable, workdir, remote, execution_id)
+                container_id = self._run_docker(
+                    "run",
+                    "-d",
+                    *cast(list[str], runnable.get("kwargs", {}).get("flags", [])),
+                    "--label",
+                    _CONTAINER_LABEL,
+                    "-e",
+                    f"DML_REMOTE_ROOT={remote['root']}",
+                    image_ref,
+                    sub["adapter"],
+                    "--poll",
+                    "-i",
+                    input_uri,
+                    "-o",
+                    output_uri,
+                )
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
 
         return {
             "status": "retry",
@@ -246,8 +203,7 @@ class DockerExecutor(ExecutorBase):
             "state": {
                 "owner": _current_owner(),
                 "container_id": container_id,
-                "cleanup_image": cleanup_image,
-                "archive_image": archive_image,
+                "image": image_ref,
             },
         }
 
@@ -324,7 +280,6 @@ class DockerExecutor(ExecutorBase):
         )
         if status in {"created", "running", "paused", "restarting"}:
             return {"status": "retry", "error": None, "state": state}
-        _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin, state.get("archive_image"))
         return {"status": "success", "error": None, "state": state}
 
     def cancel(
@@ -349,19 +304,9 @@ class DockerExecutor(ExecutorBase):
                 return {"status": "failure", "error": "docker executable not found in PATH", "state": state}
             return {"status": "cancelled", "error": None, "state": state}
         if isinstance(container_id, str) and container_id:
-            _cleanup_docker(container_id, state.get("cleanup_image"), docker_bin, state.get("archive_image"))
+            try:
+                self._run_docker("stop", container_id, docker_bin=docker_bin)
+            except DmlRepoError as exc:
+                if "No such container:" not in str(exc):
+                    raise
         return {"status": "cancelled", "error": None, "state": state}
-
-
-def _cleanup_docker(
-    container_id: str | None, cleanup_image: str | None, docker_bin: str, archive_image: str | None = None,
-) -> None:
-    if container_id:
-        try:
-            DockerExecutor._run_docker("rm", "-f", container_id, docker_bin=docker_bin)
-        except DmlRepoError as exc:
-            if "No such container:" not in str(exc):
-                raise
-    if cleanup_image or archive_image:
-        with _image_lock():
-            _cleanup_images_locked(cleanup_image, archive_image, docker_bin)

@@ -31,7 +31,8 @@ def test_docker_build_isolated_script_context():
     assert "from contextlib import chdir" in script
     assert "daggerml-archive:" in script
     assert script.index("local_image =") < script.index("'save'")
-    assert "with TemporaryDirectory(prefix='dml-docker-build-') as build_dir:" in script
+    assert "with _image_lock(), TemporaryDirectory(prefix='dml-docker-build-') as build_dir:" in script
+    assert "from daggerml.contrib.executors.docker import _image_lock" in script
     assert "_gzip_file(image_tar, compressed_image_tar)" in script
     assert "finally:" in script
     assert "_remove_docker_image(local_image)" in script

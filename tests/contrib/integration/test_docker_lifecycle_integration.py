@@ -21,20 +21,19 @@ from daggerml.contrib import api as contrib_api
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
 from daggerml.contrib.executors._ownership import _current_owner
-from daggerml.contrib.executors.docker import DockerExecutor, _cleanup_docker, _read_scratch_output
+from daggerml.contrib.executors.docker import DockerExecutor, _image_lock, _read_scratch_output
 from daggerml.contrib.s3 import S3Store
 
 pytestmark = [pytest.mark.slow, pytest.mark.docker, pytest.mark.serial]
 
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["tar", "gzip"])
-def test_native_archive_load_and_last_consumer_cleanup(tmp_path, monkeypatch, compressed):
+def test_native_archive_load_uses_config_id_and_retains_tags(tmp_path, monkeypatch, compressed):
     if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_output=True, timeout=10).returncode:
         pytest.skip("Docker daemon is not available")
     unique = uuid4().hex
     archive_tag = f"daggerml-archive:{unique}"
     first_id, second_id = f"{unique}-first", f"{unique}-second"
-    execution_tags = [f"daggerml-execution:{execution_id}" for execution_id in (first_id, second_id)]
     (tmp_path / "Dockerfile").write_text(f'FROM scratch\nLABEL daggerml-test="{unique}"\n')
     archive = tmp_path / "saved.tar"
 
@@ -43,6 +42,7 @@ def test_native_archive_load_and_last_consumer_cleanup(tmp_path, monkeypatch, co
 
     try:
         docker("build", "-t", archive_tag, str(tmp_path))
+        expected_id = json.loads(docker("image", "inspect", archive_tag).stdout)[0]["Id"]
         docker("save", "-o", str(archive), archive_tag)
         docker("image", "rm", archive_tag)
         content = gzip.compress(archive.read_bytes()) if compressed else archive.read_bytes()
@@ -52,22 +52,14 @@ def test_native_archive_load_and_last_consumer_cleanup(tmp_path, monkeypatch, co
         for execution_id in (first_id, second_id):
             workdir = tmp_path / execution_id
             workdir.mkdir()
-            image, cleanup_image, archive_image = DockerExecutor._prepare_image(
-                runnable, workdir, remote, execution_id,
-            )
-            assert image == cleanup_image == f"daggerml-execution:{execution_id}"
-            assert archive_image is not None
+            with _image_lock():
+                image = DockerExecutor._prepare_image(runnable, workdir, remote, execution_id)
+            assert image == expected_id
             inspected = json.loads(docker("image", "inspect", image).stdout)[0]
             assert inspected["Id"].startswith("sha256:")
-        _cleanup_docker(None, execution_tags[0], shutil.which("docker"), archive_image)
         assert docker("image", "inspect", archive_tag).returncode == 0
-        assert docker("image", "inspect", execution_tags[1]).returncode == 0
-        _cleanup_docker(None, execution_tags[1], shutil.which("docker"), archive_image)
-        for image in [archive_tag, *execution_tags]:
-            assert docker("image", "inspect", image, check=False).returncode != 0
     finally:
-        for image in [*execution_tags, archive_tag]:
-            docker("image", "rm", image, check=False)
+        docker("image", "rm", archive_tag, check=False)
 
 
 @funkify(uri="script")
@@ -196,7 +188,8 @@ def test_docker_cleanup_retry_and_cancel_cross_adapter_processes(docker_world):
         assert send("cancel", cancel_id)["status"] == "cancelled"
         for container_id in (cleanup_id, cancel_id):
             inspection = subprocess.run(["docker", "inspect", container_id], capture_output=True, timeout=10)
-            assert inspection.returncode != 0
+            assert inspection.returncode == 0
+            assert json.loads(inspection.stdout)[0]["State"]["Running"] is False
     finally:
         for container_id in (cleanup_id, cancel_id):
             subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=10)

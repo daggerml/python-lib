@@ -24,7 +24,7 @@ def test_docker_start_uses_execution_id_temp_prefix_and_adapter_state(tmp_path, 
 
     monkeypatch.setattr("daggerml.contrib.executors.docker.tempfile.mkdtemp", mkdtemp)
     monkeypatch.setattr(
-        DockerExecutor, "_prepare_image", staticmethod(lambda runnable, path, remote, execution: ("image", None, None))
+        DockerExecutor, "_prepare_image", staticmethod(lambda runnable, path, remote, execution: "image")
     )
     monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: "container-1"))
     monkeypatch.setattr(
@@ -113,15 +113,10 @@ def test_docker_poll_rejects_malformed_nested_response(monkeypatch) -> None:
         )
 
 
-def test_docker_cleanup_retries_active_then_prunes_idempotently(monkeypatch) -> None:
+def test_docker_cleanup_retries_active_then_retains_resources(monkeypatch) -> None:
     statuses = iter(("running", "exited", "missing"))
-    cleanup_calls = []
     monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda command: "/docker")
     monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: next(statuses)))
-    monkeypatch.setattr(
-        "daggerml.contrib.executors.docker._cleanup_docker",
-        lambda container_id, image, docker_bin, archive_image: cleanup_calls.append((container_id, image, docker_bin)),
-    )
     executor = DockerExecutor()
     kwargs = {
         "cache_key": "ck",
@@ -136,10 +131,6 @@ def test_docker_cleanup_retries_active_then_prunes_idempotently(monkeypatch) -> 
     assert executor.cleanup(**kwargs)["status"] == "retry"
     assert executor.cleanup(**kwargs)["status"] == "success"
     assert executor.cleanup(**kwargs)["status"] == "success"
-    assert cleanup_calls == [
-        ("container-1", "image-1", "/docker"),
-        ("container-1", "image-1", "/docker"),
-    ]
 
 
 def test_lambda_handler_failure_returns_object_adapter_state() -> None:
