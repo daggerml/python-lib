@@ -1,5 +1,6 @@
 """Docker-capable end-to-end worker scenarios with real Moto transport."""
 
+import gzip
 import json
 import os
 import shutil
@@ -8,7 +9,9 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import pytest
 
@@ -18,10 +21,53 @@ from daggerml.contrib import api as contrib_api
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
 from daggerml.contrib.executors._ownership import _current_owner
-from daggerml.contrib.executors.docker import _read_scratch_output
+from daggerml.contrib.executors.docker import DockerExecutor, _cleanup_docker, _read_scratch_output
 from daggerml.contrib.s3 import S3Store
 
 pytestmark = [pytest.mark.slow, pytest.mark.docker, pytest.mark.serial]
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["tar", "gzip"])
+def test_native_archive_load_and_last_consumer_cleanup(tmp_path, monkeypatch, compressed):
+    if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_output=True, timeout=10).returncode:
+        pytest.skip("Docker daemon is not available")
+    unique = uuid4().hex
+    archive_tag = f"daggerml-archive:{unique}"
+    first_id, second_id = f"{unique}-first", f"{unique}-second"
+    execution_tags = [f"daggerml-execution:{execution_id}" for execution_id in (first_id, second_id)]
+    (tmp_path / "Dockerfile").write_text(f'FROM scratch\nLABEL daggerml-test="{unique}"\n')
+    archive = tmp_path / "saved.tar"
+
+    def docker(*args, check=True):
+        return subprocess.run(["docker", *args], check=check, capture_output=True, text=True, timeout=120)
+
+    try:
+        docker("build", "-t", archive_tag, str(tmp_path))
+        docker("save", "-o", str(archive), archive_tag)
+        docker("image", "rm", archive_tag)
+        content = gzip.compress(archive.read_bytes()) if compressed else archive.read_bytes()
+        monkeypatch.setattr(S3Store, "from_remote_root", lambda _: SimpleNamespace(get=lambda _: content))
+        remote = {"root": "s3://unused/root"}
+        runnable = {"kwargs": {"image": "s3://unused/image.tar"}}
+        for execution_id in (first_id, second_id):
+            workdir = tmp_path / execution_id
+            workdir.mkdir()
+            image, cleanup_image, archive_image = DockerExecutor._prepare_image(
+                runnable, workdir, remote, execution_id,
+            )
+            assert image == cleanup_image == f"daggerml-execution:{execution_id}"
+            assert archive_image is not None
+            inspected = json.loads(docker("image", "inspect", image).stdout)[0]
+            assert inspected["Id"].startswith("sha256:")
+        _cleanup_docker(None, execution_tags[0], shutil.which("docker"), archive_image)
+        assert docker("image", "inspect", archive_tag).returncode == 0
+        assert docker("image", "inspect", execution_tags[1]).returncode == 0
+        _cleanup_docker(None, execution_tags[1], shutil.which("docker"), archive_image)
+        for image in [archive_tag, *execution_tags]:
+            assert docker("image", "inspect", image, check=False).returncode != 0
+    finally:
+        for image in [*execution_tags, archive_tag]:
+            docker("image", "rm", image, check=False)
 
 
 @funkify(uri="script")

@@ -24,7 +24,7 @@ def test_docker_start_uses_execution_id_temp_prefix_and_adapter_state(tmp_path, 
 
     monkeypatch.setattr("daggerml.contrib.executors.docker.tempfile.mkdtemp", mkdtemp)
     monkeypatch.setattr(
-        DockerExecutor, "_prepare_image", staticmethod(lambda runnable, path, remote: ("image", None))
+        DockerExecutor, "_prepare_image", staticmethod(lambda runnable, path, remote, execution: ("image", None, None))
     )
     monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: "container-1"))
     monkeypatch.setattr(
@@ -120,7 +120,7 @@ def test_docker_cleanup_retries_active_then_prunes_idempotently(monkeypatch) -> 
     monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: next(statuses)))
     monkeypatch.setattr(
         "daggerml.contrib.executors.docker._cleanup_docker",
-        lambda container_id, image, docker_bin: cleanup_calls.append((container_id, image, docker_bin)),
+        lambda container_id, image, docker_bin, archive_image: cleanup_calls.append((container_id, image, docker_bin)),
     )
     executor = DockerExecutor()
     kwargs = {

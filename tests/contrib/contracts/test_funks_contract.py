@@ -29,6 +29,8 @@ def test_docker_build_isolated_script_context():
     _, script = ScriptExecutor._script_kwargs(docker_build.kwargs)
 
     assert "from contextlib import chdir" in script
+    assert "daggerml-archive:" in script
+    assert script.index("local_image =") < script.index("'save'")
     assert "with TemporaryDirectory(prefix='dml-docker-build-') as build_dir:" in script
     assert "_gzip_file(image_tar, compressed_image_tar)" in script
     assert "finally:" in script
@@ -61,5 +63,5 @@ def test_remove_docker_image_is_best_effort(monkeypatch):
     _remove_docker_image("dml:test")
 
     assert calls == [
-        ((("docker", "image", "rm", "-f", "dml:test"),), {"check": False, "capture_output": True, "text": True})
+        ((("docker", "image", "rm", "dml:test"),), {"check": False, "capture_output": True, "text": True})
     ]

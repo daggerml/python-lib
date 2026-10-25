@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import io
 import json
-import tarfile
 import threading
 from dataclasses import asdict
 from types import SimpleNamespace
@@ -13,7 +11,7 @@ from daggerml._core.db import Ref
 from daggerml._core.types import Runnable, Uri
 from daggerml.contrib.adapters import AdapterBase
 from daggerml.contrib.executors._ownership import _current_owner
-from daggerml.contrib.executors.docker import DockerExecutor, _cleanup_docker
+from daggerml.contrib.executors.docker import DockerExecutor
 from daggerml.contrib.executors.script import ScriptExecutor
 from tests._core.contracts.test_execution_coordination import _record, _state
 
@@ -150,50 +148,6 @@ def test_adapter_failure_before_worker_activation_retains_error_dag(monkeypatch)
     assert result == Ref("dag:error")
     assert errors == ["image missing"]
     assert state.read_execution_record("child")["state"]["lifecycle"] == "failed"
-
-
-@pytest.mark.parametrize("archive_mode", ["w", "w:gz"], ids=["tar", "tar-gzip"])
-def test_tar_image_cleanup_keeps_preexisting_worker_tag(monkeypatch, tmp_path, archive_mode) -> None:
-    tag = "daggerml-lifecycle:ci"
-    manifest = json.dumps([{"RepoTags": [tag]}]).encode()
-    archive = io.BytesIO()
-    with tarfile.open(fileobj=archive, mode=archive_mode) as tar:
-        member = tarfile.TarInfo("manifest.json")
-        member.size = len(manifest)
-        tar.addfile(member, io.BytesIO(manifest))
-        repositories = b'{}'
-        member = tarfile.TarInfo("repositories")
-        member.size = len(repositories)
-        tar.addfile(member, io.BytesIO(repositories))
-    monkeypatch.setattr(
-        "daggerml.contrib.executors.docker.S3Store.from_remote_root",
-        lambda root: SimpleNamespace(get=lambda uri: archive.getvalue()),
-    )
-    images = {tag}
-    loaded_tags = []
-
-    def docker(command, **kwargs):
-        if command[1:3] == ["image", "rm"]:
-            images.discard(command[-1])
-        if command[1] == "load":
-            with tarfile.open(command[-1]) as tar:
-                assert "repositories" not in tar.getnames()
-                loaded = json.load(tar.extractfile("manifest.json"))
-            loaded_tags.extend(loaded[0]["RepoTags"])
-            images.update(loaded_tags)
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda command: "/docker")
-    monkeypatch.setattr("daggerml.contrib.executors.docker.subprocess.run", docker)
-    image, cleanup_image = DockerExecutor._prepare_image(
-        {"kwargs": {"image": "s3://bucket/image.tar"}}, tmp_path, {"root": "s3://bucket/root"}
-    )
-    assert image != tag
-    assert cleanup_image == image
-    assert loaded_tags == [image]
-    _cleanup_docker("container", cleanup_image, "/docker")
-    assert tag in images
-    assert image not in images
 
 
 @pytest.mark.xfail(strict=True, reason="script cancellation acknowledges before process teardown")

@@ -27,7 +27,7 @@ def _gzip_file(source: str, destination: str) -> None:
 def _remove_docker_image(image: str) -> None:
     import subprocess
 
-    subprocess.run(("docker", "image", "rm", "-f", image), check=False, capture_output=True, text=True)
+    subprocess.run(("docker", "image", "rm", image), check=False, capture_output=True, text=True)
 
 
 @api.funkify(uri="script", adapter="local", extra_objs=(_run, _gzip_file, _remove_docker_image))
@@ -43,7 +43,7 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
 
     store = S3Store()
     tag = uuid4().hex
-    local_image = f"dml:{tag}"
+    local_image = f"daggerml-archive:{tag}"
     with TemporaryDirectory(prefix="dml-docker-build-") as build_dir:
         store.untar(context_tarball.value(), build_dir)
         try:
