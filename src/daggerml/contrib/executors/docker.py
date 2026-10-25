@@ -15,7 +15,6 @@ from daggerml import Runnable, Uri
 from daggerml._core import validate_adapter_response
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
-from daggerml.contrib.executors._docker_archive import image_id_from_archive
 from daggerml.contrib.executors._ownership import _current_owner
 from daggerml.contrib.s3 import S3Store, is_s3_uri
 from daggerml.util import get_client
@@ -132,7 +131,7 @@ class DockerExecutor(ExecutorBase):
     def _prepare_image(
         runnable: dict[str, Any], workdir: Path, remote: dict[str, Any], execution_id: str,
     ) -> str:
-        """Load one archive image by config ID; caller holds the lock through launch."""
+        """Resolve Docker's loaded image ID; caller holds the lock through launch."""
         del execution_id
         image = DockerExecutor._image_input(runnable)
         if not is_s3_uri(image):
@@ -140,12 +139,25 @@ class DockerExecutor(ExecutorBase):
         tar_path = workdir / "image.tar"
         store = S3Store.from_remote_root(cast(str, remote["root"]))
         tar_path.write_bytes(store.get(image))
-        image_id = image_id_from_archive(tar_path)
-        DockerExecutor._run_docker("load", "-i", str(tar_path))
-        inspection = _inspect_image(image_id)
-        if inspection is None or inspection["Id"] != image_id:
-            raise DmlRepoError("docker load did not make the expected image ID available")
-        return image_id
+        output = DockerExecutor._run_docker("load", "-i", str(tar_path))
+        references = set()
+        for line in output.splitlines():
+            for prefix in ("Loaded image: ", "Loaded image ID: "):
+                if line.strip().startswith(prefix):
+                    reference = line.strip().removeprefix(prefix).strip()
+                    if reference:
+                        references.add(reference)
+        if not references:
+            raise DmlRepoError("docker load did not report any image references")
+        image_ids = set()
+        for reference in sorted(references):
+            inspection = _inspect_image(reference)
+            if inspection is None:
+                raise DmlRepoError(f"docker load reported an unavailable image: {reference}")
+            image_ids.add(inspection["Id"])
+        if len(image_ids) != 1:
+            raise DmlRepoError("docker load references must resolve to exactly one image ID")
+        return image_ids.pop()
 
     def start(
         self,

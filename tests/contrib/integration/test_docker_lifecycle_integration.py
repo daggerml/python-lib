@@ -28,11 +28,12 @@ pytestmark = [pytest.mark.slow, pytest.mark.docker, pytest.mark.serial]
 
 
 @pytest.mark.parametrize("compressed", [False, True], ids=["tar", "gzip"])
-def test_native_archive_load_uses_config_id_and_retains_tags(tmp_path, monkeypatch, compressed):
+def test_native_archive_load_uses_docker_id_and_retains_tags(tmp_path, monkeypatch, compressed):
     if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_output=True, timeout=10).returncode:
         pytest.skip("Docker daemon is not available")
     unique = uuid4().hex
     archive_tag = f"daggerml-archive:{unique}"
+    alias_tag = f"daggerml-archive:{unique}-alias"
     first_id, second_id = f"{unique}-first", f"{unique}-second"
     (tmp_path / "Dockerfile").write_text(f'FROM scratch\nLABEL daggerml-test="{unique}"\n')
     archive = tmp_path / "saved.tar"
@@ -43,8 +44,9 @@ def test_native_archive_load_uses_config_id_and_retains_tags(tmp_path, monkeypat
     try:
         docker("build", "-t", archive_tag, str(tmp_path))
         expected_id = json.loads(docker("image", "inspect", archive_tag).stdout)[0]["Id"]
-        docker("save", "-o", str(archive), archive_tag)
-        docker("image", "rm", archive_tag)
+        docker("tag", archive_tag, alias_tag)
+        docker("save", "-o", str(archive), archive_tag, alias_tag)
+        docker("image", "rm", archive_tag, alias_tag)
         content = gzip.compress(archive.read_bytes()) if compressed else archive.read_bytes()
         monkeypatch.setattr(S3Store, "from_remote_root", lambda _: SimpleNamespace(get=lambda _: content))
         remote = {"root": "s3://unused/root"}
@@ -58,8 +60,9 @@ def test_native_archive_load_uses_config_id_and_retains_tags(tmp_path, monkeypat
             inspected = json.loads(docker("image", "inspect", image).stdout)[0]
             assert inspected["Id"].startswith("sha256:")
         assert docker("image", "inspect", archive_tag).returncode == 0
+        assert docker("image", "inspect", alias_tag).returncode == 0
     finally:
-        docker("image", "rm", archive_tag, check=False)
+        docker("image", "rm", archive_tag, alias_tag, check=False)
 
 
 @funkify(uri="script")

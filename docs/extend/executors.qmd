@@ -98,10 +98,12 @@ own execution coordination; `S3Store` under `remote.root/data/` is for artifacts
 
 ## Docker resource retention
 
-Docker archive execution identifies a single image from its configuration blob,
-loads the archive unchanged, and launches by image ID. Docker-save and OCI
-archives (including gzip) are supported; ambiguous multi-image or multi-platform
-archives are rejected before loading. Multiple tags on a single image are allowed.
+Docker archive execution loads the archive unchanged, inspects the references
+reported by Docker, and launches by Docker's returned image ID. Archive formats,
+platform selection, and BuildKit attestation metadata are handled by the installed
+Docker version, not parsed by DaggerML. Multiple reported tags are allowed when
+they resolve to one distinct image ID. Archives reporting multiple distinct image
+IDs are rejected after loading; their imported images and tags remain for GC.
 
 Completed containers and loaded images remain on the Docker daemon. Cancellation
 stops the container but does not delete it. Garbage collection is independent of

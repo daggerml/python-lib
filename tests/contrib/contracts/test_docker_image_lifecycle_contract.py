@@ -1,77 +1,41 @@
-"""Archive IDs, rather than tag aliases or Docker's load output, identify runs."""
+"""Docker, not archive metadata, determines the image identity used for runs."""
 
 import hashlib
-import io
 import json
-import tarfile
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors import docker as docker_module
-from daggerml.contrib.executors._docker_archive import image_id_from_archive
 from daggerml.contrib.executors.docker import DockerExecutor
 
 pytestmark = pytest.mark.serial
 CONFIG = b'{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}'
-IMAGE_ID = "sha256:" + hashlib.sha256(CONFIG).hexdigest()
-
-
-def image_archive(*, mode="w", oci=False, multiple=False):
-    config_path = "config-not-a-digest.json"
-    entries = {config_path: CONFIG, "manifest.json": json.dumps([
-        {"RepoTags": ["worker:v1", "worker:latest"], "Config": config_path, "Layers": []}
-    ] * (2 if multiple else 1)).encode()}
-    if oci:
-        manifest = json.dumps({"schemaVersion": 2, "config": {"digest": IMAGE_ID}, "layers": []}).encode()
-        digest = hashlib.sha256(manifest).hexdigest()
-        entries.update({
-            "oci-layout": b'{"imageLayoutVersion":"1.0.0"}',
-            "index.json": json.dumps({"manifests": [{"digest": "sha256:" + digest}]
-                                      + ([{"digest": "sha256:" + "0" * 64}] if multiple else [])}).encode(),
-            "blobs/sha256/" + digest: manifest,
-            "blobs/sha256/" + IMAGE_ID.removeprefix("sha256:"): CONFIG,
-        })
-        # The OCI index takes precedence over compatibility metadata.
-        entries[config_path] = b'{}'
-    output = io.BytesIO()
-    with tarfile.open(fileobj=output, mode=mode) as archive:
-        for name, data in entries.items():
-            member = tarfile.TarInfo(name)
-            member.size = len(data)
-            archive.addfile(member, io.BytesIO(data))
-    return output.getvalue()
-
-
-def repack_archive(content, modify):
-    with tarfile.open(fileobj=io.BytesIO(content), mode="r:*") as source:
-        entries = {member.name: source.extractfile(member).read() for member in source}
-    modify(entries)
-    output = io.BytesIO()
-    with tarfile.open(fileobj=output, mode="w") as target:
-        for name, data in entries.items():
-            member = tarfile.TarInfo(name)
-            member.size = len(data)
-            target.addfile(member, io.BytesIO(data))
-    return output.getvalue()
+CONFIG_ID = "sha256:" + hashlib.sha256(CONFIG).hexdigest()
+IMAGE_ID = "sha256:" + "a" * 64
 
 
 @pytest.fixture
 def docker(monkeypatch, tmp_path):
-    backend = SimpleNamespace(archive=image_archive(), calls=[], fail_run=False, missing_image=False)
+    backend = SimpleNamespace(
+        # Intentionally opaque: archive interpretation belongs entirely to Docker.
+        archive=b"Docker-managed archive bytes", calls=[], fail_run=False, missing_image=False,
+        output="Progress...\nLoaded image: worker:v1\nLoaded image: worker:latest",
+        refs={"worker:v1": IMAGE_ID, "worker:latest": IMAGE_ID, CONFIG_ID: IMAGE_ID},
+    )
 
     def run(*args, **kwargs):
         backend.calls.append(args)
         if args[0] == "load":
-            # Output deliberately has multiple tags and unrelated progress text.
-            return "Progress...\nLoaded image: worker:v1\nLoaded image: worker:latest"
+            assert Path(args[-1]).read_bytes() == backend.archive
+            return backend.output
         if args[:2] == ("image", "inspect"):
-            assert args[-1] == IMAGE_ID
             if backend.missing_image:
-                raise DmlRepoError("No such image: " + IMAGE_ID)
-            return json.dumps([{"Id": IMAGE_ID}])
+                raise DmlRepoError("No such image: " + args[-1])
+            return json.dumps([{"Id": backend.refs[args[-1]]}])
         if args[0] == "run":
             if backend.fail_run:
                 raise DmlRepoError("docker run failed")
@@ -99,37 +63,38 @@ def start():
     )
 
 
-@pytest.mark.parametrize("mode", ["w", "w:gz"])
-@pytest.mark.parametrize("oci", [False, True])
-def test_load_unchanged_archive_and_run_by_config_id(docker, tmp_path, mode, oci):
-    docker.archive = image_archive(mode=mode, oci=oci)
+def test_load_unchanged_archive_and_run_by_docker_id(docker):
     result = start()
     assert result["state"]["image"] == IMAGE_ID
     assert "cleanup_image" not in result["state"] and "archive_image" not in result["state"]
     launch = next(call for call in docker.calls if call[0] == "run")
     assert launch[launch.index("--label") + 1] == "daggerml.managed=true"
     assert IMAGE_ID in launch
-    assert [call[0] for call in docker.calls] == ["load", "image", "run"]
+    assert [call[0] for call in docker.calls] == ["load", "image", "image", "run"]
+    assert {call[-1] for call in docker.calls if call[:2] == ("image", "inspect")} == {
+        "worker:v1", "worker:latest",
+    }
 
 
-@pytest.mark.parametrize("oci", [False, True])
-def test_ambiguous_archive_is_rejected_before_loading(docker, oci):
-    docker.archive = image_archive(oci=oci, multiple=True)
-    with pytest.raises(DmlRepoError, match="exactly one image/platform"):
+def test_distinct_loaded_image_ids_are_rejected_after_loading(docker):
+    docker.refs["worker:v1"] = "sha256:" + "b" * 64
+    with pytest.raises(DmlRepoError, match="exactly one image ID"):
         start()
-    assert docker.calls == []
+    assert docker.calls[0][0] == "load"
+    assert not any(call[0] == "run" or "rm" in call for call in docker.calls)
 
 
-def test_invalid_archive_is_rejected_before_loading(docker):
-    docker.archive = b"not a tar"
-    with pytest.raises(DmlRepoError, match="Cannot identify"):
+@pytest.mark.parametrize("output", ["", "Progress only", "Loaded image: ", "Loaded image ID: "])
+def test_load_must_report_nonempty_image_references(docker, output):
+    docker.output = output
+    with pytest.raises(DmlRepoError, match="did not report any image references"):
         start()
-    assert docker.calls == []
+    assert len(docker.calls) == 1 and docker.calls[0][0] == "load"
 
 
-def test_load_must_make_expected_id_available(docker):
+def test_load_must_make_reported_references_available(docker):
     docker.missing_image = True
-    with pytest.raises(DmlRepoError, match="expected image ID"):
+    with pytest.raises(DmlRepoError, match="unavailable image"):
         start()
     assert not any(call[0] == "run" for call in docker.calls)
 
@@ -185,40 +150,30 @@ def test_lock_is_held_through_container_creation(docker, monkeypatch):
     assert acquired.is_set()
 
 
-def test_missing_configuration_is_not_inferred_from_filename(tmp_path):
-    path = tmp_path / "archive.tar"
-    path.write_bytes(image_archive())
-    assert image_id_from_archive(path) == IMAGE_ID
+@pytest.mark.parametrize("reported_id", [CONFIG_ID, IMAGE_ID])
+def test_untagged_load_uses_inspected_id_not_reported_digest(docker, reported_id):
+    docker.output = f"Loaded image ID: {reported_id}"
+    docker.refs[reported_id] = IMAGE_ID
+    assert start()["state"]["image"] == IMAGE_ID
+    assert ("image", "inspect", reported_id) in docker.calls
 
 
-def test_oci_duplicate_tag_descriptors_are_one_image(tmp_path):
-    def duplicate(entries):
-        index = json.loads(entries["index.json"])
-        index["manifests"] *= 2
-        entries["index.json"] = json.dumps(index).encode()
-
-    path = tmp_path / "archive.tar"
-    path.write_bytes(repack_archive(image_archive(oci=True), duplicate))
-    assert image_id_from_archive(path) == IMAGE_ID
+def test_classic_docker_config_id_is_also_supported(docker):
+    docker.refs = {ref: CONFIG_ID for ref in docker.refs}
+    assert start()["state"]["image"] == CONFIG_ID
 
 
-def test_oci_nested_single_platform_index(tmp_path):
-    def nest(entries):
-        original = entries["index.json"]
-        digest = hashlib.sha256(original).hexdigest()
-        entries["blobs/sha256/" + digest] = original
-        entries["index.json"] = json.dumps({"manifests": [{"digest": "sha256:" + digest}]}).encode()
-
-    path = tmp_path / "archive.tar"
-    path.write_bytes(repack_archive(image_archive(oci=True), nest))
-    assert image_id_from_archive(path) == IMAGE_ID
+def test_duplicate_reported_references_are_inspected_once(docker):
+    docker.output = "Loaded image: worker:v1\nLoaded image: worker:v1"
+    assert start()["state"]["image"] == IMAGE_ID
+    assert docker.calls.count(("image", "inspect", "worker:v1")) == 1
 
 
-def test_oci_config_digest_is_verified_before_load(docker):
-    def corrupt(entries):
-        entries["blobs/sha256/" + IMAGE_ID.removeprefix("sha256:")] = b'{}'
+def test_load_failure_is_propagated_without_launch_or_cleanup(docker, monkeypatch):
+    def fail(*args, **kwargs):
+        assert args[0] == "load"
+        raise DmlRepoError("docker rejected the archive")
 
-    docker.archive = repack_archive(image_archive(oci=True), corrupt)
-    with pytest.raises(DmlRepoError, match="digest mismatch"):
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(fail))
+    with pytest.raises(DmlRepoError, match="rejected the archive"):
         start()
-    assert docker.calls == []
