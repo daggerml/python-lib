@@ -304,23 +304,27 @@ class Remote:
             required_metadata=required_metadata,
         )
         objects: list[tuple[Ref, DmlBase]] = []
-        with db.tx(readonly=True) as txn:
+        with ThreadPoolExecutor(max_workers=self.n_workers) as pool, db.tx(readonly=True) as txn:
             pending = {root_ref}
             visited: set[Ref] = set()
             while pending:
-                ref = pending.pop()
-                if ref in visited:
-                    continue
-                visited.add(ref)
-                if txn.exists(ref):
-                    continue
-                obj = self._load_cas_object(ref, self._store._get(self._cas_key(ref.id())))
-                # Retain fetched objects across write retries. Locally present
-                # objects are intentionally not traversed; see sharp bits.
-                objects.append((ref, obj))
-                deps: set[Ref] = set()
-                self._collect_direct_refs(obj, deps)
-                pending.update(deps - visited)
+                batch = []
+                while pending and len(batch) < self.n_workers:
+                    ref = pending.pop()
+                    if ref in visited:
+                        continue
+                    visited.add(ref)
+                    if not txn.exists(ref):
+                        batch.append(ref)
+                reads = {ref: pool.submit(self._store._get, self._cas_key(ref.id())) for ref in batch}
+                for ref in batch:
+                    obj = self._load_cas_object(ref, reads[ref].result())
+                    # Retain fetched objects across write retries. Locally present
+                    # objects are intentionally not traversed; see sharp bits.
+                    objects.append((ref, obj))
+                    deps: set[Ref] = set()
+                    self._collect_direct_refs(obj, deps)
+                    pending.update(deps - visited)
         return root_ref, objects
 
     def materialize_manifest(
@@ -368,13 +372,15 @@ class Remote:
         available_commits: set[Ref] = set()
         omitted_commits: set[Ref] = set()
 
-        with db.tx(readonly=True) as txn:
-            def load(ref: Ref) -> tuple[DmlBase, bool]:
+        with ThreadPoolExecutor(max_workers=self.n_workers) as pool, db.tx(readonly=True) as txn:
+            def load(ref: Ref, payload: str | None = None) -> tuple[DmlBase, bool]:
                 if ref in loaded:
                     return loaded[ref], False
                 if txn.exists(ref):
                     return txn.get(ref), True
-                obj = self._load_cas_object(ref, self._store._get(self._cas_key(ref.id())))
+                obj = self._load_cas_object(
+                    ref, payload if payload is not None else self._store._get(self._cas_key(ref.id()))
+                )
                 loaded[ref] = obj
                 objects.append((ref, obj))
                 return obj, False
@@ -383,16 +389,21 @@ class Remote:
                 pending = [start]
                 visited: set[Ref] = set()
                 while pending:
-                    ref = pending.pop()
-                    if ref in visited:
-                        continue
-                    visited.add(ref)
-                    if txn.exists(ref):
-                        continue
-                    obj, _ = load(ref)
-                    deps: set[Ref] = set()
-                    self._collect_direct_refs(obj, deps)
-                    pending.extend(deps - visited)
+                    batch = []
+                    while pending and len(batch) < self.n_workers:
+                        ref = pending.pop()
+                        if ref in visited:
+                            continue
+                        visited.add(ref)
+                        if not txn.exists(ref):
+                            batch.append(ref)
+                    reads = {ref: pool.submit(self._store._get, self._cas_key(ref.id()))
+                             for ref in batch if ref not in loaded}
+                    for ref in batch:
+                        obj, _ = load(ref, reads[ref].result() if ref in reads else None)
+                        deps: set[Ref] = set()
+                        self._collect_direct_refs(obj, deps)
+                        pending.extend(deps - visited)
 
             root_exists = txn.exists(root_ref)
             pending_commits = [] if root_exists and depth is None and not unshallow else [(root_ref, 1)]
