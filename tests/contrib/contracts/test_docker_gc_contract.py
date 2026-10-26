@@ -87,6 +87,70 @@ def test_dry_run_reports_candidates_without_mutation(backend):
     assert not any(call[1] == "rm" for call in backend.calls)
 
 
+@pytest.mark.parametrize("all_resources", [False, True])
+@pytest.mark.parametrize("kind,operation,target", [
+    ("container", "inspect", "foreign"),
+    ("container", "rm", "stopped"),
+    ("image", "inspect", "shared"),
+    ("image", "rm", "daggerml-archive:a"),
+])
+@pytest.mark.parametrize("missing_object", [False, True])
+def test_disappearing_resources_do_not_abort_collection(
+    backend, monkeypatch, all_resources, kind, operation, target, missing_object,
+):
+    original = docker_module.DockerExecutor._run_docker
+    failures = []
+
+    def run(*args, **kwargs):
+        if args[:2] == (kind, operation) and args[-1] == target:
+            failures.append(args)
+            resource = "object" if missing_object else kind
+            raise DmlRepoError(f"Error response from daemon: No such {resource}: {target}")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(docker_module.DockerExecutor, "_run_docker", staticmethod(run))
+    result = docker_gc.collect(all_resources=all_resources)
+    assert len(failures) == 1
+    assert target not in result["containers" if kind == "container" else "images"]
+    assert "created" in result["containers"]
+    assert "docker.io/library/daggerml-archive:created" in result["images"]
+    if operation == "inspect":
+        assert not any(call[:2] == (kind, "rm") and call[-1] == target for call in backend.calls)
+
+
+@pytest.mark.parametrize("kind,operation", [
+    ("container", "inspect"), ("container", "rm"), ("image", "inspect"), ("image", "rm"),
+])
+@pytest.mark.parametrize("error", ["Cannot connect to the Docker daemon", "permission denied"])
+def test_resource_race_handling_preserves_real_errors(backend, monkeypatch, kind, operation, error):
+    original = docker_module.DockerExecutor._run_docker
+
+    def run(*args, **kwargs):
+        if args[:2] == (kind, operation):
+            raise DmlRepoError(error)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(docker_module.DockerExecutor, "_run_docker", staticmethod(run))
+    with pytest.raises(DmlRepoError, match=error):
+        docker_gc.collect()
+
+
+@pytest.mark.parametrize("kind,target", [("container", "foreign"), ("image", "shared")])
+def test_dry_run_skips_resources_missing_during_inspection(backend, monkeypatch, kind, target):
+    original = docker_module.DockerExecutor._run_docker
+
+    def run(*args, **kwargs):
+        if args[:2] == (kind, "inspect") and args[-1] == target:
+            raise DmlRepoError(f"No such {kind}: {target}")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(docker_module.DockerExecutor, "_run_docker", staticmethod(run))
+    result = docker_gc.collect(dry_run=True)
+    assert "created" in result["containers"]
+    assert "docker.io/library/daggerml-archive:created" in result["images"]
+    assert not any(call[1] == "rm" for call in backend.calls)
+
+
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_child_dependency_conflicts_do_not_block_progress(backend, monkeypatch, dry_run):
     old = backend.images["dangling"]["Created"]

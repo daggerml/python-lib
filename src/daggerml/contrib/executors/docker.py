@@ -292,11 +292,16 @@ class DockerExecutor(ExecutorBase):
         docker_bin = shutil.which("docker")
         if not isinstance(container_id, str) or not container_id or docker_bin is None:
             return {"status": "success", "error": None, "state": state}
-        status = self._run_docker(
-            "inspect", "--format", "{{.State.Status}}", container_id, check=False, docker_bin=docker_bin
-        )
-        if status in {"created", "running", "paused", "restarting"}:
-            return {"status": "retry", "error": None, "state": state}
+        try:
+            status = self._run_docker(
+                "inspect", "--format", "{{.State.Status}}", container_id, docker_bin=docker_bin
+            )
+            if status in {"created", "running", "paused", "restarting"}:
+                return {"status": "retry", "error": None, "state": state}
+            self._run_docker("update", "--restart=no", container_id, docker_bin=docker_bin)
+        except DmlRepoError as exc:
+            if "No such container:" not in str(exc) and "No such object:" not in str(exc):
+                raise
         return {"status": "success", "error": None, "state": state}
 
     def cancel(

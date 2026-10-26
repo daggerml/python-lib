@@ -115,12 +115,50 @@ def test_terminal_operations_retain_resources(docker, operation):
     if operation == "cleanup":
         result = DockerExecutor().cleanup(**kwargs, result_ref="dag:result")
         assert result["status"] == "success"
+        assert docker.calls[-1] == ("update", "--restart=no", "container")
     else:
         result = DockerExecutor().cancel(**kwargs, cancel_requested_by="user")
         assert result["status"] == "cancelled"
         assert docker.calls.index(("update", "--restart=no", "container")) < docker.calls.index(("stop", "container"))
         assert ("stop", "container") in docker.calls
     assert not any("rm" in call for call in docker.calls)
+
+
+@pytest.mark.parametrize("status", ["created", "running", "paused", "restarting"])
+def test_cleanup_retries_active_containers_without_changing_restart_policy(docker, monkeypatch, status):
+    state = start()["state"]
+
+    def run(*args, **kwargs):
+        assert args == ("inspect", "--format", "{{.State.Status}}", "container")
+        return status
+
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(run))
+    assert DockerExecutor().cleanup("cache", "exec", {}, state, {}, "scratch", "dag:result")["status"] == "retry"
+
+
+@pytest.mark.parametrize("stage", ["inspect", "update"])
+@pytest.mark.parametrize("error,missing", [
+    ("No such container: container", True), ("No such object: container", True),
+    ("Cannot connect to the Docker daemon", False), ("permission denied", False),
+])
+def test_cleanup_only_acknowledges_disabled_restarts_or_missing_container(docker, monkeypatch, stage, error, missing):
+    state = start()["state"]
+    docker.calls.clear()
+    original = DockerExecutor._run_docker
+
+    def run(*args, **kwargs):
+        if args[0] == stage:
+            raise DmlRepoError(error)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(run))
+    if missing:
+        assert DockerExecutor().cleanup(
+            "cache", "exec", {}, state, {}, "scratch", "dag:result",
+        )["status"] == "success"
+    else:
+        with pytest.raises(DmlRepoError, match=error):
+            DockerExecutor().cleanup("cache", "exec", {}, state, {}, "scratch", "dag:result")
 
 
 def test_lock_is_held_through_container_creation(docker, monkeypatch):

@@ -196,8 +196,7 @@ def test_docker_cleanup_retry_and_cancel_cross_adapter_processes(docker_world):
             assert inspection.returncode == 0
             details = json.loads(inspection.stdout)[0]
             assert details["State"]["Running"] is False
-            if container_id == cancel_id:
-                assert details["HostConfig"]["RestartPolicy"]["Name"] == "no"
+            assert details["HostConfig"]["RestartPolicy"]["Name"] == "no"
     finally:
         for container_id in (cleanup_id, cancel_id):
             subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=10)

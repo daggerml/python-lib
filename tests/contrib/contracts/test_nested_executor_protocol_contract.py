@@ -115,8 +115,20 @@ def test_docker_poll_rejects_malformed_nested_response(monkeypatch) -> None:
 
 def test_docker_cleanup_retries_active_then_retains_resources(monkeypatch) -> None:
     statuses = iter(("running", "exited", "missing"))
+    updates = []
+
+    def run(*args, **kwargs):
+        if args[0] == "update":
+            updates.append(args)
+            return "container-1"
+        assert args[0] == "inspect"
+        status = next(statuses)
+        if status == "missing":
+            raise DmlRepoError("No such object: container-1")
+        return status
+
     monkeypatch.setattr("daggerml.contrib.executors.docker.shutil.which", lambda command: "/docker")
-    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: next(statuses)))
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(run))
     executor = DockerExecutor()
     kwargs = {
         "cache_key": "ck",
@@ -131,6 +143,7 @@ def test_docker_cleanup_retries_active_then_retains_resources(monkeypatch) -> No
     assert executor.cleanup(**kwargs)["status"] == "retry"
     assert executor.cleanup(**kwargs)["status"] == "success"
     assert executor.cleanup(**kwargs)["status"] == "success"
+    assert updates == [("update", "--restart=no", "container-1")]
 
 
 def test_lambda_handler_failure_returns_object_adapter_state() -> None:

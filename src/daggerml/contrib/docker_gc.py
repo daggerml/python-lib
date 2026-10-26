@@ -26,6 +26,16 @@ def _timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _run_if_present(*args: str) -> str | None:
+    """Ignore resources removed by Docker or other clients since enumeration."""
+    try:
+        return DockerExecutor._run_docker(*args)
+    except DmlRepoError as exc:
+        if any(marker in str(exc).lower() for marker in (f"no such {args[0]}:", "no such object:")):
+            return None
+        raise
+
+
 def collect(*, all_resources: bool = False, older_than_hours: float = 24, dry_run: bool = False) -> dict[str, Any]:
     """Collect old stopped containers and unreferenced image tags.
 
@@ -50,7 +60,11 @@ def collect(*, all_resources: bool = False, older_than_hours: float = 24, dry_ru
     removed: dict[str, Any] = {"containers": [], "images": [], "dry_run": dry_run}
     with _image_lock():
         container_ids = run("container", "ls", "-aq", "--no-trunc").split()
-        containers = [json.loads(run("container", "inspect", ident))[0] for ident in container_ids]
+        containers = []
+        for ident in container_ids:
+            output = _run_if_present("container", "inspect", ident)
+            if output is not None:
+                containers.append(json.loads(output)[0])
         retained = []
         for container in containers:
             state = container["State"]
@@ -62,7 +76,8 @@ def collect(*, all_resources: bool = False, older_than_hours: float = 24, dry_ru
                     and (all_resources or owned)
                     and max(_timestamp(finished), _timestamp(container["Created"])) < cutoff):
                 if not dry_run:
-                    run("container", "rm", container["Id"])
+                    if _run_if_present("container", "rm", container["Id"]) is None:
+                        continue
                 removed["containers"].append(container["Id"])
             else:
                 retained.append(container)
@@ -70,7 +85,10 @@ def collect(*, all_resources: bool = False, older_than_hours: float = 24, dry_ru
         image_ids = set(run("image", "ls", "-aq", "--no-trunc").split())
         pending = []
         for ident in sorted(image_ids):
-            image = json.loads(run("image", "inspect", ident))[0]
+            output = _run_if_present("image", "inspect", ident)
+            if output is None:
+                continue
+            image = json.loads(output)[0]
             if image["Id"] in referenced or _timestamp(image["Created"]) >= cutoff:
                 continue
             tags = image.get("RepoTags") or []
@@ -84,7 +102,8 @@ def collect(*, all_resources: bool = False, older_than_hours: float = 24, dry_ru
                 try:
                     # Never force deletion. Docker remains the final reference check.
                     if not dry_run:
-                        run("image", "rm", "--no-prune", ref)
+                        if _run_if_present("image", "rm", "--no-prune", ref) is None:
+                            continue
                 except DmlRepoError as exc:
                     if "image has dependent child images" not in str(exc).lower():
                         raise
