@@ -45,27 +45,30 @@ def docker_build(dag, context_tarball, build_flags=(), repo=None):
     store = S3Store()
     tag = uuid4().hex
     local_image = f"daggerml-archive:{tag}"
-    with _image_lock(), TemporaryDirectory(prefix="dml-docker-build-") as build_dir:
+    with TemporaryDirectory(prefix="dml-docker-build-") as build_dir:
         store.untar(context_tarball.value(), build_dir)
-        try:
-            with chdir(build_dir):
-                _run("docker", "build", *build_flags, "-t", local_image, ".")
-                repo = repo.value() if repo is not None else None
-                if repo is not None:
-                    remote_image = f"{repo.uri}:{tag}"
-                    try:
-                        _run("docker", "tag", local_image, remote_image)
-                        _run("docker", "push", remote_image)
-                    finally:
-                        _remove_docker_image(remote_image)
-                    return dag.put(Uri(remote_image), name="remote-image")
-                image_tar = "./image.tar"
-                _run("docker", "save", "-o", str(image_tar), local_image)
-                compressed_image_tar = "./image.tar.gz"
-                _gzip_file(image_tar, compressed_image_tar)
-                return store.put(filepath=compressed_image_tar, suffix=".tar.gz")
-        finally:
-            _remove_docker_image(local_image)
+        with chdir(build_dir):
+            repo = repo.value() if repo is not None else None
+            image_tar = "./image.tar"
+            with _image_lock():
+                try:
+                    _run("docker", "build", *build_flags, "-t", local_image, ".")
+                    if repo is not None:
+                        remote_image = f"{repo.uri}:{tag}"
+                        try:
+                            _run("docker", "tag", local_image, remote_image)
+                            _run("docker", "push", remote_image)
+                        finally:
+                            _remove_docker_image(remote_image)
+                    else:
+                        _run("docker", "save", "-o", str(image_tar), local_image)
+                finally:
+                    _remove_docker_image(local_image)
+            if repo is not None:
+                return dag.put(Uri(remote_image), name="remote-image")
+            compressed_image_tar = "./image.tar.gz"
+            _gzip_file(image_tar, compressed_image_tar)
+            return store.put(filepath=compressed_image_tar, suffix=".tar.gz")
 
 
 __all__ = ["docker_build"]

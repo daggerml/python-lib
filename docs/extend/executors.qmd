@@ -98,38 +98,21 @@ own execution coordination; `S3Store` under `remote.root/data/` is for artifacts
 
 ## Docker resource retention
 
-Docker archive execution loads the archive unchanged, inspects the references
-reported by Docker, and launches by Docker's returned image ID. Archive formats,
-platform selection, and BuildKit attestation metadata are handled by the installed
-Docker version, not parsed by DaggerML. Multiple reported tags are allowed when
-they resolve to one distinct image ID. Archives reporting multiple distinct image
-IDs are rejected after loading; their imported images and tags remain for GC.
+Docker retains completed containers and loaded images; cancellation stops work
+without deleting them. Use `dml contrib docker-gc --dry-run` to preview cleanup.
+Collection defaults to DML-owned resources; `--all` also includes other users'
+resources on the selected daemon. See `--help` for retention options and
+[Sharp bits](../sharp-bits-and-security.qmd#docker-archives-can-overwrite-local-image-tags)
+for archive tag collisions.
 
-Completed containers and loaded images remain on the Docker daemon. Cancellation
-stops the container but does not delete it. Garbage collection is independent of
-execution and can be run with `dml contrib docker-gc`; use `--dry-run` to preview.
-By default it removes DML-labeled stopped containers and unused tags in the
-`daggerml-archive` and `daggerml-execution` repositories. Arbitrary archive tags
-are not DML-owned. `--all` explicitly includes other users' resources on the
-selected Docker daemon. Running, paused, and restarting containers and images
-referenced by retained containers are not collected; image removal is never forced.
+Image age means creation time, not last use. Keep container retention longer than
+polling delays: collecting a completed container removes its local status handle.
 
-The default retention is 24 hours (`--older-than-hours` changes it). Containers
-must have been stopped for that long; images use creation time, not last use.
-Unstarted containers use creation time. Choose retention long enough for delayed
-polling, since collecting a completed container removes its local status handle.
-Launches, builds, and collection coordinate through a per-user cache lock; this
-does not coordinate other users or programs accessing the daemon.
-
-`dml contrib install-docker-gc` installs and enables an hourly systemd **user**
-timer on Linux, using the current Python installation, executable search path,
-cache directory, and Docker connection settings. Pass `--all` at installation
-to persist host-wide collection. The user needs Docker access and a running
-systemd user manager; running outside login sessions may require administrator-
-configured lingering. Other Unix systems can schedule `dml contrib docker-gc`
-with cron or launchd. The installer does not install those schedulers.
-Disable the timer with `systemctl --user disable --now daggerml-docker-gc.timer`.
-Keep the installation's Python environment available while the timer is enabled.
+On Linux, `dml contrib install-docker-gc` enables an hourly systemd user timer.
+It captures the installer's Docker/cache settings and Python environment; keep
+that environment available and reinstall to change settings. The user manager
+must remain running for scheduled collection. On other Unix systems, schedule
+`dml contrib docker-gc` with cron or launchd.
 
 ## Batch isolation
 

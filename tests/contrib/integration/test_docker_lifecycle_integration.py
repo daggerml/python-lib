@@ -54,8 +54,9 @@ def test_native_archive_load_uses_docker_id_and_retains_tags(tmp_path, monkeypat
         for execution_id in (first_id, second_id):
             workdir = tmp_path / execution_id
             workdir.mkdir()
+            staged_image = DockerExecutor._stage_image(runnable, workdir, remote)
             with _image_lock():
-                image = DockerExecutor._prepare_image(runnable, workdir, remote, execution_id)
+                image = DockerExecutor._prepare_image(staged_image)
             assert image == expected_id
             inspected = json.loads(docker("image", "inspect", image).stdout)[0]
             assert inspected["Id"].startswith("sha256:")
@@ -179,7 +180,8 @@ def test_docker_cleanup_retry_and_cancel_cross_adapter_processes(docker_world):
         return json.loads(proc.stdout)
 
     def start_container():
-        return subprocess.run(["docker", "run", "-d", image, "python", "-c", "import time;time.sleep(30)"],
+        return subprocess.run(["docker", "run", "-d", "--restart=always", image,
+                               "python", "-c", "import time;time.sleep(30)"],
                               check=True, capture_output=True, text=True, timeout=15).stdout.strip()
 
     cleanup_id = start_container()
@@ -192,7 +194,10 @@ def test_docker_cleanup_retry_and_cancel_cross_adapter_processes(docker_world):
         for container_id in (cleanup_id, cancel_id):
             inspection = subprocess.run(["docker", "inspect", container_id], capture_output=True, timeout=10)
             assert inspection.returncode == 0
-            assert json.loads(inspection.stdout)[0]["State"]["Running"] is False
+            details = json.loads(inspection.stdout)[0]
+            assert details["State"]["Running"] is False
+            if container_id == cancel_id:
+                assert details["HostConfig"]["RestartPolicy"]["Name"] == "no"
     finally:
         for container_id in (cleanup_id, cancel_id):
             subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=10)

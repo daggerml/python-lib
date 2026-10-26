@@ -1,5 +1,6 @@
 """Docker, not archive metadata, determines the image identity used for runs."""
 
+import fcntl
 import hashlib
 import json
 import threading
@@ -42,7 +43,7 @@ def docker(monkeypatch, tmp_path):
             return "container"
         if args[0] == "inspect":
             return "exited"
-        if args[0] == "stop":
+        if args[0] in {"stop", "update"}:
             return "container"
         pytest.fail(f"Unexpected Docker command: {args}")
 
@@ -117,6 +118,7 @@ def test_terminal_operations_retain_resources(docker, operation):
     else:
         result = DockerExecutor().cancel(**kwargs, cancel_requested_by="user")
         assert result["status"] == "cancelled"
+        assert docker.calls.index(("update", "--restart=no", "container")) < docker.calls.index(("stop", "container"))
         assert ("stop", "container") in docker.calls
     assert not any("rm" in call for call in docker.calls)
 
@@ -148,6 +150,62 @@ def test_lock_is_held_through_container_creation(docker, monkeypatch):
         if waiter is not None:
             waiter.join(5)
     assert acquired.is_set()
+
+
+def test_s3_download_is_unlocked_but_load_inspection_and_launch_are_locked(docker, monkeypatch):
+    lock_path = docker_module._IMAGE_LOCK_PATH
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    downloaded = []
+
+    def get(uri):
+        with lock_path.open("a+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        downloaded.append(uri)
+        return docker.archive
+
+    original = DockerExecutor._run_docker
+
+    def run(*args, **kwargs):
+        with lock_path.open("a+") as lock_file:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(docker_module.S3Store, "from_remote_root", lambda _: SimpleNamespace(get=get))
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(run))
+    assert start()["state"]["image"] == IMAGE_ID
+    assert downloaded == ["s3://bucket/image.tar"]
+
+
+@pytest.mark.parametrize("failure", ["update", "stop"])
+def test_cancel_does_not_acknowledge_restart_policy_or_stop_failure(docker, monkeypatch, failure):
+    state = start()["state"]
+    docker.calls.clear()
+    original = DockerExecutor._run_docker
+
+    def run(*args, **kwargs):
+        if args[0] == failure:
+            docker.calls.append(args)
+            raise DmlRepoError(f"{failure} failed")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(run))
+    with pytest.raises(DmlRepoError, match=f"{failure} failed"):
+        DockerExecutor().cancel("cache", "exec", {}, state, {}, "scratch", "user")
+    assert docker.calls[0] == ("update", "--restart=no", "container")
+    if failure == "update":
+        assert not any(call[0] == "stop" for call in docker.calls)
+
+
+def test_cancel_missing_container_is_idempotent(docker, monkeypatch):
+    state = start()["state"]
+
+    def missing(*args, **kwargs):
+        assert args == ("update", "--restart=no", "container")
+        raise DmlRepoError("No such container: container")
+
+    monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(missing))
+    assert DockerExecutor().cancel("cache", "exec", {}, state, {}, "scratch", "user")["status"] == "cancelled"
 
 
 @pytest.mark.parametrize("reported_id", [CONFIG_ID, IMAGE_ID])

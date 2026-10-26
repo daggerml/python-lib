@@ -24,7 +24,7 @@ def test_docker_start_uses_execution_id_temp_prefix_and_adapter_state(tmp_path, 
 
     monkeypatch.setattr("daggerml.contrib.executors.docker.tempfile.mkdtemp", mkdtemp)
     monkeypatch.setattr(
-        DockerExecutor, "_prepare_image", staticmethod(lambda runnable, path, remote, execution: "image")
+        DockerExecutor, "_prepare_image", staticmethod(lambda image: "image")
     )
     monkeypatch.setattr(DockerExecutor, "_run_docker", staticmethod(lambda *args, **kwargs: "container-1"))
     monkeypatch.setattr(

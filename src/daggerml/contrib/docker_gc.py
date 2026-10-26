@@ -1,6 +1,7 @@
 """Conservative Docker garbage collection and optional user-systemd scheduling."""
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -13,6 +14,7 @@ from daggerml.api import DmlRepoError
 from daggerml.contrib.executors.docker import DockerExecutor, _image_lock
 
 _OWNED_REPOSITORIES = {"daggerml-archive", "daggerml-execution"}
+logger = logging.getLogger(__name__)
 
 
 def _owned_tag(tag: str) -> bool:
@@ -66,6 +68,7 @@ def collect(*, all_resources: bool = False, older_than_hours: float = 24, dry_ru
                 retained.append(container)
         referenced = {container["Image"] for container in retained}
         image_ids = set(run("image", "ls", "-aq", "--no-trunc").split())
+        pending = []
         for ident in sorted(image_ids):
             image = json.loads(run("image", "inspect", ident))[0]
             if image["Id"] in referenced or _timestamp(image["Created"]) >= cutoff:
@@ -74,11 +77,24 @@ def collect(*, all_resources: bool = False, older_than_hours: float = 24, dry_ru
             refs = tags if all_resources else [tag for tag in tags if _owned_tag(tag)]
             if all_resources and not refs:
                 refs = [image["Id"]]
-            for ref in refs:
-                # Never force deletion. Docker remains the final reference check.
-                if not dry_run:
-                    run("image", "rm", "--no-prune", ref)
+            pending.extend(refs)
+        while pending:
+            deferred = []
+            for ref in pending:
+                try:
+                    # Never force deletion. Docker remains the final reference check.
+                    if not dry_run:
+                        run("image", "rm", "--no-prune", ref)
+                except DmlRepoError as exc:
+                    if "image has dependent child images" not in str(exc).lower():
+                        raise
+                    deferred.append(ref)
+                    continue
                 removed["images"].append(ref)
+            if len(deferred) == len(pending):
+                logger.warning("Retaining images with dependent children: %s", ", ".join(deferred))
+                break
+            pending = deferred
     return removed
 
 
@@ -118,13 +134,19 @@ def install(*, all_resources: bool = False, older_than_hours: float = 24) -> Pat
     # User services need the same Docker executable, cache lock, and daemon
     # selection as the interactive installer. No shell interpolation is used.
     environment = {"PATH": os.environ.get("PATH", os.defpath)}
+    unset_environment = []
     for name in ("XDG_CACHE_HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_TLS_VERIFY",
                  "DOCKER_CERT_PATH"):
         if name in os.environ:
             environment[name] = os.environ[name]
+        else:
+            # User services inherit the manager's environment, which can contain
+            # stale Docker or cache settings absent from this shell.
+            unset_environment.append(name)
     service = ("[Unit]\nDescription=DaggerML Docker garbage collection\n\n[Service]\nType=oneshot\n"
                + "".join(f"Environment={_systemd_quote(f'{key}={value}', exec_argument=False)}\n"
-                         for key, value in environment.items())
+                          for key, value in environment.items())
+               + ("UnsetEnvironment=" + " ".join(unset_environment) + "\n" if unset_environment else "")
                + "ExecStart=" + " ".join(_systemd_quote(arg) for arg in command) + "\n")
     timer = ("[Unit]\nDescription=Hourly DaggerML Docker garbage collection\n\n[Timer]\n"
              "OnCalendar=hourly\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n")

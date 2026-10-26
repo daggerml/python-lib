@@ -1,6 +1,8 @@
 """Contracts for contrib funk helpers."""
 
 import gzip
+from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -31,7 +33,8 @@ def test_docker_build_isolated_script_context():
     assert "from contextlib import chdir" in script
     assert "daggerml-archive:" in script
     assert script.index("local_image =") < script.index("'save'")
-    assert "with _image_lock(), TemporaryDirectory(prefix='dml-docker-build-') as build_dir:" in script
+    assert "with TemporaryDirectory(prefix='dml-docker-build-') as build_dir:" in script
+    assert "with _image_lock():" in script
     assert "from daggerml.contrib.executors.docker import _image_lock" in script
     assert "_gzip_file(image_tar, compressed_image_tar)" in script
     assert "finally:" in script
@@ -66,3 +69,74 @@ def test_remove_docker_image_is_best_effort(monkeypatch):
     assert calls == [
         ((("docker", "image", "rm", "dml:test"),), {"check": False, "capture_output": True, "text": True})
     ]
+
+
+@pytest.mark.serial
+@pytest.mark.parametrize("publish_registry", [False, True])
+def test_docker_build_locks_daemon_work_but_not_archive_transfers(monkeypatch, publish_registry):
+    from daggerml import Uri
+    from daggerml.contrib.executors import docker as docker_module
+
+    held = False
+    calls = []
+
+    @contextmanager
+    def lock():
+        nonlocal held
+        assert not held
+        held = True
+        try:
+            yield
+        finally:
+            held = False
+
+    def untar(uri, directory):
+        assert not held
+        calls.append("untar")
+
+    def upload(*, filepath, suffix):
+        assert not held
+        assert Path(filepath).read_bytes() == b"compressed"
+        calls.append("upload")
+        return Uri("s3://bucket/image.tar.gz")
+
+    def run(*args):
+        assert held
+        calls.append(args[1])
+        if args[1] == "save":
+            Path(args[args.index("-o") + 1]).write_bytes(b"archive")
+
+    def remove(image):
+        assert held
+        calls.append("remove")
+
+    def compress(source, destination):
+        assert not held
+        assert Path(source).read_bytes() == b"archive"
+        Path(destination).write_bytes(b"compressed")
+        calls.append("compress")
+
+    def put(value, *, name):
+        assert not held
+        return value
+
+    monkeypatch.setattr(docker_module, "_image_lock", lock)
+    monkeypatch.setattr("daggerml.contrib.s3.S3Store", lambda: SimpleNamespace(untar=untar, put=upload))
+    _, script = ScriptExecutor._script_kwargs(docker_build.kwargs)
+    namespace = {}
+    exec(script, namespace)
+    namespace.update(_run=run, _remove_docker_image=remove, _gzip_file=compress)
+    def node(value):
+        return SimpleNamespace(value=lambda: value)
+
+    result = namespace["docker_build"](
+        SimpleNamespace(put=put), node(Uri("s3://bucket/context.tar")), node(()),
+        node(Uri("registry/image")) if publish_registry else None,
+    )
+    assert not held
+    if publish_registry:
+        assert result.uri.startswith("registry/image:")
+        assert calls == ["untar", "build", "tag", "push", "remove", "remove"]
+    else:
+        assert result == Uri("s3://bucket/image.tar.gz")
+        assert calls == ["untar", "build", "save", "remove", "compress", "upload"]

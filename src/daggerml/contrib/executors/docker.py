@@ -128,18 +128,22 @@ class DockerExecutor(ExecutorBase):
         raise DmlRepoError("docker executor image must resolve to a non-empty Uri or string")
 
     @staticmethod
-    def _prepare_image(
-        runnable: dict[str, Any], workdir: Path, remote: dict[str, Any], execution_id: str,
-    ) -> str:
-        """Resolve Docker's loaded image ID; caller holds the lock through launch."""
-        del execution_id
+    def _stage_image(runnable: dict[str, Any], workdir: Path, remote: dict[str, Any]) -> str | Path:
+        """Download archives before acquiring the daemon lifecycle lock."""
         image = DockerExecutor._image_input(runnable)
         if not is_s3_uri(image):
             return image
         tar_path = workdir / "image.tar"
         store = S3Store.from_remote_root(cast(str, remote["root"]))
         tar_path.write_bytes(store.get(image))
-        output = DockerExecutor._run_docker("load", "-i", str(tar_path))
+        return tar_path
+
+    @staticmethod
+    def _prepare_image(image: str | Path) -> str:
+        """Resolve Docker's loaded image ID; caller holds the lock through launch."""
+        if isinstance(image, str):
+            return image
+        output = DockerExecutor._run_docker("load", "-i", str(image))
         references = set()
         for line in output.splitlines():
             for prefix in ("Loaded image: ", "Loaded image ID: "):
@@ -188,8 +192,9 @@ class DockerExecutor(ExecutorBase):
         )
         try:
             _write_scratch_json(input_uri, payload, raw=True)
+            staged_image = self._stage_image(runnable, workdir, remote)
             with _image_lock():
-                image_ref = self._prepare_image(runnable, workdir, remote, execution_id)
+                image_ref = self._prepare_image(staged_image)
                 container_id = self._run_docker(
                     "run",
                     "-d",
@@ -317,6 +322,7 @@ class DockerExecutor(ExecutorBase):
             return {"status": "cancelled", "error": None, "state": state}
         if isinstance(container_id, str) and container_id:
             try:
+                self._run_docker("update", "--restart=no", container_id, docker_bin=docker_bin)
                 self._run_docker("stop", container_id, docker_bin=docker_bin)
             except DmlRepoError as exc:
                 if "No such container:" not in str(exc):

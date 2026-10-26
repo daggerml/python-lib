@@ -87,6 +87,64 @@ def test_dry_run_reports_candidates_without_mutation(backend):
     assert not any(call[1] == "rm" for call in backend.calls)
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_child_dependency_conflicts_do_not_block_progress(backend, monkeypatch, dry_run):
+    old = backend.images["dangling"]["Created"]
+    backend.containers = {}
+    backend.images = {
+        "a-parent": {"Id": "a-parent", "RepoTags": [], "Created": old},
+        "z-child": {"Id": "z-child", "RepoTags": ["child:test"], "Created": old},
+    }
+    original = docker_module.DockerExecutor._run_docker
+    deleted = []
+
+    def run(*args, **kwargs):
+        if args[:2] == ("image", "rm"):
+            if args[-1] == "a-parent" and "child:test" not in deleted:
+                backend.calls.append(args)
+                raise DmlRepoError("conflict: image has dependent child images")
+            deleted.append(args[-1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(docker_module.DockerExecutor, "_run_docker", staticmethod(run))
+    result = docker_gc.collect(all_resources=True, dry_run=dry_run)
+    assert set(result["images"]) == {"a-parent", "child:test"}
+    if dry_run:
+        assert deleted == []
+    else:
+        assert deleted == ["child:test", "a-parent"]
+        assert backend.calls.count(("image", "rm", "--no-prune", "a-parent")) == 2
+
+
+def test_dependency_conflicts_without_progress_are_retained(backend, monkeypatch, caplog):
+    original = docker_module.DockerExecutor._run_docker
+    attempts = []
+
+    def run(*args, **kwargs):
+        if args[:2] == ("image", "rm"):
+            attempts.append(args[-1])
+            raise DmlRepoError("conflict: image has dependent child images")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(docker_module.DockerExecutor, "_run_docker", staticmethod(run))
+    assert docker_gc.collect()["images"] == []
+    assert len(attempts) == len(set(attempts))
+    assert "Retaining images with dependent children" in caplog.text
+
+
+def test_dependency_deferral_does_not_hide_daemon_failures(backend, monkeypatch):
+    original = docker_module.DockerExecutor._run_docker
+
+    def run(*args, **kwargs):
+        if args[:2] == ("image", "rm"):
+            raise DmlRepoError("Cannot connect to the Docker daemon")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(docker_module.DockerExecutor, "_run_docker", staticmethod(run))
+    with pytest.raises(DmlRepoError, match="Cannot connect"):
+        docker_gc.collect()
+
+
 def test_collection_holds_the_launch_lock(backend, monkeypatch):
     original = docker_module.DockerExecutor._run_docker
 
@@ -147,6 +205,39 @@ def test_install_persists_scope_and_enables_hourly_user_timer(monkeypatch, tmp_p
     assert "OnCalendar=hourly" in timer and "Persistent=true" in timer
     assert calls == [(["systemctl", "--user", "daemon-reload"], {"check": True}),
                      (["systemctl", "--user", "enable", "--now", "daggerml-docker-gc.timer"], {"check": True})]
+
+
+@pytest.mark.parametrize("settings", [
+    {},
+    {"DOCKER_HOST": "unix:///run/user/1000/docker.sock"},
+    {"DOCKER_CONTEXT": "", "XDG_CACHE_HOME": ""},
+    {name: "configured" for name in (
+        "XDG_CACHE_HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")},
+])
+def test_installed_service_preserves_present_and_absent_connection_settings(monkeypatch, tmp_path, settings):
+    tracked = {"XDG_CACHE_HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG",
+               "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"}
+    for name in tracked:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in settings.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(docker_gc.sys, "platform", "linux")
+    monkeypatch.setattr(docker_gc.shutil, "which", lambda _: "/bin/systemctl")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(docker_gc.subprocess, "run", lambda *args, **kwargs: None)
+    directory = docker_gc.install(all_resources=True)
+    service = (directory / "daggerml-docker-gc.service").read_text()
+    unset = {name for line in service.splitlines() if line.startswith("UnsetEnvironment=")
+             for name in line.removeprefix("UnsetEnvironment=").split()}
+    assert unset == tracked - settings.keys()
+    assert "PATH" not in unset
+    for name in tracked:
+        if name in settings:
+            assert f'Environment="{name}={settings[name]}"' in service
+        else:
+            assert f'Environment="{name}=' not in service
+    if not unset:
+        assert "UnsetEnvironment=" not in service
 
 
 def test_unsupported_scheduler_leaves_files_untouched(monkeypatch, tmp_path):
