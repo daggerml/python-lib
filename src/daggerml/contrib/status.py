@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from typing import Any
 
 import daggerml.api as codec_mod
+from daggerml.api import DmlRepoError
 from daggerml.contrib import adapters as areg
 from daggerml.contrib.executors import _base as ereg
 
@@ -112,11 +114,33 @@ def status() -> dict[str, object]:
 
 def cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="dml contrib", allow_abbrev=False)
-    parser.add_argument(
-        "command",
-        choices=["status"],
-        help="Report adapter, executor, and codec registrations and diagnostics.",
-    )
-    parser.parse_args(argv)
-    print(json.dumps(status(), separators=(",", ":"), sort_keys=True))
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("status", help="Report adapter, executor, and codec registrations and diagnostics.",
+                        description="Report adapter, executor, and codec registrations and diagnostics.")
+    for name, help_text in (
+        ("docker-gc", "Remove old stopped containers and unused images (DML-owned only by default)."),
+        ("install-docker-gc", "Install an hourly systemd user timer (Linux only)."),
+    ):
+        command = commands.add_parser(name, help=help_text, allow_abbrev=False)
+        command.add_argument("--all", action="store_true", help="Include non-DML resources on the Docker daemon.")
+        command.add_argument("--older-than-hours", type=float, default=24,
+                             help="Minimum age in hours (default: 24; images use creation time).")
+        if name == "docker-gc":
+            command.add_argument("--dry-run", action="store_true", help="Report candidates without deleting anything.")
+    args = parser.parse_args(argv)
+    if args.command == "status":
+        result = status()
+    else:
+        from daggerml.contrib import docker_gc
+
+        try:
+            if args.command == "install-docker-gc":
+                result = {"directory": str(docker_gc.install(
+                    all_resources=args.all, older_than_hours=args.older_than_hours))}
+            else:
+                result = docker_gc.collect(all_resources=args.all, older_than_hours=args.older_than_hours,
+                                           dry_run=args.dry_run)
+        except (DmlRepoError, ValueError, OSError, subprocess.CalledProcessError) as exc:
+            parser.exit(1, f"{parser.prog}: {exc}\n")
+    print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return 0

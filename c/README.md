@@ -19,6 +19,10 @@ This document describes the current C implementation under `/c`.
 - Ref strings use `namespace:id` format (colon separator).
 - This tree does not currently include `c/bindings/cpython/py_module.c`.
 - The primary DB source file is `c/src/dml_db.c` (not `dml_core.c`).
+- Environment opening makes at most four attempts when LMDB returns `ENOENT`
+  while the directory and `data.mdb` still exist. Each retry uses a fresh
+  `MDB_env` so LMDB can recover from a concurrent last-user semaphore unlink on
+  macOS. Other errors and missing databases are not retried.
 
 ## `c/include/dml_db.h`
 

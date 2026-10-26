@@ -1,5 +1,6 @@
 """Docker-capable end-to-end worker scenarios with real Moto transport."""
 
+import gzip
 import json
 import os
 import shutil
@@ -8,7 +9,9 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import pytest
 
@@ -18,10 +21,49 @@ from daggerml.contrib import api as contrib_api
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
 from daggerml.contrib.executors._ownership import _current_owner
-from daggerml.contrib.executors.docker import _read_scratch_output
+from daggerml.contrib.executors.docker import DockerExecutor, _image_lock, _read_scratch_output
 from daggerml.contrib.s3 import S3Store
 
 pytestmark = [pytest.mark.slow, pytest.mark.docker, pytest.mark.serial]
+
+
+@pytest.mark.parametrize("compressed", [False, True], ids=["tar", "gzip"])
+def test_native_archive_load_uses_docker_id_and_retains_tags(tmp_path, monkeypatch, compressed):
+    if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_output=True, timeout=10).returncode:
+        pytest.skip("Docker daemon is not available")
+    unique = uuid4().hex
+    archive_tag = f"daggerml-archive:{unique}"
+    alias_tag = f"daggerml-archive:{unique}-alias"
+    first_id, second_id = f"{unique}-first", f"{unique}-second"
+    (tmp_path / "Dockerfile").write_text(f'FROM scratch\nLABEL daggerml-test="{unique}"\n')
+    archive = tmp_path / "saved.tar"
+
+    def docker(*args, check=True):
+        return subprocess.run(["docker", *args], check=check, capture_output=True, text=True, timeout=120)
+
+    try:
+        docker("build", "-t", archive_tag, str(tmp_path))
+        expected_id = json.loads(docker("image", "inspect", archive_tag).stdout)[0]["Id"]
+        docker("tag", archive_tag, alias_tag)
+        docker("save", "-o", str(archive), archive_tag, alias_tag)
+        docker("image", "rm", archive_tag, alias_tag)
+        content = gzip.compress(archive.read_bytes()) if compressed else archive.read_bytes()
+        monkeypatch.setattr(S3Store, "from_remote_root", lambda _: SimpleNamespace(get=lambda _: content))
+        remote = {"root": "s3://unused/root"}
+        runnable = {"kwargs": {"image": "s3://unused/image.tar"}}
+        for execution_id in (first_id, second_id):
+            workdir = tmp_path / execution_id
+            workdir.mkdir()
+            staged_image = DockerExecutor._stage_image(runnable, workdir, remote)
+            with _image_lock():
+                image = DockerExecutor._prepare_image(staged_image)
+            assert image == expected_id
+            inspected = json.loads(docker("image", "inspect", image).stdout)[0]
+            assert inspected["Id"].startswith("sha256:")
+        assert docker("image", "inspect", archive_tag).returncode == 0
+        assert docker("image", "inspect", alias_tag).returncode == 0
+    finally:
+        docker("image", "rm", archive_tag, alias_tag, check=False)
 
 
 @funkify(uri="script")
@@ -138,7 +180,8 @@ def test_docker_cleanup_retry_and_cancel_cross_adapter_processes(docker_world):
         return json.loads(proc.stdout)
 
     def start_container():
-        return subprocess.run(["docker", "run", "-d", image, "python", "-c", "import time;time.sleep(30)"],
+        return subprocess.run(["docker", "run", "-d", "--restart=always", image,
+                               "python", "-c", "import time;time.sleep(30)"],
                               check=True, capture_output=True, text=True, timeout=15).stdout.strip()
 
     cleanup_id = start_container()
@@ -150,7 +193,10 @@ def test_docker_cleanup_retry_and_cancel_cross_adapter_processes(docker_world):
         assert send("cancel", cancel_id)["status"] == "cancelled"
         for container_id in (cleanup_id, cancel_id):
             inspection = subprocess.run(["docker", "inspect", container_id], capture_output=True, timeout=10)
-            assert inspection.returncode != 0
+            assert inspection.returncode == 0
+            details = json.loads(inspection.stdout)[0]
+            assert details["State"]["Running"] is False
+            assert details["HostConfig"]["RestartPolicy"]["Name"] == "no"
     finally:
         for container_id in (cleanup_id, cancel_id):
             subprocess.run(["docker", "rm", "-f", container_id], capture_output=True, timeout=10)

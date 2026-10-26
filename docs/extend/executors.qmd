@@ -96,6 +96,24 @@ restriction.
 Use the supplied remote scratch URI for detached input/output. Runtime records
 own execution coordination; `S3Store` under `remote.root/data/` is for artifacts.
 
+## Docker resource retention
+
+Docker retains completed containers and loaded images; cancellation stops work
+without deleting them. Use `dml contrib docker-gc --dry-run` to preview cleanup.
+Collection defaults to DML-owned resources; `--all` also includes other users'
+resources on the selected daemon. See `--help` for retention options and
+[Sharp bits](../sharp-bits-and-security.qmd#docker-archives-can-overwrite-local-image-tags)
+for archive tag collisions.
+
+Image age means creation time, not last use. Keep container retention longer than
+polling delays: collecting a completed container removes its local status handle.
+
+On Linux, `dml contrib install-docker-gc` enables an hourly systemd user timer.
+It captures the installer's Docker/cache settings and Python environment; keep
+that environment available and reinstall to change settings. The user manager
+must remain running for scheduled collection. On other Unix systems, schedule
+`dml contrib docker-gc` with cron or launchd.
+
 ## Batch isolation
 
 `AWS_EC2_METADATA_DISABLED` is not a sandbox: job code can unset it or request

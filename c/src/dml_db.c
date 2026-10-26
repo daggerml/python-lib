@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -18,6 +19,7 @@
 #include "../include/dml_msgpack.h"
 
 #define DML_DB_REGISTRY_SIZE 10
+#define DML_DB_ENV_OPEN_ATTEMPTS 4
 #define DML_DB_RESIZE_MARKER_KEY "__daggerml_map_size__"
 
 typedef struct DmlDbHandle DmlDbHandle;
@@ -293,17 +295,40 @@ static int dml_db_assign_slot_locked(
     return 0;
 }
 
+static int dml_db_data_file_exists(const char *path) {
+    struct stat st;
+    size_t length = strlen(path);
+    char *data_path;
+    int exists;
+
+    if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        return 0;
+    }
+    data_path = malloc(length + sizeof("/data.mdb"));
+    if (data_path == NULL) {
+        return 0;
+    }
+    memcpy(data_path, path, length);
+    memcpy(data_path + length, "/data.mdb", sizeof("/data.mdb"));
+    exists = stat(data_path, &st) == 0 && S_ISREG(st.st_mode);
+    free(data_path);
+    return exists;
+}
+
 static int dml_db_open_env_locked(DmlDbRegistryEntry *entry, int create_if_missing, size_t map_size) {
     MDB_env *env = NULL;
     MDB_txn *setup_txn = NULL;
     MDB_dbi *dbis = NULL;
     size_t open_map_size = map_size;
+    unsigned int attempt = 0;
     int rc;
 
     if (entry->env != NULL) {
         entry->env_refcount += 1;
         return 0;
     }
+retry_env_open:
+    attempt += 1;
     rc = mdb_env_create(&env);
     if (rc != MDB_SUCCESS) {
         return dml_map_lmdb_rc(rc);
@@ -323,6 +348,15 @@ static int dml_db_open_env_locked(DmlDbRegistryEntry *entry, int create_if_missi
     rc = mdb_env_open(env, entry->path, create_if_missing ? MDB_CREATE : 0, 0664);
     if (rc != MDB_SUCCESS) {
         mdb_env_close(env);
+        env = NULL;
+        /* On macOS, the last user can unlink LMDB's named semaphores
+         * between our failed exclusive lock and successful shared lock.
+         * Reopen from scratch so LMDB can initialize them under a new
+         * exclusive lock; do not hide a genuinely missing database.
+         */
+        if (rc == ENOENT && attempt < DML_DB_ENV_OPEN_ATTEMPTS && dml_db_data_file_exists(entry->path)) {
+            goto retry_env_open;
+        }
         return dml_map_lmdb_rc(rc);
     }
     dbis = (MDB_dbi *)calloc(entry->namespace_count, sizeof(MDB_dbi));
