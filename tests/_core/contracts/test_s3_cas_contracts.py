@@ -38,3 +38,28 @@ def test_s3_cas_put_normalizes_409_conditional_update_failure() -> None:
 
     with pytest.raises(CasItemConflict, match="was updated by another process"):
         remote._put("root/execution/e1.json", "next", overwrite=False)
+
+
+def test_s3_transport_failure_with_null_response_is_not_masked() -> None:
+    class Disconnected(ConnectionError):
+        response = None
+
+    class Client:
+        def put_object(self, **kwargs):
+            raise Disconnected("connection closed")
+
+    remote = S3Remote("s3://bucket/root", Client())
+    with pytest.raises(Disconnected, match="connection closed"):
+        remote._put("root/pack", b"compressed pack")
+    assert not remote._is_missing_error(Disconnected())
+
+
+def test_binary_read_preserves_bytes_and_closes_body():
+    body = BytesIO(b"\x00\xffcompressed bytes\n")
+
+    class Client:
+        def get_object(self, **kwargs):
+            return {"Body": body}
+
+    assert S3Remote("s3://bucket/root", Client())._get_bytes("root/pack") == b"\x00\xffcompressed bytes\n"
+    assert body.closed

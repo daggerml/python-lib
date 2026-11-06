@@ -1,12 +1,14 @@
 """Bounded S3 reads must not move database work onto worker threads."""
 
+import json
 from collections import Counter
 from contextlib import contextmanager
-from threading import Barrier, Lock, get_ident
+from threading import Barrier, Event, Lock, get_ident
 from types import SimpleNamespace
 
 import pytest
 
+from daggerml._core.db import Ref
 from daggerml._core.remote import Remote
 from daggerml._core.types import Commit, Dag, DmlDB, ListDatum, LiteralNode, ScalarDatum, Tree
 
@@ -55,11 +57,24 @@ def fetch_graph(tmp_path):
         leaves = [txn.put(ScalarDatum(value)) for value in range(4)]
         value = txn.put(ListDatum(leaves))
         node = txn.put(LiteralNode(value=value))
-        dag = txn.put(Dag(nodes=[node], names={"result": node}, tags=[], result=node))
-        tree = txn.put(Tree(dags={"main": dag}))
+        dags = [txn.put(Dag(nodes=[node], names={"result": node}, tags=[str(i)], result=node)) for i in range(4)]
+        dag = dags[0]
+        tree = txn.put(Tree(dags={f"dag-{i}": ref for i, ref in enumerate(dags)}))
         first = txn.put(Commit(parents=[], tree=tree, author="test", message="first"))
         tip = txn.put(Commit(parents=[first], tree=tree, author="test", message="second"))
-    payloads, _ = remote._collect_local_objects(tip, source)
+    payloads = {}
+    with source.tx(readonly=True) as txn:
+        for ref in dags:
+            payloads[remote._pack_key(ref)] = remote._encode_pack(ref, txn)
+            payloads[remote._manifest_key(ref)] = json.dumps(dict(
+                schema=1, root=ref.to, subdags=[], imports=[])).encode()
+        for ref in (first, tip):
+            commit, tree_obj = txn.get(ref), txn.get(tree)
+            payloads[remote._commit_key(ref)] = json.dumps({
+                "schema": 1, "commit": [ref.to, remote._dump_cas_object(commit)],
+                "tree": [tree.to, remote._dump_cas_object(tree_obj)],
+                "dags": {name: dag.to for name, dag in tree_obj.dags.items()},
+            })
     return SimpleNamespace(remote=remote, target=CallerOnlyDB(target), payloads=payloads,
                            leaves=leaves, dag=dag, tip=tip, commits={first, tip})
 
@@ -71,8 +86,9 @@ def test_fetch_bounds_parallel_reads_and_keeps_database_access_on_caller(fetch_g
     graph = fetch_graph
     remote, target = graph.remote, graph.target
     remote.n_workers = workers
-    leaf_keys = {remote._cas_key(ref.id()) for ref in graph.leaves}
-    barrier, lock, calls = Barrier(workers), Lock(), Counter()
+    pack_keys = {key for key in graph.payloads if key.startswith("packs/")}
+    expected_workers = workers if kind == "project" else 1
+    barrier, lock, calls = Barrier(expected_workers), Lock(), Counter()
     active = peak = 0
 
     def get(key):
@@ -82,7 +98,7 @@ def test_fetch_bounds_parallel_reads_and_keeps_database_access_on_caller(fetch_g
             active += 1
             peak = max(peak, active)
         try:
-            if key in leaf_keys:
+            if key in pack_keys:
                 assert get_ident() != target.caller
                 barrier.wait(timeout=5)
             return graph.payloads[key]
@@ -91,6 +107,7 @@ def test_fetch_bounds_parallel_reads_and_keeps_database_access_on_caller(fetch_g
                 active -= 1
 
     remote._store._get = get
+    remote._store._get_bytes = get
 
     def fetch():
         if kind == "manifest":
@@ -102,7 +119,7 @@ def test_fetch_bounds_parallel_reads_and_keeps_database_access_on_caller(fetch_g
 
     expected = graph.dag if kind == "manifest" else graph.tip
     assert fetch() == expected
-    assert peak == workers
+    assert peak == expected_workers
     assert all(count == 1 for count in calls.values())
     with target.tx(readonly=True) as txn:
         assert txn.exists(expected)
@@ -122,7 +139,7 @@ def test_failed_worker_read_does_not_begin_materialization(fetch_graph, kind):
     graph = fetch_graph
     remote, target = graph.remote, graph.target
     remote.n_workers = 2
-    failing_key = remote._cas_key(graph.leaves[0].id())
+    failing_key = remote._pack_key(graph.dag)
 
     def get(key):
         if key == failing_key:
@@ -130,6 +147,7 @@ def test_failed_worker_read_does_not_begin_materialization(fetch_graph, kind):
         return graph.payloads[key]
 
     remote._store._get = get
+    remote._store._get_bytes = get
     with pytest.raises(OSError, match="S3 read failed"):
         if kind == "manifest":
             remote.materialize_ref(graph.dag, target)
@@ -140,3 +158,39 @@ def test_failed_worker_read_does_not_begin_materialization(fetch_graph, kind):
         assert not txn.exists(graph.tip)
         assert not txn.exists(graph.dag)
         assert all(not txn.exists(ref) for ref in graph.leaves)
+
+
+def test_stream_consumes_completions_while_an_earlier_download_is_blocked(fetch_graph):
+    remote = fetch_graph.remote
+    remote.n_workers = 2
+    slow, fast = Ref("dag:" + "0" * 64), Ref("dag:" + "1" * 64)
+    release = Event()
+    started = Event()
+
+    def get(key):
+        if key == slow:
+            started.set()
+            assert release.wait(timeout=5)
+        else:
+            assert started.wait(timeout=5)
+        return b"body"
+
+    remote._store._get_bytes = get
+    with remote._download_stream({slow, fast}, lambda ref: ref) as completed:
+        try:
+            first = next(completed)
+            assert first == [(fast, b"body")]
+        finally:
+            release.set()
+        assert list(completed) == [[(slow, b"body")]]
+
+
+def test_failed_consumer_unblocks_full_completion_queue(fetch_graph):
+    remote = fetch_graph.remote
+    remote.n_workers = 2
+    remote._store._get_bytes = lambda key: b"body"
+    roots = {Ref(f"dag:{i:064x}") for i in range(100)}
+    with pytest.raises(ValueError, match="consumer failed"):
+        with remote._download_stream(roots, lambda ref: ref) as completed:
+            next(completed)
+            raise ValueError("consumer failed")

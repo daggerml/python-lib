@@ -79,3 +79,39 @@ a remote branch or forcing publication requires complete ancestry.
 `show` preserves the current snapshot at a shallow boundary and reports `diff:
 null` when its parent is unavailable. `diff` itself requires the parent; deepen
 the clone to compare changes.
+
+## Migrate an existing remote
+
+> **Migration is permanently restricted to the previous version → current
+> version only.** If you are N versions behind, install each intermediate version
+> in order and run its migration tool. Complete every migration step; the latest
+> tool does not support skipping versions or migrating directly from older ones.
+
+An older individual-object remote must be converted before use with this client.
+Use a new, empty S3 prefix. Stop all source writers, workers, and garbage
+collection until conversion and configuration cutover are complete. Finish or
+cancel active executions and complete their adapter cleanup first.
+
+<!-- docs:pseudocode: Migration requires operator-owned S3 prefixes and quiescent clients; do not run against the documentation fixture. -->
+```sh
+python -m daggerml._core.migrate_remote \
+  --source s3://YOUR-BUCKET/old-root \
+  --destination s3://YOUR-BUCKET/new-root --dry-run
+
+python -m daggerml._core.migrate_remote \
+  --source s3://YOUR-BUCKET/old-root \
+  --destination s3://YOUR-BUCKET/new-root --quiescent
+
+dml config set remote.root s3://YOUR-BUCKET/new-root
+```
+
+Use normal AWS credentials. The migration verifies the converted graphs before
+making the destination usable; it never changes or deletes the source. Switch
+every participating client and worker to the new root after success. A failed
+attempt leaves a staging prefix; use another empty destination for a retry.
+Dry-run checks metadata and prerequisites without copying or validating all data.
+
+Embedded artifact URIs are preserved, not rewritten. Even though auxiliary files
+are copied, old URIs can still point to the source: retain that data while those
+artifacts are referenced. Remote graph garbage collection likewise requires
+quiescent writers and does not collect external artifact bytes.

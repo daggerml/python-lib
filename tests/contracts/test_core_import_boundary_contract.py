@@ -2,7 +2,7 @@ import ast
 from importlib.util import resolve_name
 from pathlib import Path
 
-from daggerml._core import validate_adapter_response
+from daggerml._core import get_remote_descriptor, validate_adapter_response
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "daggerml"
 
@@ -24,6 +24,15 @@ def test_adapter_response_validator_is_exported():
     response = {"status": "success", "error": None}
 
     assert validate_adapter_response(response) == response
+
+
+def test_remote_descriptor_copies_are_independent():
+    original = get_remote_descriptor()
+    modified = get_remote_descriptor()
+    modified.clear()
+
+    assert get_remote_descriptor() == original
+    assert modified != original
 
 
 def test_non_core_modules_import_only_the_core_facade():

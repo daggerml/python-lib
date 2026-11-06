@@ -1,66 +1,65 @@
-from __future__ import annotations
+"""GC marks manifest dependencies without materializing or inspecting graphs."""
 
 import json
+from collections import Counter
 from types import SimpleNamespace
 
-from daggerml._core.remote import Remote
-from daggerml._core.types import Commit, Dag, DmlDB, LiteralNode, ScalarDatum, Tree
+import pytest
+
+from daggerml._core.db import Ref
+from daggerml._core.remote import Remote, _encode_cas_value
+from daggerml._core.types import DmlRepoError
 
 
-def make_db(path) -> DmlDB:
-    path.mkdir()
-    db = DmlDB(str(path), 1024 * 1024, 1024 * 1024 * 64)
-    with db.tx(create_if_missing=True):
-        pass
-    return db
-
-
-def test_reachable_objects_include_nested_objects_for_liveness(tmp_path) -> None:
-    db = make_db(tmp_path / "db")
-    with db.tx() as txn:
-        scalar = txn.put(ScalarDatum("done"))
-        result = txn.put(LiteralNode(value=scalar))
-        dag_ref = txn.put(Dag(nodes=[result], names={"result": result}, tags=[], result=result))
-        tree_ref = txn.put(Tree(dags={"main": dag_ref}))
-        commit_ref = txn.put(
-            Commit(
-                parents=[],
-                tree=tree_ref,
-                author="alice",
-                message="snapshot",
-                created="2026-01-01T00:00:00Z",
-            )
-        )
-
+def test_marking_reads_shared_history_and_import_manifests_once_without_reading_packs():
     remote = object.__new__(Remote)
-    remote.n_workers = 1
-    remote.prune_age_seconds = 24 * 3600
     remote._store = SimpleNamespace(_key_for=lambda key: key)
+    parent, tip = [Ref(f"commit:{i:064x}") for i in range(2)]
+    dag, imported, function = [Ref(f"dag:{i:064x}") for i in range(3)]
+    argv = Ref(f"node-argv:{0:064x}")
+    manifests = {
+        remote._commit_key(tip): {"commit": [tip.to, json.dumps(_encode_cas_value({"parents": [parent]}))],
+                                  "dags": {"main": dag.to, "alias": dag.to}},
+        remote._commit_key(parent): {"commit": [parent.to, json.dumps(_encode_cas_value({"parents": []}))],
+                                     "dags": {"previous": imported.to}},
+        remote._manifest_key(dag): {"subdags": [function.to], "imports": [imported.to]},
+        remote._manifest_key(imported): {"subdags": [function.to], "imports": []},
+        remote._manifest_key(argv): {"subdags": [], "imports": []},
+    }
+    reads = Counter()
 
-    objects, missing = remote._collect_local_objects(commit_ref, db)
-    assert missing == set()
-    remote._store = SimpleNamespace(
-        _key_for=lambda key: key,
-        _get=lambda key: objects[key],
-        client=SimpleNamespace(exceptions=SimpleNamespace(NoSuchKey=KeyError)),
-    )
+    def get(key):
+        reads[key] += 1
+        return json.dumps(manifests[key])
 
-    live_oids = remote._get_live_oids(commit_ref)
+    remote._store._get = get
+    live = remote._get_live_keys({tip, parent, dag, imported, argv})
+    assert live == set(manifests) | {remote._pack_key(ref) for ref in (dag, imported, function, argv)}
+    assert reads == Counter(dict.fromkeys(manifests, 1))
 
-    assert commit_ref.id() in live_oids
-    assert tree_ref.id() in live_oids
-    assert dag_ref.id() in live_oids
-    assert result.id() in live_oids
-    assert scalar.id() in live_oids
 
-    payload = json.loads(objects[remote._cas_key(commit_ref.id())])
-    assert payload == [
-        "dict",
-        {
-            "author": ["scalar", "alice"],
-            "created": ["scalar", "2026-01-01T00:00:00Z"],
-            "message": ["scalar", "snapshot"],
-            "parents": ["list", []],
-            "tree": ["ref", tree_ref.to],
-        },
-    ]
+def test_batch_deletion_splits_requests_and_deletes_each_key_once():
+    remote = object.__new__(Remote)
+    deleted, batches = [], []
+
+    def delete_objects(*, Bucket, Delete):
+        batch = [obj["Key"] for obj in Delete["Objects"]]
+        batches.append(batch)
+        deleted.extend(batch)
+        return {}
+
+    remote._store = SimpleNamespace(bucket="bucket", client=SimpleNamespace(delete_objects=delete_objects))
+    keys = [f"key-{i}" for i in range(2005)]
+    remote._delete_objects(keys)
+    assert deleted == keys
+    assert len(batches) == 3
+    assert all(0 < len(batch) <= 1000 for batch in batches)
+
+
+def test_batch_deletion_reports_s3_partial_failure_with_uri():
+    remote = object.__new__(Remote)
+    remote._store = SimpleNamespace(bucket="bucket", client=SimpleNamespace(
+        delete_objects=lambda **kwargs: {"Errors": [{"Key": "blocked", "Code": "AccessDenied"}]},
+    ))
+    with pytest.raises(DmlRepoError, match="s3://bucket/blocked.*AccessDenied"):
+        remote._delete_objects(["deleted", "blocked"])

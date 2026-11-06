@@ -1,18 +1,32 @@
-"""Remote operations for CAS, direct project refs, and cache backed by S3."""
+"""S3 graph packs, commit manifests, direct refs, and execution graph storage."""
 
+import gzip
 import json
 import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import InitVar, dataclass, field, fields, is_dataclass
-from typing import TYPE_CHECKING, Any, Literal, Optional, overload
+from queue import Empty, Full, Queue
+from threading import Event
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Optional, overload
 from urllib.parse import quote, unquote
 
 from daggerml._core.commit import CommitOps
 from daggerml._core.db import Ref
 from daggerml._core.s3_cas import CasItem, CasItemConflict, S3Remote
-from daggerml._core.types import NAMESPACES, Commit, DmlBase, DmlDB, DmlRepoError, TxnWithValid
+from daggerml._core.types import (
+    NAMESPACES,
+    Commit,
+    DmlBase,
+    DmlDB,
+    DmlRepoError,
+    FnNode,
+    ImportNode,
+    Tree,
+    TxnWithValid,
+)
 from daggerml._core.util import uuid7
 
 if TYPE_CHECKING:
@@ -26,14 +40,36 @@ _SERDE_LIST = "list"
 _SERDE_DICT = "dict"
 _SERDE_REF = "ref"
 _REMOTE_DESCRIPTOR = {
-    "schema": 0,
+    "schema": 1,
     "hash": "sha256",
-    "layout": "one-project-cas+refs+split-execution",
+    "layout": "dagmanifest+dagpack+commits+refs+split-execution",
     "refs_prefix": "refs",
     "io_prefix": "io",
-    "cas_prefix": "cas/sha256",
+    "packs_prefix": "packs",
+    "manifests_prefix": "manifests",
+    "commits_prefix": "commits",
+    "pack_schema": 1,
+    "compression": "gzip",
     "execution_prefix": "../exec",
 }
+
+
+def get_remote_descriptor() -> dict[str, str | int]:
+    """Return an independent copy of the supported remote storage descriptor."""
+    return _REMOTE_DESCRIPTOR.copy()
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, allow_nan=False)
+
+
+def _immutable_ref(value: str, namespace: str | None = None) -> Ref:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9-]*:[0-9a-f]{64}", value):
+        raise ValueError("Remote object reference must contain a namespace and SHA256 identity")
+    ref = Ref(value)
+    if namespace is not None and ref.ns() != namespace:
+        raise ValueError(f"Expected {namespace} reference, got {ref}")
+    return ref
 
 
 def _encode_cas_value(obj: Any) -> list[Any]:
@@ -194,7 +230,122 @@ class Remote:
         obj = cls.from_dict(data)
         if not isinstance(obj, DmlBase):
             raise TypeError(f"Remote CAS payload for {ref} did not decode to a DmlBase object")
+        obj._validate()
         return obj
+
+    def _pack_key(self, ref: Ref) -> str:
+        _immutable_ref(ref.to)
+        kind = {"dag": "dag", "node-argv": "argv"}.get(ref.ns())
+        if kind is None:
+            raise ValueError(f"Only DAG and argv roots can be packed: {ref}")
+        return self._store._key_for(f"packs/{kind}/{ref.id()}.json.gz")
+
+    def _commit_key(self, ref: Ref) -> str:
+        _immutable_ref(ref.to, "commit")
+        return self._store._key_for(f"commits/{ref.id()}.json")
+
+    def _manifest_key(self, ref: Ref) -> str:
+        self._pack_key(ref)
+        return self._store._key_for(f"manifests/{ref.ns()}/{ref.id()}.json")
+
+    def _body_refs(self, obj) -> tuple[set[Ref], set[Ref], set[Ref]]:
+        if isinstance(obj, ImportNode):
+            return set(), set(), {_immutable_ref(obj.dag.to, "dag")}
+        deps: set[Ref] = set()
+        self._collect_direct_refs(obj, deps)
+        functions = set()
+        if isinstance(obj, FnNode):
+            deps.discard(obj.dag)
+            functions.add(_immutable_ref(obj.dag.to, "dag"))
+        if any(ref.ns() in {"dag", "commit", "tree", "index", "frozenindex", "deletable"} for ref in deps):
+            raise ValueError("Unexpected DAG/history/mutable edge in graph body")
+        return deps, functions, set()
+
+    def _partition(self, root: Ref, get) -> tuple[dict[Ref, DmlBase], set[Ref], set[Ref]]:
+        objects, functions, imports = {}, set(), set()
+        pending = [root]
+        while pending:
+            ref = pending.pop()
+            if ref in objects:
+                continue
+            _immutable_ref(ref.to)
+            obj = get(ref)
+            objects[ref] = obj
+            deps, children, imported = self._body_refs(obj)
+            pending.extend(deps - objects.keys())
+            functions.update(children)
+            imports.update(imported)
+        return objects, functions, imports
+
+    def _encode_body(self, root: Ref, objects: dict[Ref, DmlBase]) -> bytes:
+        self._pack_key(root)
+        return gzip.compress(_json({"schema": 1, "root": root.to,
+                                    "objects": {ref.to: self._dump_cas_object(obj)
+                                                for ref, obj in objects.items()}}).encode(), compresslevel=6, mtime=0)
+
+    def _encode_pack(self, root: Ref, txn: TxnWithValid) -> bytes:
+        objects, _, _ = self._partition(root, txn.get)
+        return self._encode_body(root, objects)
+
+    def _decode_pack(self, root: Ref, raw: bytes) -> dict[Ref, DmlBase]:
+        self._pack_key(root)
+        data = json.loads(gzip.decompress(raw))
+        if (not isinstance(data, dict) or set(data) != {"schema", "root", "objects"}
+                or type(data["schema"]) is not int or data["schema"] != 1 or data["root"] != root.to
+                or not isinstance(data["objects"], dict) or root.to not in data["objects"]):
+            raise ValueError("Invalid graph pack envelope")
+        objects = {}
+        for value, payload in data["objects"].items():
+            ref = _immutable_ref(value)
+            if ref.ns() in {"commit", "tree", "index", "frozenindex", "deletable"}:
+                raise ValueError("Graph pack contains history or mutable objects")
+            if not isinstance(payload, str):
+                raise ValueError("Packed object payload must be serialized JSON")
+            objects[ref] = self._load_cas_object(ref, payload)
+        try:
+            reached, _, _ = self._partition(root, objects.__getitem__)
+        except KeyError as exc:
+            raise ValueError(f"Graph body is missing {exc}") from exc
+        if set(reached) != set(objects):
+            raise ValueError("Graph pack contains unreachable objects")
+        return objects
+
+    def _read_commit(self, ref: Ref, raw: str) -> tuple[Commit, Tree]:
+        data = json.loads(raw)
+        if (not isinstance(data, dict) or set(data) != {"schema", "commit", "tree", "dags"}
+                or type(data["schema"]) is not int or data["schema"] != 1):
+            raise ValueError("Invalid commit manifest envelope")
+        commit_record, tree_record = data["commit"], data["tree"]
+        if (not isinstance(commit_record, list) or len(commit_record) != 2 or commit_record[0] != ref.to
+                or not isinstance(commit_record[1], str)):
+            raise ValueError("Invalid commit manifest record")
+        commit = self._load_cas_object(ref, commit_record[1])
+        if (not isinstance(commit, Commit) or not isinstance(tree_record, list) or len(tree_record) != 2
+                or tree_record[0] != commit.tree.to or not isinstance(tree_record[1], str)):
+            raise ValueError("Invalid commit tree record")
+        _immutable_ref(commit.tree.to, "tree")
+        for parent in commit.parents:
+            _immutable_ref(parent.to, "commit")
+        tree = self._load_cas_object(commit.tree, tree_record[1])
+        if not isinstance(tree, Tree) or data["dags"] != {name: dag.to for name, dag in tree.dags.items()}:
+            raise ValueError("Commit manifest DAG map does not match its tree")
+        for dag in tree.dags.values():
+            _immutable_ref(dag.to, "dag")
+        return commit, tree
+
+    def _put_immutable(self, key: str, value: str | bytes) -> None:
+        try:
+            self._store._put(key, value, overwrite=False)
+        except CasItemConflict:
+            existing = self._store._get_bytes(key) if isinstance(value, bytes) else self._store._get(key)
+            if key.endswith(".json.gz") and isinstance(existing, bytes) and isinstance(value, bytes):
+                # Compressed bytes vary across zlib builds; the content is what must match.
+                try:
+                    existing, value = gzip.decompress(existing), gzip.decompress(value)
+                except (OSError, EOFError):
+                    pass
+            if existing != value:
+                raise DmlRepoError(f"Conflicting immutable remote object: {key}") from None
 
     def _collect_local_objects(
         self,
@@ -227,15 +378,92 @@ class Remote:
             futures = {pool.submit(self._store._exists, key): key for key in objs}
             return {key: objs[key] for fut, key in futures.items() if not fut.result()}
 
-    def _upload_objects(self, objects: dict[str, str]) -> None:
+    def _upload_objects(self, objects: Mapping[str, str | bytes]) -> None:
         logger.info(f"Uploading {len(objects)} objects...")
         t0 = time.time()
         with ThreadPoolExecutor(max_workers=self.n_workers) as pool:
-            futures = [pool.submit(self._store._put, key, data) for key, data in objects.items()]
+            futures = [pool.submit(self._put_immutable, key, data) for key, data in objects.items()]
             for future in futures:
                 future.result()
         t1 = time.time()
         logger.info(f"Uploaded {len(objects)} objects in {t1 - t0:.2f} seconds")
+
+    def _upload_packs(self, roots: set[Ref], db: DmlDB) -> None:
+        # A manifest is published after all its dependencies and is the remote
+        # completeness boundary. A bare pack can be an interrupted upload.
+        edges = {}
+        published: set[Ref] = set()
+        manifest_roots = set(roots)
+        pending = set(roots)
+        remote_dependencies = {}
+        with ThreadPoolExecutor(max_workers=self.n_workers) as pool:
+            while pending:
+                batch = sorted(pending)[:self.n_workers]
+                pending.difference_update(batch)
+                present = list(pool.map(self._store._exists, [self._manifest_key(ref) for ref in batch]))
+                published.update(ref for ref, exists in zip(batch, present, strict=True) if exists)
+                missing = [ref for ref, exists in zip(batch, present, strict=True) if not exists]
+                if not missing:
+                    continue
+                packs_present = list(pool.map(self._store._exists, [self._pack_key(ref) for ref in missing]))
+                writes = []
+                with db.tx(readonly=True) as txn:
+                    for root, pack_present in zip(missing, packs_present, strict=True):
+                        objects, children, imports = self._partition(root, txn.get)
+                        edges[root] = (children, imports)
+                        manifest_roots.update(imports)
+                        pending.update(children | imports)
+                        if not pack_present:
+                            writes.append(pool.submit(self._put_immutable, self._pack_key(root),
+                                                      self._encode_body(root, objects)))
+                pending.difference_update(edges.keys() | published)
+                for future in writes:
+                    future.result()
+
+            manifests = {}
+            for root in manifest_roots - published:
+                flat, imports = set(), set(edges[root][1])
+                children = list(edges[root][0])
+                while children:
+                    child = children.pop()
+                    if child in flat:
+                        continue
+                    flat.add(child)
+                    if child in published:
+                        # Reuse an already-published function's flattened set;
+                        # do not inspect its local body or walk its descendants.
+                        if child not in remote_dependencies:
+                            raw = pool.submit(self._store._get_bytes, self._manifest_key(child)).result()
+                            remote_dependencies[child] = self._read_graph_manifest(child, raw)
+                        descendants, imported = remote_dependencies[child]
+                        flat.update(descendants)
+                        # That manifest was published after its imports too.
+                        published.update(imported)
+                    else:
+                        descendants, imported = edges[child]
+                        children.extend(descendants - flat)
+                    imports.update(imported)
+                manifests[root] = (flat, imports)
+
+            # Publish imported manifests before their users, so observing a
+            # manifest is sufficient to stop a later upload at that boundary.
+            while manifests:
+                ready = [ref for ref, (_, imports) in manifests.items() if imports <= published]
+                if not ready:
+                    raise ValueError("Cannot publish cyclic graph imports")
+                for offset in range(0, len(ready), self.n_workers):
+                    batch = ready[offset:offset + self.n_workers]
+                    writes = []
+                    for root in batch:
+                        flat, imports = manifests[root]
+                        payload = _json(dict(schema=1, root=root.to, subdags=sorted(ref.to for ref in flat),
+                                             imports=sorted(ref.to for ref in imports)))
+                        writes.append(pool.submit(self._put_immutable, self._manifest_key(root), payload))
+                    for future in writes:
+                        future.result()
+                    published.update(batch)
+                for root in ready:
+                    del manifests[root]
 
     def _put_cas(
         self,
@@ -248,12 +476,76 @@ class Remote:
         missing_commits: set[Ref] | None = None,
         allow_shallow: bool = False,
     ) -> None:
-        objs, encountered_missing = self._collect_local_objects(ref, db, missing_commits)
-        if encountered_missing and not allow_shallow:
-            raise DmlRepoError("Cannot publish shallow history; fetch with greater depth or --unshallow")
-        uploads = self._plan_upload(objs)
-        if uploads:
-            self._upload_objects(uploads)
+        if ref.ns() != "commit":
+            self._upload_packs({ref}, db)
+        else:
+            # New/forced refs still require complete *local* ancestry. Only
+            # shallow repositories need this policy check; normal incremental
+            # uploads stop at the first existing remote commit.
+            if missing_commits and not allow_shallow:
+                pending_history, checked = [ref], set()
+                with db.tx(readonly=True) as txn:
+                    while pending_history:
+                        current = pending_history.pop()
+                        if current in checked:
+                            continue
+                        checked.add(current)
+                        if current in missing_commits and not txn.exists(current):
+                            raise DmlRepoError(
+                                "Cannot publish shallow history; fetch with greater depth or --unshallow"
+                            )
+                        pending_history.extend(txn.get(current).parents)
+
+            manifests: dict[Ref, str] = {}
+            parents: dict[Ref, set[Ref]] = {}
+            roots: set[Ref] = set()
+            published: set[Ref] = set()
+            pending = {ref}
+            with ThreadPoolExecutor(max_workers=self.n_workers) as pool:
+                while pending:
+                    batch = sorted(pending)[:self.n_workers]
+                    pending.difference_update(batch)
+                    present = list(pool.map(self._store._exists, [self._commit_key(item) for item in batch]))
+                    published.update(item for item, exists in zip(batch, present, strict=True) if exists)
+                    missing = [item for item, exists in zip(batch, present, strict=True) if not exists]
+                    if not missing:
+                        continue
+                    with db.tx(readonly=True) as txn:
+                        for current in missing:
+                            if current in (missing_commits or set()) and not txn.exists(current):
+                                raise DmlRepoError("Remote is missing the shallow history boundary")
+                            commit = txn.get(current)
+                            if not isinstance(commit, Commit):
+                                raise ValueError("Expected a commit")
+                            tree = txn.get(commit.tree)
+                            if not isinstance(tree, Tree):
+                                raise ValueError("Expected a commit tree")
+                            manifests[current] = _json({
+                                "schema": 1, "commit": [current.to, self._dump_cas_object(commit)],
+                                "tree": [commit.tree.to, self._dump_cas_object(tree)],
+                                "dags": {name: dag.to for name, dag in tree.dags.items()},
+                            })
+                            parents[current] = set(commit.parents)
+                            roots.update(tree.dags.values())
+                            pending.update(commit.parents)
+                    pending.difference_update(manifests.keys() | published)
+                if roots:
+                    self._upload_packs(roots, db)
+                # Existing commit manifests must imply durable history too.
+                # Never publish a child until all its parents are on the remote.
+                while manifests:
+                    ready = [item for item in manifests if parents[item] <= published]
+                    if not ready:
+                        raise ValueError("Cannot publish cyclic commit history")
+                    for offset in range(0, len(ready), self.n_workers):
+                        batch = ready[offset:offset + self.n_workers]
+                        writes = [pool.submit(self._put_immutable, self._commit_key(item), manifests[item])
+                                  for item in batch]
+                        for future in writes:
+                            future.result()
+                        published.update(batch)
+                    for item in ready:
+                        del manifests[item]
         if ref_path is not None:
             ref_key = ref_path if isinstance(ref_path, CasItem) else self._store._key_for(ref_path)
             self._store._put_js(
@@ -303,29 +595,163 @@ class Remote:
             expected_root_ns=expected_root_ns,
             required_metadata=required_metadata,
         )
-        objects: list[tuple[Ref, DmlBase]] = []
-        with ThreadPoolExecutor(max_workers=self.n_workers) as pool, db.tx(readonly=True) as txn:
-            pending = {root_ref}
-            visited: set[Ref] = set()
-            while pending:
-                batch = []
-                while pending and len(batch) < self.n_workers:
-                    ref = pending.pop()
-                    if ref in visited:
-                        continue
-                    visited.add(ref)
-                    if not txn.exists(ref):
-                        batch.append(ref)
-                reads = {ref: pool.submit(self._store._get, self._cas_key(ref.id())) for ref in batch}
-                for ref in batch:
-                    obj = self._load_cas_object(ref, reads[ref].result())
-                    # Retain fetched objects across write retries. Locally present
-                    # objects are intentionally not traversed; see sharp bits.
-                    objects.append((ref, obj))
-                    deps: set[Ref] = set()
-                    self._collect_direct_refs(obj, deps)
-                    pending.update(deps - visited)
-        return root_ref, objects
+        if root_ref.ns() == "commit":
+            _, objects, _, _ = self._fetch_project_commit_objects(manifest, db)
+            return root_ref, objects
+        with db.tx(readonly=True) as txn:
+            if self._local_graph_complete(root_ref, txn):
+                return root_ref, []
+        objects = self._fetch_packs({root_ref}, db)
+        return root_ref, list(objects.items())
+
+    def _local_graph_complete(self, root: Ref, txn: TxnWithValid) -> bool:
+        reached, pending = set(), [root]
+        while pending:
+            ref = pending.pop()
+            if ref in reached:
+                continue
+            if not txn.exists(ref):
+                return False
+            reached.add(ref)
+            deps: set[Ref] = set()
+            self._collect_direct_refs(txn.get(ref), deps)
+            pending.extend(deps - reached)
+        return True
+
+    @contextmanager
+    def _download_stream(self, roots: set[Ref], key):
+        """Transport only in workers; bounded completion-order consumption on caller."""
+        ready = Queue(maxsize=2 * self.n_workers)
+        stop = Event()
+
+        def download(ref):
+            if stop.is_set():
+                return
+            try:
+                item = (ref, self._store._get_bytes(key(ref)), None)
+            except Exception as exc:
+                item = (ref, None, exc)
+            while not stop.is_set():
+                try:
+                    ready.put(item, timeout=0.1)
+                    return
+                except Full:
+                    pass
+
+        def completed():
+            remaining = len(roots)
+            while remaining:
+                batch = [ready.get()]
+                while len(batch) < min(self.n_workers, remaining):
+                    try:
+                        batch.append(ready.get_nowait())
+                    except Empty:
+                        break
+                remaining -= len(batch)
+                for _, _, error in batch:
+                    if error is not None:
+                        raise error
+                yield [(ref, raw) for ref, raw, _ in batch]
+
+        with ThreadPoolExecutor(max_workers=self.n_workers) as pool:
+            for ref in sorted(roots):
+                pool.submit(download, ref)
+            try:
+                yield completed()
+            finally:
+                stop.set()
+
+    def _read_graph_manifest(self, root: Ref, raw: bytes) -> tuple[set[Ref], set[Ref]]:
+        data = json.loads(raw)
+        if (not isinstance(data, dict) or set(data) != {"schema", "root", "subdags", "imports"}
+                or type(data["schema"]) is not int or data["schema"] != 1 or data["root"] != root.to):
+            raise ValueError("Invalid graph manifest")
+        for field_name in ("subdags", "imports"):
+            values = data[field_name]
+            if (not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+                    or values != sorted(set(values))):
+                raise ValueError("Manifest dependencies must be sorted unique refs")
+        return ({_immutable_ref(value, "dag") for value in data["subdags"]},
+                {_immutable_ref(value, "dag") for value in data["imports"]})
+
+    def _merge_objects(self, destination, objects):
+        for ref, obj in objects.items():
+            if ref in destination and self._dump_cas_object(destination[ref]) != self._dump_cas_object(obj):
+                raise ValueError(f"Remote CAS object identity mismatch: conflicting packed object {ref}")
+            destination[ref] = obj
+
+    def _fetch_packs(self, roots: set[Ref], db: DmlDB) -> dict[Ref, DmlBase]:
+        manifests = {}
+        pending = set(roots)
+        while pending:
+            with self._download_stream(pending, self._manifest_key) as completed:
+                for batch in completed:
+                    for root, raw in batch:
+                        manifests[root] = self._read_graph_manifest(root, raw)
+            pending = set().union(*(imports for _, imports in manifests.values())) - manifests.keys()
+        functions = set().union(*(children for children, _ in manifests.values()))
+        # A function DAG can also be a named/imported DAG. Download its body
+        # once and delay it until final validation like other manifest roots.
+        edges = {}
+        objects = {}
+        for stage, phase in enumerate((functions - manifests.keys(), set(manifests))):
+            with self._download_stream(phase, self._pack_key) as completed:
+                for batch in completed:
+                    decoded = {}
+                    for root, raw in batch:
+                        body = self._decode_pack(root, raw)
+                        _, children, imports = self._partition(root, body.__getitem__)
+                        if not children <= functions or not imports <= manifests.keys():
+                            raise ValueError("Manifest omits graph dependencies")
+                        edges[root] = (children, imports)
+                        self._merge_objects(decoded, body)
+                    if stage == 0:
+                        self._materialize_objects(list(decoded.items()), db)
+                    else:
+                        self._merge_objects(objects, decoded)
+        for root, expected in manifests.items():
+            flat, imports = set(), set(edges[root][1])
+            pending_children = list(edges[root][0])
+            while pending_children:
+                child = pending_children.pop()
+                if child in flat:
+                    continue
+                flat.add(child)
+                pending_children.extend(edges[child][0] - flat)
+                imports.update(edges[child][1])
+            if expected != (flat, imports):
+                raise ValueError("Manifest disagrees with graph dependencies")
+        # Validate selected import nodes and all cross-pack edges before
+        # returning publishable root bodies. Partial function writes are
+        # harmless: subsequent imports check their closure before reuse.
+        with db.tx(readonly=True) as txn:
+            reached = set()
+            pending_refs = list(roots)
+            while pending_refs:
+                ref = pending_refs.pop()
+                if ref in reached:
+                    continue
+                reached.add(ref)
+                if ref not in objects and not txn.exists(ref):
+                    raise ValueError(f"Missing cross-pack dependency: {ref}")
+                obj = objects[ref] if ref in objects else txn.get(ref)
+                deps: set[Ref] = set()
+                self._collect_direct_refs(obj, deps)
+                pending_refs.extend(deps - reached)
+        return objects
+
+    def _materialize_objects(self, objects: list[tuple[Ref, DmlBase]], db: DmlDB) -> None:
+        def write_objects(txn: TxnWithValid) -> None:
+            for ref, obj in objects:
+                if txn.exists(ref):
+                    if self._dump_cas_object(txn.get(ref)) != self._dump_cas_object(obj):
+                        raise ValueError(f"Remote CAS object identity mismatch: {ref}")
+                    continue
+                local_ref = txn.put(obj)
+                if local_ref != ref:
+                    raise ValueError(f"Remote CAS object identity mismatch: expected {ref}, got {local_ref}")
+
+        db.write_with_growth(write_objects)
 
     def materialize_manifest(
         self,
@@ -343,16 +769,8 @@ class Remote:
             required_metadata=required_metadata,
         )
 
-        def write_objects(txn: TxnWithValid) -> Ref:
-            for ref, obj in objects:
-                if txn.exists(ref):
-                    continue
-                local_ref = txn.put(obj)
-                if local_ref != ref:
-                    raise ValueError(f"Remote CAS object identity mismatch: expected {ref}, got {local_ref}")
-            return root_ref
-
-        return db.write_with_growth(write_objects)
+        self._materialize_objects(objects, db)
+        return root_ref
 
     def _fetch_project_commit_objects(
         self,
@@ -367,71 +785,48 @@ class Remote:
         if depth is not None and unshallow:
             raise ValueError("depth and unshallow cannot be selected together")
         root_ref = self._validate_ref_payload(manifest, expected_root_ns="commit")
-        objects: list[tuple[Ref, DmlBase]] = []
-        loaded: dict[Ref, DmlBase] = {}
+        objects: dict[Ref, DmlBase] = {}
+        dags: set[Ref] = set()
         available_commits: set[Ref] = set()
         omitted_commits: set[Ref] = set()
 
         with ThreadPoolExecutor(max_workers=self.n_workers) as pool, db.tx(readonly=True) as txn:
-            def load(ref: Ref, payload: str | None = None) -> tuple[DmlBase, bool]:
-                if ref in loaded:
-                    return loaded[ref], False
-                if txn.exists(ref):
-                    return txn.get(ref), True
-                obj = self._load_cas_object(
-                    ref, payload if payload is not None else self._store._get(self._cas_key(ref.id()))
-                )
-                loaded[ref] = obj
-                objects.append((ref, obj))
-                return obj, False
-
-            def fetch_complete_closure(start: Ref) -> None:
-                pending = [start]
-                visited: set[Ref] = set()
-                while pending:
-                    batch = []
-                    while pending and len(batch) < self.n_workers:
-                        ref = pending.pop()
-                        if ref in visited:
-                            continue
-                        visited.add(ref)
-                        if not txn.exists(ref):
-                            batch.append(ref)
-                    reads = {ref: pool.submit(self._store._get, self._cas_key(ref.id()))
-                             for ref in batch if ref not in loaded}
-                    for ref in batch:
-                        obj, _ = load(ref, reads[ref].result() if ref in reads else None)
-                        deps: set[Ref] = set()
-                        self._collect_direct_refs(obj, deps)
-                        pending.extend(deps - visited)
-
             root_exists = txn.exists(root_ref)
             pending_commits = [] if root_exists and depth is None and not unshallow else [(root_ref, 1)]
             seen_commits: set[Ref] = set()
             while pending_commits:
-                commit_ref, generation = pending_commits.pop(0)
-                if commit_ref in seen_commits:
-                    continue
-                seen_commits.add(commit_ref)
-                commit_obj, _ = load(commit_ref)
-                if not isinstance(commit_obj, Commit):
-                    raise TypeError(f"Remote project commit decoded as {type(commit_obj).__name__}")
-                available_commits.add(commit_ref)
-                fetch_complete_closure(commit_obj.tree)
-                for parent in commit_obj.parents:
-                    parent_available = txn.exists(parent) or parent in loaded
-                    if depth is not None and generation >= depth:
-                        if parent_available:
+                batch = pending_commits[:self.n_workers]
+                del pending_commits[:self.n_workers]
+                reads = {}
+                for ref, generation in batch:
+                    if ref not in seen_commits:
+                        seen_commits.add(ref)
+                        reads[ref] = (generation, None if txn.exists(ref) else
+                                      pool.submit(self._store._get, self._commit_key(ref)))
+                for commit_ref, (generation, future) in reads.items():
+                    if future is None:
+                        commit_obj = txn.get(commit_ref)
+                        tree = txn.get(commit_obj.tree)
+                    else:
+                        commit_obj, tree = self._read_commit(commit_ref, future.result())
+                        objects[commit_ref] = commit_obj
+                        if (commit_obj.tree in objects and
+                                self._dump_cas_object(objects[commit_obj.tree]) != self._dump_cas_object(tree)):
+                            raise ValueError(f"Conflicting commit tree: {commit_obj.tree}")
+                        objects[commit_obj.tree] = tree
+                    available_commits.add(commit_ref)
+                    dags.update(dag for dag in tree.dags.values() if not self._local_graph_complete(dag, txn))
+                    for parent in commit_obj.parents:
+                        parent_available = txn.exists(parent) or parent in objects
+                        if depth is not None and generation >= depth:
+                            (available_commits if parent_available else omitted_commits).add(parent)
+                        elif depth is None and not unshallow and parent_available:
                             available_commits.add(parent)
                         else:
-                            omitted_commits.add(parent)
-                        continue
-                    if depth is None and not unshallow and parent_available:
-                        available_commits.add(parent)
-                        continue
-                    pending_commits.append((parent, generation + 1))
+                            pending_commits.append((parent, generation + 1))
+        self._merge_objects(objects, self._fetch_packs(dags, db))
 
-        return root_ref, objects, available_commits, omitted_commits
+        return root_ref, list(objects.items()), available_commits, omitted_commits - available_commits
 
     def materialize_project_commit(
         self,
@@ -449,16 +844,7 @@ class Remote:
             unshallow=unshallow,
         )
 
-        def write_objects(txn: TxnWithValid) -> Ref:
-            for ref, obj in objects:
-                if txn.exists(ref):
-                    continue
-                local_ref = txn.put(obj)
-                if local_ref != ref:
-                    raise ValueError(f"Remote CAS object identity mismatch: expected {ref}, got {local_ref}")
-            return root_ref
-
-        db.write_with_growth(write_objects)
+        self._materialize_objects(objects, db)
         return root_ref, available_commits, omitted_commits
 
     def materialize_project_commit_ref(
@@ -545,25 +931,44 @@ class Remote:
         self._store._put(self._store._key_for(self._tombstone_key()), data)
         return self._store._delete(full_key)
 
-    def _get_live_oids(self, root_ref: Ref) -> set[str]:
-        live_oids: set[str] = set()
-        visited: set[Ref] = set()
-        pending = [root_ref]
+    def _get_live_keys(self, roots: set[Ref]) -> set[str]:
+        """Mark physical keys from dependency metadata, without reading packs."""
+        live: set[str] = set()
+        pending = list(roots)
         while pending:
             ref = pending.pop()
-            if ref in visited:
-                continue
-            visited.add(ref)
-            live_oids.add(ref.id())
-            try:
-                raw = self._store._get(self._cas_key(ref.id()))
-            except self._store.client.exceptions.NoSuchKey:
-                logger.warning(f"Missing CAS object for live ref {ref}")
-                continue
-            deps: set[Ref] = set()
-            self._collect_direct_refs(self._load_cas_object(ref, raw), deps)
-            pending.extend(deps - visited)
-        return live_oids
+            if ref.ns() == "commit":
+                key = self._commit_key(ref)
+                if key in live:
+                    continue
+                live.add(key)
+                manifest = json.loads(self._store._get(key))
+                commit = json.loads(manifest["commit"][1])
+                pending.extend(_decode_cas_value(commit[1]["parents"]))
+                pending.extend(Ref(value) for value in manifest["dags"].values())
+            else:
+                key = self._manifest_key(ref)
+                if key in live:
+                    continue
+                live.add(key)
+                live.add(self._pack_key(ref))
+                manifest = json.loads(self._store._get(key))
+                live.update(self._pack_key(Ref(value)) for value in manifest["subdags"])
+                pending.extend(Ref(value) for value in manifest["imports"])
+        return live
+
+    def _delete_objects(self, keys: list[str]) -> None:
+        for offset in range(0, len(keys), 1000):
+            response = self._store.client.delete_objects(
+                Bucket=self._store.bucket,
+                Delete={"Objects": [{"Key": key} for key in keys[offset:offset + 1000]], "Quiet": True},
+            )
+            if errors := response.get("Errors"):
+                details = "; ".join(
+                    f"s3://{self._store.bucket}/{error['Key']}: {error.get('Code')} {error.get('Message', '')}"
+                    for error in errors
+                )
+                raise DmlRepoError(f"Remote GC deletion failed: {details}")
 
     def put_ref(
         self,
@@ -699,22 +1104,54 @@ class Remote:
             tips.append((name, tip))
         return sorted(tips, key=lambda item: item[0])
 
-    def gc(self) -> dict[str, int]:
-        from daggerml._core.exec_state import ExecutionState
+    def gc(self, unrecognized: Literal["raise", "ignore"] = "raise") -> dict[str, int]:
+        """Collect unreachable packs and manifests.
 
-        live_oids: set[str] = set()
-        tombstones_deleted = 0
+        ``unrecognized`` selects the response to keys under the immutable
+        prefixes that DaggerML did not write: ``raise`` fails before anything is
+        deleted, naming the URI; ``ignore`` logs the URI and never deletes it.
+        """
+        if unrecognized not in ("raise", "ignore"):
+            raise ValueError(f"unrecognized must be 'raise' or 'ignore', got {unrecognized!r}")
+        roots: set[Ref] = set()
         t1 = time.time()
         total_refs = 0
+        # Capture candidates before marking, and give unpublished uploads a
+        # grace period. As with execution-record maintenance, operators must
+        # quiesce writers for a complete, consistent remote GC cycle.
+        candidates = []
+        for relative in ("packs/", "manifests/", "commits/"):
+            for page in self._store.client.get_paginator("list_objects_v2").paginate(
+                Bucket=self._store.bucket, Prefix=self._store._key_for(relative),
+            ):
+                candidates.extend(page.get("Contents", []))
+        recognized = re.compile(r"packs/(?:dag|argv)/[0-9a-f]{64}\.json\.gz|"
+                                r"manifests/(?:dag|node-argv)/[0-9a-f]{64}\.json|commits/[0-9a-f]{64}\.json")
+        listed, candidates = candidates, []
+        for candidate in listed:
+            relative = candidate["Key"][len(self._store._key_for("")):]
+            if recognized.fullmatch(relative):
+                candidates.append(candidate)
+                continue
+            uri = f"s3://{self._store.bucket}/{candidate['Key']}"
+            if unrecognized == "raise":
+                raise DmlRepoError(f"Unrecognized immutable storage object: {uri}")
+            logger.warning(f"Ignoring unrecognized immutable storage object: {uri}")
         refs_prefix = self._store._key_for("refs/")
         tombstone_prefix = self._store._key_for("refs/tombstone/")
-        for key in self._store._iter(refs_prefix):
-            if key.startswith(tombstone_prefix):
-                continue
-            payload = json.loads(self._store._get(key))
-            root_ref = self._validate_ref_payload(payload)
-            live_oids.update(self._get_live_oids(root_ref))
-            total_refs += 1
+        expired_tombstones = []
+        for page in self._store.client.get_paginator("list_objects_v2").paginate(
+            Bucket=self._store.bucket, Prefix=refs_prefix,
+        ):
+            for item in page.get("Contents", []):
+                key = item["Key"]
+                if (key.startswith(tombstone_prefix)
+                        and item["LastModified"].timestamp() <= t1 - self.prune_age_seconds):
+                    expired_tombstones.append(key)
+                    continue
+                payload = json.loads(self._store._get(key))
+                roots.add(Ref(payload["ref"]["to"]))
+                total_refs += 1
         exec_store = S3Remote(self.root_uri.rstrip("/") + "/exec", client=self._store.client)
         execution_prefix = exec_store._key_for("execution/")
         execution_keys = list(exec_store._iter(execution_prefix))
@@ -735,9 +1172,9 @@ class Remote:
                 )
                 state_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json"), cas=True)
                 driver_item = exec_store._get(exec_store._key_for(f"execution/{execution_id}/driver.json"), cas=True)
-                metadata = ExecutionState._validate_metadata(json.loads(metadata_item.data), execution_id)
-                state = ExecutionState._validate_state(json.loads(state_item.data))
-                driver = ExecutionState._validate_driver(json.loads(driver_item.data))
+                metadata = json.loads(metadata_item.data)
+                state = json.loads(state_item.data)
+                driver = json.loads(driver_item.data)
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise DmlRepoError(f"Invalid execution record: {execution_id}") from exc
             records[execution_id] = (metadata, state, driver, (metadata_item, state_item, driver_item))
@@ -789,40 +1226,38 @@ class Remote:
                 else:
                     continue
                 try:
-                    metadata = ExecutionState._validate_metadata(
-                        json.loads(exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"))),
-                        execution_id,
+                    metadata = json.loads(
+                        exec_store._get(exec_store._key_for(f"execution/{execution_id}/metadata.json"))
                     )
-                    state = ExecutionState._validate_state(
-                        json.loads(exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json")))
-                    )
-                    ExecutionState._validate_driver(
-                        json.loads(exec_store._get(exec_store._key_for(f"execution/{execution_id}/driver.json")))
-                    )
+                    state = json.loads(exec_store._get(exec_store._key_for(f"execution/{execution_id}/state.json")))
                 except Exception as exc:
                     if isinstance(exc, DmlRepoError) or exec_store._is_missing_error(exc):
                         raise DmlRepoError(f"Execution record changed during GC: {execution_id}") from exc
                     raise
             for value in (metadata["argv_ref"], state["result_ref"]):
                 if value is not None:
-                    live_oids.update(self._get_live_oids(Ref(value)))
+                    roots.add(Ref(value))
             total_refs += 1
+        live_keys = self._get_live_keys(roots)
         t2 = time.time()
-        cas_prefix = self._store._key_for("cas/sha256/")
-        cas_deleted = 0
+        deletions = []
         cas_kept_live = 0
-        for key in self._store._iter(cas_prefix):
-            oid = key.rsplit("/", 1)[-1]
-            if oid in live_oids:
+        retained_recent = 0
+        for candidate in candidates:
+            key = candidate["Key"]
+            if key in live_keys:
                 cas_kept_live += 1
                 continue
-            if self._store._delete(key):
-                cas_deleted += 1
+            if candidate["LastModified"].timestamp() > t1 - self.prune_age_seconds:
+                retained_recent += 1
+                continue
+            deletions.append(key)
+        self._delete_objects(deletions + expired_tombstones)
         t3 = time.time()
         return {
-            "tombstones-deleted": tombstones_deleted,
-            "cas-deleted": cas_deleted,
-            "cas-retained": cas_kept_live,
+            "tombstones-deleted": len(expired_tombstones),
+            "cas-deleted": len(deletions),
+            "cas-retained": cas_kept_live + retained_recent,
             "total-refs": total_refs,
             "gc-time": int(t3 - t1),
             "ref-enumeration-time": int(t2 - t1),
