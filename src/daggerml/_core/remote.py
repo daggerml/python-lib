@@ -604,11 +604,13 @@ class Remote:
         objects = self._fetch_packs({root_ref}, db)
         return root_ref, list(objects.items())
 
-    def _local_graph_complete(self, root: Ref, txn: TxnWithValid) -> bool:
+    def _local_graph_complete(self, root: Ref, txn: TxnWithValid, complete: set[Ref] | None = None) -> bool:
+        if complete is None:
+            complete = set()
         reached, pending = set(), [root]
         while pending:
             ref = pending.pop()
-            if ref in reached:
+            if ref in reached or ref in complete:
                 continue
             if not txn.exists(ref):
                 return False
@@ -616,6 +618,7 @@ class Remote:
             deps: set[Ref] = set()
             self._collect_direct_refs(txn.get(ref), deps)
             pending.extend(deps - reached)
+        complete.update(reached)
         return True
 
     @contextmanager
@@ -694,16 +697,31 @@ class Remote:
         # once and delay it until final validation like other manifest roots.
         edges = {}
         objects = {}
-        for stage, phase in enumerate((functions - manifests.keys(), set(manifests))):
+        available: set[Ref] = set()
+        complete: set[Ref] = set()
+
+        def record_edges(root, get):
+            _, children, imports = self._partition(root, get)
+            if not children <= functions or not imports <= manifests.keys():
+                raise ValueError("Manifest omits graph dependencies")
+            edges[root] = (children, imports)
+
+        # Resolve the full plan first, then filter every body kind once. Mere
+        # root existence is insufficient after an interrupted streaming fetch.
+        with db.tx(readonly=True) as txn:
+            for root in sorted(functions | manifests.keys()):
+                if self._local_graph_complete(root, txn, complete):
+                    available.add(root)
+                    record_edges(root, txn.get)
+
+        phases = (functions - manifests.keys() - available, set(manifests) - available)
+        for stage, phase in enumerate(phases):
             with self._download_stream(phase, self._pack_key) as completed:
                 for batch in completed:
                     decoded = {}
                     for root, raw in batch:
                         body = self._decode_pack(root, raw)
-                        _, children, imports = self._partition(root, body.__getitem__)
-                        if not children <= functions or not imports <= manifests.keys():
-                            raise ValueError("Manifest omits graph dependencies")
-                        edges[root] = (children, imports)
+                        record_edges(root, body.__getitem__)
                         self._merge_objects(decoded, body)
                     if stage == 0:
                         self._materialize_objects(list(decoded.items()), db)
@@ -729,7 +747,7 @@ class Remote:
             pending_refs = list(roots)
             while pending_refs:
                 ref = pending_refs.pop()
-                if ref in reached:
+                if ref in reached or ref in complete:
                     continue
                 reached.add(ref)
                 if ref not in objects and not txn.exists(ref):

@@ -54,7 +54,11 @@ is not.
 
 Graph manifests (`manifests/<namespace>/<id>.json`) carry the root, flattened
 function sub-DAG refs, and imported-DAG pointers. Import manifests are resolved
-before any bodies are downloaded. Function bodies enter one continuous global
+before any bodies are downloaded. Once the complete plan is known, every body
+whose full graph is already available locally is filtered out, including function
+and imported DAGs. Their dependency edges are read locally for validation; an
+existing root with a missing descendant or datum is not considered complete.
+Function bodies enter one continuous global
 download queue; a bounded completion queue feeds caller-side decoding and
 replayable LMDB writes without transport batch barriers. Root/import bodies are
 materialized only after function bodies and dependency validation. A failed
@@ -93,9 +97,11 @@ packs, graph manifests, and commit manifests; retained counts include uploads in
 
 `python -m daggerml._core.migrate_remote` is the offline legacy-CAS conversion
 tool. It writes only an empty, non-overlapping destination; copies refs,
-completed execution records, and auxiliary objects; converts all reachable
+execution records, and auxiliary objects verbatim; converts all reachable
 project/argv/result graphs; re-downloads and validates them; checks the source
-inventory for changes; then publishes the new descriptor last. Active execution
-or unfinished adapter cleanup is rejected. Dry-run performs metadata checks, not
+inventory for changes; then publishes the new descriptor last. Unchanged records,
+including adapter state, locks, cleanup status, partial records, and cache
+pointers, are preserved without lifecycle validation or cleanup. Writers must
+remain stopped throughout migration and cutover. Dry-run performs metadata checks, not
 a complete graph verification. Failure leaves an unpublished staging prefix and
 never rolls back or deletes source data. Retry with a new empty destination.

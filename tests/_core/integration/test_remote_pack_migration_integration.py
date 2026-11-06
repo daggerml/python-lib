@@ -119,24 +119,50 @@ def test_migration_refuses_occupied_destination(legacy):
     assert legacy.client.get_object(Bucket="migration", Key="new/user-file")["Body"].read() == b"keep"
 
 
-@pytest.mark.parametrize("problem", ["running", "locked", "cleanup", "partial", "stale-cache", "corrupt-object"])
-def test_invalid_or_active_source_never_publishes_destination(legacy, problem):
+@pytest.mark.parametrize("problem", [
+    "running", "canceled", "locked", "cleanup-pending", "cleanup-failed", "partial", "stale-cache", "opaque-driver",
+])
+def test_unchanged_execution_records_are_copied_verbatim_without_readiness_checks(legacy, problem, tmp_path):
     g = legacy
-    if problem == "running":
-        g.record["state"]["lifecycle"] = "running"
+    if problem in {"running", "canceled"}:
+        g.record["state"].update(lifecycle=problem, result_ref=None, result_source=None)
+        g.record["driver"].update(adapter_state={"container": "unchanged"}, cleanup=None)
         g.source._put_js(g.source._key_for("exec/execution/exec/state.json"), g.record["state"])
-    elif problem in {"locked", "cleanup"}:
+        g.source._put_js(g.source._key_for("exec/execution/exec/driver.json"), g.record["driver"])
+    elif problem in {"locked", "cleanup-pending", "cleanup-failed"}:
         if problem == "locked":
             g.record["driver"]["lock"] = {"owner": "owner", "ttl": 300}
+        elif problem == "cleanup-failed":
+            g.record["driver"].update(adapter_state=None, cleanup={"status": "failed", "error": "keep this failure"})
         else:
-            g.record["driver"].update(adapter_state={"container": "still-owned"}, cleanup=None)
+            g.record["driver"].update(adapter_state=None, cleanup=None)
         g.source._put_js(g.source._key_for("exec/execution/exec/driver.json"), g.record["driver"])
     elif problem == "partial":
         g.source._delete(g.source._key_for("exec/execution/exec/state.json"))
     elif problem == "stale-cache":
         g.source._put(g.source._key_for("exec/cache/cache"), "missing")
-    else:
-        g.old._store._put(g.old._cas_key(g.argv.id()), g.old._dump_cas_object(ArgvNode(value=g.uri)))
+    elif problem == "opaque-driver":
+        g.source._put(g.source._key_for("exec/execution/exec/driver.json"), b"\x00\xffopaque driver bytes")
+    g.source._put(g.source._key_for("exec/execution/exec/extra.bin"), b"\x00\xffunchanged auxiliary bytes")
+    before = _fingerprint(_inventory(g.source))
+    unchanged = {key: g.source._get_bytes(g.source._key_for(key)) for key in before
+                 if key != "dml/dml.json" and not key.startswith("dml/cas/")}
+    migrate(g.source.s3_uri, "s3://migration/new", client=g.client)
+    assert _fingerprint(_inventory(g.source)) == before
+    destination = S3Remote("s3://migration/new", g.client)
+    for key, original in unchanged.items():
+        assert destination._get_bytes(destination._key_for(key)) == original
+    remote = Remote("s3://migration/new", 2, g.client)
+    target = database(tmp_path / "target")
+    assert remote.get_ref("branch", "main", target) == g.tip
+    assert remote.materialize_ref(g.argv, target) == g.argv
+    if problem not in {"running", "canceled", "partial"}:
+        assert remote.materialize_ref(g.cached, target) == g.cached
+
+
+def test_corrupt_graph_cannot_publish_destination(legacy):
+    g = legacy
+    g.old._store._put(g.old._cas_key(g.argv.id()), g.old._dump_cas_object(ArgvNode(value=g.uri)))
     before = _fingerprint(_inventory(g.source))
     with pytest.raises((ValueError, DmlRepoError)):
         migrate(g.source.s3_uri, "s3://migration/new", client=g.client)

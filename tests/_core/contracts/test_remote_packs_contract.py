@@ -230,22 +230,82 @@ def test_manifest_or_cross_pack_damage_cannot_publish_root(graph, damage):
         assert not txn.exists(outer)
 
 
-def test_incomplete_function_objects_from_failed_fetch_are_not_trusted_on_retry(graph):
+@pytest.mark.parametrize("missing", ["dag", "datum"])
+def test_incomplete_function_objects_from_failed_fetch_are_not_trusted_on_retry(graph, missing):
     g = graph
     outer, middle = function_graph(g)
     g.remote.upload_object_graph(outer, g.source)
     # Simulate a function batch committed before a later network failure.
     objects = g.remote._decode_pack(middle, g.data[g.remote._pack_key(middle)])
+    if missing == "datum":
+        objects.update(g.remote._decode_pack(g.nested, g.data[g.remote._pack_key(g.nested)]))
+        del objects[g.value]
     g.remote._materialize_objects(list(objects.items()), g.target)
     with g.target.tx(readonly=True) as txn:
         assert txn.exists(middle)
-        assert not txn.exists(g.nested)
+        assert txn.exists(g.nested) == (missing == "datum")
+        assert not txn.exists(g.value)
     # Execution results may select that same function DAG as a new root.
     g.remote.upload_object_graph(middle, g.source)
+    reads = []
+
+    def get(key):
+        reads.append(key)
+        return g.data[key]
+
+    g.remote._store._get_bytes = get
     g.remote.materialize_ref(middle, g.target)
+    assert {key for key in reads if key.startswith("packs/")} == {
+        g.remote._pack_key(ref) for ref in (middle, g.nested)
+    }
     with g.target.tx(readonly=True) as txn:
         assert txn.exists(g.nested)
+    reads.clear()
     g.remote.materialize_ref(outer, g.target)
+    assert {key for key in reads if key.startswith("packs/")} == {
+        g.remote._pack_key(ref) for ref in (outer, g.dag)
+    }
+
+
+@pytest.mark.parametrize("kind", ["dag", "commit"])
+def test_incremental_fetch_filters_complete_local_functions_and_imported_dags_from_plan(graph, kind):
+    from tests._core.contracts.test_remote_fetch_concurrency_contract import CallerOnlyDB
+
+    g = graph
+    original, middle = function_graph(g)
+    g.remote.upload_object_graph(original, g.source)
+    g.remote.materialize_ref(original, g.target)
+    with g.source.tx() as txn:
+        old_call = txn.put(FnNode(argv=[], dag=middle))
+        new_function = txn.put(Dag(nodes=[old_call], names={}, tags=["new-function"], result=old_call))
+        new_call = txn.put(FnNode(argv=[], dag=new_function))
+        new_import = txn.put(Dag(nodes=[old_call], names={}, tags=["new-import"], result=old_call))
+        imported = txn.put(ImportNode(dag=new_import, node=old_call))
+        changed = txn.put(Dag(nodes=[*txn.get(original).nodes, new_call, imported], names={},
+                              tags=["changed"], result=new_call))
+        tree = txn.put(Tree(dags={"changed": changed, "already-local": g.dag}))
+        commit = txn.put(Commit(parents=[], tree=tree, author="a", message="incremental"))
+    root = changed if kind == "dag" else commit
+    g.remote.upload_object_graph(root, g.source)
+    reused = {g.remote._pack_key(ref) for ref in (original, middle, g.dag, g.nested)}
+    reads = []
+
+    def get(key):
+        assert key not in reused, "Complete local dependencies must not be downloaded again"
+        reads.append(key)
+        return g.data[key]
+
+    g.remote._store._get_bytes = get
+    target = CallerOnlyDB(g.target)
+    assert g.remote.materialize_ref(root, target) == root
+    assert Counter(key for key in reads if key.startswith("packs/")) == Counter(dict.fromkeys(
+        [g.remote._pack_key(ref) for ref in (changed, new_function, new_import)], 1,
+    ))
+    manifest_reads = [i for i, key in enumerate(reads) if key.startswith("manifests/")]
+    body_reads = [i for i, key in enumerate(reads) if key.startswith("packs/")]
+    assert max(manifest_reads) < min(body_reads)
+    with target.tx(readonly=True) as txn:
+        assert all(txn.exists(ref) for ref in (root, changed, new_function, new_import, middle, g.dag, g.nested))
 
 
 def test_function_insertion_overlaps_download_and_stays_on_caller(graph):

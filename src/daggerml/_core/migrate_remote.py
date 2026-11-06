@@ -24,7 +24,6 @@ from urllib.parse import urlsplit
 from boto3.s3.transfer import TransferConfig
 
 from daggerml._core.aws import get_client
-from daggerml._core.exec_state import ExecutionState
 from daggerml._core.remote import _REMOTE_DESCRIPTOR, Remote, _immutable_ref
 from daggerml._core.s3_cas import S3Remote
 from daggerml._core.types import DmlDB, DmlRepoError
@@ -151,44 +150,29 @@ def migrate(source_uri: str, destination_uri: str, *, workers: int = 8, dry_run:
     new.root_uri, new.n_workers = destination.s3_uri, workers
     new._store = S3Remote(destination.s3_uri + "/dml", client)
     roots = set()
-    refs = {}
-    records: dict[str, dict[str, dict]] = {}
+    refs = set()
+    executions = set()
     for relative in before:
         if (relative.startswith(("dml/packs/", "dml/manifests/", "dml/commits/"))
                 or relative == "migration-in-progress.json"):
             raise DmlRepoError(f"Unexpected staged/new-format object in legacy source: {relative}")
-        if relative.startswith("dml/refs/"):
-            if not re.fullmatch(r"dml/refs/(heads|tags|tombstone)/[^/]+\.json", relative):
-                raise DmlRepoError(f"Unsupported project ref: {relative}")
+        if re.fullmatch(r"dml/refs/(heads|tags|tombstone)/[^/]+\.json", relative):
             payload = json.loads(source._get(source._key_for(relative)))
-            root = old._validate_ref_payload(payload, expected_root_ns="commit")
-            roots.add(root)
-            refs[relative] = payload
+            roots.add(_immutable_ref(payload["ref"]["to"], "commit"))
+            refs.add(relative)
         elif relative.startswith("exec/execution/"):
             match = re.fullmatch(r"exec/execution/([^/]+)/(metadata|state|driver)\.json", relative)
-            if match is None:
-                raise DmlRepoError(f"Unsupported execution record: {relative}")
-            records.setdefault(match[1], {})[match[2]] = json.loads(source._get(source._key_for(relative)))
-    for execution_id, record in records.items():
-        if set(record) != {"metadata", "state", "driver"}:
-            raise DmlRepoError(f"Incomplete execution record: {execution_id}")
-        metadata = ExecutionState._validate_metadata(record["metadata"], execution_id)
-        state = ExecutionState._validate_state(record["state"])
-        driver = ExecutionState._validate_driver(record["driver"])
-        if (state["lifecycle"] in {"pending", "running", "cancel-pending"} or driver["lock"] is not None
-                or driver["adapter_state"] is not None and (driver["cleanup"] or {}).get("status") != "complete"):
-            raise DmlRepoError(f"Finish/cancel execution and cleanup before migration: {execution_id}")
-        for value in (metadata["argv_ref"], state["result_ref"]):
-            if value is not None:
-                roots.add(_immutable_ref(value))
-    for relative in before:
-        if relative.startswith("exec/cache/"):
-            execution_id = source._get(source._key_for(relative))
-            cache_key = relative.removeprefix("exec/cache/")
-            if execution_id not in records or records[execution_id]["metadata"]["cache_key"] != cache_key:
-                raise DmlRepoError(f"Cache pointer has no complete execution record: {relative}")
+            if match is not None:
+                executions.add(match[1])
+                # Only graph storage changes. Read the graph pointers needed
+                # for conversion, not the unchanged execution/driver schema.
+                field = {"metadata": "argv_ref", "state": "result_ref"}.get(match[2])
+                if field is not None:
+                    payload = json.loads(source._get(source._key_for(relative)))
+                    if value := payload.get(field):
+                        roots.add(_immutable_ref(value))
 
-    stats = {"graph_roots": len(roots), "project_refs": len(refs), "executions": len(records), "copied_objects": 0}
+    stats = {"graph_roots": len(roots), "project_refs": len(refs), "executions": len(executions), "copied_objects": 0}
     if dry_run:
         return stats
     marker = destination._key_for("migration-in-progress.json")

@@ -89,8 +89,9 @@ the clone to compare changes.
 
 An older individual-object remote must be converted before use with this client.
 Use a new, empty S3 prefix. Stop all source writers, workers, and garbage
-collection until conversion and configuration cutover are complete. Finish or
-cancel active executions and complete their adapter cleanup first.
+collection until conversion and configuration cutover are complete. Execution
+and adapter records are copied unchanged, regardless of lifecycle or cleanup
+status; migration does not invoke adapters or perform their cleanup.
 
 <!-- docs:pseudocode: Migration requires operator-owned S3 prefixes and quiescent clients; do not run against the documentation fixture. -->
 ```sh
