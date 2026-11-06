@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, urlsplit
 
-from daggerml._core import Dml, DmlRepoError, Error, Ref, Runnable, Uri
+from daggerml._core import Dml, DmlRepoError, Error, Ref, Runnable, Uri, get_remote_descriptor
 from daggerml.dashboard.logs import read_cloudwatch_log
 from daggerml.dashboard.serialization import bounded_json, project_runnable, redact
 
@@ -1216,15 +1216,7 @@ class DashboardReadModel:
             payload = json.loads(client.get_object(Bucket=parsed.netloc, Key=key)["Body"].read())
         except Exception as exc:
             raise DmlRepoError("Remote descriptor is unavailable; dashboard reads will not create it") from exc
-        if payload != {
-            "schema": 0,
-            "hash": "sha256",
-            "layout": "one-project-cas+refs+split-execution",
-            "refs_prefix": "refs",
-            "io_prefix": "io",
-            "cas_prefix": "cas/sha256",
-            "execution_prefix": "../exec",
-        }:
+        if payload != get_remote_descriptor():
             raise DmlRepoError("Remote descriptor is invalid")
         self._remote_descriptor_verified = True
 

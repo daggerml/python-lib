@@ -263,7 +263,7 @@ def test_gc_union_serializes_local_and_remote_summaries(tmp_path: Path, monkeypa
     }
 
     class Remote:
-        def gc(self):
+        def gc(self, unrecognized):
             return remote
 
     monkeypatch.setattr(dml_mod, "_remote_ops", lambda _dml: Remote())

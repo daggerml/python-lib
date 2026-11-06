@@ -1,5 +1,8 @@
 """Reachability through public repository operations and Moto remote GC."""
 
+import time
+from types import SimpleNamespace
+
 import pytest
 from botocore.exceptions import ClientError
 
@@ -75,7 +78,7 @@ def test_remote_gc_preserves_published_tip_and_clones(collaboration_world):
     assert api.load("seed", dml=observer).result.value() == 1
 
 
-def test_remote_gc_prunes_force_replaced_tip_but_keeps_current_branch(collaboration_world):
+def test_remote_gc_prunes_force_replaced_tip_but_keeps_current_branch(collaboration_world, monkeypatch):
     world = collaboration_world()
     publisher = world.publisher
     publisher.branch.create("replacement")
@@ -90,7 +93,17 @@ def test_remote_gc_prunes_force_replaced_tip_but_keeps_current_branch(collaborat
     publisher.branch.set_upstream("main")
     publisher.push(force=True)
 
-    gc = Dml(str(world.home / "publisher"), remote_root=world.root, user="publisher", remote_prune_age_seconds=1)
+    prune_age_seconds = 3600
+    gc_now = time.time()
+    # Patch only GC's module clock, leaving S3 timestamps and SDK clocks real.
+    monkeypatch.setattr("daggerml._core.remote.time", SimpleNamespace(time=lambda: gc_now))
+    gc = Dml(str(world.home / "publisher"), remote_root=world.root, user="publisher",
+             remote_prune_age_seconds=prune_age_seconds)
+    gc.gc(remote=True)
+    retained = world.clone("before-prune", revision=old_tip)
+    assert api.load("old", dml=retained).result.value() == "discarded"
+
+    gc_now += prune_age_seconds + 1
     gc.gc(remote=True)
     clone = world.clone("after-prune")
     assert api.load("new", dml=clone).result.value() == "kept"

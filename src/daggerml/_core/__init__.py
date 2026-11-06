@@ -17,6 +17,7 @@ from .exec_state import (
     ExecutionSemanticState,
     validate_adapter_response,
 )
+from .remote import get_remote_descriptor
 from .serde import dml_dumps, dml_loads
 from .types import BadExecutionStatusError, CanceledExecutionError, Error, Ref, Runnable, Uri
 
@@ -36,6 +37,7 @@ __all__ = [
     "dml_dumps",
     "dml_loads",
     "get_client",
+    "get_remote_descriptor",
     "Error",
     "ExecutionDriver",
     "ExecutionMetadata",

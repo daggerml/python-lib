@@ -114,12 +114,17 @@ def test_gc_remote_selection_preserves_summary_and_requires_remote_root(tmp_path
         "cas-enumeration-time": 7,
     }
 
+    policies = []
+
     class Remote:
-        def gc(self):
+        def gc(self, unrecognized):
+            policies.append(unrecognized)
             return summary
 
     monkeypatch.setattr(dml_mod, "_remote_ops", lambda _dml: Remote())
     assert dml.gc(remote=True) == summary
+    assert dml.gc(remote=True, unrecognized="ignore") == summary
+    assert policies == ["raise", "ignore"]
 
     dml._config = replace(dml._config, remote=replace(dml._config.remote, root=None))
     monkeypatch.setattr(dml_mod, "_remote_ops", original_remote_ops)
@@ -127,12 +132,15 @@ def test_gc_remote_selection_preserves_summary_and_requires_remote_root(tmp_path
         dml.gc(remote=True)
 
 
-def test_gc_signature_exposes_only_remote_and_union_summary() -> None:
+def test_gc_signature_exposes_remote_unrecognized_policy_and_union_summary() -> None:
     signature = inspect.signature(Dml.gc)
     hints = get_type_hints(Dml.gc, include_extras=True)
 
-    assert list(signature.parameters) == ["self", "remote"]
+    assert list(signature.parameters) == ["self", "remote", "unrecognized"]
     assert signature.parameters["remote"].kind is inspect.Parameter.KEYWORD_ONLY
     assert signature.parameters["remote"].default is False
     assert get_args(hints["remote"])[0] is bool
+    assert signature.parameters["unrecognized"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["unrecognized"].default == "raise"
+    assert set(get_args(get_args(hints["unrecognized"])[0])) == {"raise", "ignore"}
     assert set(get_args(hints["return"])) == {LocalGCSummary, RemoteGCSummary}

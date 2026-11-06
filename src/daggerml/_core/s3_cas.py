@@ -56,12 +56,12 @@ class S3Remote:
 
     @staticmethod
     def _is_missing_error(exc: Exception) -> bool:
-        code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+        code = (getattr(exc, "response", None) or {}).get("Error", {}).get("Code", "")
         return code in {"404", "NoSuchKey", "NotFound"}
 
     @staticmethod
     def _is_conditional_error(exc: Exception) -> bool:
-        response = getattr(exc, "response", {})
+        response = getattr(exc, "response", None) or {}
         code = response.get("Error", {}).get("Code", "")
         status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
         return code in {"PreconditionFailed", "ConditionalRequestConflict", "409", "412"} or status in {
@@ -99,7 +99,10 @@ class S3Remote:
     def _get(self, key: str, *, cas: Literal[True] = True) -> CasItem: ...
     def _get(self, key: str, *, cas: bool = False) -> str | CasItem:
         resp = self.client.get_object(Bucket=self.bucket, Key=key)
-        data = resp["Body"].read().decode().strip()
+        try:
+            data = resp["Body"].read().decode().strip()
+        finally:
+            resp["Body"].close()
         if cas:
             headers = resp.get("ResponseMetadata", {}).get("HTTPHeaders", {})
             response_date = headers.get("date") or headers.get("Date")
@@ -113,6 +116,14 @@ class S3Remote:
                 parsedate_to_datetime(response_date),
             )
         return data
+
+    def _get_bytes(self, key: str) -> bytes:
+        """Read a binary object without applying text decoding or stripping."""
+        response = self.client.get_object(Bucket=self.bucket, Key=key)
+        try:
+            return response["Body"].read()
+        finally:
+            response["Body"].close()
 
     def _delete(self, key: str | CasItem, **kw) -> bool:
         """Delete an object; no-op if absent or CAS preconditions fail."""

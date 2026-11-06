@@ -1,3 +1,4 @@
+import gzip
 import json
 
 import boto3
@@ -151,7 +152,8 @@ def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypat
         metadata_key = exec_store._key_for("execution/unlocked/metadata.json")
         state_key = exec_store._key_for("execution/unlocked/state.json")
         driver_key = exec_store._key_for("execution/unlocked/driver.json")
-        result = Ref("dag:surviving-result")
+        result = Ref("dag:" + "a" * 64)
+        remote.prune_age_seconds = 0
         exec_store._put_js(
             metadata_key,
             {"execution_id": "unlocked", "cache_key": "unlocked-key", "argv_ref": None, "created_at": 0},
@@ -173,7 +175,7 @@ def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypat
             driver_key,
             {"lock": None, "not_before": None, "adapter_state": None, "cleanup": None},
         )
-        remote._store._put(remote._store._key_for(f"cas/sha256/{result.id()}"), "result")
+        remote._store._put(remote._pack_key(result), b"result")
         original_delete = exec_store.__class__._delete
         mutated = False
 
@@ -211,11 +213,11 @@ def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypat
             return original_delete(store, key, **kwargs)
 
         monkeypatch.setattr(exec_store.__class__, "_delete", mutate_before_conditional_delete)
-        monkeypatch.setattr(remote, "_get_live_oids", lambda ref: {ref.id()})
+        remote._store._put_js(remote._manifest_key(result), {"subdags": [], "imports": []})
 
         remote.gc()
 
-        result_exists = remote._store._exists(remote._store._key_for(f"cas/sha256/{result.id()}"))
+        result_exists = remote._store._exists(remote._pack_key(result))
         record = ExecutionState(remote.root_uri, 1, client).read_execution_record("unlocked")
         if conflicting_part == "state":
             assert result_exists
@@ -232,14 +234,15 @@ def test_gc_retains_refs_when_conditional_execution_deletion_conflicts(monkeypat
     "malformation",
     ["missing-metadata", "missing-state", "missing-driver", "malformed", "extra-field", "extra-file", "unified"],
 )
-def test_remote_gc_rejects_unsupported_execution_shapes_before_cas_deletion(malformation):
+def test_remote_gc_only_requires_execution_fields_needed_for_collection(malformation):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket="bucket")
         remote = Remote("s3://bucket/root", n_workers=1, client=client)
         exec_store = remote._store.__class__("s3://bucket/root/exec", client)
-        cas_key = remote._store._key_for("cas/sha256/aa/bb/orphan")
-        remote._store._put(cas_key, "orphan")
+        remote.prune_age_seconds = 0
+        orphan_key = remote._pack_key(Ref("dag:" + "a" * 64))
+        remote._store._put(orphan_key, b"orphan")
         if malformation == "unified":
             exec_store._put_js(exec_store._key_for("execution/exec.json"), {"result_ref": "dag:legacy"})
         else:
@@ -256,10 +259,13 @@ def test_remote_gc_rejects_unsupported_execution_shapes_before_cas_deletion(malf
             elif malformation == "extra-file":
                 exec_store._put_js(exec_store._key_for("execution/exec/legacy.json"), {})
 
-        with pytest.raises(DmlRepoError):
+        if malformation == "extra-field":
             remote.gc()
-
-        assert remote._store._exists(cas_key)
+            assert not remote._store._exists(orphan_key)
+        else:
+            with pytest.raises(DmlRepoError):
+                remote.gc()
+            assert remote._store._exists(orphan_key)
 
 
 def test_remote_gc_retains_execution_lineage_from_current_pointer():
@@ -283,15 +289,12 @@ def test_remote_descriptor_initializes_empty_root_and_rejects_undescribed_state(
         client.create_bucket(Bucket="bucket")
 
         remote = Remote("s3://bucket/empty", n_workers=2, client=client)
-        assert json.loads(remote._store._get(remote._store._key_for("dml.json"))) == {
-            "cas_prefix": "cas/sha256",
-            "hash": "sha256",
-            "io_prefix": "io",
-            "layout": "one-project-cas+refs+split-execution",
-            "refs_prefix": "refs",
-            "schema": 0,
-            "execution_prefix": "../exec",
-        }
+        descriptor_key = remote._store._key_for("dml.json")
+        before = remote._store._get(descriptor_key, cas=True)
+        reopened = Remote("s3://bucket/empty", n_workers=2, client=client)
+        assert reopened.list_refs() == []
+        after = reopened._store._get(descriptor_key, cas=True)
+        assert (after.data, after.etag) == (before.data, before.etag)
 
         client.put_object(Bucket="bucket", Key="nonempty/dml/refs/heads/main.json", Body=b"{}")
         with pytest.raises(DmlRepoError, match="not empty"):
@@ -483,7 +486,7 @@ def test_manifest_fetch_precedes_replayable_local_write(tmp_path, monkeypatch):
         remote.upload_object_graph(dag_ref, source_db)
 
         in_local_write = False
-        original_get = remote._store._get
+        original_get = remote._store._get_bytes
         original_write = target_db.write_with_growth
 
         def guarded_get(*args, **kwargs):
@@ -498,7 +501,7 @@ def test_manifest_fetch_precedes_replayable_local_write(tmp_path, monkeypatch):
             finally:
                 in_local_write = False
 
-        monkeypatch.setattr(remote._store, "_get", guarded_get)
+        monkeypatch.setattr(remote._store, "_get_bytes", guarded_get)
         monkeypatch.setattr(target_db, "write_with_growth", write_with_tracking)
 
         assert remote.materialize_ref(dag_ref, target_db) == dag_ref
@@ -620,17 +623,19 @@ def test_remote_ref_payloads_use_typed_roots(tmp_path):
         assert project_payload["metadata"] == {}
 
 
-def test_remote_cas_payloads_use_tagged_json(tmp_path):
+def test_remote_roundtrip_preserves_typed_refs_and_ref_shaped_scalar_values(tmp_path):
     with mock_aws():
         client = boto3.client("s3", region_name="us-east-1")
         client.create_bucket(Bucket="bucket")
         remote = Remote("s3://bucket/root", n_workers=2, client=client)
         source_db = make_db(tmp_path / "source-db")
+        target_db = make_db(tmp_path / "target-db")
 
         with source_db.tx() as txn:
             argv_value = txn.put(ListDatum([]))
             argv_node = txn.put(ArgvNode(value=argv_value))
-            value = txn.put(ScalarDatum("done"))
+            # This looks like a reference but must remain an ordinary string.
+            value = txn.put(ScalarDatum(argv_node.to))
             result = txn.put(LiteralNode(value=value))
             dag_ref = txn.put(
                 Dag(nodes=[argv_node, result], names={"result": result}, tags=[], result=result, argv=argv_node)
@@ -638,21 +643,15 @@ def test_remote_cas_payloads_use_tagged_json(tmp_path):
 
         remote.upload_object_graph(dag_ref, source_db)
 
-        dag_payload = json.loads(remote._store._get(remote._cas_key(dag_ref.id())))
-        scalar_payload = json.loads(remote._store._get(remote._cas_key(value.id())))
-
-        assert dag_payload == [
-            "dict",
-            {
-                "argv": ["ref", argv_node.to],
-                "error": ["scalar", None],
-                "names": ["dict", {"result": ["ref", result.to]}],
-                "nodes": ["list", [["ref", argv_node.to], ["ref", result.to]]],
-                "result": ["ref", result.to],
-                "tags": ["list", []],
-            },
-        ]
-        assert scalar_payload == ["dict", {"data": ["scalar", "done"]}]
+        assert remote.materialize_ref(dag_ref, target_db) == dag_ref
+        with target_db.tx(readonly=True) as txn:
+            dag = txn.get(dag_ref)
+            assert isinstance(dag.argv, Ref)
+            assert dag.argv == argv_node
+            assert dag.names["result"] == result
+            assert txn.get(result).value == value
+            assert txn.get(value).data == argv_node.to
+            assert isinstance(txn.get(value).data, str)
 
 
 def test_remote_gc_traces_split_execution_refs_and_collects_losing_attempt(tmp_path):
@@ -668,6 +667,7 @@ def test_remote_gc_traces_split_execution_refs_and_collects_losing_attempt(tmp_p
         remote.upload_object_graph(dag_ref, source_db)
 
         state = ExecutionState("s3://bucket/root", 2, cache_key="current", client=client)
+        remote.upload_object_graph(argv, source_db)
         execution_id, owner, _ = state.reserve_execution(argv, execution_id="current-exec")
         assert state._create_cache("current", execution_id)
         state.mark_running(execution_id, owner)
@@ -685,7 +685,7 @@ def test_remote_gc_traces_split_execution_refs_and_collects_losing_attempt(tmp_p
 
         remote.gc()
 
-        assert remote._store._exists(remote._cas_key(dag_ref.id()))
+        assert remote._store._exists(remote._pack_key(dag_ref))
         assert losing._snapshot(losing._execution_key("losing-exec")) is None
 
 
@@ -707,7 +707,9 @@ def test_remote_pull_rejects_cas_identity_mismatch(tmp_path):
             )
 
         remote.upload_object_graph(dag_ref, source_db)
-        remote._store._put(remote._cas_key(value.id()), remote._dump_cas_object(ScalarDatum("different")))
+        pack = json.loads(gzip.decompress(remote._store._get_bytes(remote._pack_key(dag_ref))))
+        pack["objects"][value.to] = remote._dump_cas_object(ScalarDatum("different"))
+        remote._store._put(remote._pack_key(dag_ref), gzip.compress(json.dumps(pack).encode()))
 
         with pytest.raises(ValueError, match="Remote CAS object identity mismatch"):
             remote.materialize_ref(dag_ref, target_db)

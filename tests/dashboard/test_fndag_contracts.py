@@ -1,24 +1,18 @@
 import json
+from io import BytesIO
 
 import pytest
 
+from daggerml._core import get_remote_descriptor
 from daggerml._core.db import Ref
 from daggerml._core.types import Runnable, Uri
 from daggerml.dashboard.read_model import DashboardReadModel, ScriptReadError
 
 
-def test_dashboard_accepts_the_current_remote_descriptor(tmp_path):
+def test_dashboard_verifies_remote_once_before_reusing_it(tmp_path):
     (tmp_path / ".dml").mkdir()
     (tmp_path / ".dml" / "HEAD").write_text("", encoding="utf-8")
-    descriptor = {
-        "schema": 0,
-        "hash": "sha256",
-        "layout": "one-project-cas+refs+split-execution",
-        "refs_prefix": "refs",
-        "io_prefix": "io",
-        "cas_prefix": "cas/sha256",
-        "execution_prefix": "../exec",
-    }
+    reads = []
 
     class Dml:
         class Config:
@@ -31,13 +25,15 @@ def test_dashboard_accepts_the_current_remote_descriptor(tmp_path):
     class Client:
         @staticmethod
         def get_object(*, Bucket, Key):
-            assert (Bucket, Key) == ("bucket", "project/dml/dml.json")
-            return {"Body": type("Body", (), {"read": staticmethod(lambda: json.dumps(descriptor).encode())})()}
+            reads.append((Bucket, Key))
+            return {"Body": BytesIO(json.dumps(get_remote_descriptor()).encode())}
 
     model = DashboardReadModel(tmp_path, dml_factory=lambda **_kwargs: Dml(), s3_client_factory=Client)
 
     model._require_remote_descriptor()
-    assert model._remote_descriptor_verified is True
+    assert len(reads) == 1
+    model._require_remote_descriptor()
+    assert len(reads) == 1
 
 
 def test_fndag_preserves_dml_execution_runtime_argv_and_output_boundaries(tmp_path):

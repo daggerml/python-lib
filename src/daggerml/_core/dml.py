@@ -1565,11 +1565,15 @@ class Dml:
         self,
         *,
         remote: Annotated[bool, "Garbage-collect configured remote state instead of local objects."] = False,
+        unrecognized: Annotated[
+            Literal["raise", "ignore"],
+            "Remote only: fail on (raise) or log and skip (ignore) unrecognized objects in immutable storage.",
+        ] = "raise",
     ) -> LocalGCSummary | RemoteGCSummary:
         """Garbage-collect unreachable local or configured remote state."""
         if not remote:
             return _local_gc(self)
-        return cast(RemoteGCSummary, _remote_ops(self).gc())
+        return cast(RemoteGCSummary, _remote_ops(self).gc(unrecognized))
 
     @property
     def branch(self) -> Annotated[_BranchNamespace, "Branch inspection and lifecycle commands."]:
