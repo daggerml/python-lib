@@ -10,6 +10,14 @@ import pytest
 
 import daggerml.contrib.supervisor as supervisor_mod
 from daggerml import Ref
+from daggerml.api import DmlRepoError
+
+
+def test_suspended_worker_is_nonterminal_and_has_no_result():
+    result = {"status": "suspended", "error": None}
+    assert supervisor_mod._validate_output(result) == result
+    with pytest.raises(DmlRepoError, match="suspended"):
+        supervisor_mod._validate_output({**result, "dag_id": "not-terminal"})
 
 
 @pytest.mark.serial

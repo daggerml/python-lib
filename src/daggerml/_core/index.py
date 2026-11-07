@@ -16,6 +16,7 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import InitVar, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
@@ -145,16 +146,22 @@ class IndexOps:
         return db.write_with_growth(create_index)
 
     def freeze(self, index: Ref, message: str | None, *, db: DmlDB) -> Ref:
-        """Replace a user runtime index with its frozen representation."""
+        """Preserve local state before publishing a durable suspension fence."""
+        frozen_ref = Ref(f"frozenindex:{index.id()}")
+        with db.tx(readonly=True) as txn:
+            staged = txn.get(frozen_ref) if txn.exists(frozen_ref) and not txn.exists(index) else None
+        if staged is not None:
+            self.exec_state().suspend_runtime(index.id(), staged.previous_generation, staged.runtime_generation)
+            return frozen_ref
         self._require_mutation(index, db)
+        checkpoint = uuid7().hex
+        with db.tx(readonly=True) as txn:
+            original = txn.get(index)
 
         def freeze_index(txn) -> Ref:
             idx = txn.get(index)
             if not isinstance(idx, Index):
                 raise DmlRepoError(f"Runtime is not an active index: {index}")
-            dag: Dag = txn.get(idx.dag)
-            if dag.argv is not None:
-                raise DmlRepoError("Cannot freeze an execution-aware function runtime")
             frozen = txn.put(
                 FrozenIndex(
                     parents=idx.parents,
@@ -164,23 +171,138 @@ class IndexOps:
                     created=idx.created,
                     dag=idx.dag,
                     frozen_message=message,
+                    runtime_generation=checkpoint,
+                    previous_generation=idx.runtime_generation,
                 ),
                 to=Ref(f"frozenindex:{index.id()}"),
             )
             txn.delete(index)
             return frozen
 
-        return db.write_with_growth(freeze_index)
+        frozen = db.write_with_growth(freeze_index)
+        self.exec_state().suspend_runtime(index.id(), original.runtime_generation, checkpoint)
+        return frozen
 
-    def unfreeze(self, index: Ref, *, db: DmlDB) -> Ref:
-        """Replace a frozen runtime index with its active representation."""
-        self._require_mutation(index, db)
+    def export_snapshot(self, index: Ref, *, db: DmlDB) -> str:
+        """Export a frozen runtime and its complete repository-object closure as JSON."""
+        with db.tx(readonly=True) as txn:
+            frozen = txn.get(index)
+            if not isinstance(frozen, FrozenIndex):
+                raise DmlRepoError("Snapshot export requires a frozen runtime")
+            objects = {}
+            pending = [index]
+            while pending:
+                ref = pending.pop()
+                if ref.to in objects:
+                    continue
+                obj = txn.get(ref)
+                objects[ref.to] = self._remote._dump_cas_object(obj)
+                deps: set[Ref] = set()
+                self._remote._collect_direct_refs(obj, deps)
+                pending.extend(deps)
+        return json.dumps({"schema": 1, "remote_root": self.remote_root.rstrip("/"),
+                           "root": index.to, "objects": objects}, sort_keys=True, separators=(",", ":"))
+
+    def _import_snapshot(self, snapshot: str, db: DmlDB) -> Ref:
+        try:
+            data = json.loads(snapshot)
+            if (not isinstance(data, dict) or set(data) != {"schema", "remote_root", "root", "objects"}
+                    or type(data["schema"]) is not int or data["schema"] != 1
+                    or data["remote_root"] != self.remote_root.rstrip("/")):
+                raise ValueError("Invalid snapshot schema or remote.root mismatch")
+            root = Ref(data["root"])
+            if root.ns() != "frozenindex" or not isinstance(data["objects"], dict):
+                raise ValueError("Snapshot must contain a frozen runtime")
+            objects = {}
+            for key, payload in data["objects"].items():
+                ref = Ref(key)
+                if ref != root and ref.ns() in {"index", "frozenindex", "deletable"}:
+                    raise ValueError("Snapshot contains an unrelated mutable object")
+                objects[ref] = self._remote._load_cas_object(ref, payload)
+            if root not in objects or not isinstance(objects[root], FrozenIndex):
+                raise ValueError("Snapshot root is missing")
+            reached: set[Ref] = set()
+            pending = [root]
+            while pending:
+                ref = pending.pop()
+                if ref in reached:
+                    continue
+                reached.add(ref)
+                deps: set[Ref] = set()
+                self._remote._collect_direct_refs(objects[ref], deps)
+                pending.extend(deps - reached)
+            if reached != set(objects):
+                raise ValueError("Snapshot contains unreachable objects")
+            current = self.exec_state().read_execution_record(root.id())["state"]
+            checkpoint = objects[root].runtime_generation
+            with db.tx(readonly=True) as txn:
+                active = Ref(f"index:{root.id()}")
+                recovering = (txn.exists(root) and txn.exists(active)
+                              and current["lifecycle"] == "running"
+                              and txn.get(active).runtime_generation == current.get("runtime_generation"))
+            if not recovering and not (
+                current["lifecycle"] == "suspended" and current.get("runtime_generation") == checkpoint
+            ):
+                raise DmlRepoError("Snapshot is stale or runtime is not suspended")
+
+            def restore(txn):
+                if txn.exists(Ref(f"index:{root.id()}")) and not txn.exists(root):
+                    raise ValueError("Runtime is already active locally")
+                for ref, obj in objects.items():
+                    if txn.exists(ref):
+                        if self._remote._dump_cas_object(txn.get(ref)) != self._remote._dump_cas_object(obj):
+                            raise ValueError(f"Snapshot object conflicts with local state: {ref}")
+                    elif ref == root:
+                        txn.put(obj, to=ref)
+                    elif txn.put(obj) != ref:
+                        raise ValueError(f"Snapshot object identity mismatch: {ref}")
+
+            db.write_with_growth(restore)
+            return root
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DmlRepoError(f"Invalid runtime snapshot: {exc}") from exc
+
+    def unfreeze(self, index: Ref | None = None, *, snapshot: str | None = None, db: DmlDB) -> Ref:
+        """Restore graph state, then claim a single activation in the original remote."""
+        if (index is None) == (snapshot is None):
+            raise DmlRepoError("Provide exactly one of index or snapshot")
+        if snapshot is not None:
+            index = self._import_snapshot(snapshot, db)
+        assert index is not None
+        active = Ref(f"index:{index.id()}")
+        state = self.exec_state()
+
+        def prepare_frozen(txn):
+            frozen = txn.get(index)
+            if not isinstance(frozen, FrozenIndex):
+                raise DmlRepoError(f"Runtime is not a frozen index: {index}")
+            # Older user checkpoints predate remote suspension generations.
+            if frozen.runtime_generation is None:
+                frozen.runtime_generation = uuid7().hex
+                txn.put(frozen, to=index)
+            return frozen
+
+        frozen = db.write_with_growth(prepare_frozen)
+        current = state.read_execution_record(index.id())["state"]
+        if (current["lifecycle"] == "running"
+                and current.get("runtime_generation") == frozen.previous_generation):
+            state.suspend_runtime(index.id(), frozen.previous_generation, frozen.runtime_generation)
+            current = state.read_execution_record(index.id())["state"]
+        with db.tx(readonly=True) as txn:
+            recovering = (txn.exists(active) and current["lifecycle"] == "running"
+                          and txn.get(active).runtime_generation == current.get("runtime_generation"))
+        if not recovering and not (
+            current["lifecycle"] == "suspended" and current.get("runtime_generation") == frozen.runtime_generation
+        ):
+            raise DmlRepoError("Snapshot is stale or runtime is not suspended")
 
         def unfreeze_index(txn) -> Ref:
             frozen = txn.get(index)
             if not isinstance(frozen, FrozenIndex):
                 raise DmlRepoError(f"Runtime is not a frozen index: {index}")
-            active = txn.put(
+            if txn.exists(active):
+                return active
+            candidate = txn.put(
                 Index(
                     parents=frozen.parents,
                     tree=frozen.tree,
@@ -188,13 +310,23 @@ class IndexOps:
                     message=frozen.message,
                     created=frozen.created,
                     dag=frozen.dag,
+                    runtime_generation=uuid7().hex,
                 ),
                 to=Ref(f"index:{index.id()}"),
             )
-            txn.delete(index)
-            return active
+            return candidate
 
-        return db.write_with_growth(unfreeze_index)
+        # Stage the candidate generation before the remote CAS. A fresh process
+        # can finish activation after a crash without issuing a second claim.
+        db.write_with_growth(unfreeze_index)
+        with db.tx(readonly=True) as txn:
+            frozen = txn.get(index)
+            generation = txn.get(active).runtime_generation
+        current = state.read_execution_record(index.id())["state"]
+        if not (current["lifecycle"] == "running" and current.get("runtime_generation") == generation):
+            state.resume_runtime(index.id(), frozen.runtime_generation, generation)
+        db.write_with_growth(lambda txn: txn.delete(index))
+        return active
 
     def put_import(self, index: Ref, dag: Ref, node: Optional[Ref], name: Optional[str] = None, *, db: DmlDB) -> Ref:
         """Import a node from another DAG into the current index DAG."""
@@ -427,7 +559,7 @@ class IndexOps:
         self._require_mutation(index, db)
         created = now()
 
-        def commit_index(txn) -> tuple[Ref, Ref | None]:
+        def commit_index(txn) -> tuple[Ref, Ref | None, str | None]:
             ctx = txn.get_ctx(index)
             index_obj = cast(Index, ctx.commit)
             if ctx.dag is None:
@@ -451,10 +583,10 @@ class IndexOps:
                         created=created,
                     )
                 )
-            return dag_ref, commit_ref
+            return dag_ref, commit_ref, index_obj.runtime_generation
 
-        dag_ref, commit_ref = db.write_with_growth(commit_index)
-        self.exec_state().finish_execution(index.id(), dag_ref, db)
+        dag_ref, commit_ref, generation = db.write_with_growth(commit_index)
+        self.exec_state().finish_execution(index.id(), dag_ref, db, generation=generation)
 
         def delete_index(txn) -> None:
             txn.delete(index)

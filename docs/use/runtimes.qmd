@@ -9,7 +9,7 @@ A runtime is mutable state used while authoring a DAG or tracking execution.
 Finalizing it creates an immutable DAG. Use the CLI to inspect and administer
 open work; use named committed DAGs for completed research.
 
-## Freeze and resume authoring
+## Freeze and resume runtimes
 
 ```{bash}
 runtime_ref="$(dml runtime create)"
@@ -31,6 +31,61 @@ and `Dag.unfreeze()` manage the normal Python wrapper; `dml.resume(frozen,
 name=..., message=...)` resumes it in another process. Runtime and execution
 identities are complete `Ref` values (`index:` or `frozenindex:`), never bare
 IDs.
+
+### Move a checkpoint to another computer
+
+Freeze before exporting. `dag.export_snapshot()` (or
+`dml.runtime.export_snapshot(frozen_ref)`) returns versioned JSON containing the
+frozen index and its complete local repository-object dependencies. Save that
+string in durable storage before stopping the source computer.
+
+```{python}
+import daggerml as dml
+
+draft = dml.new()
+draft.put({"epoch": 2, "loss": 0.5}, name="checkpoint")
+draft.freeze("handoff")
+snapshot = draft.export_snapshot()
+
+# An empty project models the replacement computer's local database.
+with dml.temporary(remote_root=draft.dml.config.get("remote.root")) as replacement:
+    resumed = dml.resume(snapshot=snapshot, dml=replacement)
+    assert resumed["checkpoint"].value() == {"epoch": 2, "loss": 0.5}
+    resumed.commit(resumed.put({"epoch": 3}))
+```
+
+`dml.resume()` and `dml.runtime.unfreeze()` accept exactly one local frozen ref
+or `snapshot=` string. The destination must use the same `remote.root` and have
+access to its execution records and referenced artifacts. Export is repeatable
+and leaves the frozen runtime intact; successful resumption consumes its remote
+activation claim. A second computer cannot activate another copy of that
+checkpoint. Older checkpoints become stale after resumption, even if the same
+execution is frozen again.
+
+Both user-authored and execution-aware function runtimes can be frozen. The
+execution becomes `suspended`, not terminal; its identity, arguments, lineage,
+cache pointer, and executor continuation remain in place. Resumption claims a
+new runtime generation, and stale local indexes cannot publish results under an
+old generation. Cancellation remains valid during suspension and prevents later
+resumption. Retry the same freeze/unfreeze operation after an interrupted remote
+response; locally staged state retains the generation needed to finish it.
+
+Snapshots are application checkpoints, not Python stack or process images.
+Continue explicitly from named checkpoint nodes and commit the ordinary result.
+The original adapter is not relaunched or allowed to turn its old process's exit
+into a failure of the resumed execution; its handles remain available for
+cleanup/cancellation. Resumption does not move PIDs, containers, or external
+side effects, and does not make local executor teardown portable. Quiesce the
+old application at the checkpoint; graph fencing is not a sandbox for arbitrary
+Python side effects. Do not share one mutable project database between competing
+application writers.
+
+Snapshot JSON contains repository data, not external artifact bytes, remote
+execution records, or ambient credentials. Treat snapshots as trusted project data, not
+authenticated authorization tokens. All repository dependencies must be local
+when exporting; deepen shallow history first if required parent objects are
+missing. Keep checkpoint files independently durable: remote graph collection
+does not discover snapshots stored outside the repository.
 
 ## Inspect, cancel, and refresh deliberately
 

@@ -11,7 +11,7 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import InitVar, asdict, dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Literal, Sequence, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, NotRequired, Sequence, TypedDict, cast
 from uuid import uuid4
 
 from daggerml._core.aws import get_client
@@ -36,7 +36,7 @@ LOCK_TTL = 300.0
 COORDINATION_CAS_ATTEMPTS = 10
 COORDINATION_CAS_BACKOFF_SECONDS = 0.01
 COORDINATION_CAS_MAX_BACKOFF_SECONDS = 1.0
-EXECUTION_LIFECYCLES = Literal["pending", "running", "succeeded", "failed", "cancel-pending", "canceled"]
+EXECUTION_LIFECYCLES = Literal["pending", "running", "suspended", "succeeded", "failed", "cancel-pending", "canceled"]
 GRAPH_LIFECYCLES = EXECUTION_LIFECYCLES
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ class ExecutionMetadata(TypedDict):
 
 
 class ExecutionSemanticState(TypedDict):
+    runtime_generation: NotRequired[str]
     lifecycle: EXECUTION_LIFECYCLES
     result_ref: str | None
     result_source: Literal["runtime", "adapter-error"] | None
@@ -287,10 +288,20 @@ class ExecutionState:
             "lifecycle", "result_ref", "result_source", "spawned_execution_ids", "child_execution_ids",
             "cancelation", "invalidation", "updated_at",
         }
-        if not isinstance(value, dict) or set(value) != required:
+        if not isinstance(value, dict) or set(value) - {"runtime_generation"} != required:
             raise DmlRepoError("Invalid execution state")
-        if value["lifecycle"] not in {"pending", "running", "succeeded", "failed", "cancel-pending", "canceled"}:
+        if value["lifecycle"] not in {
+            "pending", "running", "suspended", "succeeded", "failed", "cancel-pending", "canceled"
+        }:
             raise DmlRepoError("Invalid execution state")
+        if "runtime_generation" in value and (
+            not isinstance(value["runtime_generation"], str) or not value["runtime_generation"]
+        ):
+            raise DmlRepoError("Invalid runtime generation")
+        if value["lifecycle"] == "suspended" and (
+            "runtime_generation" not in value or value["result_ref"] is not None
+        ):
+            raise DmlRepoError("Suspended execution requires a generation and no terminal result")
         result, source = value["result_ref"], value["result_source"]
         if (result is None) != (source is None):
             raise DmlRepoError("Invalid execution result")
@@ -413,14 +424,15 @@ class ExecutionState:
             state, item = self._part_snapshot(execution_id, "state")
             original = cast(ExecutionSemanticState, json.loads(json.dumps(state)))
             mutate(state)
-            changed = {key for key in state if key != "updated_at" and state[key] != original[key]}
+            changed = {key for key in state if key != "updated_at" and state[key] != original.get(key)}
             lifecycle = original["lifecycle"]
             transition = (lifecycle, state["lifecycle"])
             lock_free_fields = {
-                frozenset(): {"pending", "running", "succeeded", "failed", "cancel-pending", "canceled"},
+                frozenset(): {"pending", "running", "suspended", "succeeded", "failed", "cancel-pending", "canceled"},
+                frozenset({"lifecycle", "runtime_generation"}): {"running", "suspended"},
                 frozenset({"result_ref", "result_source"}): {"running"},
                 frozenset({"spawned_execution_ids"}): {"running"},
-                frozenset({"spawned_execution_ids", "child_execution_ids"}): {"running", "cancel-pending"},
+                frozenset({"spawned_execution_ids", "child_execution_ids"}): {"running", "suspended", "cancel-pending"},
             }
             changed_fields = frozenset(changed)
             if changed_fields in lock_free_fields:
@@ -429,6 +441,11 @@ class ExecutionState:
                         f"Execution {execution_id} cannot accept lock-free state mutation",
                         lifecycle=lifecycle,
                     )
+                if changed_fields == frozenset({"lifecycle", "runtime_generation"}) and (
+                    transition not in {("running", "suspended"), ("suspended", "running")}
+                    or original["result_ref"] is not None
+                ):
+                    raise DmlRepoError("Invalid runtime suspension transition")
             else:
                 if owner is None:
                     raise DmlRepoError(f"Driver lock ownership required for state mutation: {execution_id}")
@@ -441,6 +458,7 @@ class ExecutionState:
                     ("running", "succeeded"),
                     ("running", "failed"),
                     ("running", "cancel-pending"),
+                    ("suspended", "cancel-pending"),
                     ("cancel-pending", "canceled"),
                 }
                 if transition[0] != transition[1] and transition not in allowed:
@@ -732,6 +750,11 @@ class ExecutionState:
     ) -> ExecutionSemanticState:
         state = self.read_execution_record(execution_id)["state"]
         if state["lifecycle"] == ("pending" if mode == "activation" else "running"):
+            if mode == "mutation" and state.get("runtime_generation") is not None:
+                with db.tx(readonly=True) as txn:
+                    index = txn.get(Ref(f"index:{execution_id}"))
+                if index.runtime_generation != state.get("runtime_generation"):
+                    raise DmlRepoError(f"Stale runtime generation: {execution_id}")
             return state
         if state["lifecycle"] == "cancel-pending":
             self.cancel(execution_id, None, db)
@@ -755,10 +778,35 @@ class ExecutionState:
         self._mutate_state(execution_id, lambda state: state.update(lifecycle="running"), owner=owner)
         self.unlock(execution_id, owner)
 
-    def finish_execution(self, execution_id: str, dag: Ref, db: DmlDB) -> None:
+    def suspend_runtime(self, execution_id: str, generation: str | None, checkpoint: str) -> None:
+        """Fence the active runtime using a semantic-state CAS, independently of driver locks."""
+        def suspend(state: ExecutionSemanticState) -> None:
+            if state["lifecycle"] == "suspended" and state.get("runtime_generation") == checkpoint:
+                return
+            if (state["lifecycle"] != "running" or state.get("runtime_generation") != generation
+                    or state["result_ref"] is not None):
+                raise DmlRepoError(f"Runtime cannot be suspended: {execution_id}")
+            state.update(lifecycle="suspended", runtime_generation=checkpoint)
+
+        self._mutate_state(execution_id, suspend)
+
+    def resume_runtime(self, execution_id: str, checkpoint: str, generation: str) -> None:
+        """Claim exactly one activation of a frozen runtime."""
+        def resume(state: ExecutionSemanticState) -> None:
+            if state["lifecycle"] != "suspended" or state.get("runtime_generation") != checkpoint:
+                raise DmlRepoError(f"Snapshot is stale or runtime is not suspended: {execution_id}")
+            state.update(lifecycle="running", runtime_generation=generation)
+
+        self._mutate_state(execution_id, resume)
+
+    def finish_execution(
+        self, execution_id: str, dag: Ref, db: DmlDB, *, generation: str | None = None
+    ) -> None:
         self._remote.upload_object_graph(dag, db)
 
         def publish(state: ExecutionSemanticState) -> None:
+            if state.get("runtime_generation") != generation:
+                raise DmlRepoError(f"Stale runtime generation: {execution_id}")
             if state["lifecycle"] in ("cancel-pending", "canceled"):
                 raise CancellationError(f"Execution {execution_id} is canceled", lifecycle=state["lifecycle"])
             if state["result_ref"] is None:
@@ -885,11 +933,17 @@ class ExecutionState:
                 )
             edge_created = self._record_edge(index.id(), execution_id)
             self._update_child(index.id(), execution_id, complete=False)
+            if state["lifecycle"] == "suspended":
+                return None
             if state["result_source"] == "runtime":
                 state = self._finalize_runtime_result(execution_id, owner)
                 self._update_child(index.id(), execution_id, complete=True)
                 self._drive_cleanup_owned(execution_id, owner, db, runnable)
                 return self._materialize(state["result_ref"], db)
+            if state.get("runtime_generation") is not None:
+                # A restored application owns progress; the original adapter's
+                # process outcome must not overwrite the checkpointed execution.
+                return None
             if driver["not_before"] is not None and driver["not_before"] > int(time.time() * 1000):
                 return None
             adapter_called = True
@@ -908,6 +962,10 @@ class ExecutionState:
             if current["driver"]["lock"] is None or current["driver"]["lock"]["owner"] != owner:
                 return None
             adapter_state = response.get("adapter_state", current["driver"]["adapter_state"])
+            if (current["state"]["lifecycle"] == "suspended"
+                    or current["state"].get("runtime_generation") != state.get("runtime_generation")):
+                self._mutate_driver(execution_id, owner, lambda d: d.update(adapter_state=adapter_state))
+                return None
             if response["status"] == "retry":
                 if not isinstance(adapter_state, dict):
                     raise DmlRepoError("Retry adapter response requires object adapter_state")

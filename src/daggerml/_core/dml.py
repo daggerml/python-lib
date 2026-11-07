@@ -54,6 +54,7 @@ def _format_graph_age(seconds: int | float | None) -> str:
 def _graph_lifecycle_style(lifecycle: str) -> str:
     return {
         "running": "yellow",
+        "suspended": "blue",
         "succeeded": "green",
         "failed": "red",
         "cancel-pending": "dark_goldenrod italic",
@@ -521,17 +522,27 @@ class _RuntimeNamespace:
     @_retry_runtime_mutation
     def freeze(
         self,
-        index: Annotated[Ref, "Active user runtime index to freeze."],
+        index: Annotated[Ref, "Active runtime index to freeze."],
         *,
         message: Annotated[str | None, "Optional reason shown while the runtime is frozen."] = None,
     ) -> Ref:
-        """Freeze a user runtime for later inspection or resumption."""
+        """Freeze a runtime for later inspection or coordinated resumption."""
         return _index_ops(self._dml).freeze(index, message, db=self._dml._db)
 
+    def export_snapshot(self, index: Annotated[Ref, "Frozen runtime index to export."]) -> str:
+        """Export a frozen runtime and its graph dependencies as portable JSON."""
+        return _index_ops(self._dml).export_snapshot(index, db=self._dml._db)
+
     @_retry_runtime_mutation
-    def unfreeze(self, index: Annotated[Ref, "Frozen runtime index to reactivate."]) -> Ref:
-        """Reactivate a frozen runtime index."""
-        return _index_ops(self._dml).unfreeze(index, db=self._dml._db)
+    def unfreeze(
+        self,
+        index: Annotated[Ref | None, "Frozen runtime index to reactivate."] = None,
+        /,
+        *,
+        snapshot: Annotated[str | None, "Portable snapshot JSON to import and reactivate."] = None,
+    ) -> Ref:
+        """Reactivate exactly one of a local frozen index or a portable snapshot."""
+        return _index_ops(self._dml).unfreeze(index, snapshot=snapshot, db=self._dml._db)
 
     def describe(self, index: Annotated[Ref, "Runtime index to inspect."]) -> RuntimeDescribe:
         """Describe one runtime index."""

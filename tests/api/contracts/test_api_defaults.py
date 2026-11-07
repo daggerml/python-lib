@@ -129,7 +129,7 @@ def test_resume_unfreezes_with_explicit_metadata_and_active_default(fake_dml, re
 
     dag = api.resume(refs.index, name="resumed", message="complete review")
 
-    fake_dml.runtime.unfreeze.assert_called_once_with(refs.index)
+    fake_dml.runtime.unfreeze.assert_called_once_with(refs.index, snapshot=None)
     assert dag.dml is fake_dml
     assert dag.token == refs.index
     assert dag.ref is None

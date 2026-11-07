@@ -31,6 +31,20 @@ Cancellation conditionally removes the selected attempt's matching cache pointer
 before adapter teardown, and `cancel-pending` prevents later result mutation.
 Adapter scratch paths and caller edges remain separate from the execution record.
 
+Runtime freezing stages a local `FrozenIndex` before CAS-publishing `suspended`
+semantic state. A frozen generation can be claimed once for resumption; the
+active generation is staged locally before the claim so response loss is
+recoverable. Mutation guards and result-publication CAS reject old generations.
+The optional semantic `runtime_generation` field is separate from the transient
+driver lock. Restored applications explicitly continue from graph checkpoints;
+original adapter handles remain for teardown, not automatic relaunch.
+
+`runtime.export_snapshot` exports versioned JSON with the frozen index and its
+complete local object closure. `runtime.unfreeze(snapshot=...)` validates object
+identities and closure in a replayable transaction before claiming activation in
+the same remote namespace. Artifact bytes and remote execution/driver records
+are not duplicated into snapshots.
+
 ## Remote graph storage
 
 The S3 descriptor is schema 1, layout `dagmanifest+dagpack+commits+refs+split-execution`.

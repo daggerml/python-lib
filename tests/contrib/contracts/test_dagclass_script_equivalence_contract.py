@@ -329,6 +329,7 @@ def test_dag_resolved_names_are_not_dependencies():
         "cancel",
         "commit",
         "dml",
+        "export_snapshot",
         "freeze",
         "keys",
         "message",

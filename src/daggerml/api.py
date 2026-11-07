@@ -105,15 +105,16 @@ def load(
 
 
 def resume(
-    frozen: Ref,
+    frozen: Ref | None = None,
     *,
-    name: str,
-    message: str,
+    snapshot: str | None = None,
+    name: str = "",
+    message: str = "",
     dml: Dml | None = None,
 ) -> "Dag":
-    """Resume a frozen DAG runtime with explicitly supplied commit metadata."""
+    """Resume a local frozen runtime or a portable snapshot in its original remote."""
     runtime = dml or get_default_dml()
-    index_id = runtime.runtime.unfreeze(frozen)
+    index_id = runtime.runtime.unfreeze(frozen, snapshot=snapshot)
     return Dag(dml=runtime, token=index_id, name=name, message=message)
 
 
@@ -630,6 +631,17 @@ class Dag:
             freeze_message = f"{freeze_message}\n{message}"
         self.token = self.dml.runtime.freeze(self._require_index_ref(), message=freeze_message)
         return self
+
+    def export_snapshot(self) -> str:
+        """Export this frozen runtime as portable JSON.
+
+        Returns
+        -------
+        str
+            Versioned snapshot containing repository objects, not external artifact
+            bytes or live processes. Resume against the same ``remote.root``.
+        """
+        return self.dml.runtime.export_snapshot(self._require_index_ref())
 
     def unfreeze(self) -> "Dag":
         """Unfreeze this uncommitted DAG's runtime index."""

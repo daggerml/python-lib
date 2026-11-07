@@ -11,6 +11,7 @@ from typing import Any, Callable
 from daggerml._core.db import Ref
 from daggerml._core.exec_state import ExecutionGraph
 from daggerml._core.index import IndexOps
+from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItem, CasItemConflict
 from daggerml._core.types import BadExecutionStatusError, CanceledExecutionError, DmlDB, DmlRepoError
 
@@ -174,7 +175,16 @@ class NoopExecutionState:
         except KeyError as exc:
             raise DmlRepoError(f"No execution record found for execution_id: {execution_id}") from exc
 
-    def finish_execution(self, execution_id: str, dag: Ref, db: DmlDB) -> None:
+    def suspend_runtime(self, execution_id, generation, checkpoint):
+        self.records[execution_id]["state"].update(lifecycle="suspended", runtime_generation=checkpoint)
+
+    def resume_runtime(self, execution_id, checkpoint, generation):
+        state = self.records[execution_id]["state"]
+        if state["lifecycle"] != "suspended" or state.get("runtime_generation") != checkpoint:
+            raise DmlRepoError("Snapshot is stale or runtime is not suspended")
+        state.update(lifecycle="running", runtime_generation=generation)
+
+    def finish_execution(self, execution_id: str, dag: Ref, db: DmlDB, *, generation=None) -> None:
         record = self.read_execution_record(execution_id)
         record["state"].update(
             lifecycle="succeeded",
@@ -234,8 +244,11 @@ class NoopExecutionState:
         return {"roots": roots, "nodes": nodes}
 
 
-class FakeRemote:
+class FakeRemote(Remote):
     n_workers = 1
+
+    def __init__(self):
+        pass
 
     class _Store:
         client = None

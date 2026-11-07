@@ -842,24 +842,34 @@ class Index(Commit):
     """
 
     dag: Ref = field(kw_only=True)
+    runtime_generation: Optional[str] = field(default=None, kw_only=True)
 
     def _validate(self) -> None:
         super()._validate()
         require_ref(self.dag, expected_ns=["dag"], context=f"{self.__class__.__name__}.dag")
+        if self.runtime_generation is not None and (
+            not isinstance(self.runtime_generation, str) or not self.runtime_generation
+        ):
+            raise TypeError("Index.runtime_generation must be a non-empty string or None")
 
 
 @_register_dml_obj
 class FrozenIndex(Commit):
-    """A user runtime preserved for inspection before authoring continues."""
+    """A runtime preserved for inspection and coordinated resumption."""
 
     dag: Ref = field(kw_only=True)
     frozen_message: Optional[str] = field(default=None, kw_only=True)
+    runtime_generation: Optional[str] = field(default=None, kw_only=True)
+    previous_generation: Optional[str] = field(default=None, kw_only=True)
 
     def _validate(self) -> None:
         super()._validate()
         require_ref(self.dag, expected_ns=["dag"], context=f"{self.__class__.__name__}.dag")
         if self.frozen_message is not None and not isinstance(self.frozen_message, str):
             raise TypeError(f"{self.__class__.__name__}.frozen_message must be a string or None")
+        for generation in (self.runtime_generation, self.previous_generation):
+            if generation is not None and (not isinstance(generation, str) or not generation):
+                raise TypeError("Frozen runtime generations must be non-empty strings or None")
 
 
 def _cleanup_opposite_entry(db: "TxnWithValid", ref: Ref, *, opposite_ns: str, noun: str) -> None:
