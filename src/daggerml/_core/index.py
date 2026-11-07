@@ -233,27 +233,51 @@ class IndexOps:
                 pending.extend(deps - reached)
             if reached != set(objects):
                 raise ValueError("Snapshot contains unreachable objects")
-            current = self.exec_state().read_execution_record(root.id())["state"]
-            checkpoint = objects[root].runtime_generation
-            with db.tx(readonly=True) as txn:
-                active = Ref(f"index:{root.id()}")
-                recovering = (txn.exists(root) and txn.exists(active)
+            frozen = objects[root]
+            checkpoint = frozen.runtime_generation
+            active = Ref(f"index:{root.id()}")
+            root_payload = self._remote._dump_cas_object(frozen)
+
+            def validate_checkpoint(txn):
+                current = self.exec_state().read_execution_record(root.id())["state"]
+                same_checkpoint = (txn.exists(root)
+                                   and self._remote._dump_cas_object(txn.get(root)) == root_payload)
+                recovering = (same_checkpoint and txn.exists(active)
                               and current["lifecycle"] == "running"
+                              and current.get("runtime_generation") is not None
                               and txn.get(active).runtime_generation == current.get("runtime_generation"))
-            if not recovering and not (
-                current["lifecycle"] == "suspended" and current.get("runtime_generation") == checkpoint
-            ):
-                raise DmlRepoError("Snapshot is stale or runtime is not suspended")
+                if not recovering and not (
+                    current["lifecycle"] == "suspended" and current.get("runtime_generation") == checkpoint
+                ):
+                    raise DmlRepoError("Snapshot is stale or runtime is not suspended")
+                return same_checkpoint, recovering
+
+            with db.tx(readonly=True) as txn:
+                validate_checkpoint(txn)
 
             def restore(txn):
-                if txn.exists(Ref(f"index:{root.id()}")) and not txn.exists(root):
-                    raise ValueError("Runtime is already active locally")
+                # Recheck authority on every replay before replacing mutable local
+                # state. Immutable graph-object conflicts still abort the transaction.
+                same_checkpoint, recovering = validate_checkpoint(txn)
+                if txn.exists(active) and not recovering:
+                    candidate = txn.get(active)
+                    candidate_content = candidate.to_dict()
+                    candidate_content.pop("runtime_generation")
+                    frozen_content = frozen.to_dict()
+                    for field_name in ("runtime_generation", "previous_generation", "frozen_message"):
+                        frozen_content.pop(field_name)
+                    same_staging = (same_checkpoint and candidate_content == frozen_content
+                                    and candidate.runtime_generation not in {
+                                        None, frozen.previous_generation, checkpoint
+                                    })
+                    if not same_staging:
+                        txn.delete(active)
                 for ref, obj in objects.items():
-                    if txn.exists(ref):
+                    if ref == root:
+                        txn.put(obj, to=ref)
+                    elif txn.exists(ref):
                         if self._remote._dump_cas_object(txn.get(ref)) != self._remote._dump_cas_object(obj):
                             raise ValueError(f"Snapshot object conflicts with local state: {ref}")
-                    elif ref == root:
-                        txn.put(obj, to=ref)
                     elif txn.put(obj) != ref:
                         raise ValueError(f"Snapshot object identity mismatch: {ref}")
 

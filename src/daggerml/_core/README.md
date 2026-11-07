@@ -38,12 +38,19 @@ recoverable. Mutation guards and result-publication CAS reject old generations.
 The optional semantic `runtime_generation` field is separate from the transient
 driver lock. Restored applications explicitly continue from graph checkpoints;
 original adapter handles remain for teardown, not automatic relaunch.
+Adapter-error publication checks the invocation's generation, lifecycle, and
+absence of a runtime result inside every semantic-state CAS attempt. Rejected
+stale outcomes do not complete child lineage or start cleanup.
 
 `runtime.export_snapshot` exports versioned JSON with the frozen index and its
 complete local object closure. `runtime.unfreeze(snapshot=...)` validates object
 identities and closure in a replayable transaction before claiming activation in
 the same remote namespace. Artifact bytes and remote execution/driver records
 are not duplicated into snapshots.
+An import may reconcile superseded local frozen roots and stale activation
+staging only after validating the current remote checkpoint. Immutable-object
+conflicts abort the local transaction; a locally owned active generation is
+preserved, including during interrupted-activation recovery.
 
 ## Remote graph storage
 

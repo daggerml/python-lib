@@ -223,6 +223,10 @@ class CancellationError(CanceledExecutionError):
         self.type = "cancellationerror"
 
 
+class _StaleAdapterOutcome(Exception):
+    """Abort an adapter failure whose runtime publication authority has changed."""
+
+
 @dataclass
 class ExecutionState:
     root_uri: str
@@ -927,6 +931,7 @@ class ExecutionState:
             record = self.read_execution_record(execution_id)
             state = record["state"]
             driver = record["driver"]
+            expected_generation = state.get("runtime_generation")
             if state["lifecycle"] in ("cancel-pending", "canceled"):
                 raise CancellationError(
                     f"Execution {execution_id} is canceled", lifecycle=state["lifecycle"]
@@ -963,7 +968,7 @@ class ExecutionState:
                 return None
             adapter_state = response.get("adapter_state", current["driver"]["adapter_state"])
             if (current["state"]["lifecycle"] == "suspended"
-                    or current["state"].get("runtime_generation") != state.get("runtime_generation")):
+                    or current["state"].get("runtime_generation") != expected_generation):
                 self._mutate_driver(execution_id, owner, lambda d: d.update(adapter_state=adapter_state))
                 return None
             if response["status"] == "retry":
@@ -989,16 +994,28 @@ class ExecutionState:
             dag = self._error_dag(
                 str(response.get("error") or "Adapter failed before publishing a result"), argv_node, db
             )
-            if self.read_execution_record(execution_id)["state"]["lifecycle"] == "pending":
-                # The adapter may fail before a worker has activated this execution.
-                self._mutate_state(execution_id, lambda value: value.update(lifecycle="running"), owner=owner)
-            self._mutate_state(
-                execution_id,
-                lambda value: value.update(
-                    lifecycle="failed", result_ref=dag.to, result_source="adapter-error"
-                ),
-                owner=owner,
-            )
+            def require_failure_authority(value: ExecutionSemanticState, lifecycle: str) -> None:
+                if (value.get("runtime_generation") != expected_generation
+                        or value["lifecycle"] != lifecycle or value["result_ref"] is not None):
+                    raise _StaleAdapterOutcome
+
+            def activate_for_failure(value: ExecutionSemanticState) -> None:
+                require_failure_authority(value, "pending")
+                value["lifecycle"] = "running"
+
+            def publish_failure(value: ExecutionSemanticState) -> None:
+                require_failure_authority(value, "running")
+                value.update(lifecycle="failed", result_ref=dag.to, result_source="adapter-error")
+
+            try:
+                if self.read_execution_record(execution_id)["state"]["lifecycle"] == "pending":
+                    # The adapter may fail before a worker has activated this execution.
+                    self._mutate_state(execution_id, activate_for_failure, owner=owner)
+                self._mutate_state(execution_id, publish_failure, owner=owner)
+            except _StaleAdapterOutcome:
+                # Every CAS retry rechecks the original invocation's authority.
+                # In particular, do not complete lineage or tear down replacement work.
+                return None
             self._mutate_driver(execution_id, owner, lambda value: value.update(adapter_state=adapter_state))
             self._update_child(index.id(), execution_id, complete=True)
             self._drive_cleanup_owned(execution_id, owner, db, runnable)

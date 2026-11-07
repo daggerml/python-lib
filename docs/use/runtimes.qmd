@@ -62,6 +62,11 @@ activation claim. A second computer cannot activate another copy of that
 checkpoint. Older checkpoints become stale after resumption, even if the same
 execution is frozen again.
 
+A newer checkpoint can return to a project that still holds an older frozen
+copy of the same execution. Import reconciles that superseded copy and stale
+activation staging after validating the remote checkpoint; it does not overwrite
+a locally owned active generation or conflicting immutable graph objects.
+
 Both user-authored and execution-aware function runtimes can be frozen. The
 execution becomes `suspended`, not terminal; its identity, arguments, lineage,
 cache pointer, and executor continuation remain in place. Resumption claims a

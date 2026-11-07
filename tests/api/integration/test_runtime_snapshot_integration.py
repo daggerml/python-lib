@@ -78,7 +78,7 @@ def test_script_checkpoint_resumes_without_relaunch_and_returns_normal_result(ru
 
 
 @pytest.mark.parametrize("execution_runtime", [False, True])
-def test_snapshot_cross_project_resumption_and_cache_publication(runtime_world, execution_runtime):
+def test_snapshot_cross_project_round_trip_and_cache_publication(runtime_world, execution_runtime):
     world = runtime_world
     source = world.publisher
     cache_key = None
@@ -117,15 +117,19 @@ def test_snapshot_cross_project_resumption_and_cache_publication(runtime_world, 
     assert resumed.tags == ["training"]
     if execution_runtime:
         assert resumed.argv.value() == [Runnable(Uri("script"), kwargs={}, adapter="dml-local-adapter"), 3]
-    resumed.commit(resumed.put({"epoch": 3}, name="final"))
+    resumed.put({"epoch": 3}, name="final")
+    resumed.freeze("return checkpoint to original project")
+    returned = api.resume(snapshot=resumed.export_snapshot(), dml=source, name="finished", message="complete")
+    assert returned["checkpoint"].value() == {"epoch": 2, "loss": 0.5}
+    returned.commit(returned["final"])
     with pytest.raises(DmlRepoError, match="stale|not suspended"):
-        draft.unfreeze()
+        resumed.unfreeze()
     after = state.read_execution_record(execution_id)
     assert after["metadata"] == before["metadata"]
     assert after["driver"] == before["driver"]
-    assert after["state"]["result_ref"] == resumed.ref.to
+    assert after["state"]["result_ref"] == returned.ref.to
     if cache_key:
         owner = state.acquire(execution_id)
         state._finalize_runtime_result(execution_id, owner)
         state.unlock(execution_id, owner)
-        assert state.get_cached_result(cache_key, target._db) == resumed.ref
+        assert state.get_cached_result(cache_key, target._db) == returned.ref

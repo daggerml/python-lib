@@ -10,8 +10,8 @@ import pytest
 
 from daggerml._core.db import Ref
 from daggerml._core.exec_state import ExecutionState
-from daggerml._core.types import CanceledExecutionError, DmlRepoError, Runnable, Uri
-from tests._core.helpers import FakeCasStore, FakeExecutionRemote, run_parallel
+from daggerml._core.types import ArgvNode, CanceledExecutionError, DmlRepoError, ListDatum, Runnable, Uri
+from tests._core.helpers import FakeCasStore, FakeExecutionRemote, make_db, run_parallel
 
 
 def _state(cache_key: str | None = "cache") -> ExecutionState:
@@ -275,6 +275,69 @@ def test_invoke_failure_is_reused_as_cached_adapter_error(monkeypatch) -> None:
     assert record["state"]["lifecycle"] == "failed"
     assert record["state"]["result_source"] == "adapter-error"
     assert record["driver"]["cleanup"] == {"status": "complete", "error": None}
+
+
+@pytest.mark.parametrize("stage", ["error-upload", "failure-cas", "pending-cas"])
+@pytest.mark.parametrize(("handoff", "published"), [(True, False), (True, True), (False, True)])
+def test_adapter_failure_cannot_override_current_runtime(tmp_path, monkeypatch, stage, handoff, published):
+    state = _state()
+    db = make_db(tmp_path)
+    db.ensure_exists()
+    argv = db.write_with_growth(lambda txn: txn.put(ArgvNode(value=txn.put(ListDatum([])))))
+    assert state.create_execution_record(_record("caller", cache_key=None, argv_ref=None))
+    assert state.create_execution_record(_record("child", "pending" if stage == "pending-cas" else "running"))
+    assert state._create_cache("cache", "child")
+    injected = False
+    calls = []
+
+    def replace_runtime():
+        nonlocal injected
+        injected = True
+        record = state.read_execution_record("child")
+        if record["state"]["lifecycle"] == "pending":
+            state._mutate_state("child", lambda value: value.update(lifecycle="running"),
+                                owner=record["driver"]["lock"]["owner"])
+        if handoff:
+            state.suspend_runtime("child", None, "checkpoint")
+            state.resume_runtime("child", "checkpoint", "replacement")
+        if published:
+            state.finish_execution("child", Ref("dag:replacement"), db,
+                                   generation="replacement" if handoff else None)
+
+    if stage == "error-upload":
+        monkeypatch.setattr(
+            state._remote, "upload_object_graph", lambda *_: replace_runtime() if not injected else None
+        )
+    else:
+        put = state._store._put_js
+
+        def interrupt_cas(key, value, **kwargs):
+            if (not injected and getattr(key, "key", None) == state._execution_key("child")
+                    and value["lifecycle"] == ("running" if stage == "pending-cas" else "failed")):
+                replace_runtime()
+            return put(key, value, **kwargs)
+
+        monkeypatch.setattr(state._store, "_put_js", interrupt_cas)
+
+    def call_adapter(request):
+        calls.append(request["operation"])
+        return {"status": "failure", "error": "old worker failed"}
+
+    monkeypatch.setattr(state, "_call_adapter", call_adapter)
+    assert state.get_or_start_fn(Ref("index:caller"), Runnable(Uri("target"), adapter="adapter"), argv, db) is None
+    assert injected
+    record = state.read_execution_record("child")
+    assert record["state"]["lifecycle"] == "running"
+    assert record["state"].get("runtime_generation") == ("replacement" if handoff else None)
+    assert record["state"]["result_ref"] == ("dag:replacement" if published else None)
+    assert record["driver"]["lock"] is None
+    assert record["driver"]["cleanup"] is None
+    assert state.read_execution_record("caller")["state"]["spawned_execution_ids"] == ["child"]
+    assert state.read_execution_record("caller")["state"]["child_execution_ids"] == []
+    assert calls == ["invoke"]
+    if not published:
+        state.finish_execution("child", Ref("dag:replacement"), db, generation="replacement")
+        assert state.read_execution_record("child")["state"]["result_ref"] == "dag:replacement"
 
 
 def test_cleanup_records_complete_and_failure_statuses(monkeypatch) -> None:
