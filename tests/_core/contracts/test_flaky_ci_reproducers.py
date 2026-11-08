@@ -154,6 +154,10 @@ def test_adapter_failure_before_worker_activation_retains_error_dag(monkeypatch)
 def test_script_cancel_waits_for_terminated_process_group(monkeypatch, tmp_path) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
+    monkeypatch.setattr(
+        "daggerml.contrib.executors.script.psutil.Process",
+        lambda pid: SimpleNamespace(create_time=lambda: 100.25),
+    )
     monkeypatch.setattr("daggerml.contrib.executors.script.os.killpg", lambda *_: None)
     monkeypatch.setattr("daggerml.contrib.executors.script.os.waitpid", lambda *_: (0, 0))
 
@@ -161,7 +165,7 @@ def test_script_cancel_waits_for_terminated_process_group(monkeypatch, tmp_path)
         cache_key="cache",
         execution_id="exec",
         runnable={},
-        state={"owner": _current_owner(), "pid": 123, "workdir": str(workdir)},
+        state={"owner": _current_owner(), "pid": 123, "start_time": 100.25, "workdir": str(workdir)},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec",
         cancel_requested_by="user",

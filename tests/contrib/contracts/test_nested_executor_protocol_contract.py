@@ -57,6 +57,10 @@ def test_script_start_uses_execution_id_temp_prefix(tmp_path, monkeypatch) -> No
 
     monkeypatch.setattr("daggerml.contrib.executors.script.tempfile.mkdtemp", mkdtemp)
     monkeypatch.setattr(
+        "daggerml.contrib.executors.script.psutil.Process",
+        lambda pid: SimpleNamespace(create_time=lambda: 100.25),
+    )
+    monkeypatch.setattr(
         "daggerml.contrib.executors.script.subprocess.Popen",
         lambda *args, **kwargs: SimpleNamespace(pid=123),
     )

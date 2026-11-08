@@ -8,6 +8,8 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+import psutil
+
 import daggerml.api as api
 from daggerml import Runnable, Uri
 from daggerml.contrib.api import funkify
@@ -76,7 +78,10 @@ def test_local_adapter_wire_cleans_active_supervisor_across_fresh_processes(tmp_
     workdir.mkdir()
     (workdir / "worker.log").write_text("scratch")
     worker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
-    state = {"owner": _current_owner(), "pid": worker.pid, "workdir": str(workdir)}
+    state = {
+        "owner": _current_owner(), "pid": worker.pid,
+        "start_time": psutil.Process(worker.pid).create_time(), "workdir": str(workdir),
+    }
     request = {
         "operation": "cleanup", "cache_key": "process-cleanup", "execution_id": "process-cleanup",
         "runnable": asdict(Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter")),
@@ -124,7 +129,10 @@ def test_script_cancel_reaps_worker_process_group_via_adapter_wire(tmp_path):
         "runnable": asdict(Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter")),
         "remote": {"root": "s3://test-bucket/test-prefix"},
         "scratch_uri": "s3://test-bucket/test-prefix/scratch",
-        "adapter_state": {"owner": _current_owner(), "pid": parent.pid, "workdir": str(workdir)},
+        "adapter_state": {
+            "owner": _current_owner(), "pid": parent.pid,
+            "start_time": psutil.Process(parent.pid).create_time(), "workdir": str(workdir),
+        },
         "argv_ref": "node-argv:process-cancel", "requested_by": "tester",
     }
     try:

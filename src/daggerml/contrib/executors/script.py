@@ -6,6 +6,7 @@ import importlib.util
 import inspect
 import json
 import logging
+import math
 import os
 import shutil
 import signal
@@ -17,6 +18,8 @@ from contextlib import chdir
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
+
+import psutil
 
 import daggerml as dml
 from daggerml import Runnable, Uri
@@ -161,14 +164,23 @@ class ScriptExecutor(ExecutorBase):
                 close_fds=True,
                 env={**os.environ, "PYTHONUNBUFFERED": "1", **payload["env"]},
             )
-        launch_state = {
+        launch_state: dict[str, Any] = {
             "owner": _current_owner(),
             "pid": proc.pid,
+            "start_time": None,
             "workdir": str(workdir),
             "result_path": str(result_path),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
         }
+        try:
+            launch_state["start_time"] = psutil.Process(proc.pid).create_time()
+        except psutil.Error as exc:
+            return {
+                "status": "failure",
+                "error": f"Could not record script supervisor identity: {exc}",
+                "state": launch_state,
+            }
         return {"status": "retry", "error": None, "state": launch_state}
 
     def poll(
@@ -183,25 +195,13 @@ class ScriptExecutor(ExecutorBase):
         del cache_key, execution_id, runnable, remote, scratch_uri
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
-        result_path = Path(state.get("result_path", ""))
-        pid = state.get("pid")
-        # Polls may run either in the launching adapter process or in a later
-        # process. Reap children when we can; otherwise fall back to a direct
-        # PID probe for cross-process polling.
-        if isinstance(pid, int):
-            try:
-                done_pid, _ = os.waitpid(pid, os.WNOHANG)
-                if done_pid == 0:
-                    return {"status": "retry", "error": None, "state": state}
-            except ChildProcessError:
-                try:
-                    os.kill(pid, 0)
-                    return {"status": "retry", "error": None, "state": state}
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    return {"status": "retry", "error": None, "state": state}
+        try:
+            if _supervisor_active(state):
+                return {"status": "retry", "error": None, "state": state}
+        except DmlRepoError as exc:
+            return {"status": "failure", "error": f"script poll failed: {exc}", "state": state}
         # Process exited — read result
+        result_path = Path(state.get("result_path", ""))
         if result_path.exists():
             try:
                 parsed = json.loads(result_path.read_text())
@@ -225,31 +225,22 @@ class ScriptExecutor(ExecutorBase):
 
     def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
         del cache_key, execution_id, runnable, remote, scratch_uri, result_ref
-        if isinstance(state, dict) and state["owner"] != _current_owner():
+        if not isinstance(state, dict):
+            return {"status": "success", "error": None, "state": {}}
+        if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
-        state = state if isinstance(state, dict) else {}
-        pid = state.get("pid")
-        if isinstance(pid, int):
-            try:
-                done_pid, _ = os.waitpid(pid, os.WNOHANG)
-                active = done_pid == 0
-            except ChildProcessError:
-                try:
-                    os.kill(pid, 0)
-                    active = True
-                except ProcessLookupError:
-                    active = False
-                except PermissionError as exc:
-                    return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
-            if active:
+        try:
+            if _supervisor_active(state):
                 # The DML result is already published, so the supervisor is no longer needed.
                 # Stop its process group before removing scratch so it cannot keep writing there.
                 try:
-                    os.killpg(pid, signal.SIGTERM)
+                    os.killpg(state["pid"], signal.SIGTERM)
                 except ProcessLookupError:
                     pass
                 except PermissionError as exc:
                     return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
+        except DmlRepoError as exc:
+            return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
         _cleanup_workdir(state)
         workdir = state.get("workdir")
         if isinstance(workdir, str) and os.path.exists(workdir):
@@ -272,19 +263,48 @@ class ScriptExecutor(ExecutorBase):
             return {"status": "cancelled", "error": None, "state": {}}
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
-        pid = state.get("pid")
-        if isinstance(pid, int):
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            except PermissionError as exc:
-                return {"status": "failure", "error": f"script cancellation failed: {exc}", "state": state}
+        try:
+            if _supervisor_active(state):
+                try:
+                    os.killpg(state["pid"], signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except PermissionError as exc:
+                    return {"status": "failure", "error": f"script cancellation failed: {exc}", "state": state}
+        except DmlRepoError as exc:
+            return {"status": "failure", "error": f"script cancellation failed: {exc}", "state": state}
         _cleanup_workdir(state)
         workdir = state.get("workdir")
         if isinstance(workdir, str) and os.path.exists(workdir):
             return {"status": "failure", "error": f"script cancellation failed to remove {workdir}", "state": state}
         return {"status": "cancelled", "error": None, "state": state}
+
+
+def _supervisor_active(state: dict[str, Any]) -> bool:
+    """Check the saved PID/start-time identity before inspecting or signalling work."""
+    # This check and killpg are not atomic; PID/group reuse between them remains possible.
+    pid, start_time = state.get("pid"), state.get("start_time")
+    if (type(pid) is not int or pid <= 0 or not isinstance(start_time, (int, float)) or isinstance(start_time, bool)
+            or not math.isfinite(start_time) or start_time <= 0):
+        raise DmlRepoError("Missing or invalid script supervisor PID/start time; refusing local resource operations")
+    try:
+        process = psutil.Process(pid)
+        if process.create_time() != start_time:
+            raise DmlRepoError(f"Script supervisor identity mismatch for PID {pid}; refusing local resource operations")
+        # Reap our own child when possible. Fresh adapter processes are not its
+        # parent, so inspect the verified process's status instead.
+        try:
+            done_pid, _ = os.waitpid(pid, os.WNOHANG)
+            return done_pid == 0
+        except ChildProcessError:
+            return process.status() != psutil.STATUS_ZOMBIE
+    except psutil.ZombieProcess as exc:
+        # ZombieProcess subclasses NoSuchProcess, but does not prove absence.
+        raise DmlRepoError(f"Could not verify script supervisor PID {pid}: {exc}") from exc
+    except psutil.NoSuchProcess:
+        return False
+    except (psutil.Error, OSError) as exc:
+        raise DmlRepoError(f"Could not verify script supervisor PID {pid}: {exc}") from exc
 
 
 def _cleanup_workdir(launch_state: dict[str, Any]) -> None:
