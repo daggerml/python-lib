@@ -268,6 +268,37 @@ def test_freeze_and_unfreeze_replace_only_token_and_return_self(dag, fake_dml, r
     fake_dml.runtime.freeze.assert_called_once_with(refs.index, message="dag: demo")
 
 
+@pytest.mark.parametrize("explicit_dml", [False, True])
+@pytest.mark.parametrize("frozen", [False, True])
+def test_load_constructs_wrapper_without_execution_coordination(fake_dml, refs, monkeypatch, explicit_dml, frozen):
+    data = {"schema": 1, "id": "runtime", "frozen": frozen}
+    token = api.Ref("frozenindex:runtime") if frozen else refs.index
+    fake_dml.runtime.load.return_value = token
+    if explicit_dml:
+        monkeypatch.setattr(api, "get_default_dml", lambda: pytest.fail("explicit repository must be used"))
+        loaded = api.Dag.load(data, dml=fake_dml)
+    else:
+        monkeypatch.setattr(api, "get_default_dml", lambda: fake_dml)
+        loaded = api.Dag.load(data)
+    fake_dml.runtime.load.assert_called_once_with(data)
+    assert loaded.dml is fake_dml
+    assert loaded.token == token
+    assert loaded.ref is None
+    fake_dml.runtime.create.assert_not_called()
+    fake_dml.runtime.unfreeze.assert_not_called()
+    fake_dml.runtime.freeze.assert_not_called()
+
+
+def test_load_constructs_requested_subclass(fake_dml, refs):
+    class DerivedDag(api.Dag):
+        pass
+
+    fake_dml.runtime.load.return_value = refs.index
+    loaded = DerivedDag.load({}, dml=fake_dml)
+    assert isinstance(loaded, DerivedDag)
+    assert loaded.token == refs.index
+
+
 def test_frozen_index_reads_use_partial_dag_projections(dag, fake_dml, refs):
     frozen = api.Ref("frozenindex:frozen")
     dag.token = frozen

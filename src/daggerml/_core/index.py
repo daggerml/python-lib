@@ -16,6 +16,7 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import InitVar, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
@@ -51,6 +52,33 @@ if TYPE_CHECKING:
     import boto3
 
 logger = logging.getLogger(__name__)
+
+
+class _RuntimePackCodec(Remote):
+    """Reuse Remote's pack codecs without constructing a remote transport."""
+
+    def __init__(self):
+        pass
+
+    def _pack_key(self, ref: Ref) -> str:
+        if ref.ns() not in {"dag", "node-argv"}:
+            raise ValueError(f"Only DAG and argv roots can be packed: {ref}")
+        return ref.to
+
+    def manifest(self, root: Ref, txn) -> dict[str, Any]:
+        _, children, imports = self._partition(root, txn.get)
+        descendants: set[Ref] = set()
+        pending = list(children)
+        while pending:
+            child = pending.pop()
+            if child in descendants:
+                continue
+            descendants.add(child)
+            _, children, imported = self._partition(child, txn.get)
+            pending.extend(children - descendants)
+            imports.update(imported)
+        return {"schema": 1, "root": root.to, "subdags": sorted(ref.to for ref in descendants),
+                "imports": sorted(ref.to for ref in imports)}
 
 
 @dataclass
@@ -195,6 +223,65 @@ class IndexOps:
             return active
 
         return db.write_with_growth(unfreeze_index)
+
+    @staticmethod
+    def dump(index: Ref, *, db: DmlDB) -> dict[str, Any]:
+        """Serialize an index as a commitpack, one DAG manifest, and one DAG pack.
+
+        The embedded DAG pack is its ordinary decompressed JSON representation.
+        Dependency DAGs and parent history remain references, as in remote packs.
+        """
+        codec = _RuntimePackCodec()
+        with db.tx(readonly=True) as txn:
+            idx = txn.get(index)
+            if not isinstance(idx, (Index, FrozenIndex)):
+                raise DmlRepoError("Runtime dump requires an active or frozen index")
+            tree = txn.get(idx.tree)
+            commitpack = {"schema": 1, "commit": [index.to, codec._dump_cas_object(idx)],
+                          "tree": [idx.tree.to, codec._dump_cas_object(tree)],
+                          "dags": {name: dag.to for name, dag in tree.dags.items()}}
+            return {"schema": 1, "id": index.id(), "commitpack": commitpack,
+                    "frozen": isinstance(idx, FrozenIndex), "dag_manifest": codec.manifest(idx.dag, txn),
+                    "dag_pack": codec._encode_pack(idx.dag, txn)}
+
+    @staticmethod
+    def load(data: dict[str, Any], *, db: DmlDB) -> Ref:
+        """Load a runtimepack under its original ID, overwriting an existing index.
+
+        Only the embedded root DAG body and commit-shaped state are loaded.
+        Referenced DAGs and history must already be local or fetched separately.
+        """
+        try:
+            if not isinstance(data, dict) or data.get("schema") != 1:
+                raise ValueError("Invalid runtime dump envelope")
+            root = Ref(f"{'frozenindex' if data['frozen'] else 'index'}:{data['id']}")
+            codec = _RuntimePackCodec()
+            idx, tree = codec._read_commit(root, json.dumps(data["commitpack"]))
+            if not isinstance(idx, (Index, FrozenIndex)):
+                raise ValueError("Runtime commitpack must contain an index")
+            children, imports = codec._read_graph_manifest(idx.dag, json.dumps(data["dag_manifest"]).encode())
+            objects = codec._decode_pack(idx.dag, data["dag_pack"])
+            _, direct_children, direct_imports = codec._partition(idx.dag, objects.__getitem__)
+            if not direct_children <= children or not direct_imports <= imports:
+                raise ValueError("DAG manifest omits graph dependencies")
+            objects[idx.tree] = tree
+
+            def restore(txn):
+                for ref, obj in objects.items():
+                    if txn.exists(ref):
+                        if codec._dump_cas_object(txn.get(ref)) != codec._dump_cas_object(obj):
+                            raise ValueError(f"Immutable object conflicts with local state: {ref}")
+                    elif txn.put(obj) != ref:
+                        raise ValueError(f"Object identity mismatch: {ref}")
+                txn.put(idx, to=root)
+                opposite = Ref(f"{'index' if root.ns() == 'frozenindex' else 'frozenindex'}:{root.id()}")
+                if txn.exists(opposite):
+                    txn.delete(opposite)
+
+            db.write_with_growth(restore, create_if_missing=True)
+            return root
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DmlRepoError(f"Invalid runtime dump: {exc}") from exc
 
     def put_import(self, index: Ref, dag: Ref, node: Optional[Ref], name: Optional[str] = None, *, db: DmlDB) -> Ref:
         """Import a node from another DAG into the current index DAG."""

@@ -277,19 +277,17 @@ class Remote:
             imports.update(imported)
         return objects, functions, imports
 
-    def _encode_body(self, root: Ref, objects: dict[Ref, DmlBase]) -> bytes:
+    def _encode_body(self, root: Ref, objects: dict[Ref, DmlBase]) -> dict[str, Any]:
         self._pack_key(root)
-        return gzip.compress(_json({"schema": 1, "root": root.to,
-                                    "objects": {ref.to: self._dump_cas_object(obj)
-                                                for ref, obj in objects.items()}}).encode(), compresslevel=6, mtime=0)
+        return {"schema": 1, "root": root.to,
+                "objects": {ref.to: self._dump_cas_object(obj) for ref, obj in objects.items()}}
 
-    def _encode_pack(self, root: Ref, txn: TxnWithValid) -> bytes:
+    def _encode_pack(self, root: Ref, txn: TxnWithValid) -> dict[str, Any]:
         objects, _, _ = self._partition(root, txn.get)
         return self._encode_body(root, objects)
 
-    def _decode_pack(self, root: Ref, raw: bytes) -> dict[Ref, DmlBase]:
+    def _decode_pack(self, root: Ref, data: dict[str, Any]) -> dict[Ref, DmlBase]:
         self._pack_key(root)
-        data = json.loads(gzip.decompress(raw))
         if (not isinstance(data, dict) or set(data) != {"schema", "root", "objects"}
                 or type(data["schema"]) is not int or data["schema"] != 1 or data["root"] != root.to
                 or not isinstance(data["objects"], dict) or root.to not in data["objects"]):
@@ -414,8 +412,9 @@ class Remote:
                         manifest_roots.update(imports)
                         pending.update(children | imports)
                         if not pack_present:
-                            writes.append(pool.submit(self._put_immutable, self._pack_key(root),
-                                                      self._encode_body(root, objects)))
+                            payload = self._encode_body(root, objects)
+                            raw = gzip.compress(_json(payload).encode(), compresslevel=6, mtime=0)
+                            writes.append(pool.submit(self._put_immutable, self._pack_key(root), raw))
                 pending.difference_update(edges.keys() | published)
                 for future in writes:
                     future.result()
@@ -720,7 +719,7 @@ class Remote:
                 for batch in completed:
                     decoded = {}
                     for root, raw in batch:
-                        body = self._decode_pack(root, raw)
+                        body = self._decode_pack(root, json.loads(gzip.decompress(raw)))
                         record_edges(root, body.__getitem__)
                         self._merge_objects(decoded, body)
                     if stage == 0:

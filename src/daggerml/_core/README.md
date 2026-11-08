@@ -31,6 +31,13 @@ Cancellation conditionally removes the selected attempt's matching cache pointer
 before adapter teardown, and `cancel-pending` prevents later result mutation.
 Adapter scratch paths and caller edges remain separate from the execution record.
 
+`runtime.dump` and `runtime.load` serialize an active or frozen index and its
+complete local repository-object closure using the graph-pack object encoding.
+Loading preserves the index ID and overwrites any existing copy, replacing the
+opposite active/frozen form if present. These are local database operations:
+they do not read or restore execution records, locks, cache pointers, executor
+handles, or external artifact bytes, and provide no execution-handoff guarantee.
+
 ## Remote graph storage
 
 The S3 descriptor is schema 1, layout `dagmanifest+dagpack+commits+refs+split-execution`.

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItemConflict
 from daggerml._core.types import (
@@ -19,8 +20,10 @@ from daggerml._core.types import (
     DmlRepoError,
     FnNode,
     ImportNode,
+    Index,
     ListDatum,
     LiteralNode,
+    Ref,
     ScalarDatum,
     Tree,
 )
@@ -67,6 +70,44 @@ def graph(tmp_path):
                            commit=commit, parent=parent, tree=tree)
 
 
+@pytest.mark.parametrize("finished", [False, True])
+def test_runtimepack_reuses_remote_formats_and_leaves_dependencies_separate(graph, finished):
+    g = graph
+    with g.source.tx() as txn:
+        imported = txn.get(g.dag).names["result"]
+        call = txn.put(FnNode(argv=[imported], dag=g.nested))
+        dag = txn.put(Dag(nodes=[g.argv, imported, call], names={"call": call}, tags=[], argv=g.argv,
+                          result=call if finished else None))
+        index = txn.put(Index(parents=[g.commit], tree=g.tree, author="researcher", message="work in progress",
+                              dag=dag), to=Ref("index:runtime"))
+        expected = txn.get(index)
+    g.remote.upload_object_graph(dag, g.source)
+    data = IndexOps.dump(index, db=g.source)
+    assert data["dag_pack"] == json.loads(gzip.decompress(g.data[g.remote._pack_key(dag)]))
+    assert data["dag_manifest"] == json.loads(g.data[g.remote._manifest_key(dag)])
+    commit, tree = g.remote._read_commit(index, json.dumps(data["commitpack"]))
+    assert commit == expected
+    with g.source.tx(readonly=True) as txn:
+        assert tree == txn.get(g.tree)
+    assert data["dag_manifest"]["imports"] == [g.nested.to]
+    assert data["dag_manifest"]["subdags"] == [g.nested.to]
+    assert g.nested.to not in data["dag_pack"]["objects"]
+    assert g.node.to not in data["dag_pack"]["objects"]
+    assert IndexOps.load(data, db=g.target) == index
+    with g.target.tx(readonly=True) as txn:
+        assert txn.get(index) == expected
+        assert txn.get(dag).result == (call if finished else None)
+        assert not txn.exists(g.nested)
+        assert not txn.exists(g.commit)
+    # Existing fetch planning fills the missing dependencies of either a completed
+    # or unfinished DAG. Loading the runtimepack itself does not fetch them.
+    assert g.remote.materialize_ref(dag, g.target) == dag
+    with g.target.tx(readonly=True) as txn:
+        assert txn.exists(g.nested)
+        assert txn.exists(g.node)
+        assert txn.get(dag).result == (call if finished else None)
+
+
 def test_project_upload_only_writes_manifests_and_deduplicated_dag_packs(graph):
     g = graph
     g.remote.upload_object_graph(g.commit, g.source)
@@ -89,12 +130,36 @@ def test_same_codec_roundtrips_dag_and_argv_without_synthetic_dag(graph, root_na
     raw = g.data[g.remote._pack_key(root)]
     envelope = json.loads(gzip.decompress(raw))
     assert envelope["root"] == root.to
+    with g.source.tx(readonly=True) as txn:
+        assert g.remote._encode_pack(root, txn) == envelope
+    expected = json.dumps(envelope, separators=(",", ":"), sort_keys=True, allow_nan=False).encode()
+    assert raw == gzip.compress(expected, compresslevel=6, mtime=0)
     if root_name == "argv":
         assert not any(key.startswith("dag:") for key in envelope["objects"])
     assert g.remote.materialize_ref(root, g.target) == root
     with g.source.tx(readonly=True) as source, g.target.tx(readonly=True) as target:
         assert target.get(root) == source.get(root)
         assert target.get(g.value) == source.get(g.value)
+
+
+def test_pack_codecs_and_runtimepack_do_not_use_gzip(graph, monkeypatch):
+    g = graph
+    with g.source.tx() as txn:
+        index = txn.put(Index(parents=[g.commit], tree=g.tree, author="a", message="dump", dag=g.dag),
+                        to=Ref("index:runtime"))
+
+    def unexpected_gzip(*args, **kwargs):
+        pytest.fail("Pack codecs and runtimepacks must operate on payload dictionaries")
+
+    monkeypatch.setattr(gzip, "compress", unexpected_gzip)
+    monkeypatch.setattr(gzip, "decompress", unexpected_gzip)
+    with g.source.tx(readonly=True) as txn:
+        payload = g.remote._encode_pack(g.dag, txn)
+        decoded = g.remote._decode_pack(g.dag, payload)
+        assert decoded[g.dag] == txn.get(g.dag)
+    runtimepack = IndexOps.dump(index, db=g.source)
+    assert runtimepack["dag_pack"] == payload
+    assert IndexOps.load(runtimepack, db=g.target) == index
 
 
 @pytest.mark.parametrize("damage", ["schema", "root", "missing", "unreachable", "identity", "gzip"])
@@ -236,9 +301,10 @@ def test_incomplete_function_objects_from_failed_fetch_are_not_trusted_on_retry(
     outer, middle = function_graph(g)
     g.remote.upload_object_graph(outer, g.source)
     # Simulate a function batch committed before a later network failure.
-    objects = g.remote._decode_pack(middle, g.data[g.remote._pack_key(middle)])
+    objects = g.remote._decode_pack(middle, json.loads(gzip.decompress(g.data[g.remote._pack_key(middle)])))
     if missing == "datum":
-        objects.update(g.remote._decode_pack(g.nested, g.data[g.remote._pack_key(g.nested)]))
+        payload = json.loads(gzip.decompress(g.data[g.remote._pack_key(g.nested)]))
+        objects.update(g.remote._decode_pack(g.nested, payload))
         del objects[g.value]
     g.remote._materialize_objects(list(objects.items()), g.target)
     with g.target.tx(readonly=True) as txn:

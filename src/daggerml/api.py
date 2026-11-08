@@ -636,6 +636,35 @@ class Dag:
         self.token = self.dml.runtime.unfreeze(self._require_index_ref())
         return self
 
+    def dump(self) -> dict[str, Any]:
+        """Return this active or frozen runtime's repository objects as JSON-compatible data.
+
+        This does not freeze execution or preserve locks, execution records, or
+        external artifact bytes. ``dml.runtime.load(data)`` restores the original
+        index ID and overwrites an existing copy.
+        """
+        return self.dml.runtime.dump(self._require_index_ref())
+
+    @classmethod
+    def load(cls, data: dict[str, Any], *, dml: Dml | None = None) -> "Dag":
+        """Construct a DAG wrapper from a runtimepack, preserving its index ID.
+
+        Parameters
+        ----------
+        data : dict
+            Runtimepack returned by ``Dag.dump()``.
+        dml : Dml, optional
+            Destination repository. Defaults to the active default repository.
+
+        Returns
+        -------
+        Dag
+            The loaded active or frozen runtime. An existing index is overwritten;
+            execution records and locks are neither created nor restored.
+        """
+        runtime = dml if dml is not None else get_default_dml()
+        return cls(dml=runtime, token=runtime.runtime.load(data))
+
     def cancel(self, max_retries: int = 3):
         """Cancel the DAG's execution.
 

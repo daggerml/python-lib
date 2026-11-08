@@ -32,6 +32,40 @@ name=..., message=...)` resumes it in another process. Runtime and execution
 identities are complete `Ref` values (`index:` or `frozenindex:`), never bare
 IDs.
 
+## Dump and load runtime graph data
+
+Dump an active or frozen index to JSON on stdout, then load it from stdin or a
+file in another initialized project:
+
+```{bash}
+dump_ref="$(dml runtime create)"
+printf '["scalar",42]\n' | dml runtime put-literal "$dump_ref" - --name answer >/dev/null
+dml runtime dump "$dump_ref" > runtime.json
+dml runtime load - < runtime.json
+dml runtime load runtime.json
+```
+
+Loading preserves the dumped index ID. It overwrites an existing index with
+that ID or creates it if absent; loading a frozen index replaces its active
+counterpart and vice versa. The JSON contains `schema`, `root`, and `objects`,
+using the same object encoding as dagpacks and including the complete local
+dependency closure, including parent history. Immutable graph-object identities
+are checked during loading.
+
+In Python, `dag.dump()` or `dml.runtime.dump(index_ref)` returns a JSON-compatible
+dictionary. Pass that dictionary to `dml.runtime.load(data)` to obtain the
+restored index ref. Dumping does not require freezing, including for function
+runtimes.
+
+These operations only transfer local repository objects. They do not transfer
+execution records, locks, cache ownership, executor handles, Python stacks, or
+external artifact bytes. No remote access or matching `remote.root` is required
+to dump or load. Normal runtime mutations still use the project's existing
+execution coordination; loading does not initialize or repair that state.
+The caller is responsible for concurrent writers and any execution handoff.
+Treat dumps as trusted project data, and ensure every referenced repository
+object is local before dumping (deepen shallow history if needed).
+
 ## Inspect, cancel, and refresh deliberately
 
 `runtime describe`, `describe-graph`, and `read-execution-record` report graph,

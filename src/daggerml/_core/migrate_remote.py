@@ -13,6 +13,7 @@ No local repository is needed. No source objects are written or deleted.
 """
 
 import argparse
+import gzip
 import hashlib
 import json
 import re
@@ -89,7 +90,8 @@ def _verify_destination(remote: Remote, db: DmlDB, roots: set) -> None:
         for key in remote._store._iter(prefix):
             oid = key[len(prefix):].removesuffix(".json.gz")
             root = _immutable_ref(f"{namespace}:{oid}")
-            objects = remote._decode_pack(root, remote._store._get_bytes(key))
+            payload = json.loads(gzip.decompress(remote._store._get_bytes(key)))
+            objects = remote._decode_pack(root, payload)
             remote._materialize_objects(list(objects.items()), db)
     # Validate every manifest against its bodies and cross-pack dependencies,
     # not just the independently valid bounded packs.

@@ -533,6 +533,14 @@ class _RuntimeNamespace:
         """Reactivate a frozen runtime index."""
         return _index_ops(self._dml).unfreeze(index, db=self._dml._db)
 
+    def dump(self, index: Annotated[Ref, "Active or frozen index to dump."]) -> dict[str, Any]:
+        """Dump an index and its repository objects to JSON without execution coordination."""
+        return IndexOps.dump(index, db=self._dml._db)
+
+    def load(self, data: Annotated[dict[str, Any], "JSON file to load, or '-' for stdin."]) -> Ref:
+        """Load a dumped index under its original ID, overwriting it if present."""
+        return IndexOps.load(data, db=self._dml._db)
+
     def describe(self, index: Annotated[Ref, "Runtime index to inspect."]) -> RuntimeDescribe:
         """Describe one runtime index."""
         db = self._dml._db
