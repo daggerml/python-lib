@@ -130,12 +130,36 @@ def test_same_codec_roundtrips_dag_and_argv_without_synthetic_dag(graph, root_na
     raw = g.data[g.remote._pack_key(root)]
     envelope = json.loads(gzip.decompress(raw))
     assert envelope["root"] == root.to
+    with g.source.tx(readonly=True) as txn:
+        assert g.remote._encode_pack(root, txn) == envelope
+    expected = json.dumps(envelope, separators=(",", ":"), sort_keys=True, allow_nan=False).encode()
+    assert raw == gzip.compress(expected, compresslevel=6, mtime=0)
     if root_name == "argv":
         assert not any(key.startswith("dag:") for key in envelope["objects"])
     assert g.remote.materialize_ref(root, g.target) == root
     with g.source.tx(readonly=True) as source, g.target.tx(readonly=True) as target:
         assert target.get(root) == source.get(root)
         assert target.get(g.value) == source.get(g.value)
+
+
+def test_pack_codecs_and_runtimepack_do_not_use_gzip(graph, monkeypatch):
+    g = graph
+    with g.source.tx() as txn:
+        index = txn.put(Index(parents=[g.commit], tree=g.tree, author="a", message="dump", dag=g.dag),
+                        to=Ref("index:runtime"))
+
+    def unexpected_gzip(*args, **kwargs):
+        pytest.fail("Pack codecs and runtimepacks must operate on payload dictionaries")
+
+    monkeypatch.setattr(gzip, "compress", unexpected_gzip)
+    monkeypatch.setattr(gzip, "decompress", unexpected_gzip)
+    with g.source.tx(readonly=True) as txn:
+        payload = g.remote._encode_pack(g.dag, txn)
+        decoded = g.remote._decode_pack(g.dag, payload)
+        assert decoded[g.dag] == txn.get(g.dag)
+    runtimepack = IndexOps.dump(index, db=g.source)
+    assert runtimepack["dag_pack"] == payload
+    assert IndexOps.load(runtimepack, db=g.target) == index
 
 
 @pytest.mark.parametrize("damage", ["schema", "root", "missing", "unreachable", "identity", "gzip"])
@@ -277,9 +301,10 @@ def test_incomplete_function_objects_from_failed_fetch_are_not_trusted_on_retry(
     outer, middle = function_graph(g)
     g.remote.upload_object_graph(outer, g.source)
     # Simulate a function batch committed before a later network failure.
-    objects = g.remote._decode_pack(middle, g.data[g.remote._pack_key(middle)])
+    objects = g.remote._decode_pack(middle, json.loads(gzip.decompress(g.data[g.remote._pack_key(middle)])))
     if missing == "datum":
-        objects.update(g.remote._decode_pack(g.nested, g.data[g.remote._pack_key(g.nested)]))
+        payload = json.loads(gzip.decompress(g.data[g.remote._pack_key(g.nested)]))
+        objects.update(g.remote._decode_pack(g.nested, payload))
         del objects[g.value]
     g.remote._materialize_objects(list(objects.items()), g.target)
     with g.target.tx(readonly=True) as txn:

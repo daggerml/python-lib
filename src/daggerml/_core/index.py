@@ -16,7 +16,6 @@ Public API:
 
 from __future__ import annotations
 
-import gzip
 import json
 import logging
 from dataclasses import InitVar, dataclass, field
@@ -243,7 +242,7 @@ class IndexOps:
                           "dags": {name: dag.to for name, dag in tree.dags.items()}}
             return {"schema": 1, "id": index.id(), "commitpack": commitpack,
                     "frozen": isinstance(idx, FrozenIndex), "dag_manifest": codec.manifest(idx.dag, txn),
-                    "dag_pack": json.loads(gzip.decompress(codec._encode_pack(idx.dag, txn)))}
+                    "dag_pack": codec._encode_pack(idx.dag, txn)}
 
     @staticmethod
     def load(data: dict[str, Any], *, db: DmlDB) -> Ref:
@@ -261,7 +260,7 @@ class IndexOps:
             if not isinstance(idx, (Index, FrozenIndex)):
                 raise ValueError("Runtime commitpack must contain an index")
             children, imports = codec._read_graph_manifest(idx.dag, json.dumps(data["dag_manifest"]).encode())
-            objects = codec._decode_pack(idx.dag, gzip.compress(json.dumps(data["dag_pack"]).encode()))
+            objects = codec._decode_pack(idx.dag, data["dag_pack"])
             _, direct_children, direct_imports = codec._partition(idx.dag, objects.__getitem__)
             if not direct_children <= children or not direct_imports <= imports:
                 raise ValueError("DAG manifest omits graph dependencies")

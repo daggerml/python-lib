@@ -1,5 +1,6 @@
 """Bounded S3 reads must not move database work onto worker threads."""
 
+import gzip
 import json
 from collections import Counter
 from contextlib import contextmanager
@@ -65,7 +66,7 @@ def fetch_graph(tmp_path):
     payloads = {}
     with source.tx(readonly=True) as txn:
         for ref in dags:
-            payloads[remote._pack_key(ref)] = remote._encode_pack(ref, txn)
+            payloads[remote._pack_key(ref)] = gzip.compress(json.dumps(remote._encode_pack(ref, txn)).encode())
             payloads[remote._manifest_key(ref)] = json.dumps(dict(
                 schema=1, root=ref.to, subdags=[], imports=[])).encode()
         for ref in (first, tip):
