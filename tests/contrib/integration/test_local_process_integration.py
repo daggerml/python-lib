@@ -5,10 +5,9 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
-
-import psutil
 
 import daggerml.api as api
 from daggerml import Runnable, Uri
@@ -22,7 +21,7 @@ from daggerml.contrib.s3 import S3Store
 def worker_pid(dag, value):
     import os
 
-    return {"pid": os.getpid(), "value": value.value()}
+    return {"pid": os.getpid(), "value": value.value(), "execution_id": os.environ["DML_EXECUTION_ID"]}
 
 
 @funkify(uri="script")
@@ -65,6 +64,7 @@ def test_local_adapter_crosses_process_boundary_and_cleans_scratch(runtime_world
     assert value["value"] == 42
     key = dml.dag.describe(result.context().ref)["cache_key"]
     execution = dml.cache.describe(key)["execution"]
+    assert value["execution_id"] == execution.id()
     record = dml.runtime.read_execution_record(execution)
     assert record["state"]["lifecycle"] == "succeeded"
     state = record["driver"]["adapter_state"]
@@ -77,10 +77,13 @@ def test_local_adapter_wire_cleans_active_supervisor_across_fresh_processes(tmp_
     workdir = tmp_path / "scratch"
     workdir.mkdir()
     (workdir / "worker.log").write_text("scratch")
-    worker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    worker = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True,
+        env={**os.environ, "DML_EXECUTION_ID": "process-cleanup"},
+    )
     state = {
         "owner": _current_owner(), "pid": worker.pid,
-        "start_time": psutil.Process(worker.pid).create_time(), "workdir": str(workdir),
+        "workdir": str(workdir),
     }
     request = {
         "operation": "cleanup", "cache_key": "process-cleanup", "execution_id": "process-cleanup",
@@ -100,9 +103,10 @@ def test_local_adapter_wire_cleans_active_supervisor_across_fresh_processes(tmp_
 
     try:
         first = send()
-        assert first["status"] == "success"
+        assert first["status"] in {"retry", "success"}
         assert first["adapter_state"] == state
         worker.wait(timeout=10)
+        assert send()["status"] == "success"
         assert not workdir.exists()
     finally:
         if worker.poll() is None:
@@ -117,11 +121,14 @@ def test_script_cancel_reaps_worker_process_group_via_adapter_wire(tmp_path):
     parent = subprocess.Popen(
         [sys.executable, "-u", "-c", "import subprocess,sys,time; "
          "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']); "
-         "print(child.pid,flush=True); time.sleep(30)"],
+         "print(child.pid,flush=True)"],
         stdout=subprocess.PIPE, start_new_session=True, text=True,
+        env={**os.environ, "DML_EXECUTION_ID": "process-cancel"},
     )
     assert parent.stdout is not None
     child_pid = int(parent.stdout.readline().strip())
+    # The group survives its leader; cancellation must find the marked child.
+    parent.wait(timeout=5)
     workdir = tmp_path / "cancel-scratch"
     workdir.mkdir()
     request = {
@@ -131,17 +138,25 @@ def test_script_cancel_reaps_worker_process_group_via_adapter_wire(tmp_path):
         "scratch_uri": "s3://test-bucket/test-prefix/scratch",
         "adapter_state": {
             "owner": _current_owner(), "pid": parent.pid,
-            "start_time": psutil.Process(parent.pid).create_time(), "workdir": str(workdir),
+            "workdir": str(workdir),
         },
         "argv_ref": "node-argv:process-cancel", "requested_by": "tester",
     }
     try:
-        proc = subprocess.run(
-            [str(Path(sys.executable).with_name("dml-local-adapter")), "-i", "-", "-o", "-"],
-            input=json.dumps(request), text=True, capture_output=True, timeout=10,
-        )
-        assert proc.returncode == 0, proc.stderr
-        assert json.loads(proc.stdout)["status"] == "cancelled"
+        deadline = time.monotonic() + 10
+        while True:
+            proc = subprocess.run(
+                [str(Path(sys.executable).with_name("dml-local-adapter")), "-i", "-", "-o", "-"],
+                input=json.dumps(request), text=True, capture_output=True, timeout=10,
+            )
+            assert proc.returncode == 0, proc.stderr
+            result = json.loads(proc.stdout)
+            if result["status"] != "retry":
+                assert result["status"] == "cancelled", result
+                break
+            assert time.monotonic() < deadline
+            parent.poll()
+            time.sleep(0.05)
         parent.wait(timeout=5)
         assert not workdir.exists()
         try:

@@ -21,11 +21,14 @@ def _runnable() -> dict:
 
 @pytest.mark.parametrize("caller", ["A", "B"])
 def test_ssh_forwards_remote_ownership_from_any_caller(monkeypatch, caller):
-    state = {"owner": "C", "pid": 123, "start_time": 100.25}
+    state = {"owner": "C", "pid": 123}
     monkeypatch.setattr(
-        "daggerml.contrib.executors.script.psutil.Process",
-        lambda pid: SimpleNamespace(create_time=lambda: 100.25),
+        "daggerml.contrib.executors.script.psutil.process_iter",
+        lambda: iter([
+            SimpleNamespace(pid=123, status=lambda: "running", environ=lambda: {"DML_EXECUTION_ID": "exec"})
+        ]),
     )
+    monkeypatch.setattr("daggerml.contrib.executors.script.os.getpgid", lambda pid: pid)
     monkeypatch.setattr("daggerml.contrib.executors._ownership.socket.gethostname", lambda: caller)
     monkeypatch.setattr("daggerml.contrib.executors.script.os.waitpid", lambda *args: (0, 0))
 

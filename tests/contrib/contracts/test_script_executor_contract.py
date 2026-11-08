@@ -221,15 +221,22 @@ def test_resolve_runnable_rejects_sub_and_writes_script_to_s3(monkeypatch):
 
 @pytest.fixture
 def supervisor_identity(monkeypatch):
-    monkeypatch.setattr(script_mod.psutil, "Process", lambda pid: SimpleNamespace(create_time=lambda: 100.25))
+    monkeypatch.setattr(
+        script_mod.psutil, "process_iter",
+        lambda: iter([
+            SimpleNamespace(pid=123, status=lambda: "running", environ=lambda: {"DML_EXECUTION_ID": "exec"})
+        ]),
+    )
+    monkeypatch.setattr(script_mod.os, "getpgid", lambda pid: pid)
 
 
 def test_start_returns_durable_running_state(monkeypatch, supervisor_identity):
+    seen = {}
     class FakePopen:
         pid = 123
 
         def __init__(self, *args, **kwargs):
-            pass
+            seen.update(kwargs)
 
     monkeypatch.setattr(script_mod.subprocess, "Popen", FakePopen)
     result = ScriptExecutor().start(
@@ -241,19 +248,20 @@ def test_start_returns_durable_running_state(monkeypatch, supervisor_identity):
     )
     assert result["status"] == "retry"
     assert result["state"]["pid"] == 123
-    assert result["state"]["start_time"] == 100.25
+    assert "start_time" not in result["state"]
+    assert seen["env"]["DML_EXECUTION_ID"] == "exec"
     assert "workdir" in result["state"]
 
 
 def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_path, supervisor_identity):
-    monkeypatch.setattr(script_mod.os, "waitpid", lambda pid, flags: (pid, 0))
+    monkeypatch.setattr(script_mod.psutil, "process_iter", lambda: iter([]))
+    monkeypatch.setattr(script_mod.os, "waitpid", lambda pid, flags: (0, 0))
 
     success_dir = tmp_path / "success"
     success_dir.mkdir()
     success_state = {
         "owner": _current_owner(),
         "pid": 1,
-        "start_time": 100.25,
         "workdir": str(success_dir),
         "result_path": str(success_dir / "result.json"),
         "stdout_path": str(success_dir / "stdout.log"),
@@ -279,7 +287,6 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     bad_state = {
         "owner": _current_owner(),
         "pid": 1,
-        "start_time": 100.25,
         "workdir": str(bad_dir),
         "result_path": str(bad_dir / "result.json"),
         "stdout_path": str(bad_dir / "stdout.log"),
@@ -309,7 +316,6 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     empty_state = {
         "owner": _current_owner(),
         "pid": 1,
-        "start_time": 100.25,
         "workdir": str(empty_dir),
         "result_path": str(empty_dir / "result.json"),
         "stdout_path": str(empty_dir / "stdout.log"),
@@ -405,7 +411,7 @@ def test_contrib_script_cancel_reports_permission_failure(monkeypatch, superviso
         cache_key="ck",
         execution_id="exec",
         runnable={},
-        state={"owner": _current_owner(), "pid": 123, "start_time": 100.25},
+        state={"owner": _current_owner(), "pid": 123},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
         cancel_requested_by="user",
@@ -425,7 +431,7 @@ def test_script_cleanup_preserves_workdir_if_supervisor_cannot_be_terminated(
         script_mod.os, "killpg", lambda pid, sig: (_ for _ in ()).throw(PermissionError("denied"))
     )
 
-    state = {"owner": _current_owner(), "pid": 123, "start_time": 100.25, "workdir": str(workdir)}
+    state = {"owner": _current_owner(), "pid": 123, "workdir": str(workdir)}
     result = ScriptExecutor().cleanup("ck", "exec", {}, state, {}, "scratch", "dag:x")
 
     assert result["status"] == "failure"

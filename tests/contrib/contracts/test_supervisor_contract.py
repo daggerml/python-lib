@@ -27,6 +27,7 @@ def test_payload_environment_configures_supervisor_and_child(monkeypatch, tmp_pa
     monkeypatch.setenv("AWS_PROFILE", "ambient")
     monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("DML_REMOTE_ROOT", "s3://ambient/project")
+    monkeypatch.setenv("DML_EXECUTION_ID", "ambient-execution")
     monkeypatch.setattr(boto3, "DEFAULT_SESSION", boto3.Session())
     original_session = boto3.DEFAULT_SESSION
     original_env = dict(os.environ)
@@ -73,6 +74,7 @@ def test_payload_environment_configures_supervisor_and_child(monkeypatch, tmp_pa
         "cmd": ["python", "worker.py"], "remote": {"root": "s3://job/project"},
         "env": {
             "DML_REMOTE_ROOT": "s3://conflicting/project", "DML_REMOTE_FETCH_WORKERS": "3",
+            "DML_EXECUTION_ID": "conflicting-execution",
             "AWS_REGION": "eu-west-1", "AWS_PROFILE": "job",
             "AWS_ENDPOINT_URL_CLOUDWATCH_LOGS": "http://127.0.0.1:9",
         },
@@ -84,8 +86,10 @@ def test_payload_environment_configures_supervisor_and_child(monkeypatch, tmp_pa
         assert supervisor_mod.run(payload)["status"] == "failed"
         assert seen["logs"]
         assert seen["child_env"]["DML_REMOTE_ROOT"] == "s3://job/project"
+        assert seen["child_env"]["DML_EXECUTION_ID"] == "exec"
         assert seen["child_env"]["AWS_PROFILE"] == "job"
     assert seen["dml_env"]["DML_REMOTE_ROOT"] == "s3://job/project"
+    assert seen["dml_env"]["DML_EXECUTION_ID"] == "exec"
     assert seen["dml_env"]["DML_REMOTE_FETCH_WORKERS"] == "3"
     assert seen["dml_env"]["AWS_PROFILE"] == "job"
     assert dict(os.environ) == original_env
