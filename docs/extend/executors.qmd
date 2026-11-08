@@ -84,13 +84,6 @@ Script workers receive function source plus explicit `extra_objs` and
 `post_lines`, not the authoring module's imports or globals. Put dependencies
 inside the function or inject them explicitly.
 
-A script function can freeze its DAG, export its snapshot to durable storage,
-and return without committing. Its worker/supervisor records `suspended`, not
-success or failure. This is a local worker outcome, not an additional adapter
-wire status: script polling represents it as `retry`. Core coordinates the
-remote suspension and explicit application-driven resumption; no executor is
-automatically relaunched from a snapshot.
-
 Script and Docker handles belong to their launching user and host. Foreign
 callers retry without touching local resources; hosts and containers must have
 distinct hostnames. Ownership is not authentication or automatic failover.

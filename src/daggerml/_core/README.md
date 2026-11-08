@@ -31,26 +31,12 @@ Cancellation conditionally removes the selected attempt's matching cache pointer
 before adapter teardown, and `cancel-pending` prevents later result mutation.
 Adapter scratch paths and caller edges remain separate from the execution record.
 
-Runtime freezing stages a local `FrozenIndex` before CAS-publishing `suspended`
-semantic state. A frozen generation can be claimed once for resumption; the
-active generation is staged locally before the claim so response loss is
-recoverable. Mutation guards and result-publication CAS reject old generations.
-The optional semantic `runtime_generation` field is separate from the transient
-driver lock. Restored applications explicitly continue from graph checkpoints;
-original adapter handles remain for teardown, not automatic relaunch.
-Adapter-error publication checks the invocation's generation, lifecycle, and
-absence of a runtime result inside every semantic-state CAS attempt. Rejected
-stale outcomes do not complete child lineage or start cleanup.
-
-`runtime.export_snapshot` exports versioned JSON with the frozen index and its
-complete local object closure. `runtime.unfreeze(snapshot=...)` validates object
-identities and closure in a replayable transaction before claiming activation in
-the same remote namespace. Artifact bytes and remote execution/driver records
-are not duplicated into snapshots.
-An import may reconcile superseded local frozen roots and stale activation
-staging only after validating the current remote checkpoint. Immutable-object
-conflicts abort the local transaction; a locally owned active generation is
-preserved, including during interrupted-activation recovery.
+`runtime.dump` and `runtime.load` serialize an active or frozen index and its
+complete local repository-object closure using the graph-pack object encoding.
+Loading preserves the index ID and overwrites any existing copy, replacing the
+opposite active/frozen form if present. These are local database operations:
+they do not read or restore execution records, locks, cache pointers, executor
+handles, or external artifact bytes, and provide no execution-handoff guarantee.
 
 ## Remote graph storage
 

@@ -4,7 +4,7 @@ import pytest
 
 from daggerml._core import DmlRepoError
 from daggerml._core.db import Ref
-from daggerml._core.types import ArgvNode, FrozenIndex, ListDatum
+from daggerml._core.types import ArgvNode, FrozenIndex, Index, ListDatum
 from daggerml.api import Dag
 from tests._core.helpers import NoopExecutionState, execution_record, local_index_ops, make_local_dml
 
@@ -59,7 +59,7 @@ def test_runtime_list_includes_frozen_indexes(tmp_path, monkeypatch) -> None:
     assert listed[frozen]["frozen_message"] == "Awaiting review"
 
 
-def test_runtime_freeze_preserves_function_runtime_arguments(tmp_path, monkeypatch) -> None:
+def test_runtime_freeze_rejects_function_runtime_without_replacing_it(tmp_path, monkeypatch) -> None:
     dml = make_local_dml(tmp_path, monkeypatch)
     index = dml.runtime.create()
     with dml._db.tx(create_if_missing=True) as txn:
@@ -68,12 +68,12 @@ def test_runtime_freeze_preserves_function_runtime_arguments(tmp_path, monkeypat
         dag.argv = txn.put(ArgvNode(value=txn.put(ListDatum([]))))
         txn.put(dag, to=idx.dag)
 
-    frozen = dml.runtime.freeze(index)
+    with pytest.raises(DmlRepoError, match="execution-aware function runtime"):
+        dml.runtime.freeze(index)
 
     with dml._db.tx(readonly=True) as txn:
-        assert not txn.exists(index)
-        assert isinstance(txn.get(frozen), FrozenIndex)
-        assert txn.get(txn.get(frozen).dag).argv is not None
+        assert isinstance(txn.get(index), Index)
+        assert not txn.exists(Ref(f"frozenindex:{index.id()}"))
 
 
 def test_frozen_index_is_retained_by_local_gc(tmp_path, monkeypatch) -> None:

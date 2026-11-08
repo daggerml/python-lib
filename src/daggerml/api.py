@@ -105,16 +105,15 @@ def load(
 
 
 def resume(
-    frozen: Ref | None = None,
+    frozen: Ref,
     *,
-    snapshot: str | None = None,
-    name: str = "",
-    message: str = "",
+    name: str,
+    message: str,
     dml: Dml | None = None,
 ) -> "Dag":
-    """Resume a local frozen runtime or a portable snapshot in its original remote."""
+    """Resume a frozen DAG runtime with explicitly supplied commit metadata."""
     runtime = dml or get_default_dml()
-    index_id = runtime.runtime.unfreeze(frozen, snapshot=snapshot)
+    index_id = runtime.runtime.unfreeze(frozen)
     return Dag(dml=runtime, token=index_id, name=name, message=message)
 
 
@@ -632,21 +631,39 @@ class Dag:
         self.token = self.dml.runtime.freeze(self._require_index_ref(), message=freeze_message)
         return self
 
-    def export_snapshot(self) -> str:
-        """Export this frozen runtime as portable JSON.
-
-        Returns
-        -------
-        str
-            Versioned snapshot containing repository objects, not external artifact
-            bytes or live processes. Resume against the same ``remote.root``.
-        """
-        return self.dml.runtime.export_snapshot(self._require_index_ref())
-
     def unfreeze(self) -> "Dag":
         """Unfreeze this uncommitted DAG's runtime index."""
         self.token = self.dml.runtime.unfreeze(self._require_index_ref())
         return self
+
+    def dump(self) -> dict[str, Any]:
+        """Return this active or frozen runtime's repository objects as JSON-compatible data.
+
+        This does not freeze execution or preserve locks, execution records, or
+        external artifact bytes. ``dml.runtime.load(data)`` restores the original
+        index ID and overwrites an existing copy.
+        """
+        return self.dml.runtime.dump(self._require_index_ref())
+
+    @classmethod
+    def load(cls, data: dict[str, Any], *, dml: Dml | None = None) -> "Dag":
+        """Construct a DAG wrapper from a runtimepack, preserving its index ID.
+
+        Parameters
+        ----------
+        data : dict
+            Runtimepack returned by ``Dag.dump()``.
+        dml : Dml, optional
+            Destination repository. Defaults to the active default repository.
+
+        Returns
+        -------
+        Dag
+            The loaded active or frozen runtime. An existing index is overwritten;
+            execution records and locks are neither created nor restored.
+        """
+        runtime = dml if dml is not None else get_default_dml()
+        return cls(dml=runtime, token=runtime.runtime.load(data))
 
     def cancel(self, max_retries: int = 3):
         """Cancel the DAG's execution.

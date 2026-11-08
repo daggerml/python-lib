@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from daggerml._core.index import IndexOps
 from daggerml._core.remote import Remote
 from daggerml._core.s3_cas import CasItemConflict
 from daggerml._core.types import (
@@ -19,8 +20,10 @@ from daggerml._core.types import (
     DmlRepoError,
     FnNode,
     ImportNode,
+    Index,
     ListDatum,
     LiteralNode,
+    Ref,
     ScalarDatum,
     Tree,
 )
@@ -65,6 +68,44 @@ def graph(tmp_path):
     return SimpleNamespace(remote=remote, source=source, target=target, data=data, writes=writes,
                            argv=argv, dag=dag, nested=nested, value=value, node=node,
                            commit=commit, parent=parent, tree=tree)
+
+
+@pytest.mark.parametrize("finished", [False, True])
+def test_runtimepack_reuses_remote_formats_and_leaves_dependencies_separate(graph, finished):
+    g = graph
+    with g.source.tx() as txn:
+        imported = txn.get(g.dag).names["result"]
+        call = txn.put(FnNode(argv=[imported], dag=g.nested))
+        dag = txn.put(Dag(nodes=[g.argv, imported, call], names={"call": call}, tags=[], argv=g.argv,
+                          result=call if finished else None))
+        index = txn.put(Index(parents=[g.commit], tree=g.tree, author="researcher", message="work in progress",
+                              dag=dag), to=Ref("index:runtime"))
+        expected = txn.get(index)
+    g.remote.upload_object_graph(dag, g.source)
+    data = IndexOps.dump(index, db=g.source)
+    assert data["dag_pack"] == json.loads(gzip.decompress(g.data[g.remote._pack_key(dag)]))
+    assert data["dag_manifest"] == json.loads(g.data[g.remote._manifest_key(dag)])
+    commit, tree = g.remote._read_commit(index, json.dumps(data["commitpack"]))
+    assert commit == expected
+    with g.source.tx(readonly=True) as txn:
+        assert tree == txn.get(g.tree)
+    assert data["dag_manifest"]["imports"] == [g.nested.to]
+    assert data["dag_manifest"]["subdags"] == [g.nested.to]
+    assert g.nested.to not in data["dag_pack"]["objects"]
+    assert g.node.to not in data["dag_pack"]["objects"]
+    assert IndexOps.load(data, db=g.target) == index
+    with g.target.tx(readonly=True) as txn:
+        assert txn.get(index) == expected
+        assert txn.get(dag).result == (call if finished else None)
+        assert not txn.exists(g.nested)
+        assert not txn.exists(g.commit)
+    # Existing fetch planning fills the missing dependencies of either a completed
+    # or unfinished DAG. Loading the runtimepack itself does not fetch them.
+    assert g.remote.materialize_ref(dag, g.target) == dag
+    with g.target.tx(readonly=True) as txn:
+        assert txn.exists(g.nested)
+        assert txn.exists(g.node)
+        assert txn.get(dag).result == (call if finished else None)
 
 
 def test_project_upload_only_writes_manifests_and_deduplicated_dag_packs(graph):

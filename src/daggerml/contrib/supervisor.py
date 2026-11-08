@@ -214,10 +214,6 @@ def _validate_output(result: Any) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise DmlRepoError(f"Supervisor result must be a dict; received: {result!r}")
     status = result.get("status")
-    if status == "suspended":
-        if set(result) != {"status", "error"} or result["error"] is not None:
-            raise DmlRepoError("Supervisor suspended result requires exactly status and error=None")
-        return result
     if status not in {"succeeded", "failed"}:
         raise DmlRepoError(
             "Supervisor result status must be one of succeeded|failed after worker exit; " f"received: {result!r}"

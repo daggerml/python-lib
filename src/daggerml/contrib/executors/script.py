@@ -205,8 +205,6 @@ class ScriptExecutor(ExecutorBase):
         if result_path.exists():
             try:
                 parsed = json.loads(result_path.read_text())
-                if parsed.get("status") == "suspended":
-                    return {"status": "retry", "error": None, "state": state}
                 if parsed.get("status") in {"succeeded", "failed"}:
                     return {
                         "status": "success" if parsed["status"] == "succeeded" else "failure",
@@ -338,8 +336,6 @@ def run_payload(
                     raise
                 fn = getattr(module, runnable.kwargs["fn_name"])
                 output = fn(dag, *arg_nodes)
-                if dag.token is not None and dag.token.ns() == "frozenindex":
-                    return {"status": "suspended", "error": None}
                 if dag.ref is None:
                     dag.commit(output)
             if dag.ref is None:

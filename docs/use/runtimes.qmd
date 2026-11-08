@@ -9,7 +9,7 @@ A runtime is mutable state used while authoring a DAG or tracking execution.
 Finalizing it creates an immutable DAG. Use the CLI to inspect and administer
 open work; use named committed DAGs for completed research.
 
-## Freeze and resume runtimes
+## Freeze and resume authoring
 
 ```{bash}
 runtime_ref="$(dml runtime create)"
@@ -32,65 +32,39 @@ name=..., message=...)` resumes it in another process. Runtime and execution
 identities are complete `Ref` values (`index:` or `frozenindex:`), never bare
 IDs.
 
-### Move a checkpoint to another computer
+## Dump and load runtime graph data
 
-Freeze before exporting. `dag.export_snapshot()` (or
-`dml.runtime.export_snapshot(frozen_ref)`) returns versioned JSON containing the
-frozen index and its complete local repository-object dependencies. Save that
-string in durable storage before stopping the source computer.
+Dump an active or frozen index to JSON on stdout, then load it from stdin or a
+file in another initialized project:
 
-```{python}
-import daggerml as dml
-
-draft = dml.new()
-draft.put({"epoch": 2, "loss": 0.5}, name="checkpoint")
-draft.freeze("handoff")
-snapshot = draft.export_snapshot()
-
-# An empty project models the replacement computer's local database.
-with dml.temporary(remote_root=draft.dml.config.get("remote.root")) as replacement:
-    resumed = dml.resume(snapshot=snapshot, dml=replacement)
-    assert resumed["checkpoint"].value() == {"epoch": 2, "loss": 0.5}
-    resumed.commit(resumed.put({"epoch": 3}))
+```{bash}
+dump_ref="$(dml runtime create)"
+printf '["scalar",42]\n' | dml runtime put-literal "$dump_ref" - --name answer >/dev/null
+dml runtime dump "$dump_ref" > runtime.json
+dml runtime load - < runtime.json
+dml runtime load runtime.json
 ```
 
-`dml.resume()` and `dml.runtime.unfreeze()` accept exactly one local frozen ref
-or `snapshot=` string. The destination must use the same `remote.root` and have
-access to its execution records and referenced artifacts. Export is repeatable
-and leaves the frozen runtime intact; successful resumption consumes its remote
-activation claim. A second computer cannot activate another copy of that
-checkpoint. Older checkpoints become stale after resumption, even if the same
-execution is frozen again.
+Loading preserves the dumped index ID. It overwrites an existing index with
+that ID or creates it if absent; loading a frozen index replaces its active
+counterpart and vice versa. The JSON contains `schema`, `root`, and `objects`,
+using the same object encoding as dagpacks and including the complete local
+dependency closure, including parent history. Immutable graph-object identities
+are checked during loading.
 
-A newer checkpoint can return to a project that still holds an older frozen
-copy of the same execution. Import reconciles that superseded copy and stale
-activation staging after validating the remote checkpoint; it does not overwrite
-a locally owned active generation or conflicting immutable graph objects.
+In Python, `dag.dump()` or `dml.runtime.dump(index_ref)` returns a JSON-compatible
+dictionary. Pass that dictionary to `dml.runtime.load(data)` to obtain the
+restored index ref. Dumping does not require freezing, including for function
+runtimes.
 
-Both user-authored and execution-aware function runtimes can be frozen. The
-execution becomes `suspended`, not terminal; its identity, arguments, lineage,
-cache pointer, and executor continuation remain in place. Resumption claims a
-new runtime generation, and stale local indexes cannot publish results under an
-old generation. Cancellation remains valid during suspension and prevents later
-resumption. Retry the same freeze/unfreeze operation after an interrupted remote
-response; locally staged state retains the generation needed to finish it.
-
-Snapshots are application checkpoints, not Python stack or process images.
-Continue explicitly from named checkpoint nodes and commit the ordinary result.
-The original adapter is not relaunched or allowed to turn its old process's exit
-into a failure of the resumed execution; its handles remain available for
-cleanup/cancellation. Resumption does not move PIDs, containers, or external
-side effects, and does not make local executor teardown portable. Quiesce the
-old application at the checkpoint; graph fencing is not a sandbox for arbitrary
-Python side effects. Do not share one mutable project database between competing
-application writers.
-
-Snapshot JSON contains repository data, not external artifact bytes, remote
-execution records, or ambient credentials. Treat snapshots as trusted project data, not
-authenticated authorization tokens. All repository dependencies must be local
-when exporting; deepen shallow history first if required parent objects are
-missing. Keep checkpoint files independently durable: remote graph collection
-does not discover snapshots stored outside the repository.
+These operations only transfer local repository objects. They do not transfer
+execution records, locks, cache ownership, executor handles, Python stacks, or
+external artifact bytes. No remote access or matching `remote.root` is required
+to dump or load. Normal runtime mutations still use the project's existing
+execution coordination; loading does not initialize or repair that state.
+The caller is responsible for concurrent writers and any execution handoff.
+Treat dumps as trusted project data, and ensure every referenced repository
+object is local before dumping (deepen shallow history if needed).
 
 ## Inspect, cancel, and refresh deliberately
 

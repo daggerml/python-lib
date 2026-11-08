@@ -54,7 +54,6 @@ def _format_graph_age(seconds: int | float | None) -> str:
 def _graph_lifecycle_style(lifecycle: str) -> str:
     return {
         "running": "yellow",
-        "suspended": "blue",
         "succeeded": "green",
         "failed": "red",
         "cancel-pending": "dark_goldenrod italic",
@@ -522,27 +521,25 @@ class _RuntimeNamespace:
     @_retry_runtime_mutation
     def freeze(
         self,
-        index: Annotated[Ref, "Active runtime index to freeze."],
+        index: Annotated[Ref, "Active user runtime index to freeze."],
         *,
         message: Annotated[str | None, "Optional reason shown while the runtime is frozen."] = None,
     ) -> Ref:
-        """Freeze a runtime for later inspection or coordinated resumption."""
+        """Freeze a user runtime for later inspection or resumption."""
         return _index_ops(self._dml).freeze(index, message, db=self._dml._db)
 
-    def export_snapshot(self, index: Annotated[Ref, "Frozen runtime index to export."]) -> str:
-        """Export a frozen runtime and its graph dependencies as portable JSON."""
-        return _index_ops(self._dml).export_snapshot(index, db=self._dml._db)
-
     @_retry_runtime_mutation
-    def unfreeze(
-        self,
-        index: Annotated[Ref | None, "Frozen runtime index to reactivate."] = None,
-        /,
-        *,
-        snapshot: Annotated[str | None, "Portable snapshot JSON to import and reactivate."] = None,
-    ) -> Ref:
-        """Reactivate exactly one of a local frozen index or a portable snapshot."""
-        return _index_ops(self._dml).unfreeze(index, snapshot=snapshot, db=self._dml._db)
+    def unfreeze(self, index: Annotated[Ref, "Frozen runtime index to reactivate."]) -> Ref:
+        """Reactivate a frozen runtime index."""
+        return _index_ops(self._dml).unfreeze(index, db=self._dml._db)
+
+    def dump(self, index: Annotated[Ref, "Active or frozen index to dump."]) -> dict[str, Any]:
+        """Dump an index and its repository objects to JSON without execution coordination."""
+        return IndexOps.dump(index, db=self._dml._db)
+
+    def load(self, data: Annotated[dict[str, Any], "JSON file to load, or '-' for stdin."]) -> Ref:
+        """Load a dumped index under its original ID, overwriting it if present."""
+        return IndexOps.load(data, db=self._dml._db)
 
     def describe(self, index: Annotated[Ref, "Runtime index to inspect."]) -> RuntimeDescribe:
         """Describe one runtime index."""

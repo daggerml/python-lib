@@ -43,7 +43,6 @@ def _run_worker_script(monkeypatch, tmp_path: Path, source: str, *, real_store=F
                 "arg-node",
             ]
             self.ref = None
-            self.token = None
 
         def __enter__(self):
             return self
@@ -83,16 +82,6 @@ def _run_worker_script(monkeypatch, tmp_path: Path, source: str, *, real_store=F
         monkeypatch.setattr(script_mod, "S3Store", lambda: FakeStore())
     result = script_mod.run_payload(execution_id="exec-1", cache_key="cache-1", remote_root="s3://bucket/root")
     return result, calls
-
-
-def test_frozen_worker_exits_without_committing_a_terminal_result(monkeypatch, tmp_path):
-    result, calls = _run_worker_script(monkeypatch, tmp_path, '''
-def fn(dag, arg):
-    from daggerml import Ref
-    dag.token = Ref("frozenindex:checkpoint")
-''')
-    assert result == {"status": "suspended", "error": None}
-    assert "commit" not in calls
 
 
 @pytest.mark.parametrize("ambient_default", [False, True])
@@ -453,7 +442,6 @@ def test_run_payload_uses_prepop_and_script_uri_from_runnable(monkeypatch, tmp_p
                 "arg-node",
             ]
             self.ref = None
-            self.token = None
 
         def __enter__(self):
             return self
