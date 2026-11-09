@@ -24,7 +24,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["boto3", "psutil>=7"]
+dependencies = ["boto3"]
 
 [project.optional-dependencies]
 terminal = [

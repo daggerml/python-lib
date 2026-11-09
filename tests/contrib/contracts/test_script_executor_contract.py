@@ -221,24 +221,13 @@ def test_resolve_runnable_rejects_sub_and_writes_script_to_s3(monkeypatch):
 
 @pytest.fixture
 def supervisor_identity(monkeypatch):
-    monkeypatch.setattr(
-        script_mod.psutil, "process_iter",
-        lambda: iter([
-            SimpleNamespace(pid=123, status=lambda: "running", environ=lambda: {"DML_EXECUTION_ID": "exec"})
-        ]),
-    )
-    monkeypatch.setattr(script_mod.os, "getpgid", lambda pid: pid)
+    monkeypatch.setattr(script_mod, "service_active", lambda handle: True)
+    monkeypatch.setattr(script_mod, "stop_service", lambda handle: True)
 
 
 def test_start_returns_durable_running_state(monkeypatch, supervisor_identity):
     seen = {}
-    class FakePopen:
-        pid = 123
-
-        def __init__(self, *args, **kwargs):
-            seen.update(kwargs)
-
-    monkeypatch.setattr(script_mod.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(script_mod, "start_service", lambda handle, cmd, workdir, env: seen.update(env=env))
     result = ScriptExecutor().start(
         cache_key="ck",
         execution_id="exec",
@@ -247,21 +236,21 @@ def test_start_returns_durable_running_state(monkeypatch, supervisor_identity):
         scratch_uri="s3://bucket/scratch",
     )
     assert result["status"] == "retry"
-    assert result["state"]["pid"] == 123
+    assert result["state"]["service"]["name"]
+    assert "pid" not in result["state"]
     assert "start_time" not in result["state"]
     assert seen["env"]["DML_EXECUTION_ID"] == "exec"
     assert "workdir" in result["state"]
 
 
 def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_path, supervisor_identity):
-    monkeypatch.setattr(script_mod.psutil, "process_iter", lambda: iter([]))
-    monkeypatch.setattr(script_mod.os, "waitpid", lambda pid, flags: (0, 0))
+    monkeypatch.setattr(script_mod, "service_active", lambda handle: False)
 
     success_dir = tmp_path / "success"
     success_dir.mkdir()
     success_state = {
         "owner": _current_owner(),
-        "pid": 1,
+        "service": {"manager": "systemd", "name": "daggerml-test.service"},
         "workdir": str(success_dir),
         "result_path": str(success_dir / "result.json"),
         "stdout_path": str(success_dir / "stdout.log"),
@@ -286,7 +275,7 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     bad_dir.mkdir()
     bad_state = {
         "owner": _current_owner(),
-        "pid": 1,
+        "service": {"manager": "systemd", "name": "daggerml-test.service"},
         "workdir": str(bad_dir),
         "result_path": str(bad_dir / "result.json"),
         "stdout_path": str(bad_dir / "stdout.log"),
@@ -315,7 +304,7 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     empty_dir.mkdir()
     empty_state = {
         "owner": _current_owner(),
-        "pid": 1,
+        "service": {"manager": "systemd", "name": "daggerml-test.service"},
         "workdir": str(empty_dir),
         "result_path": str(empty_dir / "result.json"),
         "stdout_path": str(empty_dir / "stdout.log"),
@@ -401,17 +390,16 @@ def test_cancel_without_launch_state_is_still_cancelled():
 
 
 def test_contrib_script_cancel_reports_permission_failure(monkeypatch, supervisor_identity):
-    monkeypatch.setattr(script_mod.os, "waitpid", lambda *_: (0, 0))
     monkeypatch.setattr(
-        "daggerml.contrib.executors.script.os.killpg",
-        lambda *_: (_ for _ in ()).throw(PermissionError("denied")),
+        script_mod, "stop_service",
+        lambda *_: (_ for _ in ()).throw(DmlRepoError("denied")),
     )
 
     result = ScriptExecutor().cancel(
         cache_key="ck",
         execution_id="exec",
         runnable={},
-        state={"owner": _current_owner(), "pid": 123},
+        state={"owner": _current_owner(), "service": {"manager": "systemd", "name": "daggerml-test.service"}},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
         cancel_requested_by="user",
@@ -426,12 +414,12 @@ def test_script_cleanup_preserves_workdir_if_supervisor_cannot_be_terminated(
 ):
     workdir = tmp_path / "scratch"
     workdir.mkdir()
-    monkeypatch.setattr(script_mod.os, "waitpid", lambda pid, flags: (0, 0))
     monkeypatch.setattr(
-        script_mod.os, "killpg", lambda pid, sig: (_ for _ in ()).throw(PermissionError("denied"))
+        script_mod, "stop_service", lambda handle: (_ for _ in ()).throw(DmlRepoError("denied"))
     )
 
-    state = {"owner": _current_owner(), "pid": 123, "workdir": str(workdir)}
+    state = {"owner": _current_owner(), "service": {"manager": "systemd", "name": "daggerml-test.service"},
+             "workdir": str(workdir)}
     result = ScriptExecutor().cleanup("ck", "exec", {}, state, {}, "scratch", "dag:x")
 
     assert result["status"] == "failure"

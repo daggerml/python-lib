@@ -1,19 +1,22 @@
-"""Real local adapter, supervisor, script worker and scratch lifecycle."""
+"""Real local adapter, OS-managed supervisor, script worker and scratch lifecycle."""
 
 import json
 import os
-import signal
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
+
+import pytest
 
 import daggerml.api as api
 from daggerml import Runnable, Uri
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
 from daggerml.contrib.executors._ownership import _current_owner
+from daggerml.contrib.executors._services import service_active, service_handle, start_service, stop_service
 from daggerml.contrib.s3 import S3Store
 
 
@@ -69,111 +72,61 @@ def test_local_adapter_crosses_process_boundary_and_cleans_scratch(runtime_world
     assert record["state"]["lifecycle"] == "succeeded"
     state = record["driver"]["adapter_state"]
     assert state["owner"] == _current_owner()
-    if state and isinstance(state, dict) and state.get("workdir"):
-        assert not Path(state["workdir"]).exists()
+    assert state["service"]["name"]
+    assert "pid" not in state
+    assert not Path(state["workdir"]).exists()
 
 
-def test_local_adapter_wire_cleans_active_supervisor_across_fresh_processes(tmp_path):
+@pytest.mark.parametrize("operation", ["cleanup", "cancel"])
+def test_local_adapter_wire_stops_named_service_across_fresh_processes(tmp_path, operation):
+    handle = service_handle(uuid.uuid4().hex, "s3://test-bucket/project")
     workdir = tmp_path / "scratch"
     workdir.mkdir()
-    (workdir / "worker.log").write_text("scratch")
-    worker = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True,
-        env={**os.environ, "DML_EXECUTION_ID": "process-cleanup"},
-    )
-    state = {
-        "owner": _current_owner(), "pid": worker.pid,
-        "workdir": str(workdir),
-    }
+    start_service(handle, [sys.executable, "-c", "import time; time.sleep(60)"], workdir, dict(os.environ))
+    state = {"owner": _current_owner(), "service": handle, "workdir": str(workdir)}
     request = {
-        "operation": "cleanup", "cache_key": "process-cleanup", "execution_id": "process-cleanup",
+        "operation": operation, "cache_key": "ck", "execution_id": "exec",
         "runnable": asdict(Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter")),
-        "remote": {"root": "s3://test-bucket/test-prefix"},
-        "scratch_uri": "s3://test-bucket/test-prefix/scratch",
-        "adapter_state": state, "result_ref": "dag:result",
+        "remote": {"root": "s3://test-bucket/project"}, "scratch_uri": "s3://test-bucket/scratch",
+        "adapter_state": state,
     }
-
-    def send():
-        proc = subprocess.run(
-            [str(Path(sys.executable).with_name("dml-local-adapter")), "-i", "-", "-o", "-"],
-            input=json.dumps(request), text=True, capture_output=True, timeout=10,
-        )
-        assert proc.returncode == 0, proc.stderr
-        return json.loads(proc.stdout)
-
+    request.update({"result_ref": "dag:result"} if operation == "cleanup" else
+                   {"argv_ref": "node-argv:argv", "requested_by": "tester"})
     try:
-        first = send()
-        assert first["status"] in {"retry", "success"}
-        assert first["adapter_state"] == state
-        worker.wait(timeout=10)
-        assert send()["status"] == "success"
-        assert not workdir.exists()
-    finally:
-        if worker.poll() is None:
-            os.killpg(worker.pid, signal.SIGTERM)
-            worker.wait(timeout=10)
-    second = send()
-    assert second["status"] == "success"
-    assert not workdir.exists()
-
-
-def test_script_cancel_reaps_worker_process_group_via_adapter_wire(tmp_path):
-    parent = subprocess.Popen(
-        [sys.executable, "-u", "-c", "import subprocess,sys,time; "
-         "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']); "
-         "print(child.pid,flush=True)"],
-        stdout=subprocess.PIPE, start_new_session=True, text=True,
-        env={**os.environ, "DML_EXECUTION_ID": "process-cancel"},
-    )
-    assert parent.stdout is not None
-    child_pid = int(parent.stdout.readline().strip())
-    # The group survives its leader; cancellation must find the marked child.
-    parent.wait(timeout=5)
-    workdir = tmp_path / "cancel-scratch"
-    workdir.mkdir()
-    request = {
-        "operation": "cancel", "cache_key": "process-cancel", "execution_id": "process-cancel",
-        "runnable": asdict(Runnable(target=Uri("script"), kwargs={}, adapter="dml-local-adapter")),
-        "remote": {"root": "s3://test-bucket/test-prefix"},
-        "scratch_uri": "s3://test-bucket/test-prefix/scratch",
-        "adapter_state": {
-            "owner": _current_owner(), "pid": parent.pid,
-            "workdir": str(workdir),
-        },
-        "argv_ref": "node-argv:process-cancel", "requested_by": "tester",
-    }
-    try:
-        deadline = time.monotonic() + 10
-        while True:
+        for _ in range(2):
             proc = subprocess.run(
                 [str(Path(sys.executable).with_name("dml-local-adapter")), "-i", "-", "-o", "-"],
-                input=json.dumps(request), text=True, capture_output=True, timeout=10,
+                input=json.dumps(request), text=True, capture_output=True, timeout=40,
             )
             assert proc.returncode == 0, proc.stderr
             result = json.loads(proc.stdout)
-            if result["status"] != "retry":
-                assert result["status"] == "cancelled", result
-                break
-            assert time.monotonic() < deadline
-            parent.poll()
-            time.sleep(0.05)
-        parent.wait(timeout=5)
+            assert result["status"] == ("success" if operation == "cleanup" else "cancelled"), result
+            assert result["adapter_state"] == state
         assert not workdir.exists()
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            import pytest
-
-            pytest.xfail("script cancellation acknowledges before its child process is reaped")
+        assert not service_active(handle)
     finally:
-        try:
-            os.killpg(parent.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            os.kill(child_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        parent.wait(timeout=5)
+        stop_service(handle)
+
+
+def test_service_manager_stops_workers_when_supervisor_exits(tmp_path):
+    handle = service_handle(uuid.uuid4().hex, "s3://test-bucket/project")
+    marker = tmp_path / "heartbeat"
+    child = ("import pathlib,time,sys\np=pathlib.Path(sys.argv[1])\n"
+             "while True:\n p.write_text(str(time.time_ns()))\n time.sleep(.05)")
+    parent = (
+        "import subprocess,sys,time,pathlib\n"
+        "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]])\n"
+        "while not pathlib.Path(sys.argv[2]).exists(): time.sleep(.01)\n"
+    )
+    try:
+        start_service(handle, [sys.executable, "-c", parent, child, str(marker)], tmp_path, dict(os.environ))
+        deadline = time.monotonic() + 15
+        while service_active(handle):
+            assert time.monotonic() < deadline
+            time.sleep(.05)
+        assert marker.exists()
+        before = marker.read_text()
+        time.sleep(.2)
+        assert marker.read_text() == before
+    finally:
+        stop_service(handle)

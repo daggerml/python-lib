@@ -8,8 +8,6 @@ import json
 import logging
 import os
 import shutil
-import signal
-import subprocess
 import sys
 import tempfile
 import traceback
@@ -18,14 +16,13 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
-import psutil
-
 import daggerml as dml
 from daggerml import Runnable, Uri
 from daggerml._core import AdapterCancelResponse, AdapterInvokeResponse
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.executors._ownership import _current_owner
+from daggerml.contrib.executors._services import service_active, service_handle, start_service, stop_service
 from daggerml.contrib.s3 import S3Store
 
 logger = logging.getLogger(__name__)
@@ -143,34 +140,26 @@ class ScriptExecutor(ExecutorBase):
             "execution_id": execution_id,
             "cmd": cmd,
             "remote": remote,
-            "env": {"DML_REMOTE_ROOT": remote["root"], "DML_EXECUTION_ID": execution_id},
+            "env": {**os.environ, "DML_REMOTE_ROOT": remote["root"], "DML_EXECUTION_ID": execution_id},
         }
         payload_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
-        with stdout_path.open("w") as stdout_f, stderr_path.open("w") as stderr_f:
-            proc = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "daggerml.contrib.supervisor",
-                    "-i",
-                    str(payload_path),
-                    "-o",
-                    str(result_path),
-                ],
-                stdout=stdout_f,
-                stderr=stderr_f,
-                start_new_session=True,
-                close_fds=True,
-                env={**os.environ, "PYTHONUNBUFFERED": "1", **payload["env"]},
-            )
+        payload_path.chmod(0o600)
+        service = service_handle(execution_id, remote["root"])
         launch_state: dict[str, Any] = {
             "owner": _current_owner(),
-            "pid": proc.pid,
+            "service": service,
             "workdir": str(workdir),
             "result_path": str(result_path),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
         }
+        try:
+            start_service(service, [sys.executable, "-m", "daggerml.contrib.supervisor",
+                                   "-i", str(payload_path), "-o", str(result_path)], workdir,
+                          {**payload["env"], "PYTHONUNBUFFERED": "1"})
+        except DmlRepoError as exc:
+            # Retain the named handle: a launch timeout does not prove rejection.
+            return {"status": "failure", "error": str(exc), "state": launch_state}
         return {"status": "retry", "error": None, "state": launch_state}
 
     def poll(
@@ -186,11 +175,11 @@ class ScriptExecutor(ExecutorBase):
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
         try:
-            if _process_group_active(state, execution_id):
+            if service_active(_saved_service(state)):
                 return {"status": "retry", "error": None, "state": state}
         except DmlRepoError as exc:
             return {"status": "failure", "error": f"script poll failed: {exc}", "state": state}
-        # No live group members remain — read result.
+        # The manager reports that the supervisor job has stopped.
         result_path = Path(state.get("result_path", ""))
         if result_path.exists():
             try:
@@ -220,16 +209,8 @@ class ScriptExecutor(ExecutorBase):
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
         try:
-            if _process_group_active(state, execution_id):
-                # Published results remain reusable while group teardown retries.
-                try:
-                    os.killpg(state["pid"], signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                except PermissionError as exc:
-                    return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
-                if _process_group_active(state, execution_id):
-                    return {"status": "retry", "error": None, "state": state}
+            if not stop_service(_saved_service(state)):
+                return {"status": "retry", "error": None, "state": state}
         except DmlRepoError as exc:
             return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
         _cleanup_workdir(state)
@@ -255,15 +236,8 @@ class ScriptExecutor(ExecutorBase):
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
         try:
-            if _process_group_active(state, execution_id):
-                try:
-                    os.killpg(state["pid"], signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                except PermissionError as exc:
-                    return {"status": "failure", "error": f"script cancellation failed: {exc}", "state": state}
-                if _process_group_active(state, execution_id):
-                    return {"status": "retry", "error": None, "state": state}
+            if not stop_service(_saved_service(state)):
+                return {"status": "retry", "error": None, "state": state}
         except DmlRepoError as exc:
             return {"status": "failure", "error": f"script cancellation failed: {exc}", "state": state}
         _cleanup_workdir(state)
@@ -273,45 +247,14 @@ class ScriptExecutor(ExecutorBase):
         return {"status": "cancelled", "error": None, "state": state}
 
 
-def _process_group_active(state: dict[str, Any], execution_id: str) -> bool:
-    """Verify a live group member's execution marker, even if its leader exited."""
-    # Launch uses start_new_session=True, so the saved PID is also the PGID.
-    # Inspection and killpg are not atomic; this is not a security boundary.
-    pgid = state.get("pid")
-    if type(pgid) is not int or pgid <= 0 or not isinstance(execution_id, str) or not execution_id:
-        raise DmlRepoError("Missing or invalid script process group/execution ID; refusing local resource operations")
-    active = owned = False
-    inspection_error = None
-    try:
-        for process in psutil.process_iter():
-            try:
-                if os.getpgid(process.pid) != pgid:
-                    continue
-                if process.status() == psutil.STATUS_ZOMBIE:
-                    continue
-                marker = process.environ().get("DML_EXECUTION_ID")
-                active = True
-                if marker == execution_id and os.getpgid(process.pid) == pgid:
-                    owned = True
-                    break
-            except (psutil.NoSuchProcess, ProcessLookupError):
-                continue
-            except (psutil.Error, OSError) as exc:
-                inspection_error = exc
-        if not owned and (active or inspection_error is not None):
-            detail = str(inspection_error) if inspection_error is not None else "no matching DML_EXECUTION_ID"
-            raise DmlRepoError(f"Could not verify script process group {pgid}: {detail}")
-        # Reap only our direct children, by group. Fresh adapters normally have none.
-        while True:
-            try:
-                done_pid, _ = os.waitpid(-pgid, os.WNOHANG)
-            except ChildProcessError:
-                break
-            if done_pid == 0:
-                break
-        return owned
-    except (psutil.Error, OSError) as exc:
-        raise DmlRepoError(f"Could not inspect script process group {pgid}: {exc}") from exc
+def _saved_service(state: dict[str, Any]) -> dict:
+    service = state.get("service")
+    if (not isinstance(service, dict) or service.get("manager") not in {"systemd", "launchd"}
+            or not isinstance(service.get("name"), str) or not service["name"]):
+        raise DmlRepoError("Missing Script service handle; PID-only continuation is unsupported")
+    if service["manager"] == "launchd" and service.get("domain") != f"user/{os.geteuid()}":
+        raise DmlRepoError("Script launchd job belongs to a different user domain")
+    return service
 
 
 def _cleanup_workdir(launch_state: dict[str, Any]) -> None:

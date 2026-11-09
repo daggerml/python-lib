@@ -154,20 +154,15 @@ def test_script_cancel_waits_for_terminated_process_group(monkeypatch, tmp_path)
     workdir = tmp_path / "work"
     workdir.mkdir()
     monkeypatch.setattr(
-        "daggerml.contrib.executors.script.psutil.process_iter",
-        lambda: iter([
-            SimpleNamespace(pid=124, status=lambda: "running", environ=lambda: {"DML_EXECUTION_ID": "exec"})
-        ]),
+        "daggerml.contrib.executors.script.stop_service", lambda handle: False,
     )
-    monkeypatch.setattr("daggerml.contrib.executors.script.os.getpgid", lambda pid: 123)
-    monkeypatch.setattr("daggerml.contrib.executors.script.os.killpg", lambda *_: None)
-    monkeypatch.setattr("daggerml.contrib.executors.script.os.waitpid", lambda *_: (0, 0))
 
     result = ScriptExecutor().cancel(
         cache_key="cache",
         execution_id="exec",
         runnable={},
-        state={"owner": _current_owner(), "pid": 123, "workdir": str(workdir)},
+        state={"owner": _current_owner(), "service": {"manager": "systemd", "name": "daggerml-test.service"},
+               "workdir": str(workdir)},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec",
         cancel_requested_by="user",
