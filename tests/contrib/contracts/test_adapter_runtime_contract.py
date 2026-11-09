@@ -252,3 +252,28 @@ def test_local_cli_poll_selects_foreground_without_changing_wire_payload(monkeyp
     monkeypatch.setattr(LocalAdapter, "send", classmethod(send))
     LocalAdapter.cli([*(["--poll"] if poll else []), "-i", str(input_path), "-o", str(tmp_path / "output.json")])
     assert calls == [(not poll, payload)]
+
+
+@pytest.mark.parametrize("inherited", [None, "0", "1"])
+@pytest.mark.parametrize("explicit", [None, False, True])
+def test_local_adapter_inherits_foreground_unless_explicit(monkeypatch, inherited, explicit):
+    from daggerml.contrib.adapters import LocalAdapter
+    from daggerml.contrib.executors import _base
+
+    if inherited is None:
+        monkeypatch.delenv("DML_SCRIPT_FOREGROUND", raising=False)
+    else:
+        monkeypatch.setenv("DML_SCRIPT_FOREGROUND", inherited)
+    calls = []
+
+    class Executor:
+        @staticmethod
+        def handle(**kw):
+            calls.append(kw)
+            return {"status": "retry", "adapter_state": {}, "error": None}
+
+    monkeypatch.setattr(_base, "get_executor", lambda *args: Executor)
+    payload = {"runnable": {"target": {"uri": "script"}}}
+    LocalAdapter.send(background=explicit, **payload)
+    expected = explicit if explicit is not None else inherited != "1"
+    assert calls == [{"background": expected, **payload}]

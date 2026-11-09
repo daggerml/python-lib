@@ -240,6 +240,7 @@ def test_start_returns_durable_running_state(monkeypatch, supervisor_identity):
     assert "pid" not in result["state"]
     assert "start_time" not in result["state"]
     assert seen["env"]["DML_EXECUTION_ID"] == "exec"
+    assert seen["env"]["DML_SCRIPT_FOREGROUND"] == "0"
     assert "workdir" in result["state"]
 
 
@@ -254,6 +255,9 @@ def test_foreground_waits_for_supervisor_without_service_manager(monkeypatch, tm
 
     def run(command, **kwargs):
         assert kwargs["env"]["DML_EXECUTION_ID"] == "exec"
+        assert kwargs["env"]["DML_SCRIPT_FOREGROUND"] == "1"
+        payload = json.loads(Path(command[command.index("-i") + 1]).read_text())
+        assert payload["env"]["DML_SCRIPT_FOREGROUND"] == "1"
         assert "start_new_session" not in kwargs
         calls.append(command)
         Path(command[-1]).write_text(json.dumps({"status": "succeeded", "error": None}))

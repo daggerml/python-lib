@@ -218,3 +218,13 @@ def test_ssh_cleanup_forwards_result_and_retry_state_across_fresh_calls(monkeypa
     assert [payload["operation"] for payload in payloads] == ["cleanup", "cleanup"]
     assert payloads[0]["result_ref"] == payloads[1]["result_ref"] == "dag:result"
     assert payloads[1]["adapter_state"] == {"cleanup": 1}
+def test_remote_command_clears_foreground_after_sourcing_environment(tmp_path):
+    import subprocess
+
+    env_file = tmp_path / "worker.env"
+    env_file.write_text("export DML_SCRIPT_FOREGROUND=1\n")
+    adapter = tmp_path / "adapter"
+    adapter.write_text('#!/bin/sh\ntest "${DML_SCRIPT_FOREGROUND+x}" != x\n')
+    adapter.chmod(0o700)
+    command = SshExecutor._remote_command(env_files=[str(env_file)], adapter=str(adapter))
+    subprocess.run(["sh", "-c", command], env={"DML_SCRIPT_FOREGROUND": "1"}, check=True)

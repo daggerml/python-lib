@@ -140,7 +140,8 @@ class ScriptExecutor(ExecutorBase):
             "execution_id": execution_id,
             "cmd": cmd,
             "remote": remote,
-            "env": {**os.environ, "DML_REMOTE_ROOT": remote["root"], "DML_EXECUTION_ID": execution_id},
+            "env": {**os.environ, "DML_REMOTE_ROOT": remote["root"], "DML_EXECUTION_ID": execution_id,
+                    "DML_SCRIPT_FOREGROUND": "0" if self.background else "1"},
         }
         payload_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         payload_path.chmod(0o600)

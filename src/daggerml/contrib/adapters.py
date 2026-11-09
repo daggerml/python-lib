@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from functools import partial
@@ -71,7 +72,7 @@ class AdapterBase:
         raw = cls._read_input(args.input)
         payload = json.loads(raw)
         # Execution mode is local driver policy, never part of the wire request.
-        send = partial(cls.send, background=not args.poll) if issubclass(cls, LocalAdapter) else cls.send
+        send = partial(cls.send, background=False) if args.poll and issubclass(cls, LocalAdapter) else cls.send
         result = send(**payload)
         while args.poll and payload.get("operation") == "invoke" and result.get("status") == "retry":
             state = result.get("adapter_state")
@@ -117,10 +118,12 @@ class LocalAdapter(AdapterBase):
 
     @classmethod
     def send(
-        cls, *, background: bool = True, **kw
+        cls, *, background: bool | None = None, **kw
     ) -> AdapterInvokeResponse | AdapterCleanupResponse | AdapterCancelResponse:
         from daggerml.contrib.executors._base import get_executor
 
+        if background is None:
+            background = os.environ.get("DML_SCRIPT_FOREGROUND") != "1"
         return get_executor("local", kw["runnable"]["target"]["uri"]).handle(background=background, **kw)
 
 
