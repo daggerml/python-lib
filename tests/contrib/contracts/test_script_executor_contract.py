@@ -243,6 +243,35 @@ def test_start_returns_durable_running_state(monkeypatch, supervisor_identity):
     assert "workdir" in result["state"]
 
 
+def test_foreground_waits_for_supervisor_without_service_manager(monkeypatch, tmp_path):
+    def forbidden(*args, **kwargs):
+        pytest.fail("foreground execution accessed the service manager")
+
+    for name in ("service_handle", "start_service", "service_active", "stop_service"):
+        monkeypatch.setattr(script_mod, name, forbidden)
+    monkeypatch.setattr(script_mod.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path))
+    calls = []
+
+    def run(command, **kwargs):
+        assert kwargs["env"]["DML_EXECUTION_ID"] == "exec"
+        assert "start_new_session" not in kwargs
+        calls.append(command)
+        Path(command[-1]).write_text(json.dumps({"status": "succeeded", "error": None}))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(script_mod.subprocess, "run", run)
+    result = ScriptExecutor.handle(
+        background=False, operation="invoke", cache_key="ck", execution_id="exec",
+        runnable={}, remote={"root": "s3://bucket/root"}, scratch_uri="s3://bucket/scratch", adapter_state=None,
+    )
+    assert len(calls) == 1
+    assert result["status"] == "success"
+    state = result["adapter_state"]
+    assert state["mode"] == "foreground"
+    assert "service" not in state and "pid" not in state
+    assert ScriptExecutor().cleanup("ck", "exec", {}, state, {}, "scratch", "dag:result")["status"] == "success"
+
+
 def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_path, supervisor_identity):
     monkeypatch.setattr(script_mod, "service_active", lambda handle: False)
 

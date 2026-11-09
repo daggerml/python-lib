@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -114,7 +115,6 @@ class ScriptExecutor(ExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
     ) -> AdapterInvokeResponse:
-        del scratch_uri
         tags = runnable.get("kwargs", {}).get("tags")
         workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{execution_id}-"))
         payload_path = workdir / "supervisor-input.json"
@@ -144,19 +144,28 @@ class ScriptExecutor(ExecutorBase):
         }
         payload_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         payload_path.chmod(0o600)
-        service = service_handle(execution_id, remote["root"])
         launch_state: dict[str, Any] = {
             "owner": _current_owner(),
-            "service": service,
             "workdir": str(workdir),
             "result_path": str(result_path),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
         }
+        command = [sys.executable, "-m", "daggerml.contrib.supervisor",
+                   "-i", str(payload_path), "-o", str(result_path)]
+        env = {**payload["env"], "PYTHONUNBUFFERED": "1"}
+        if not self.background:
+            launch_state["mode"] = "foreground"
+            try:
+                with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+                    subprocess.run(command, stdout=stdout, stderr=stderr, env=env, check=False)
+            except OSError as exc:
+                return {"status": "failure", "error": f"Could not run script supervisor: {exc}", "state": launch_state}
+            return self.poll(cache_key, execution_id, runnable, launch_state, remote, scratch_uri)
+        service = service_handle(execution_id, remote["root"])
+        launch_state["service"] = service
         try:
-            start_service(service, [sys.executable, "-m", "daggerml.contrib.supervisor",
-                                   "-i", str(payload_path), "-o", str(result_path)], workdir,
-                          {**payload["env"], "PYTHONUNBUFFERED": "1"})
+            start_service(service, command, workdir, env)
         except DmlRepoError as exc:
             # Retain the named handle: a launch timeout does not prove rejection.
             return {"status": "failure", "error": str(exc), "state": launch_state}
@@ -175,7 +184,7 @@ class ScriptExecutor(ExecutorBase):
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
         try:
-            if service_active(_saved_service(state)):
+            if state.get("mode") != "foreground" and service_active(_saved_service(state)):
                 return {"status": "retry", "error": None, "state": state}
         except DmlRepoError as exc:
             return {"status": "failure", "error": f"script poll failed: {exc}", "state": state}
@@ -209,7 +218,7 @@ class ScriptExecutor(ExecutorBase):
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
         try:
-            if not stop_service(_saved_service(state)):
+            if state.get("mode") != "foreground" and not stop_service(_saved_service(state)):
                 return {"status": "retry", "error": None, "state": state}
         except DmlRepoError as exc:
             return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
@@ -236,6 +245,9 @@ class ScriptExecutor(ExecutorBase):
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
         try:
+            if state.get("mode") == "foreground":
+                return {"status": "failure", "error": "Foreground cancellation belongs to the enclosing runtime",
+                        "state": state}
             if not stop_service(_saved_service(state)):
                 return {"status": "retry", "error": None, "state": state}
         except DmlRepoError as exc:

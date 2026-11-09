@@ -236,3 +236,19 @@ def test_lambda_throttling_returns_resumable_retry(monkeypatch):
     )
 
     assert result == {"status": "retry", "error": None, "adapter_state": {}, "retry_after_ms": 2000}
+@pytest.mark.parametrize("poll", [False, True])
+def test_local_cli_poll_selects_foreground_without_changing_wire_payload(monkeypatch, tmp_path, poll):
+    from daggerml.contrib.adapters import LocalAdapter
+
+    payload = {"operation": "invoke", "runnable": {"target": {"uri": "script"}}}
+    input_path = tmp_path / "input.json"
+    input_path.write_text(json.dumps(payload))
+    calls = []
+
+    def send(cls, *, background=True, **kw):
+        calls.append((background, kw))
+        return {"status": "failure", "error": "done"}
+
+    monkeypatch.setattr(LocalAdapter, "send", classmethod(send))
+    LocalAdapter.cli([*(["--poll"] if poll else []), "-i", str(input_path), "-o", str(tmp_path / "output.json")])
+    assert calls == [(not poll, payload)]
