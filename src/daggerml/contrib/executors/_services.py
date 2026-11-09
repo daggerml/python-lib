@@ -4,6 +4,7 @@ import hashlib
 import os
 import plistlib
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -12,11 +13,38 @@ from daggerml.api import DmlRepoError
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "LC_ALL": "C"}
+    if args[0] in {"systemctl", "systemd-run"}:
+        env = _systemd_environment(env)
     try:
         return subprocess.run(args, capture_output=True, text=True, timeout=40,
-                              env={**os.environ, "LC_ALL": "C"})
+                              env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise DmlRepoError(f"Script service manager unavailable: {exc}") from exc
+
+
+def _systemd_environment(env: dict[str, str]) -> dict[str, str]:
+    """Find the existing user bus for noninteractive sessions; never provision it."""
+    env = dict(env)
+    if env.get("DBUS_SESSION_BUS_ADDRESS"):
+        return env
+    uid = os.geteuid()
+    runtime = Path(env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}")
+    bus = runtime / "bus"
+    try:
+        directory = runtime.stat()
+        socket = bus.stat()
+        if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != uid
+                or not stat.S_ISSOCK(socket.st_mode) or socket.st_uid != uid):
+            raise ValueError("runtime directory and bus socket must belong to the effective user")
+    except (OSError, ValueError) as exc:
+        raise DmlRepoError(
+            f"User systemd bus unavailable at {bus}: {exc}. "
+            "Configure a running user systemd manager and user bus, or set DBUS_SESSION_BUS_ADDRESS explicitly."
+        ) from exc
+    env["XDG_RUNTIME_DIR"] = str(runtime)
+    env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+    return env
 
 
 def _check(result: subprocess.CompletedProcess[str]) -> None:

@@ -6,6 +6,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from time import monotonic, sleep
 from urllib.parse import urlparse
@@ -17,6 +18,7 @@ import daggerml.api as api
 from daggerml import CancellationError
 from daggerml.contrib.api import funkify
 from daggerml.contrib.codecs import DelayedActionCodec
+from daggerml.contrib.executors._services import _systemd_environment
 
 pytestmark = [pytest.mark.slow, pytest.mark.ssh, pytest.mark.serial]
 
@@ -63,6 +65,10 @@ def local_ssh(tmp_path, monkeypatch, remote_env, s3_bucket):
     sshd = shutil.which("sshd") or ("/usr/sbin/sshd" if os.path.isfile("/usr/sbin/sshd") else None)
     if not sshd or not shutil.which("ssh") or not shutil.which("ssh-keygen"):
         pytest.skip("OpenSSH client, server and keygen are required")
+    if sys.platform == "linux":
+        # Provisioned by CI, not by the application or this fixture.
+        subprocess.run(["systemctl", "--user", "show-environment"],
+                       env=_systemd_environment(dict(os.environ)), check=True, capture_output=True, timeout=10)
     host_key = tmp_path / "host_key"
     user_key = tmp_path / "user_key"
     for key in (host_key, user_key):
@@ -77,6 +83,9 @@ def local_ssh(tmp_path, monkeypatch, remote_env, s3_bucket):
             "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ENDPOINT_URL",
         )}, "AWS_SHARED_CREDENTIALS_FILE": "/dev/null", "PATH": os.environ["PATH"]}.items()
     ))
+    if sys.platform == "linux":
+        with env_file.open("a") as file:
+            file.write("unset XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS\n")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
