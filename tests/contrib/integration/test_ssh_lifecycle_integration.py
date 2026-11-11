@@ -6,6 +6,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from time import monotonic, sleep
 from urllib.parse import urlparse
@@ -77,6 +78,9 @@ def local_ssh(tmp_path, monkeypatch, remote_env, s3_bucket):
             "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_ENDPOINT_URL",
         )}, "AWS_SHARED_CREDENTIALS_FILE": "/dev/null", "PATH": os.environ["PATH"]}.items()
     ))
+    if sys.platform == "linux":
+        with env_file.open("a") as file:
+            file.write("unset XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS\n")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]

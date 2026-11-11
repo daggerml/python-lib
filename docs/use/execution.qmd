@@ -94,6 +94,14 @@ environment, identified by `effective-UID@hostname`; other users/hosts safely re
 host/container names. SSH callers may differ when they reach the same owning
 destination and effective user. Ownerless or hostname-only saved adapter state is unsupported.
 
+Script launches return promptly. When systemd tools (Linux) or launchctl (macOS)
+are installed, the adapter launches the supervisor as a named user service/job;
+the user manager must be configured and available. Manager errors are reported,
+not retried through another backend. Without those tools, as in minimal worker
+containers, it launches a detached process group. This fallback retains numeric
+process-group identity and its reuse risk. Later polling, cancellation, and
+cleanup use the backend handle saved at launch, without detecting tools again.
+
 <!-- docs:pseudocode: An SSH host, scheduler, or cloud adapter is not owned by the documentation fixture. Configure its credentials and installed integration before composing this wrapper. -->
 ```python
 remote_docker = api.funkify(

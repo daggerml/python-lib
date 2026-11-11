@@ -161,7 +161,7 @@ def test_script_cancel_waits_for_terminated_process_group(monkeypatch, tmp_path)
         cache_key="cache",
         execution_id="exec",
         runnable={},
-        state={"owner": _current_owner(), "pid": 123, "workdir": str(workdir)},
+        state={"owner": _current_owner(), "handle": {"backend": "pgroup", "pgid": 123}, "workdir": str(workdir)},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/root/exec/io/exec",
         cancel_requested_by="user",
