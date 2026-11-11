@@ -219,15 +219,14 @@ def test_resolve_runnable_rejects_sub_and_writes_script_to_s3(monkeypatch):
         ScriptExecutor.resolve_runnable("script", {"fn": fn}, Runnable(target=Uri("inner"), kwargs={}, adapter="x"))
 
 
-@pytest.fixture
-def supervisor_identity(monkeypatch):
-    monkeypatch.setattr(script_mod, "service_active", lambda handle: True)
-    monkeypatch.setattr(script_mod, "stop_service", lambda handle: True)
+def test_start_returns_durable_running_state(monkeypatch):
+    class FakePopen:
+        pid = 123
 
+        def __init__(self, *args, **kwargs):
+            pass
 
-def test_start_returns_durable_running_state(monkeypatch, supervisor_identity):
-    seen = {}
-    monkeypatch.setattr(script_mod, "start_service", lambda handle, cmd, workdir, env: seen.update(env=env))
+    monkeypatch.setattr(script_mod.subprocess, "Popen", FakePopen)
     result = ScriptExecutor().start(
         cache_key="ck",
         execution_id="exec",
@@ -236,54 +235,18 @@ def test_start_returns_durable_running_state(monkeypatch, supervisor_identity):
         scratch_uri="s3://bucket/scratch",
     )
     assert result["status"] == "retry"
-    assert result["state"]["service"]["name"]
-    assert "pid" not in result["state"]
-    assert "start_time" not in result["state"]
-    assert seen["env"]["DML_EXECUTION_ID"] == "exec"
-    assert seen["env"]["DML_SCRIPT_FOREGROUND"] == "0"
+    assert result["state"]["pid"] == 123
     assert "workdir" in result["state"]
 
 
-def test_foreground_waits_for_supervisor_without_service_manager(monkeypatch, tmp_path):
-    def forbidden(*args, **kwargs):
-        pytest.fail("foreground execution accessed the service manager")
-
-    for name in ("service_handle", "start_service", "service_active", "stop_service"):
-        monkeypatch.setattr(script_mod, name, forbidden)
-    monkeypatch.setattr(script_mod.tempfile, "mkdtemp", lambda **kwargs: str(tmp_path))
-    calls = []
-
-    def run(command, **kwargs):
-        assert kwargs["env"]["DML_EXECUTION_ID"] == "exec"
-        assert kwargs["env"]["DML_SCRIPT_FOREGROUND"] == "1"
-        payload = json.loads(Path(command[command.index("-i") + 1]).read_text())
-        assert payload["env"]["DML_SCRIPT_FOREGROUND"] == "1"
-        assert "start_new_session" not in kwargs
-        calls.append(command)
-        Path(command[-1]).write_text(json.dumps({"status": "succeeded", "error": None}))
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(script_mod.subprocess, "run", run)
-    result = ScriptExecutor.handle(
-        background=False, operation="invoke", cache_key="ck", execution_id="exec",
-        runnable={}, remote={"root": "s3://bucket/root"}, scratch_uri="s3://bucket/scratch", adapter_state=None,
-    )
-    assert len(calls) == 1
-    assert result["status"] == "success"
-    state = result["adapter_state"]
-    assert state["mode"] == "foreground"
-    assert "service" not in state and "pid" not in state
-    assert ScriptExecutor().cleanup("ck", "exec", {}, state, {}, "scratch", "dag:result")["status"] == "success"
-
-
-def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_path, supervisor_identity):
-    monkeypatch.setattr(script_mod, "service_active", lambda handle: False)
+def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(script_mod.os, "waitpid", lambda pid, flags: (pid, 0))
 
     success_dir = tmp_path / "success"
     success_dir.mkdir()
     success_state = {
         "owner": _current_owner(),
-        "service": {"manager": "systemd", "name": "daggerml-test.service"},
+        "pid": 1,
         "workdir": str(success_dir),
         "result_path": str(success_dir / "result.json"),
         "stdout_path": str(success_dir / "stdout.log"),
@@ -308,7 +271,7 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     bad_dir.mkdir()
     bad_state = {
         "owner": _current_owner(),
-        "service": {"manager": "systemd", "name": "daggerml-test.service"},
+        "pid": 1,
         "workdir": str(bad_dir),
         "result_path": str(bad_dir / "result.json"),
         "stdout_path": str(bad_dir / "stdout.log"),
@@ -337,7 +300,7 @@ def test_poll_handles_terminal_malformed_and_no_result_paths(monkeypatch, tmp_pa
     empty_dir.mkdir()
     empty_state = {
         "owner": _current_owner(),
-        "service": {"manager": "systemd", "name": "daggerml-test.service"},
+        "pid": 1,
         "workdir": str(empty_dir),
         "result_path": str(empty_dir / "result.json"),
         "stdout_path": str(empty_dir / "stdout.log"),
@@ -422,17 +385,17 @@ def test_cancel_without_launch_state_is_still_cancelled():
     assert result == {"status": "cancelled", "error": None, "state": {}}
 
 
-def test_contrib_script_cancel_reports_permission_failure(monkeypatch, supervisor_identity):
+def test_contrib_script_cancel_reports_permission_failure(monkeypatch):
     monkeypatch.setattr(
-        script_mod, "stop_service",
-        lambda *_: (_ for _ in ()).throw(DmlRepoError("denied")),
+        "daggerml.contrib.executors.script.os.killpg",
+        lambda *_: (_ for _ in ()).throw(PermissionError("denied")),
     )
 
     result = ScriptExecutor().cancel(
         cache_key="ck",
         execution_id="exec",
         runnable={},
-        state={"owner": _current_owner(), "service": {"manager": "systemd", "name": "daggerml-test.service"}},
+        state={"owner": _current_owner(), "pid": 123},
         remote={"root": "s3://bucket/root"},
         scratch_uri="s3://bucket/scratch",
         cancel_requested_by="user",
@@ -442,17 +405,15 @@ def test_contrib_script_cancel_reports_permission_failure(monkeypatch, superviso
     assert "denied" in result["error"]
 
 
-def test_script_cleanup_preserves_workdir_if_supervisor_cannot_be_terminated(
-    monkeypatch, tmp_path, supervisor_identity
-):
+def test_script_cleanup_preserves_workdir_if_supervisor_cannot_be_terminated(monkeypatch, tmp_path):
     workdir = tmp_path / "scratch"
     workdir.mkdir()
+    monkeypatch.setattr(script_mod.os, "waitpid", lambda pid, flags: (0, 0))
     monkeypatch.setattr(
-        script_mod, "stop_service", lambda handle: (_ for _ in ()).throw(DmlRepoError("denied"))
+        script_mod.os, "killpg", lambda pid, sig: (_ for _ in ()).throw(PermissionError("denied"))
     )
 
-    state = {"owner": _current_owner(), "service": {"manager": "systemd", "name": "daggerml-test.service"},
-             "workdir": str(workdir)}
+    state = {"owner": _current_owner(), "pid": 123, "workdir": str(workdir)}
     result = ScriptExecutor().cleanup("ck", "exec", {}, state, {}, "scratch", "dag:x")
 
     assert result["status"] == "failure"

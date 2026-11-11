@@ -23,7 +23,6 @@ class ExecutorBase:
 
     name: str = ""
     adapter: str = ""
-    background: bool = True
 
     # ------------------------------------------------------------------
     # Subclass interface
@@ -65,8 +64,6 @@ class ExecutorBase:
     @classmethod
     def handle(
         cls,
-        *,
-        background: bool = True,
         **payload: Any,
     ) -> dict[str, Any]:
         """Dispatch an explicit adapter operation to the executor."""
@@ -135,7 +132,6 @@ class ExecutorBase:
         if operation == "cleanup" and not valid_result_ref:
             raise DmlRepoError("Cleanup operation requires a non-null result_ref")
         executor = cls()
-        executor.background = background
         if operation == "cancel":
             result = executor.cancel(
                 cache_key=cache_key,

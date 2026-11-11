@@ -75,12 +75,9 @@ jobs:
       - name: Install local OpenSSH server
         run: |
           sudo apt-get update
-          sudo apt-get install -y openssh-server dbus-user-session
+          sudo apt-get install -y openssh-server
           sudo mkdir -p /run/sshd
           sudo usermod --password "$(openssl passwd -6 "$(openssl rand -hex 32)")" "$(id -un)"
-          sudo loginctl enable-linger "$(id -un)"
-          sudo systemctl start "user@$(id -u).service"
-          test -S "/run/user/$(id -u)/bus"
       - name: Sync dependencies
         run: uv sync --group dev --all-extras
       - name: Local SSH lifecycle results

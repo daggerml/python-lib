@@ -20,6 +20,14 @@ from unittest.mock import patch
 def main():
     argparse.ArgumentParser(description=__doc__).parse_args()
     package = distribution("daggerml")
+    assert sorted(package.requires or []) == sorted(
+        [
+            "boto3",
+            'rich; extra == "terminal"',
+            'fastapi<1,>=0.115; extra == "dashboard"',
+            'uvicorn<1,>=0.32; extra == "dashboard"',
+        ]
+    ), package.requires
     assert sorted(package.metadata.get_all("Provides-Extra") or []) == ["dashboard", "terminal"]
     direct_url = json.loads(package.read_text("direct_url.json") or "{}")
     assert not direct_url.get("dir_info", {}).get("editable"), "An installed wheel is required"

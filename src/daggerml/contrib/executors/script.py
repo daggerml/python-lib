@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -23,7 +24,6 @@ from daggerml._core import AdapterCancelResponse, AdapterInvokeResponse
 from daggerml.api import DmlRepoError
 from daggerml.contrib.executors._base import ExecutorBase
 from daggerml.contrib.executors._ownership import _current_owner
-from daggerml.contrib.executors._services import service_active, service_handle, start_service, stop_service
 from daggerml.contrib.s3 import S3Store
 
 logger = logging.getLogger(__name__)
@@ -115,6 +115,7 @@ class ScriptExecutor(ExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
     ) -> AdapterInvokeResponse:
+        del scratch_uri
         tags = runnable.get("kwargs", {}).get("tags")
         workdir = Path(tempfile.mkdtemp(prefix=f"dml-script-{execution_id}-"))
         payload_path = workdir / "supervisor-input.json"
@@ -140,36 +141,34 @@ class ScriptExecutor(ExecutorBase):
             "execution_id": execution_id,
             "cmd": cmd,
             "remote": remote,
-            "env": {**os.environ, "DML_REMOTE_ROOT": remote["root"], "DML_EXECUTION_ID": execution_id,
-                    "DML_SCRIPT_FOREGROUND": "0" if self.background else "1"},
+            "env": {"DML_REMOTE_ROOT": remote["root"]},
         }
         payload_path.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
-        payload_path.chmod(0o600)
-        launch_state: dict[str, Any] = {
+        with stdout_path.open("w") as stdout_f, stderr_path.open("w") as stderr_f:
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "daggerml.contrib.supervisor",
+                    "-i",
+                    str(payload_path),
+                    "-o",
+                    str(result_path),
+                ],
+                stdout=stdout_f,
+                stderr=stderr_f,
+                start_new_session=True,
+                close_fds=True,
+                env={**os.environ, "PYTHONUNBUFFERED": "1", **payload["env"]},
+            )
+        launch_state = {
             "owner": _current_owner(),
+            "pid": proc.pid,
             "workdir": str(workdir),
             "result_path": str(result_path),
             "stdout_path": str(stdout_path),
             "stderr_path": str(stderr_path),
         }
-        command = [sys.executable, "-m", "daggerml.contrib.supervisor",
-                   "-i", str(payload_path), "-o", str(result_path)]
-        env = {**payload["env"], "PYTHONUNBUFFERED": "1"}
-        if not self.background:
-            launch_state["mode"] = "foreground"
-            try:
-                with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
-                    subprocess.run(command, stdout=stdout, stderr=stderr, env=env, check=False)
-            except OSError as exc:
-                return {"status": "failure", "error": f"Could not run script supervisor: {exc}", "state": launch_state}
-            return self.poll(cache_key, execution_id, runnable, launch_state, remote, scratch_uri)
-        service = service_handle(execution_id, remote["root"])
-        launch_state["service"] = service
-        try:
-            start_service(service, command, workdir, env)
-        except DmlRepoError as exc:
-            # Retain the named handle: a launch timeout does not prove rejection.
-            return {"status": "failure", "error": str(exc), "state": launch_state}
         return {"status": "retry", "error": None, "state": launch_state}
 
     def poll(
@@ -181,16 +180,28 @@ class ScriptExecutor(ExecutorBase):
         remote: dict[str, str],
         scratch_uri: str,
     ) -> AdapterInvokeResponse:
-        del cache_key, runnable, remote, scratch_uri
+        del cache_key, execution_id, runnable, remote, scratch_uri
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
-        try:
-            if state.get("mode") != "foreground" and service_active(_saved_service(state)):
-                return {"status": "retry", "error": None, "state": state}
-        except DmlRepoError as exc:
-            return {"status": "failure", "error": f"script poll failed: {exc}", "state": state}
-        # The manager reports that the supervisor job has stopped.
         result_path = Path(state.get("result_path", ""))
+        pid = state.get("pid")
+        # Polls may run either in the launching adapter process or in a later
+        # process. Reap children when we can; otherwise fall back to a direct
+        # PID probe for cross-process polling.
+        if isinstance(pid, int):
+            try:
+                done_pid, _ = os.waitpid(pid, os.WNOHANG)
+                if done_pid == 0:
+                    return {"status": "retry", "error": None, "state": state}
+            except ChildProcessError:
+                try:
+                    os.kill(pid, 0)
+                    return {"status": "retry", "error": None, "state": state}
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    return {"status": "retry", "error": None, "state": state}
+        # Process exited — read result
         if result_path.exists():
             try:
                 parsed = json.loads(result_path.read_text())
@@ -213,16 +224,32 @@ class ScriptExecutor(ExecutorBase):
         }
 
     def cleanup(self, cache_key, execution_id, runnable, state, remote, scratch_uri, result_ref):
-        del cache_key, runnable, remote, scratch_uri, result_ref
-        if not isinstance(state, dict):
-            return {"status": "success", "error": None, "state": {}}
-        if state["owner"] != _current_owner():
+        del cache_key, execution_id, runnable, remote, scratch_uri, result_ref
+        if isinstance(state, dict) and state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
-        try:
-            if state.get("mode") != "foreground" and not stop_service(_saved_service(state)):
-                return {"status": "retry", "error": None, "state": state}
-        except DmlRepoError as exc:
-            return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
+        state = state if isinstance(state, dict) else {}
+        pid = state.get("pid")
+        if isinstance(pid, int):
+            try:
+                done_pid, _ = os.waitpid(pid, os.WNOHANG)
+                active = done_pid == 0
+            except ChildProcessError:
+                try:
+                    os.kill(pid, 0)
+                    active = True
+                except ProcessLookupError:
+                    active = False
+                except PermissionError as exc:
+                    return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
+            if active:
+                # The DML result is already published, so the supervisor is no longer needed.
+                # Stop its process group before removing scratch so it cannot keep writing there.
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except PermissionError as exc:
+                    return {"status": "failure", "error": f"script cleanup failed: {exc}", "state": state}
         _cleanup_workdir(state)
         workdir = state.get("workdir")
         if isinstance(workdir, str) and os.path.exists(workdir):
@@ -240,34 +267,24 @@ class ScriptExecutor(ExecutorBase):
         cancel_requested_by: str | None,
         argv_ref: str | None = None,
     ) -> AdapterCancelResponse:
-        del cache_key, runnable, remote, scratch_uri, cancel_requested_by, argv_ref
+        del cache_key, execution_id, runnable, remote, scratch_uri, cancel_requested_by, argv_ref
         if not isinstance(state, dict):
             return {"status": "cancelled", "error": None, "state": {}}
         if state["owner"] != _current_owner():
             return {"status": "retry", "error": None, "state": state}
-        try:
-            if state.get("mode") == "foreground":
-                return {"status": "failure", "error": "Foreground cancellation belongs to the enclosing runtime",
-                        "state": state}
-            if not stop_service(_saved_service(state)):
-                return {"status": "retry", "error": None, "state": state}
-        except DmlRepoError as exc:
-            return {"status": "failure", "error": f"script cancellation failed: {exc}", "state": state}
+        pid = state.get("pid")
+        if isinstance(pid, int):
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except PermissionError as exc:
+                return {"status": "failure", "error": f"script cancellation failed: {exc}", "state": state}
         _cleanup_workdir(state)
         workdir = state.get("workdir")
         if isinstance(workdir, str) and os.path.exists(workdir):
             return {"status": "failure", "error": f"script cancellation failed to remove {workdir}", "state": state}
         return {"status": "cancelled", "error": None, "state": state}
-
-
-def _saved_service(state: dict[str, Any]) -> dict:
-    service = state.get("service")
-    if (not isinstance(service, dict) or service.get("manager") not in {"systemd", "launchd"}
-            or not isinstance(service.get("name"), str) or not service["name"]):
-        raise DmlRepoError("Missing Script service handle; PID-only continuation is unsupported")
-    if service["manager"] == "launchd" and service.get("domain") != f"user/{os.geteuid()}":
-        raise DmlRepoError("Script launchd job belongs to a different user domain")
-    return service
 
 
 def _cleanup_workdir(launch_state: dict[str, Any]) -> None:

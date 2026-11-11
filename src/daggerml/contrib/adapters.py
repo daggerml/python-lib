@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
-from functools import partial
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -71,16 +69,14 @@ class AdapterBase:
         args = parser.parse_args(argv)
         raw = cls._read_input(args.input)
         payload = json.loads(raw)
-        # Execution mode is local driver policy, never part of the wire request.
-        send = partial(cls.send, background=False) if args.poll and issubclass(cls, LocalAdapter) else cls.send
-        result = send(**payload)
+        result = cls.send(**payload)
         while args.poll and payload.get("operation") == "invoke" and result.get("status") == "retry":
             state = result.get("adapter_state")
             if not isinstance(state, dict):
                 raise DmlRepoError("Retry adapter response requires object adapter_state")
             payload["adapter_state"] = state
             time.sleep(0.1)
-            result = send(**payload)
+            result = cls.send(**payload)
         if args.poll and payload.get("operation") == "invoke" and result.get("status") == "success":
             payload["adapter_state"] = result.get("adapter_state", payload["adapter_state"])
             record = Dml(remote_root=payload["remote"]["root"]).runtime.read_execution_record(
@@ -91,14 +87,14 @@ class AdapterBase:
                 raise DmlRepoError("Successful nested invoke did not publish a result")
             cleanup_payload = {**payload, "operation": "cleanup", "result_ref": result_ref}
             try:
-                cleanup_result = send(**cleanup_payload)
+                cleanup_result = cls.send(**cleanup_payload)
                 while cleanup_result.get("status") == "retry":
                     state = cleanup_result.get("adapter_state")
                     if not isinstance(state, dict):
                         raise DmlRepoError("Retry adapter response requires object adapter_state")
                     cleanup_payload["adapter_state"] = state
                     time.sleep(0.1)
-                    cleanup_result = send(**cleanup_payload)
+                    cleanup_result = cls.send(**cleanup_payload)
                 if cleanup_result.get("status") != "success":
                     print(
                         f"Nested cleanup failed for {payload['execution_id']}: {cleanup_result.get('error')}",
@@ -117,14 +113,10 @@ class LocalAdapter(AdapterBase):
     executable = "dml-local-adapter"
 
     @classmethod
-    def send(
-        cls, *, background: bool | None = None, **kw
-    ) -> AdapterInvokeResponse | AdapterCleanupResponse | AdapterCancelResponse:
+    def send(cls, **kw) -> AdapterInvokeResponse | AdapterCleanupResponse | AdapterCancelResponse:
         from daggerml.contrib.executors._base import get_executor
 
-        if background is None:
-            background = os.environ.get("DML_SCRIPT_FOREGROUND") != "1"
-        return get_executor("local", kw["runnable"]["target"]["uri"]).handle(background=background, **kw)
+        return get_executor("local", kw["runnable"]["target"]["uri"]).handle(**kw)
 
 
 class LambdaAdapter(AdapterBase):

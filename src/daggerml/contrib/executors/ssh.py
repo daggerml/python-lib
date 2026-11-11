@@ -233,7 +233,5 @@ class SshExecutor(ExecutorBase):
     def _remote_command(*, env_files: list[str], adapter: str) -> str:
         parts = ["set -e"]
         parts.extend(f". {shlex.quote(path)}" for path in env_files)
-        # SSH crosses into an independently managed execution environment.
-        parts.append("unset DML_SCRIPT_FOREGROUND")
         parts.append(f"exec {shlex.quote(adapter)} -i - -o -")
         return "; ".join(parts)

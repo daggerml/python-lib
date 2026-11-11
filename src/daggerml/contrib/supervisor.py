@@ -207,7 +207,6 @@ def _parse_cmd_payload(
     merged_env.update(env)
     # The explicit job remote wins over inherited and payload environment roots.
     merged_env["DML_REMOTE_ROOT"] = remote["root"]
-    merged_env["DML_EXECUTION_ID"] = execution_id
     return cache_key, execution_id, cmd, merged_env, {"root": remote["root"]}
 
 

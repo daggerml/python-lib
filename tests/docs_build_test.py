@@ -486,6 +486,12 @@ def test_wheels_package_and_serve_completed_docs_without_build_tools(tmp_path):
     for distribution in (wheel, sdist_wheel):
         assert expected_files <= _wheel_contents(distribution)
         metadata = _wheel_metadata(distribution)
+        assert metadata.get_all("Requires-Dist") == [
+            "boto3",
+            'rich; extra == "terminal"',
+            'fastapi<1,>=0.115; extra == "dashboard"',
+            'uvicorn<1,>=0.32; extra == "dashboard"',
+        ]
         assert metadata.get_all("Provides-Extra") == ["terminal", "dashboard"]
 
     with tarfile.open(sdist) as archive:
